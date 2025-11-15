@@ -1,0 +1,26 @@
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Build outputs
+*.dylib
+*.so
+*.a

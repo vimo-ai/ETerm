@@ -1,0 +1,18 @@
+[package]
+name = "sugarloaf-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+sugarloaf = { path = "../rio/sugarloaf" }
+raw-window-handle = "0.6.2"
+wgpu = "27.0.1"
+
+# 终端相关依赖
+teletypewriter = { path = "../rio/teletypewriter" }
+rio-backend = { path = "../rio/rio-backend" }
+parking_lot = "0.12.4"
+libc = "0.2.174"
