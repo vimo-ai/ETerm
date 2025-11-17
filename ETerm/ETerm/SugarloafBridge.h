@@ -245,4 +245,29 @@ int tab_manager_set_active_pane(TabManagerHandle manager, size_t pane_id);
 // Get the number of panes in the current tab
 size_t tab_manager_get_pane_count(TabManagerHandle manager);
 
+// Get pane at specific position (for click focus switching)
+// Returns pane_id or -1 if no pane found at that position
+// x, y are in logical coordinates
+int tab_manager_get_pane_at_position(
+    TabManagerHandle manager,
+    float x,
+    float y
+);
+
+// Pane position and size information
+typedef struct {
+    float x;
+    float y;
+    float width;
+    float height;
+} PaneInfo;
+
+// Get pane position and size information (in logical coordinates)
+// Returns 0 on failure, non-zero on success
+int tab_manager_get_pane_info(
+    TabManagerHandle manager,
+    size_t pane_id,
+    PaneInfo* out_info
+);
+
 #endif /* SugarloafBridge_h */

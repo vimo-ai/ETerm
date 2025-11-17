@@ -63,6 +63,11 @@ class TerminalManagerNSView: NSView {
         )
     }
 
+    // 🎯 确保 view 可以接收鼠标事件
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
     @objc private func windowDidBecomeKey() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.initialize()
@@ -297,6 +302,47 @@ class TerminalManagerNSView: NSView {
         requestRender()
     }
 
+    // 🎯 点击切换 Pane 焦点
+    override func mouseDown(with event: NSEvent) {
+        print("[TabTerminalView] 🖱️ mouseDown called")
+
+        guard let tabManager = tabManager else {
+            print("[TabTerminalView] ⚠️ No tabManager")
+            super.mouseDown(with: event)
+            return
+        }
+
+        // 获取点击位置（逻辑坐标）
+        let locationInView = convert(event.locationInWindow, from: nil)
+        let x = Float(locationInView.x)
+        let y = Float(locationInView.y)
+
+        print("[TabTerminalView] Click at logical coords: (\(x), \(y))")
+        print("[TabTerminalView] Bounds: \(bounds)")
+        print("[TabTerminalView] Current pane count: \(tab_manager_get_pane_count(tabManager.handle))")
+
+        // 查找点击的 pane
+        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
+        print("[TabTerminalView] Found pane ID: \(paneId)")
+
+        if paneId >= 0 {
+            // 切换焦点到点击的 pane
+            let result = tab_manager_set_active_pane(tabManager.handle, size_t(paneId))
+            print("[TabTerminalView] Set active pane result: \(result)")
+
+            if result != 0 {
+                print("[TabTerminalView] ✅ Switched focus to pane \(paneId)")
+                requestRender()
+            } else {
+                print("[TabTerminalView] ❌ Failed to switch focus to pane \(paneId)")
+            }
+        } else {
+            print("[TabTerminalView] ❌ No pane found at click position")
+        }
+
+        super.mouseDown(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         guard let tabManager = tabManager else {
             super.keyDown(with: event)
@@ -518,35 +564,83 @@ struct TabTerminalView: View {
                 .ignoresSafeArea()
 
                 // 始终显示终端管理器视图（在背景之上）
-                TerminalManagerView()
-                    .padding(10)  // 添加 10pt 的内边距
-
-                // TabView 只用于显示 tab 栏，不显示内容
-                if !coordinator.tabIds.isEmpty {
-                    TabView(selection: Binding(
-                        get: { coordinator.activeTabId },
-                        set: { newId in
-                            coordinator.terminalView?.switchToTab(newId)
-                        }
-                    )) {
-                        ForEach(coordinator.tabIds, id: \.self) { tabId in
-                            Color.clear
-                                .tabItem {
-                                    if let index = coordinator.tabIds.firstIndex(of: tabId) {
-                                        Text("Tab \(index + 1)")
-                                    }
+                GeometryReader { geometry in
+                    TerminalManagerView()
+                        .padding(10)  // 添加 10pt 的内边距
+                        .contentShape(Rectangle())  // 确保整个区域可以接收点击
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onEnded { value in
+                                    handlePaneClick(at: value.location, in: geometry)
                                 }
-                                .tag(tabId)
-                        }
-                    }
-                    .tabViewStyle(.automatic)
+                        )
                 }
+
+                // 🧪 临时注释掉 TabView 测试点击事件
+                // TabView 只用于显示 tab 栏，不显示内容
+//                if !coordinator.tabIds.isEmpty {
+//                    TabView(selection: Binding(
+//                        get: { coordinator.activeTabId },
+//                        set: { newId in
+//                            coordinator.terminalView?.switchToTab(newId)
+//                        }
+//                    )) {
+//                        ForEach(coordinator.tabIds, id: \.self) { tabId in
+//                            Color.clear
+//                                .tabItem {
+//                                    if let index = coordinator.tabIds.firstIndex(of: tabId) {
+//                                        Text("Tab \(index + 1)")
+//                                    }
+//                                }
+//                                .tag(tabId)
+//                        }
+//                    }
+//                    .tabViewStyle(.automatic)
+//                }
             }
         }
     }
 
     private func createNewTab() {
         coordinator.terminalView?.createNewTab()
+    }
+
+    // 🎯 处理 Pane 点击切换焦点
+    private func handlePaneClick(at location: CGPoint, in geometry: GeometryProxy) {
+        print("[TabTerminalView] 🖱️ Click detected at: \(location)")
+
+        guard let terminalView = coordinator.terminalView,
+              let tabManager = terminalView.tabManager else {
+            print("[TabTerminalView] ⚠️ No terminal view or tab manager")
+            return
+        }
+
+        // 调整坐标（需要减去 padding）
+        let x = Float(location.x - 10)  // 减去 padding
+        let y = Float(location.y - 10)
+
+        print("[TabTerminalView] Adjusted coords: (\(x), \(y))")
+        print("[TabTerminalView] Geometry size: \(geometry.size)")
+        print("[TabTerminalView] Current pane count: \(tab_manager_get_pane_count(tabManager.handle))")
+
+        // 查找点击的 pane
+        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
+        print("[TabTerminalView] Found pane ID: \(paneId)")
+
+        if paneId >= 0 {
+            // 切换焦点
+            let result = tab_manager_set_active_pane(tabManager.handle, size_t(paneId))
+            print("[TabTerminalView] Set active pane result: \(result)")
+
+            if result != 0 {
+                print("[TabTerminalView] ✅ Switched focus to pane \(paneId)")
+                terminalView.renderTerminal()
+            } else {
+                print("[TabTerminalView] ❌ Failed to switch focus")
+            }
+        } else {
+            print("[TabTerminalView] ❌ No pane found at this position")
+        }
     }
 
     private func splitRight() {

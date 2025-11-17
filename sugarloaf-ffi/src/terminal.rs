@@ -669,7 +669,7 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                     && !current_line.is_empty()
                 {
                     let (r, g, b) = prev_fg;
-                    let mut style = FragmentStyle {
+                    let style = FragmentStyle {
                         color: [
                             r as f32 / 255.0,
                             g as f32 / 255.0,
@@ -679,9 +679,6 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                         width: prev_width,
                         ..FragmentStyle::default()
                     };
-                    if debug_overlay {
-                        style.background_color = Some([1.0, 0.2, 0.2, 0.45]);
-                    }
                     content.add_text(&current_line, style);
                     current_line.clear();
                 }
@@ -693,7 +690,7 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
         if !current_line.is_empty() {
             if let Some(((r, g, b), width)) = current_style {
-                let mut style = FragmentStyle {
+                let style = FragmentStyle {
                     color: [
                         r as f32 / 255.0,
                         g as f32 / 255.0,
@@ -703,17 +700,10 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                     width,
                     ..FragmentStyle::default()
                 };
-                if debug_overlay {
-                    style.background_color = Some([1.0, 0.2, 0.2, 0.45]);
-                }
                 content.add_text(&current_line, style);
             }
         } else {
-            let mut style = FragmentStyle::default();
-            if debug_overlay {
-                style.background_color = Some([1.0, 0.2, 0.2, 0.45]);
-                style.color = [0.0, 0.0, 0.0, 0.0];
-            }
+            let style = FragmentStyle::default();
             content.add_text(" ", style);
         }
 
@@ -824,6 +814,8 @@ impl TabManager {
             scale,
             margin,
             border_color,
+            self.cols,
+            self.rows,
         );
 
         let tab_info = TabInfo {
@@ -1102,6 +1094,26 @@ impl TabManager {
             }
         }
         0
+    }
+
+    /// 根据坐标查找对应的 pane
+    fn get_pane_at_position(&self, x: f32, y: f32) -> Option<usize> {
+        if let Some(tab_id) = self.active_tab_id {
+            if let Some(tab_info) = self.tabs.get(&tab_id) {
+                return tab_info.grid.get_pane_at_position(x, y);
+            }
+        }
+        None
+    }
+
+    /// 获取指定 pane 的位置和尺寸信息
+    fn get_pane_info(&self, pane_id: usize) -> Option<(f32, f32, f32, f32)> {
+        if let Some(tab_id) = self.active_tab_id {
+            if let Some(tab_info) = self.tabs.get(&tab_id) {
+                return tab_info.grid.get_pane_info(pane_id);
+            }
+        }
+        None
     }
 }
 
@@ -1413,4 +1425,56 @@ pub extern "C" fn tab_manager_get_pane_count(manager: *mut TabManager) -> usize 
 
     let manager = unsafe { &*manager };
     manager.get_pane_count()
+}
+
+/// 根据坐标查找对应的 pane（用于点击切换焦点）
+/// x, y 是逻辑坐标
+#[no_mangle]
+pub extern "C" fn tab_manager_get_pane_at_position(
+    manager: *mut TabManager,
+    x: f32,
+    y: f32,
+) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &*manager };
+    manager.get_pane_at_position(x, y)
+        .map(|id| id as i32)
+        .unwrap_or(-1)
+}
+
+/// Pane 信息结构（用于 FFI）
+#[repr(C)]
+pub struct PaneInfo {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// 获取指定 pane 的位置和尺寸信息
+#[no_mangle]
+pub extern "C" fn tab_manager_get_pane_info(
+    manager: *mut TabManager,
+    pane_id: usize,
+    out_info: *mut PaneInfo,
+) -> bool {
+    if manager.is_null() || out_info.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &*manager };
+    if let Some((x, y, width, height)) = manager.get_pane_info(pane_id) {
+        unsafe {
+            (*out_info).x = x;
+            (*out_info).y = y;
+            (*out_info).width = width;
+            (*out_info).height = height;
+        }
+        true
+    } else {
+        false
+    }
 }

@@ -35,11 +35,7 @@ struct ContentView: View {
                     Label("写作助手", systemImage: "pencil")
                 }
 
-            // Rio 进程测试 Tab
-            RioProcessView()
-                .tabItem {
-                    Label("Rio 测试", systemImage: "atom")
-                }
+
         }
         .frame(minWidth: 1000, minHeight: 800)
         .background(

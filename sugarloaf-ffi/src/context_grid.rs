@@ -57,6 +57,10 @@ pub struct ContextGridItem {
     pub dimension: PaneDimension,
     rich_text_object: Object,
 
+    // 🎯 终端网格尺寸
+    pub cols: u16,  // 终端列数
+    pub rows: u16,  // 终端行数
+
     // 链表关系
     right: Option<usize>,
     down: Option<usize>,
@@ -69,6 +73,8 @@ impl ContextGridItem {
         terminal: Box<TerminalHandle>,
         rich_text_id: usize,
         dimension: PaneDimension,
+        cols: u16,
+        rows: u16,
     ) -> Self {
         let rich_text_object = Object::RichText(RichText {
             id: rich_text_id,
@@ -82,6 +88,8 @@ impl ContextGridItem {
             rich_text_id,
             dimension,
             rich_text_object,
+            cols,
+            rows,
             right: None,
             down: None,
             parent: None,
@@ -135,6 +143,8 @@ impl ContextGrid {
         scale: f32,
         margin: Delta<f32>,
         border_color: [f32; 4],
+        cols: u16,
+        rows: u16,
     ) -> Self {
         let scaled_padding = PADDING * scale;
         let dimension = PaneDimension::new(width, height);
@@ -142,7 +152,7 @@ impl ContextGrid {
         let mut inner = HashMap::new();
         inner.insert(
             initial_pane_id,
-            ContextGridItem::new(initial_pane_id, terminal, rich_text_id, dimension),
+            ContextGridItem::new(initial_pane_id, terminal, rich_text_id, dimension, cols, rows),
         );
 
         let mut grid = Self {
@@ -206,10 +216,17 @@ impl ContextGrid {
         let old_grid_item_width = current_item.dimension.width - self.margin.x;
         let new_grid_item_width = old_grid_item_width / 2.0;
 
+        // 🎯 获取当前终端的尺寸
+        let old_cols = current_item.cols;
+        let old_rows = current_item.rows;
+        let new_cols = old_cols / 2;
+
         eprintln!("[ContextGrid] old_width: {}, new_width: {}, height: {}",
                   old_grid_item_width, new_grid_item_width, old_grid_item_height);
+        eprintln!("[ContextGrid] old_cols: {}, new_cols: {}, rows: {}",
+                  old_cols, new_cols, old_rows);
 
-        // 更新当前 pane 的宽度
+        // 更新当前 pane 的宽度和终端尺寸
         if let Some(current_item) = self.inner.get_mut(&self.current) {
             current_item
                 .dimension
@@ -219,6 +236,12 @@ impl ContextGrid {
             let mut new_margin = current_item.dimension.margin;
             new_margin.x = 0.0;
             current_item.dimension.update_margin(new_margin);
+
+            // 🎯 调整终端尺寸
+            current_item.cols = new_cols;
+            let terminal_ptr = &mut *current_item.terminal as *mut crate::TerminalHandle;
+            eprintln!("[ContextGrid] Resizing current pane terminal to {}x{}", new_cols, old_rows);
+            crate::terminal_resize(terminal_ptr, new_cols, old_rows);
         }
 
         // 创建新 pane
@@ -237,7 +260,15 @@ impl ContextGrid {
             terminal,
             rich_text_id,
             new_dimension,
+            new_cols,
+            old_rows,
         );
+
+        // 🎯 调整新终端的尺寸
+        let new_terminal_ptr = &mut *new_item.terminal as *mut crate::TerminalHandle;
+        eprintln!("[ContextGrid] Resizing new pane terminal to {}x{}", new_cols, old_rows);
+        crate::terminal_resize(new_terminal_ptr, new_cols, old_rows);
+
         new_item.right = old_right;
         new_item.parent = Some(self.current);
 
@@ -272,17 +303,34 @@ impl ContextGrid {
         terminal: Box<TerminalHandle>,
         rich_text_id: usize,
     ) -> Option<usize> {
+        eprintln!("[ContextGrid] split_down called, current pane: {}", self.current);
         let current_item = self.inner.get(&self.current)?;
         let old_down = current_item.down;
         let old_grid_item_height = current_item.dimension.height;
         let old_grid_item_width = current_item.dimension.width;
         let new_grid_item_height = old_grid_item_height / 2.0;
 
-        // 更新当前 pane 的高度
+        // 🎯 获取当前终端的尺寸
+        let old_cols = current_item.cols;
+        let old_rows = current_item.rows;
+        let new_rows = old_rows / 2;
+
+        eprintln!("[ContextGrid] old_height: {}, new_height: {}, width: {}",
+                  old_grid_item_height, new_grid_item_height, old_grid_item_width);
+        eprintln!("[ContextGrid] cols: {}, old_rows: {}, new_rows: {}",
+                  old_cols, old_rows, new_rows);
+
+        // 更新当前 pane 的高度和终端尺寸
         if let Some(current_item) = self.inner.get_mut(&self.current) {
             current_item
                 .dimension
                 .update_height(new_grid_item_height - self.scaled_padding);
+
+            // 🎯 调整终端尺寸
+            current_item.rows = new_rows;
+            let terminal_ptr = &mut *current_item.terminal as *mut crate::TerminalHandle;
+            eprintln!("[ContextGrid] Resizing current pane terminal to {}x{}", old_cols, new_rows);
+            crate::terminal_resize(terminal_ptr, old_cols, new_rows);
         }
 
         // 创建新 pane
@@ -294,7 +342,15 @@ impl ContextGrid {
             terminal,
             rich_text_id,
             new_dimension,
+            old_cols,
+            new_rows,
         );
+
+        // 🎯 调整新终端的尺寸
+        let new_terminal_ptr = &mut *new_item.terminal as *mut crate::TerminalHandle;
+        eprintln!("[ContextGrid] Resizing new pane terminal to {}x{}", old_cols, new_rows);
+        crate::terminal_resize(new_terminal_ptr, old_cols, new_rows);
+
         new_item.down = old_down;
         new_item.parent = Some(self.current);
 
@@ -317,6 +373,8 @@ impl ContextGrid {
 
         // 重新计算位置
         self.calculate_positions_for_affected_nodes(&[self.current, new_pane_id]);
+
+        eprintln!("[ContextGrid] split_down completed, new pane: {}", new_pane_id);
 
         Some(new_pane_id)
     }
@@ -413,11 +471,14 @@ impl ContextGrid {
             (item.right, item.down, item.dimension.width, item.dimension.height)
         };
 
-        // 设置当前 pane 的位置
+        // 设置当前 pane 的位置（转换为逻辑坐标）
         if let Some(item) = self.inner.get_mut(&pane_id) {
-            item.set_position([x, y]);
-            eprintln!("[ContextGrid] Pane {} -> position: [{}, {}], size: [{}x{}]",
-                      pane_id, x, y, width, height);
+            // RichText 的 position 需要逻辑坐标，Sugarloaf 内部会乘以 scale_factor
+            let logical_x = x / self.scale;
+            let logical_y = y / self.scale;
+            item.set_position([logical_x, logical_y]);
+            eprintln!("[ContextGrid] Pane {} -> position: [{}, {}] (physical: [{}, {}]), size: [{}x{}]",
+                      pane_id, logical_x, logical_y, x, y, width, height);
         }
 
         // 递归处理右侧 pane
@@ -467,19 +528,120 @@ impl ContextGrid {
 
     /// 调整所有 pane 的大小
     pub fn resize(&mut self, width: f32, height: f32) {
+        eprintln!("[ContextGrid] resize called: old={}x{}, new={}x{}",
+                  self.width, self.height, width, height);
+
+        // 计算缩放比例
+        let width_ratio = if self.width > 0.0 { width / self.width } else { 1.0 };
+        let height_ratio = if self.height > 0.0 { height / self.height } else { 1.0 };
+
+        eprintln!("[ContextGrid] Scale ratios: width={:.2}, height={:.2}",
+                  width_ratio, height_ratio);
+
         self.width = width;
         self.height = height;
 
-        // 重新计算所有 pane 的尺寸和位置
+        // 递归调整所有 pane 的尺寸
         if let Some(root) = self.root {
-            // 简单实现：按比例缩放
-            // TODO: 更智能的缩放策略
-            if let Some(root_item) = self.inner.get_mut(&root) {
-                root_item.dimension.update_width(width);
-                root_item.dimension.update_height(height);
-            }
+            self.resize_pane_recursive(root, width_ratio, height_ratio);
             self.calculate_positions_for_affected_nodes(&[root]);
         }
+    }
+
+    /// 递归调整 pane 的尺寸（保持比例）
+    fn resize_pane_recursive(&mut self, pane_id: usize, width_ratio: f32, height_ratio: f32) {
+        // 获取当前 pane 的链表信息
+        let (right, down) = {
+            let item = if let Some(item) = self.inner.get(&pane_id) {
+                item
+            } else {
+                return;
+            };
+            (item.right, item.down)
+        };
+
+        // 调整当前 pane 的尺寸
+        if let Some(item) = self.inner.get_mut(&pane_id) {
+            let old_width = item.dimension.width;
+            let old_height = item.dimension.height;
+            let old_margin = item.dimension.margin;
+
+            // 按比例缩放尺寸
+            let new_width = old_width * width_ratio;
+            let new_height = old_height * height_ratio;
+
+            // 按比例缩放 margin
+            let mut new_margin = old_margin;
+            new_margin.x *= width_ratio;
+            new_margin.top_y *= height_ratio;
+            new_margin.bottom_y *= height_ratio;
+
+            item.dimension.update_width(new_width);
+            item.dimension.update_height(new_height);
+            item.dimension.update_margin(new_margin);
+
+            eprintln!("[ContextGrid] Pane {} resized: {}x{} -> {}x{}",
+                      pane_id, old_width, old_height, new_width, new_height);
+
+            // 🎯 重新计算终端网格尺寸（基于新的 pane 尺寸）
+            let font_metrics = crate::global_font_metrics().unwrap_or_else(|| {
+                crate::SugarloafFontMetrics::fallback(14.0)
+            });
+
+            // new_width 和 new_height 本身就是逻辑坐标，直接使用
+            // 计算新的 cols 和 rows
+            let new_cols = ((new_width / font_metrics.cell_width).max(1.0) as u16).max(2);
+            let new_rows = ((new_height / font_metrics.line_height).max(1.0) as u16).max(1);
+
+            eprintln!("[ContextGrid] Pane {} terminal grid: {}x{} -> {}x{}",
+                      pane_id, item.cols, item.rows, new_cols, new_rows);
+
+            // 更新终端网格尺寸
+            item.cols = new_cols;
+            item.rows = new_rows;
+
+            // 调用 terminal_resize
+            let terminal_ptr = &mut *item.terminal as *mut crate::TerminalHandle;
+            crate::terminal_resize(terminal_ptr, new_cols, new_rows);
+        }
+
+        // 递归处理右侧 pane
+        if let Some(right_id) = right {
+            self.resize_pane_recursive(right_id, width_ratio, height_ratio);
+        }
+
+        // 递归处理下方 pane
+        if let Some(down_id) = down {
+            self.resize_pane_recursive(down_id, width_ratio, height_ratio);
+        }
+    }
+
+    /// 根据坐标查找对应的 pane（用于点击切换焦点）
+    /// x, y 是逻辑坐标
+    pub fn get_pane_at_position(&self, x: f32, y: f32) -> Option<usize> {
+        for item in self.inner.values() {
+            let pos = item.position();
+            let width = item.dimension.width / self.scale;  // 转换为逻辑坐标
+            let height = item.dimension.height / self.scale;
+
+            if x >= pos[0] && x < pos[0] + width &&
+               y >= pos[1] && y < pos[1] + height {
+                eprintln!("[ContextGrid] Click at ({}, {}) -> Pane {}", x, y, item.pane_id);
+                return Some(item.pane_id);
+            }
+        }
+        eprintln!("[ContextGrid] Click at ({}, {}) -> No pane found", x, y);
+        None
+    }
+
+    /// 获取指定 pane 的位置和尺寸信息（逻辑坐标）
+    pub fn get_pane_info(&self, pane_id: usize) -> Option<(f32, f32, f32, f32)> {
+        self.inner.get(&pane_id).map(|item| {
+            let pos = item.position();
+            let width = item.dimension.width / self.scale;
+            let height = item.dimension.height / self.scale;
+            (pos[0], pos[1], width, height)
+        })
     }
 }
 
