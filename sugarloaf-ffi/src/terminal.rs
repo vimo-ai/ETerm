@@ -6,10 +6,13 @@ use parking_lot::Mutex;
 
 use rio_backend::ansi::CursorShape;
 use rio_backend::crosswords::{Crosswords, CrosswordsSize};
+use rio_backend::crosswords::grid::Scroll;
 use rio_backend::event::{EventListener, WindowId};
 use rio_backend::performer::handler::Processor;
-use rio_backend::config::colors::{AnsiColor, NamedColor, ColorRgb};
+use rio_backend::config::colors::{AnsiColor, NamedColor};
 use teletypewriter::{create_pty_with_fork, WinsizeBuilder, ProcessReadWrite};
+
+use crate::{global_font_metrics, SugarloafFontMetrics, SugarloafHandle};
 
 /// 单个终端单元格的数据（用于 FFI）
 #[repr(C)]
@@ -30,6 +33,7 @@ pub struct TerminalHandle {
     parser: Arc<Mutex<Processor>>,
     cols: u16,
     rows: u16,
+    font_metrics: SugarloafFontMetrics,
 }
 
 /// 简单的事件监听器实现 (不发送任何事件)
@@ -42,6 +46,42 @@ impl EventListener for VoidListener {
     }
 }
 
+const DEFAULT_HISTORY_LINES: usize = 1_000;
+
+fn default_font_metrics() -> SugarloafFontMetrics {
+    SugarloafFontMetrics {
+        cell_width: 8.0,
+        cell_height: 16.0,
+        line_height: 16.0,
+    }
+}
+
+fn resolve_font_metrics() -> SugarloafFontMetrics {
+    global_font_metrics().unwrap_or_else(default_font_metrics)
+}
+
+fn pixel_dimensions(
+    cols: u16,
+    rows: u16,
+    metrics: &SugarloafFontMetrics,
+) -> (u16, u16, u32, u32, u32, u32) {
+    let total_width = (cols as f32 * metrics.cell_width).max(1.0).round();
+    // ⚠️ 关键修复：使用 line_height 而不是 cell_height 来计算总高度
+    let total_height = (rows as f32 * metrics.line_height).max(1.0).round();
+    let square_width = metrics.cell_width.max(1.0).round();
+    // square_height 保持用 cell_height（字符本身的高度）
+    let square_height = metrics.cell_height.max(1.0).round();
+
+    (
+        total_width.min(u16::MAX as f32) as u16,
+        total_height.min(u16::MAX as f32) as u16,
+        total_width.min(u32::MAX as f32) as u32,
+        total_height.min(u32::MAX as f32) as u32,
+        square_width.min(u32::MAX as f32) as u32,
+        square_height.min(u32::MAX as f32) as u32,
+    )
+}
+
 /// 创建终端
 #[no_mangle]
 pub extern "C" fn terminal_create(
@@ -50,31 +90,69 @@ pub extern "C" fn terminal_create(
     shell_program: *const c_char,
 ) -> *mut TerminalHandle {
     if shell_program.is_null() {
-        eprintln!("[Terminal FFI] Error: shell_program is null");
         return ptr::null_mut();
     }
 
     let shell = unsafe { CStr::from_ptr(shell_program).to_str().unwrap_or("/bin/zsh") };
 
-    eprintln!("[Terminal FFI] Creating terminal:");
-    eprintln!("  - cols: {}, rows: {}", cols, rows);
-    eprintln!("  - shell: {}", shell);
+    // ⭐ 关键修复: 使用 Rio 的环境变量设置方式
+    // 检测 terminfo
+    let terminfo = match (
+        teletypewriter::terminfo_exists("xterm-rio"),
+        teletypewriter::terminfo_exists("rio"),
+    ) {
+        (true, _) => "xterm-rio",
+        (false, true) => "rio",
+        (false, false) => "xterm-256color",
+    };
+
+    std::env::set_var("TERM", terminfo);
+    std::env::set_var("TERM_PROGRAM", "ETerm");
+    std::env::set_var("TERM_PROGRAM_VERSION", "0.1.0");
+    std::env::set_var("COLORTERM", "truecolor");
+
+    // 移除可能干扰的环境变量
+    std::env::remove_var("DESKTOP_STARTUP_ID");
+    std::env::remove_var("XDG_ACTIVATION_TOKEN");
+
+    // macOS 特定设置
+    #[cfg(target_os = "macos")]
+    {
+        if std::env::var("LC_CTYPE").is_err() {
+            std::env::set_var("LC_CTYPE", "UTF-8");
+        }
+        if std::env::var("LC_ALL").is_err() {
+            std::env::set_var("LC_ALL", "en_US.UTF-8");
+        }
+    }
+
+    // 默认切到用户主目录，避免 shell-init getcwd 错误
+    if let Ok(home_dir) = std::env::var("HOME") {
+        let _ = std::env::set_current_dir(&home_dir);
+    }
+
+    let font_metrics = resolve_font_metrics();
+    let (winsize_width, winsize_height, total_width, total_height, square_width, square_height) =
+        pixel_dimensions(cols, rows, &font_metrics);
 
     // 创建 PTY
-    let pty = match create_pty_with_fork(
+    let mut pty = match create_pty_with_fork(
         &std::borrow::Cow::Borrowed(shell),
         cols,
         rows,
     ) {
-        Ok(pty) => {
-            eprintln!("[Terminal FFI] ✅ PTY created successfully");
-            pty
-        }
-        Err(e) => {
-            eprintln!("[Terminal FFI] ❌ Failed to create PTY: {:?}", e);
-            return ptr::null_mut();
-        }
+        Ok(pty) => pty,
+        Err(_) => return ptr::null_mut(),
     };
+
+    let initial_winsize = WinsizeBuilder {
+        cols,
+        rows,
+        width: winsize_width,
+        height: winsize_height,
+    };
+
+    let _ = pty.set_winsize(initial_winsize);
 
     // 创建终端状态（Crosswords）
     let listener = VoidListener;
@@ -83,10 +161,10 @@ pub extern "C" fn terminal_create(
     let dimensions = CrosswordsSize {
         columns: cols as usize,
         screen_lines: rows as usize,
-        width: (cols as u32) * 8,  // 假设每个字符8像素宽
-        height: (rows as u32) * 16,  // 假设每个字符16像素高
-        square_width: 8,
-        square_height: 16,
+        width: total_width,
+        height: total_height,
+        square_width,
+        square_height,
     };
 
     // 使用一个dummy WindowId 和 route_id
@@ -100,11 +178,11 @@ pub extern "C" fn terminal_create(
         window_id,
         route_id,
     );
+    let mut terminal = terminal;
+    terminal.grid.update_history(DEFAULT_HISTORY_LINES);
 
     // 创建 ANSI 解析器
     let parser = Processor::default();
-
-    eprintln!("[Terminal FFI] ✅ Terminal created successfully");
 
     let handle = Box::new(TerminalHandle {
         pty: Arc::new(Mutex::new(pty)),
@@ -112,6 +190,7 @@ pub extern "C" fn terminal_create(
         parser: Arc::new(Mutex::new(parser)),
         cols,
         rows,
+        font_metrics,
     });
 
     Box::into_raw(handle)
@@ -133,31 +212,20 @@ pub extern "C" fn terminal_read_output(handle: *mut TerminalHandle) -> bool {
     // 使用 ProcessReadWrite trait 的 reader() 方法
     match pty.reader().read(&mut buf) {
         Ok(0) => {
-            // EOF - 进程可能已退出
-            eprintln!("[Terminal FFI] EOF from PTY");
             false
         }
         Ok(n) => {
-            // 有数据
             let data = &buf[..n];
-            eprintln!("[Terminal FFI] Read {} bytes from PTY", n);
 
-            // 释放 PTY 锁
             drop(pty);
 
-            // 使用 Processor 解析数据并更新终端状态
             let mut terminal = handle.terminal.lock();
             let mut parser = handle.parser.lock();
-
-            // Processor::advance 会自动解析 ANSI 序列并更新 terminal
             parser.advance(&mut *terminal, data);
-
-            eprintln!("[Terminal FFI] Parsed and applied {} bytes", n);
 
             true
         }
         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-            // 没有数据可读（非阻塞模式）
             false
         }
         Err(e) => {
@@ -179,9 +247,6 @@ pub extern "C" fn terminal_write_input(
 
     let handle = unsafe { &mut *handle };
     let input = unsafe { CStr::from_ptr(data).to_bytes() };
-
-    eprintln!("[Terminal FFI] Writing {} bytes to PTY: {:?}", input.len(),
-              String::from_utf8_lossy(input));
 
     let mut pty = handle.pty.lock();
     match std::io::Write::write_all(pty.writer(), input) {
@@ -302,15 +367,16 @@ pub extern "C" fn terminal_resize(
 
     let handle = unsafe { &mut *handle };
 
-    eprintln!("[Terminal FFI] Resizing to {}x{}", cols, rows);
-
     // 调整 PTY 大小
     let mut pty = handle.pty.lock();
+    let metrics = handle.font_metrics;
+    let (winsize_width, winsize_height, total_width, total_height, square_width, square_height) =
+        pixel_dimensions(cols, rows, &metrics);
     let winsize = WinsizeBuilder {
         cols,
         rows,
-        width: cols * 8,
-        height: rows * 16,
+        width: winsize_width,
+        height: winsize_height,
     };
 
     if let Err(e) = pty.set_winsize(winsize) {
@@ -325,10 +391,10 @@ pub extern "C" fn terminal_resize(
     let new_size = CrosswordsSize {
         columns: cols as usize,
         screen_lines: rows as usize,
-        width: (cols as u32) * 8,
-        height: (rows as u32) * 16,
-        square_width: 8,
-        square_height: 16,
+        width: total_width,
+        height: total_height,
+        square_width,
+        square_height,
     };
     terminal.resize(new_size);
 
@@ -345,8 +411,7 @@ pub extern "C" fn terminal_free(handle: *mut TerminalHandle) {
         unsafe {
             let _ = Box::from_raw(handle);
         }
-        eprintln!("[Terminal FFI] Terminal freed");
-    }
+}
 }
 
 /// 将 AnsiColor 转换为 RGB
@@ -519,4 +584,589 @@ pub extern "C" fn terminal_get_cell_with_scroll(
     }
 
     true
+}
+
+/// 滚动终端视图
+#[no_mangle]
+pub extern "C" fn terminal_scroll(
+    handle: *mut TerminalHandle,
+    delta_lines: i32,  // 正数向上滚动（查看历史），负数向下滚动
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let mut terminal = handle.terminal.lock();
+
+    if delta_lines > 0 {
+        // 向上滚动（查看历史）
+        terminal.scroll_display(Scroll::Delta(delta_lines));
+    } else if delta_lines < 0 {
+        // 向下滚动（回到底部）
+        terminal.scroll_display(Scroll::Delta(delta_lines));
+    }
+
+    true
+}
+
+/// 渲染终端到 Sugarloaf（完整版本，使用 visible_rows）
+#[no_mangle]
+pub extern "C" fn terminal_render_to_sugarloaf(
+    handle: *mut TerminalHandle,
+    sugarloaf: *mut SugarloafHandle,
+    rich_text_id: usize,
+) -> bool {
+    if handle.is_null() || sugarloaf.is_null() {
+        return false;
+    }
+
+    let handle_ref = unsafe { &mut *handle };
+    let sugarloaf_ref = unsafe { &mut *sugarloaf };
+    let terminal = handle_ref.terminal.lock();
+
+    let rows = terminal.visible_rows();
+    let debug_overlay = false;
+    let _cursor = terminal.cursor();
+
+    // ⚠️ 关键修复：不要在这里 drop terminal!
+    // rows 是对 terminal 内部数据的引用,必须在使用完 rows 之后才能释放 terminal
+    // drop(terminal);  // ❌ 删除这行
+
+    // 获取 content builder - 使用链式调用
+    let content = sugarloaf_ref.instance.content();
+    content.sel(rich_text_id).clear();
+
+    use sugarloaf::FragmentStyle;
+
+    // 渲染所有可见行
+    for row in rows.iter() {
+        // 🔍 调试：打印第一行的详细信息
+        // ⚠️ 关键修复：在每一行开始时调用 new_line()（匹配 Rio 示例的做法）
+        content.new_line();
+
+        let cols = row.len();
+
+        // 跟踪当前颜色，以便批量渲染相同颜色的字符
+        let mut current_line = String::new();
+        let mut current_style: Option<((u8, u8, u8), f32)> = None;
+
+        for col in 0..cols {
+            let cell = &row.inner[col];
+
+            use rio_backend::crosswords::square::Flags;
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
+            }
+
+            let fg_color = ansi_color_to_rgb(&cell.fg);
+            let glyph_width = if cell.flags.contains(Flags::WIDE_CHAR) {
+                2.0
+            } else {
+                1.0
+            };
+
+            if let Some((prev_fg, prev_width)) = current_style {
+                if (prev_fg != fg_color || (prev_width - glyph_width).abs() > f32::EPSILON)
+                    && !current_line.is_empty()
+                {
+                    let (r, g, b) = prev_fg;
+                    let mut style = FragmentStyle {
+                        color: [
+                            r as f32 / 255.0,
+                            g as f32 / 255.0,
+                            b as f32 / 255.0,
+                            1.0,
+                        ],
+                        width: prev_width,
+                        ..FragmentStyle::default()
+                    };
+                    if debug_overlay {
+                        style.background_color = Some([1.0, 0.2, 0.2, 0.45]);
+                    }
+                    content.add_text(&current_line, style);
+                    current_line.clear();
+                }
+            }
+
+            current_line.push(cell.c);
+            current_style = Some((fg_color, glyph_width));
+        }
+
+        if !current_line.is_empty() {
+            if let Some(((r, g, b), width)) = current_style {
+                let mut style = FragmentStyle {
+                    color: [
+                        r as f32 / 255.0,
+                        g as f32 / 255.0,
+                        b as f32 / 255.0,
+                        1.0,
+                    ],
+                    width,
+                    ..FragmentStyle::default()
+                };
+                if debug_overlay {
+                    style.background_color = Some([1.0, 0.2, 0.2, 0.45]);
+                }
+                content.add_text(&current_line, style);
+            }
+        } else {
+            let mut style = FragmentStyle::default();
+            if debug_overlay {
+                style.background_color = Some([1.0, 0.2, 0.2, 0.45]);
+                style.color = [0.0, 0.0, 0.0, 0.0];
+            }
+            content.add_text(" ", style);
+        }
+
+    }
+
+    // 正确顺序：先 build content，再 set objects，最后 render
+    content.build();
+
+    use sugarloaf::{Object, RichText};
+
+    // 添加一些 padding 让 UI 更舒适
+    const PADDING_LEFT: f32 = 10.0;
+    const PADDING_TOP: f32 = 10.0;
+
+    sugarloaf_ref.instance.set_objects(vec![Object::RichText(RichText {
+        id: rich_text_id,
+        position: [PADDING_LEFT, PADDING_TOP],
+        lines: None,
+    })]);
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sugarloaf_ref.instance.render();
+    })) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+// ============================================================================
+// Tab Manager - 多终端会话管理
+// ============================================================================
+
+use std::collections::HashMap;
+
+/// Tab 信息
+pub struct TabInfo {
+    terminal: Box<TerminalHandle>,
+    rich_text_id: usize,
+    title: String,
+}
+
+/// Tab 管理器
+pub struct TabManager {
+    tabs: HashMap<usize, TabInfo>,
+    active_tab_id: Option<usize>,
+    next_tab_id: usize,
+    sugarloaf_handle: *mut SugarloafHandle,
+    cols: u16,
+    rows: u16,
+    shell: String,
+}
+
+impl TabManager {
+    fn new(
+        sugarloaf_handle: *mut SugarloafHandle,
+        cols: u16,
+        rows: u16,
+        shell: String,
+    ) -> Self {
+        Self {
+            tabs: HashMap::new(),
+            active_tab_id: None,
+            next_tab_id: 1,
+            sugarloaf_handle,
+            cols,
+            rows,
+            shell,
+        }
+    }
+
+    fn create_tab(&mut self) -> Option<usize> {
+        if self.sugarloaf_handle.is_null() {
+            return None;
+        }
+
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        // 创建终端
+        let shell_cstr = std::ffi::CString::new(self.shell.as_str()).ok()?;
+        let terminal_ptr = terminal_create(self.cols, self.rows, shell_cstr.as_ptr());
+        if terminal_ptr.is_null() {
+            return None;
+        }
+
+        let terminal = unsafe { Box::from_raw(terminal_ptr) };
+
+        // 创建 RichText (使用 sugarloaf_create_rich_text FFI 函数)
+        let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
+
+        let tab_info = TabInfo {
+            terminal,
+            rich_text_id,
+            title: format!("Tab {}", tab_id),
+        };
+
+        self.tabs.insert(tab_id, tab_info);
+
+        // 如果是第一个 tab，自动激活
+        if self.active_tab_id.is_none() {
+            self.active_tab_id = Some(tab_id);
+        }
+
+        Some(tab_id)
+    }
+
+    fn switch_tab(&mut self, tab_id: usize) -> bool {
+        if self.tabs.contains_key(&tab_id) {
+            self.active_tab_id = Some(tab_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn close_tab(&mut self, tab_id: usize) -> bool {
+        if let Some(_tab) = self.tabs.remove(&tab_id) {
+            // tab 会自动 drop，释放资源
+
+            // 如果关闭的是当前激活的 tab，切换到第一个可用的 tab
+            if self.active_tab_id == Some(tab_id) {
+                self.active_tab_id = self.tabs.keys().next().copied();
+            }
+
+            true
+        } else {
+            false
+        }
+    }
+
+    fn get_active_tab(&self) -> Option<usize> {
+        self.active_tab_id
+    }
+
+    fn get_active_tab_mut(&mut self) -> Option<&mut TabInfo> {
+        if let Some(tab_id) = self.active_tab_id {
+            self.tabs.get_mut(&tab_id)
+        } else {
+            None
+        }
+    }
+
+    fn read_all_tabs(&mut self) -> bool {
+        let mut has_updates = false;
+        for tab_info in self.tabs.values_mut() {
+            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
+            if terminal_read_output(terminal_ptr) {
+                has_updates = true;
+            }
+        }
+        has_updates
+    }
+
+    fn render_active_tab(&mut self) -> bool {
+        // 先获取需要的值,避免借用冲突
+        let (terminal_ptr, rich_text_id) = if let Some(tab_info) = self.get_active_tab_mut() {
+            let ptr = &mut *tab_info.terminal as *mut TerminalHandle;
+            let id = tab_info.rich_text_id;
+            (ptr, id)
+        } else {
+            return false;
+        };
+
+        terminal_render_to_sugarloaf(
+            terminal_ptr,
+            self.sugarloaf_handle,
+            rich_text_id,
+        )
+    }
+
+    fn write_input_to_active(&mut self, data: &[u8]) -> bool {
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
+            let cstring = match std::ffi::CString::new(data) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            terminal_write_input(terminal_ptr, cstring.as_ptr())
+        } else {
+            false
+        }
+    }
+
+    fn scroll_active_tab(&mut self, delta_lines: i32) -> bool {
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
+            terminal_scroll(terminal_ptr, delta_lines)
+        } else {
+            false
+        }
+    }
+
+    fn resize_all_tabs(&mut self, cols: u16, rows: u16) -> bool {
+        self.cols = cols;
+        self.rows = rows;
+
+        let mut all_success = true;
+        for tab_info in self.tabs.values_mut() {
+            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
+            if !terminal_resize(terminal_ptr, cols, rows) {
+                all_success = false;
+            }
+        }
+        all_success
+    }
+
+    fn get_tab_list(&self) -> Vec<(usize, String)> {
+        self.tabs
+            .iter()
+            .map(|(id, info)| (*id, info.title.clone()))
+            .collect()
+    }
+
+    fn set_tab_title(&mut self, tab_id: usize, title: String) -> bool {
+        if let Some(tab_info) = self.tabs.get_mut(&tab_id) {
+            tab_info.title = title;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+// ============================================================================
+// Tab Manager FFI
+// ============================================================================
+
+/// 创建 Tab 管理器
+#[no_mangle]
+pub extern "C" fn tab_manager_new(
+    sugarloaf: *mut SugarloafHandle,
+    cols: u16,
+    rows: u16,
+    shell_program: *const c_char,
+) -> *mut TabManager {
+    if sugarloaf.is_null() || shell_program.is_null() {
+        return ptr::null_mut();
+    }
+
+    let shell = unsafe {
+        CStr::from_ptr(shell_program)
+            .to_str()
+            .unwrap_or("/bin/zsh")
+            .to_string()
+    };
+
+    let manager = Box::new(TabManager::new(sugarloaf, cols, rows, shell));
+    Box::into_raw(manager)
+}
+
+/// 创建新 Tab
+#[no_mangle]
+pub extern "C" fn tab_manager_create_tab(manager: *mut TabManager) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.create_tab().map(|id| id as i32).unwrap_or(-1)
+}
+
+/// 切换到指定 Tab
+#[no_mangle]
+pub extern "C" fn tab_manager_switch_tab(manager: *mut TabManager, tab_id: usize) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.switch_tab(tab_id)
+}
+
+/// 关闭指定 Tab
+#[no_mangle]
+pub extern "C" fn tab_manager_close_tab(manager: *mut TabManager, tab_id: usize) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.close_tab(tab_id)
+}
+
+/// 获取当前激活的 Tab ID
+#[no_mangle]
+pub extern "C" fn tab_manager_get_active_tab(manager: *mut TabManager) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.get_active_tab().map(|id| id as i32).unwrap_or(-1)
+}
+
+/// 读取所有 Tab 的输出（更新所有终端状态）
+#[no_mangle]
+pub extern "C" fn tab_manager_read_all_tabs(manager: *mut TabManager) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.read_all_tabs()
+}
+
+/// 渲染当前激活的 Tab
+#[no_mangle]
+pub extern "C" fn tab_manager_render_active_tab(manager: *mut TabManager) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.render_active_tab()
+}
+
+/// 向当前激活的 Tab 写入输入
+#[no_mangle]
+pub extern "C" fn tab_manager_write_input(
+    manager: *mut TabManager,
+    data: *const c_char,
+) -> bool {
+    if manager.is_null() || data.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    let input = unsafe { CStr::from_ptr(data).to_bytes() };
+    manager.write_input_to_active(input)
+}
+
+/// 滚动当前激活的 Tab
+#[no_mangle]
+pub extern "C" fn tab_manager_scroll_active_tab(
+    manager: *mut TabManager,
+    delta_lines: i32,
+) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.scroll_active_tab(delta_lines)
+}
+
+/// 调整所有 Tab 的大小
+#[no_mangle]
+pub extern "C" fn tab_manager_resize_all_tabs(
+    manager: *mut TabManager,
+    cols: u16,
+    rows: u16,
+) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.resize_all_tabs(cols, rows)
+}
+
+/// 获取 Tab 数量
+#[no_mangle]
+pub extern "C" fn tab_manager_get_tab_count(manager: *mut TabManager) -> usize {
+    if manager.is_null() {
+        return 0;
+    }
+
+    let manager = unsafe { &*manager };
+    manager.tabs.len()
+}
+
+/// 获取所有 Tab ID（需要传入足够大的数组）
+#[no_mangle]
+pub extern "C" fn tab_manager_get_tab_ids(
+    manager: *mut TabManager,
+    out_ids: *mut usize,
+    max_count: usize,
+) -> usize {
+    if manager.is_null() || out_ids.is_null() {
+        return 0;
+    }
+
+    let manager = unsafe { &*manager };
+    let tab_list = manager.get_tab_list();
+    let count = tab_list.len().min(max_count);
+
+    for (i, (id, _title)) in tab_list.iter().take(count).enumerate() {
+        unsafe {
+            *out_ids.add(i) = *id;
+        }
+    }
+
+    count
+}
+
+/// 设置 Tab 标题
+#[no_mangle]
+pub extern "C" fn tab_manager_set_tab_title(
+    manager: *mut TabManager,
+    tab_id: usize,
+    title: *const c_char,
+) -> bool {
+    if manager.is_null() || title.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    let title_str = unsafe {
+        CStr::from_ptr(title)
+            .to_str()
+            .unwrap_or("Untitled")
+            .to_string()
+    };
+
+    manager.set_tab_title(tab_id, title_str)
+}
+
+/// 获取 Tab 标题（需要传入足够大的缓冲区）
+#[no_mangle]
+pub extern "C" fn tab_manager_get_tab_title(
+    manager: *mut TabManager,
+    tab_id: usize,
+    buffer: *mut c_char,
+    buffer_size: usize,
+) -> bool {
+    if manager.is_null() || buffer.is_null() || buffer_size == 0 {
+        return false;
+    }
+
+    let manager = unsafe { &*manager };
+    if let Some(tab_info) = manager.tabs.get(&tab_id) {
+        let title_bytes = tab_info.title.as_bytes();
+        let copy_len = title_bytes.len().min(buffer_size - 1);
+
+        unsafe {
+            ptr::copy_nonoverlapping(title_bytes.as_ptr(), buffer as *mut u8, copy_len);
+            *buffer.add(copy_len) = 0; // null terminator
+        }
+
+        true
+    } else {
+        false
+    }
+}
+
+/// 释放 Tab 管理器
+#[no_mangle]
+pub extern "C" fn tab_manager_free(manager: *mut TabManager) {
+    if !manager.is_null() {
+        unsafe {
+            let _ = Box::from_raw(manager);
+        }
+    }
 }

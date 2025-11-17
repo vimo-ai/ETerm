@@ -13,5 +13,7 @@ struct ETermApp: App {
         WindowGroup {
             ContentView()
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.automatic)
     }
 }

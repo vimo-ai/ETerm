@@ -1,24 +1,32 @@
 //
-//  TerminalView.swift
+//  TabTerminalView.swift
 //  ETerm
 //
-//  Complete terminal view with PTY + Sugarloaf rendering
+//  带 Tab 功能的终端视图 - 使用原生 SwiftUI TabView
 //
 
 import SwiftUI
 import AppKit
 import Metal
 import QuartzCore
+import Combine
 
-/// NSView that integrates terminal PTY with Sugarloaf rendering
-class TerminalNSView: NSView {
+/// 完整的终端管理器（包含 Sugarloaf 和多个 Tab）
+class TerminalManagerNSView: NSView {
     private var sugarloaf: SugarloafWrapper?
-    private var terminal: TerminalWrapper?
+    private var tabManager: TabManagerWrapper?
     private var updateTimer: Timer?
-    private var richTextId: Int = 0  // Rich text ID for terminal content
-    private var hasRenderedFirstFrame = false // 确保第一帧总能被渲染
+    private var hasRenderedFirstFrame = false
     private var scrollAccumulator: CGFloat = 0.0
     private var fontMetrics: SugarloafFontMetrics?
+
+    // 公开属性供 SwiftUI 访问
+    var tabIds: [Int] = []
+    var activeTabId: Int = -1
+
+    // 回调
+    var onTabsChanged: (([Int]) -> Void)?
+    var onActiveTabChanged: ((Int) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -30,7 +38,6 @@ class TerminalNSView: NSView {
         setupView()
     }
 
-    // 🔧 关键修复: 明确使用 CAMetalLayer
     override func makeBackingLayer() -> CALayer {
         let metalLayer = CAMetalLayer()
         metalLayer.device = MTLCreateSystemDefaultDevice()
@@ -40,11 +47,9 @@ class TerminalNSView: NSView {
     }
 
     private func setupView() {
-        // Layer-backed view for Metal
         wantsLayer = true
         layer?.contentsScale = window?.backingScaleFactor ?? 2.0
 
-        // Wait for window
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(windowDidBecomeKey),
@@ -54,7 +59,6 @@ class TerminalNSView: NSView {
     }
 
     @objc private func windowDidBecomeKey() {
-        // 延迟初始化
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.initialize()
         }
@@ -67,7 +71,6 @@ class TerminalNSView: NSView {
         let windowScale = window.backingScaleFactor
         let layerScale = layer?.contentsScale ?? windowScale
         let screenScale = window.screen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1.0
-        // 优先使用 screenScale（最可靠），然后是 layerScale
         let effectiveScale = max(screenScale, max(windowScale, layerScale))
         layer?.contentsScale = effectiveScale
 
@@ -77,7 +80,6 @@ class TerminalNSView: NSView {
 
         let scale = Float(effectiveScale)
 
-        // 添加 padding（和 Rust 侧保持一致）
         let PADDING_LEFT: Float = 10.0
         let PADDING_TOP: Float = 10.0
         let PADDING_RIGHT: Float = 10.0
@@ -102,41 +104,67 @@ class TerminalNSView: NSView {
         self.sugarloaf = sugarloaf
         let fontSize: Float = 14.0
 
-        // ⚠️ 重要发现：Sugarloaf 渲染时会在屏幕坐标系再乘一次 scale
-        // 所以我们应该用 points 来计算行列数，而不是 pixels！
         let metricsInPixels = sugarloaf.fontMetrics ?? SugarloafFontMetrics(
             cell_width: fontSize * 0.6 * scale,
             cell_height: fontSize * 1.2 * scale,
             line_height: fontSize * 1.2 * scale
         )
 
-        // 转换成 points 用于计算行列数
         let metricsInPoints = SugarloafFontMetrics(
             cell_width: metricsInPixels.cell_width / scale,
             cell_height: metricsInPixels.cell_height / scale,
             line_height: metricsInPixels.line_height / scale
         )
 
-        // 保存 points 版本供其他地方使用
         fontMetrics = metricsInPoints
-        richTextId = sugarloaf.createRichText()
 
-        // 用 points 计算列数（因为 Sugarloaf 渲染时会再乘 scale）
         let (cols, rows) = calculateGridSize(
-            widthPoints: widthPoints,   // 传 points
+            widthPoints: widthPoints,
             heightPoints: heightPoints,
-            metrics: metricsInPoints    // 用 points 版本的 metrics
+            metrics: metricsInPoints
         )
 
-        guard let terminal = TerminalWrapper(cols: cols, rows: rows, shell: "/bin/zsh") else {
+        guard let tabManager = TabManagerWrapper(
+            sugarloaf: sugarloaf,
+            cols: cols,
+            rows: rows,
+            shell: "/bin/zsh"
+        ) else {
             return
         }
 
-        self.terminal = terminal
+        self.tabManager = tabManager
+
+        // 创建第一个 Tab
+        createNewTab()
 
         startUpdateTimer()
         renderTerminal()
         needsDisplay = true
+    }
+
+    func createNewTab() {
+        guard let tabManager = tabManager else { return }
+
+        let newTabId = tabManager.createTab()
+        if newTabId >= 0 {
+            tabIds.append(newTabId)
+            activeTabId = newTabId
+            tabManager.setTabTitle(newTabId, title: "Shell")
+            onTabsChanged?(tabIds)
+            onActiveTabChanged?(activeTabId)
+        }
+    }
+
+    func switchToTab(_ tabId: Int) {
+        guard let tabManager = tabManager else { return }
+        guard tabIds.contains(tabId) else { return }
+
+        if tabManager.switchTab(tabId) {
+            activeTabId = tabId
+            onActiveTabChanged?(activeTabId)
+            renderTerminal()
+        }
     }
 
     private func startUpdateTimer() {
@@ -145,21 +173,25 @@ class TerminalNSView: NSView {
             self?.updateTerminal()
         }
     }
+
     private func updateTerminal() {
-        guard let terminal = terminal else { return }
+        guard let tabManager = tabManager else { return }
 
-        // 读取 PTY 输出
-        let hasNewData = terminal.readOutput()
+        let hasNewData = tabManager.readAllTabs()
 
-        // 只有在第一帧或有新数据时才渲染
         if !hasRenderedFirstFrame || hasNewData {
             renderTerminal()
             hasRenderedFirstFrame = true
         }
     }
 
+    private func renderTerminal() {
+        guard let tabManager = tabManager else { return }
+        _ = tabManager.renderActiveTab()
+    }
+
     override func scrollWheel(with event: NSEvent) {
-        guard let terminal = terminal else {
+        guard let tabManager = tabManager else {
             super.scrollWheel(with: event)
             return
         }
@@ -178,55 +210,40 @@ class TerminalNSView: NSView {
         }
 
         scrollAccumulator += deltaY
-        let threshold: CGFloat = 10.0  // 增加阈值，减少滚动敏感度
+        let threshold: CGFloat = 10.0
 
         while abs(scrollAccumulator) >= threshold {
-            let direction: Int32 = scrollAccumulator > 0 ? 1 : -1  // 每次只滚动 1 行
-            terminal.scroll(direction)
+            let direction: Int32 = scrollAccumulator > 0 ? 1 : -1
+            tabManager.scrollActiveTab(direction)
             scrollAccumulator -= threshold * (scrollAccumulator > 0 ? 1 : -1)
         }
 
         renderTerminal()
     }
 
-    private func renderTerminal() {
-        guard let sugarloaf = sugarloaf,
-              let terminal = terminal else { return }
-
-        // 使用 Rust 端的渲染 API
-        _ = terminal.renderToSugarloaf(sugarloaf: sugarloaf, richTextId: richTextId)
-    }
-
-
     override func keyDown(with event: NSEvent) {
-        guard let terminal = terminal else {
+        guard let tabManager = tabManager else {
             super.keyDown(with: event)
             return
         }
 
-        // 处理键盘输入
         if let characters = event.characters {
-            // 处理特殊键
             if event.modifierFlags.contains(.control) && characters == "c" {
-                // Ctrl+C
-                terminal.writeInput("\u{03}")
+                tabManager.writeInput("\u{03}")
                 return
             }
 
-            // 处理回车
-            if event.keyCode == 36 {  // Return key
-                terminal.writeInput("\r")
+            if event.keyCode == 36 {  // Return
+                tabManager.writeInput("\r")
                 return
             }
 
-            // 处理退格
-            if event.keyCode == 51 {  // Delete key
-                terminal.writeInput("\u{7F}")
+            if event.keyCode == 51 {  // Delete
+                tabManager.writeInput("\u{7F}")
                 return
             }
 
-            // 普通字符
-            terminal.writeInput(characters)
+            tabManager.writeInput(characters)
         }
     }
 
@@ -240,11 +257,8 @@ class TerminalNSView: NSView {
 
     override func layout() {
         super.layout()
-        guard let sugarloaf, let terminal else {
-            return
-        }
+        guard let tabManager else { return }
 
-        // 和初始化时保持一致的 padding
         let PADDING_LEFT: Float = 10.0
         let PADDING_TOP: Float = 10.0
         let PADDING_RIGHT: Float = 10.0
@@ -252,16 +266,16 @@ class TerminalNSView: NSView {
 
         let widthPoints = Float(bounds.width) - PADDING_LEFT - PADDING_RIGHT
         let heightPoints = Float(bounds.height) - PADDING_TOP - PADDING_BOTTOM
-        let scale = Float(window?.backingScaleFactor ?? 1.0)
 
-        // fontMetrics 存储的是 points，直接用 points 计算
         let metricsInPoints = self.fontMetrics ?? fallbackMetrics(for: 14.0)
 
-        let (cols, rows) = calculateGridSize(widthPoints: widthPoints, heightPoints: heightPoints, metrics: metricsInPoints)
+        let (cols, rows) = calculateGridSize(
+            widthPoints: widthPoints,
+            heightPoints: heightPoints,
+            metrics: metricsInPoints
+        )
 
-        terminal.resize(cols: cols, rows: rows)
-
-        // 重新渲染以匹配新的尺寸
+        tabManager.resizeAllTabs(cols: cols, rows: rows)
         renderTerminal()
     }
 
@@ -278,15 +292,13 @@ class TerminalNSView: NSView {
         heightPoints: Float,
         metrics: SugarloafFontMetrics
     ) -> (UInt16, UInt16) {
-        // metrics 已经是 pixels 单位（在调用前已转换）
         let width = max(widthPoints, 1.0)
         let height = max(heightPoints, 1.0)
         let charWidth = max(metrics.cell_width, 1.0)
-        // ⚠️ 关键：使用 line_height 而不是 cell_height 来计算行数
         let lineHeight = max(metrics.line_height, 1.0)
 
         let rawCols = Int(width / charWidth)
-        let rawRows = Int(height / lineHeight)  // 使用 line_height
+        let rawRows = Int(height / lineHeight)
         let cols = max(2, rawCols)
         let rows = max(1, rawRows)
 
@@ -301,22 +313,115 @@ class TerminalNSView: NSView {
     }
 }
 
-/// SwiftUI wrapper for TerminalNSView
-struct TerminalView: NSViewRepresentable {
-    func makeNSView(context: Context) -> TerminalNSView {
-        let view = TerminalNSView()
+/// 终端管理器协调器 - 保持单例
+class TerminalCoordinator: ObservableObject {
+    static let shared = TerminalCoordinator()
+
+    @Published var terminalView: TerminalManagerNSView?
+    @Published var tabIds: [Int] = []
+    @Published var activeTabId: Int = -1
+
+    private init() {}
+
+    func setTerminalView(_ view: TerminalManagerNSView) {
+        self.terminalView = view
+        view.onTabsChanged = { [weak self] ids in
+            DispatchQueue.main.async {
+                self?.tabIds = ids
+            }
+        }
+        view.onActiveTabChanged = { [weak self] id in
+            DispatchQueue.main.async {
+                self?.activeTabId = id
+            }
+        }
+    }
+}
+
+/// SwiftUI 包装器 - 单例视图
+struct TerminalManagerView: NSViewRepresentable {
+    @ObservedObject var coordinator = TerminalCoordinator.shared
+
+    func makeNSView(context: Context) -> TerminalManagerNSView {
+        // 如果已有实例，直接返回
+        if let existingView = coordinator.terminalView {
+            return existingView
+        }
+
+        // 创建新实例
+        let view = TerminalManagerNSView()
+        coordinator.setTerminalView(view)
         return view
     }
 
-    func updateNSView(_ nsView: TerminalNSView, context: Context) {
-        // 更新视图时的逻辑
+    func updateNSView(_ nsView: TerminalManagerNSView, context: Context) {
+        // 不需要做什么，状态由 coordinator 管理
+    }
+}
+
+/// 使用原生 SwiftUI TabView 的终端视图
+struct TabTerminalView: View {
+    @ObservedObject var coordinator = TerminalCoordinator.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 工具栏
+            if !coordinator.tabIds.isEmpty {
+                HStack {
+                    Button(action: createNewTab) {
+                        Label("新建 Tab", systemImage: "plus")
+                    }
+                    .keyboardShortcut("t", modifiers: .command)
+                    .help("⌘T")
+
+                    Spacer()
+
+                    Text("\(coordinator.tabIds.count) tab\(coordinator.tabIds.count > 1 ? "s" : "")")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
+                .padding(8)
+                .background(Color.clear)
+            }
+
+            // 终端内容
+            ZStack {
+                // 始终显示终端管理器视图（在后台）
+                TerminalManagerView()
+
+                // TabView 只用于显示 tab 栏，不显示内容
+                if !coordinator.tabIds.isEmpty {
+                    TabView(selection: Binding(
+                        get: { coordinator.activeTabId },
+                        set: { newId in
+                            coordinator.terminalView?.switchToTab(newId)
+                        }
+                    )) {
+                        ForEach(coordinator.tabIds, id: \.self) { tabId in
+                            Color.clear
+                                .tabItem {
+                                    if let index = coordinator.tabIds.firstIndex(of: tabId) {
+                                        Text("Tab \(index + 1)")
+                                    }
+                                }
+                                .tag(tabId)
+                        }
+                    }
+                    .tabViewStyle(.automatic)
+                }
+            }
+        }
+    }
+
+    private func createNewTab() {
+        coordinator.terminalView?.createNewTab()
     }
 }
 
 // MARK: - Preview
-struct TerminalView_Previews: PreviewProvider {
+struct TabTerminalView_Previews: PreviewProvider {
     static var previews: some View {
-        TerminalView()
+        TabTerminalView()
             .frame(width: 800, height: 600)
     }
 }

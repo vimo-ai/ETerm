@@ -20,25 +20,19 @@ class TerminalWrapper {
     let rows: UInt16
 
     init?(cols: UInt16, rows: UInt16, shell: String = "/bin/zsh") {
-        print("[TerminalWrapper] Creating terminal \(cols)x\(rows) with shell: \(shell)")
-
         let cShell = shell.cString(using: .utf8)
         guard let cShell = cShell else {
-            print("[TerminalWrapper] ❌ Failed to convert shell path to C string")
             return nil
         }
 
         let termHandle = terminal_create(cols, rows, cShell)
         guard termHandle != nil else {
-            print("[TerminalWrapper] ❌ Failed to create terminal")
             return nil
         }
 
         self.handle = termHandle
         self.cols = cols
         self.rows = rows
-
-        print("[TerminalWrapper] ✅ Terminal created successfully")
     }
 
     /// 读取 PTY 输出（非阻塞）
@@ -144,9 +138,25 @@ class TerminalWrapper {
         return result != 0
     }
 
+    /// 滚动终端视图
+    /// - Parameter deltaLines: 滚动行数（正数=向上滚动查看历史，负数=向下滚动）
+    func scroll(_ deltaLines: Int32) -> Bool {
+        guard let handle = handle else { return false }
+
+        let result = terminal_scroll(handle, deltaLines)
+        return result != 0
+    }
+
+    /// 渲染终端到 Sugarloaf
+    func renderToSugarloaf(sugarloaf: SugarloafWrapper, richTextId: Int) -> Bool {
+        guard let handle = handle else { return false }
+
+        let result = terminal_render_to_sugarloaf(handle, sugarloaf.handle, richTextId)
+        return result != 0
+    }
+
     deinit {
         if let handle = handle {
-            print("[TerminalWrapper] Freeing terminal")
             terminal_free(handle)
         }
     }

@@ -490,6 +490,7 @@ impl Sugarloaf<'_> {
                 frame.present();
             }
             Err(error) => {
+                eprintln!("SurfaceError: {:?}", error);
                 if error == wgpu::SurfaceError::OutOfMemory {
                     panic!("Swapchain error: {error}. Rendering cannot continue.")
                 }

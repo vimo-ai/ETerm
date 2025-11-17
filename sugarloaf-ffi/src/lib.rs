@@ -1,19 +1,74 @@
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use sugarloaf::{
-    font::{FontLibrary, fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle}},
+    font::{FontLibrary, fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle}, metrics::Metrics},
     layout::RootStyle, FragmentStyle, Sugarloaf, SugarloafRenderer,
-    SugarloafWindow, SugarloafWindowSize,
+    SugarloafWindow, SugarloafWindowSize, Object,
 };
+use parking_lot::RwLock;
 
 // 终端模块
 mod terminal;
 pub use terminal::*;
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SugarloafFontMetrics {
+    pub cell_width: f32,
+    pub cell_height: f32,
+    pub line_height: f32,
+}
+
+impl SugarloafFontMetrics {
+    fn from_metrics(metrics: Metrics) -> Self {
+        // ⚠️ 实测发现：Sugarloaf 实际渲染的行高是 cell_height × 2
+        // 这可能是因为包含了 ascent、descent、leading 等
+        // 所以这里返回 2 倍的 cell_height 用于计算行数
+        Self {
+            cell_width: metrics.cell_width as f32,
+            cell_height: metrics.cell_height as f32,
+            line_height: metrics.cell_height as f32 * 2.0,  // 实测 2 倍
+        }
+    }
+
+    fn fallback(font_size: f32) -> Self {
+        let cell_width = font_size * 0.6;
+        let cell_height = font_size * 1.2;
+        Self {
+            cell_width,
+            cell_height,
+            line_height: cell_height * 2.0,  // 实测 2 倍
+        }
+    }
+}
+
+static GLOBAL_FONT_METRICS: RwLock<Option<SugarloafFontMetrics>> = RwLock::new(None);
+
+pub(crate) fn set_global_font_metrics(metrics: SugarloafFontMetrics) {
+    *GLOBAL_FONT_METRICS.write() = Some(metrics);
+}
+
+pub(crate) fn global_font_metrics() -> Option<SugarloafFontMetrics> {
+    let guard = GLOBAL_FONT_METRICS.read();
+    guard.as_ref().copied()
+}
+
 /// Opaque pointer to Sugarloaf instance
 pub struct SugarloafHandle {
     instance: Sugarloaf<'static>,
     current_rt_id: Option<usize>,
+    _font_library: FontLibrary,
+    font_metrics: SugarloafFontMetrics,
+}
+
+impl SugarloafHandle {
+    fn set_objects(&mut self, objects: Vec<Object>) {
+        self.instance.set_objects(objects);
+    }
+
+    fn clear(&mut self) {
+        self.instance.clear();
+    }
 }
 
 /// Initialize Sugarloaf
@@ -28,19 +83,12 @@ pub extern "C" fn sugarloaf_new(
 ) -> *mut SugarloafHandle {
     // 验证输入
     if window_handle.is_null() {
-        eprintln!("[Sugarloaf FFI] Error: window_handle is null");
         return ptr::null_mut();
     }
 
     if width <= 0.0 || height <= 0.0 {
-        eprintln!("[Sugarloaf FFI] Error: invalid dimensions {}x{}", width, height);
         return ptr::null_mut();
     }
-
-    eprintln!("[Sugarloaf FFI] Initializing with:");
-    eprintln!("  - window_handle: {:?}", window_handle);
-    eprintln!("  - dimensions: {}x{}", width, height);
-    eprintln!("  - scale: {}", scale);
 
     // 创建 raw window handle (这里需要根据平台处理)
     #[cfg(target_os = "macos")]
@@ -74,32 +122,31 @@ pub extern "C" fn sugarloaf_new(
     let renderer = SugarloafRenderer::default();
 
     // 创建字体配置（添加中文字体支持）
-    eprintln!("[Sugarloaf FFI] Creating font library with CJK support...");
-
+    // 🔧 指定 Maple Mono NF CN 作为主字体
     let font_spec = SugarloafFonts {
         family: Some("Maple Mono NF CN".to_string()),
         size: font_size,
         hinting: true,
         regular: SugarloafFont {
-            family: "Maple Mono NF CN".to_string(),
+            family: "MapleMono-NF-CN-Regular".to_string(),
             weight: Some(400),
             style: SugarloafFontStyle::Normal,
             width: None,
         },
         bold: SugarloafFont {
-            family: "Maple Mono NF CN".to_string(),
+            family: "MapleMono-NF-CN-Bold".to_string(),
             weight: Some(700),
             style: SugarloafFontStyle::Normal,
             width: None,
         },
         italic: SugarloafFont {
-            family: "Maple Mono NF CN".to_string(),
+            family: "MapleMono-NF-CN-Italic".to_string(),
             weight: Some(400),
             style: SugarloafFontStyle::Italic,
             width: None,
         },
         bold_italic: SugarloafFont {
-            family: "Maple Mono NF CN".to_string(),
+            family: "MapleMono-NF-CN-BoldItalic".to_string(),
             weight: Some(700),
             style: SugarloafFontStyle::Italic,
             width: None,
@@ -107,44 +154,44 @@ pub extern "C" fn sugarloaf_new(
         ..Default::default()
     };
 
-    let (font_library, font_errors) = FontLibrary::new(font_spec);
+    let (font_library, _font_errors) = FontLibrary::new(font_spec);
 
-    if let Some(errors) = font_errors {
-        eprintln!("[Sugarloaf FFI] ⚠️  Font warnings: {:?}", errors);
-    }
-
-    eprintln!("[Sugarloaf FFI] Font library created with CJK support");
+    let font_metrics = {
+        let mut data = font_library.inner.write();
+        data.get_primary_metrics(font_size)
+            .map(SugarloafFontMetrics::from_metrics)
+            .unwrap_or_else(|| SugarloafFontMetrics::fallback(font_size))
+    };
+    set_global_font_metrics(font_metrics);
 
     let layout = RootStyle {
         font_size,
-        line_height: 1.5,  // 增加行高
+        line_height: 1.0,  // 和 Rio 保持一致
         scale_factor: scale,
     };
 
-    eprintln!("[Sugarloaf FFI] Layout: font_size={}, line_height=1.5, scale={}", font_size, scale);
+    let mut instance = match Sugarloaf::new(window, renderer, &font_library, layout) {
+        Ok(instance) => instance,
+        Err(with_errors) => with_errors.instance,
+    };
 
-    eprintln!("[Sugarloaf FFI] Creating Sugarloaf instance...");
-    match Sugarloaf::new(window, renderer, &font_library, layout) {
-        Ok(instance) => {
-            eprintln!("[Sugarloaf FFI] ✅ Successfully created Sugarloaf instance (no errors)");
-            let handle = Box::new(SugarloafHandle {
-                instance,
-                current_rt_id: None,
-            });
-            Box::into_raw(handle)
-        }
-        Err(with_errors) => {
-            eprintln!("[Sugarloaf FFI] ⚠️  Created Sugarloaf instance with errors:");
-            eprintln!("   {:?}", with_errors.errors);
-
-            // 即使有错误也返回实例（Rio 的做法）
-            let handle = Box::new(SugarloafHandle {
-                instance: with_errors.instance,
-                current_rt_id: None,
-            });
-            Box::into_raw(handle)
-        }
+    #[cfg(target_os = "macos")]
+    {
+        instance.set_background_color(Some(wgpu::Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,  // 完全透明,让窗口的磨砂效果显示出来
+        }));
     }
+
+    let handle = Box::new(SugarloafHandle {
+        instance,
+        current_rt_id: None,
+        _font_library: font_library,
+        font_metrics,
+    });
+    Box::into_raw(handle)
 }
 
 /// Create a new rich text state
@@ -155,9 +202,26 @@ pub extern "C" fn sugarloaf_create_rich_text(handle: *mut SugarloafHandle) -> us
     }
 
     let handle = unsafe { &mut *handle };
-    let rt_id = handle.instance.create_temp_rich_text();
+    let rt_id = handle.instance.create_rich_text();
     handle.current_rt_id = Some(rt_id);
     rt_id
+}
+
+/// Returns the cached font metrics used by Sugarloaf.
+#[no_mangle]
+pub extern "C" fn sugarloaf_get_font_metrics(
+    handle: *mut SugarloafHandle,
+    out_metrics: *mut SugarloafFontMetrics,
+) -> bool {
+    if handle.is_null() || out_metrics.is_null() {
+        return false;
+    }
+
+    let handle_ref = unsafe { &mut *handle };
+    unsafe {
+        *out_metrics = handle_ref.font_metrics;
+    }
+    true
 }
 
 /// Select a rich text state
@@ -240,21 +304,21 @@ pub extern "C" fn sugarloaf_commit_rich_text(handle: *mut SugarloafHandle, rt_id
         return;
     }
 
-    use sugarloaf::{Object, RichText, Quad};
+    use sugarloaf::{Object, RichText};
 
     let handle = unsafe { &mut *handle };
 
-    // 创建 RichText 对象，位置在左上角
+    // 创建 RichText 对象，位置在左上角 (0, 0)
     let rich_text_obj = Object::RichText(RichText {
         id: rt_id,
-        position: [10.0, 10.0],  // 左上角位置，留点边距
+        position: [0.0, 0.0],  // 左上角，与 Rio 终端一致
         lines: None,
     });
 
-    eprintln!("[Sugarloaf FFI] Committing RichText object with id {} at position [10, 10]", rt_id);
+    eprintln!("[Sugarloaf FFI] Committing RichText object with id {} at position [0, 0]", rt_id);
 
-    // 只设置 RichText（移除测试用的背景矩形）
-    handle.instance.set_objects(vec![rich_text_obj]);
+    // 只设置 RichText，移除测试矩形
+    handle.set_objects(vec![rich_text_obj]);
 }
 
 /// Clear the screen
@@ -265,7 +329,7 @@ pub extern "C" fn sugarloaf_clear(handle: *mut SugarloafHandle) {
     }
 
     let handle = unsafe { &mut *handle };
-    handle.instance.clear();
+    handle.clear();
 }
 
 /// Set objects (for testing with Quads)
@@ -275,11 +339,33 @@ pub extern "C" fn sugarloaf_set_test_objects(handle: *mut SugarloafHandle) {
         return;
     }
 
-    use sugarloaf::{Object, Quad};
+    use sugarloaf::{Object, Quad, RichText};
 
     let handle = unsafe { &mut *handle };
 
-    // 创建测试用的彩色矩形
+    eprintln!("[Sugarloaf FFI] Testing simple text rendering");
+
+    // 创建 rich text
+    let rt_id = handle.instance.create_temp_rich_text();
+    eprintln!("[Sugarloaf FFI] Created rich text ID: {}", rt_id);
+
+    // 选择并清空
+    let content = handle.instance.content();
+    content.sel(rt_id);
+    content.clear();
+
+    // 添加简单文本
+    eprintln!("[Sugarloaf FFI] Adding test text");
+    content.add_text("Hello, Sugarloaf!", FragmentStyle {
+        color: [1.0, 1.0, 0.0, 1.0], // 黄色
+        ..FragmentStyle::default()
+    });
+
+    // 构建
+    eprintln!("[Sugarloaf FFI] Building content");
+    content.build();
+
+    // 创建测试用的彩色矩形和文本对象
     let objects = vec![
         Object::Quad(Quad {
             position: [100.0, 100.0],
@@ -287,33 +373,141 @@ pub extern "C" fn sugarloaf_set_test_objects(handle: *mut SugarloafHandle) {
             color: [1.0, 0.0, 0.0, 1.0], // 红色
             ..Quad::default()
         }),
-        Object::Quad(Quad {
-            position: [350.0, 100.0],
-            size: [200.0, 200.0],
-            color: [0.0, 1.0, 0.0, 1.0], // 绿色
-            ..Quad::default()
-        }),
-        Object::Quad(Quad {
-            position: [600.0, 100.0],
-            size: [200.0, 200.0],
-            color: [0.0, 0.0, 1.0, 1.0], // 蓝色
-            ..Quad::default()
+        Object::RichText(RichText {
+            id: rt_id,
+            position: [150.0, 150.0],  // 放在红色矩形中间
+            lines: None,
         }),
     ];
 
-    eprintln!("[Sugarloaf FFI] Setting {} test objects (quads)", objects.len());
-    handle.instance.set_objects(objects);
+    eprintln!("[Sugarloaf FFI] Setting {} test objects (quad + richtext)", objects.len());
+    handle.set_objects(objects);
+}
+
+/// Render a simple rich text demo completely from Rust for integration testing.
+#[no_mangle]
+pub extern "C" fn sugarloaf_render_demo(handle: *mut SugarloafHandle) {
+    if handle.is_null() {
+        eprintln!("[Sugarloaf FFI] sugarloaf_render_demo called with null handle!");
+        return;
+    }
+
+    use sugarloaf::{Object, RichText};
+
+    let handle = unsafe { &mut *handle };
+    let rt_id = handle.instance.create_temp_rich_text();
+    let content = handle.instance.content();
+    content.sel(rt_id);
+    content.clear();
+
+    content.add_text(
+        "Rust-rendered Sugarloaf demo",
+        FragmentStyle {
+            color: [1.0, 0.85, 0.2, 1.0],
+            ..FragmentStyle::default()
+        },
+    );
+    content.new_line();
+    content.add_text(
+        "Line 2: 渲染链路验证成功 ✅",
+        FragmentStyle {
+            color: [0.6, 0.85, 1.0, 1.0],
+            ..FragmentStyle::default()
+        },
+    );
+    content.new_line();
+    content.add_text(
+        "Line 3: wgpu → CAMetalLayer present",
+        FragmentStyle {
+            color: [0.8, 0.8, 0.8, 1.0],
+            ..FragmentStyle::default()
+        },
+    );
+    content.build();
+
+    let object = Object::RichText(RichText {
+        id: rt_id,
+        position: [20.0, 40.0],
+        lines: None,
+    });
+
+    handle.set_objects(vec![object]);
+    handle.instance.render();
+}
+
+/// Render demo text using an existing rich text id (matching Swift's usage).
+#[no_mangle]
+pub extern "C" fn sugarloaf_render_demo_with_rich_text(
+    handle: *mut SugarloafHandle,
+    rich_text_id: usize,
+) {
+    if handle.is_null() {
+        eprintln!("[Sugarloaf FFI] sugarloaf_render_demo_with_rich_text called with null handle!");
+        return;
+    }
+
+    use sugarloaf::{Object, RichText};
+
+    let handle = unsafe { &mut *handle };
+    let content = handle.instance.content();
+    content.sel(rich_text_id);
+    content.clear();
+
+
+    content.add_text(
+        "[Swift→Rust] RichText demo via shared ID",
+        FragmentStyle {
+            color: [0.9, 0.9, 0.2, 1.0],
+            ..FragmentStyle::default()
+        },
+    );
+    content.new_line();
+    content.add_text(
+        "Line 2 via sugarloaf_render_demo_with_rich_text",
+        FragmentStyle {
+            color: [0.6, 0.85, 1.0, 1.0],
+            ..FragmentStyle::default()
+        },
+    );
+    content.new_line();
+    content.add_text(
+        "Line 3 ✓ verifying sugarloaf_create_rich_text flow",
+        FragmentStyle {
+            color: [0.8, 0.8, 0.8, 1.0],
+            ..FragmentStyle::default()
+        },
+    );
+    content.build();
+
+    let object = Object::RichText(RichText {
+        id: rich_text_id,
+        position: [20.0, 80.0],
+        lines: None,
+    });
+
+    handle.set_objects(vec![object]);
+    handle.instance.render();
 }
 
 /// Render
 #[no_mangle]
 pub extern "C" fn sugarloaf_render(handle: *mut SugarloafHandle) {
     if handle.is_null() {
+        eprintln!("[Sugarloaf FFI] render() called with null handle!");
         return;
     }
 
     let handle = unsafe { &mut *handle };
-    handle.instance.render();
+    eprintln!("[Sugarloaf FFI] 🎨 Calling sugarloaf.render()...");
+    // 添加panic捕获
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle.instance.render();
+    }));
+
+    match result {
+        Ok(_) => eprintln!("[Sugarloaf FFI] ✅ render() completed successfully"),
+        Err(e) => eprintln!("[Sugarloaf FFI] ❌ render() panicked: {:?}", e),
+    }
 }
 
 /// Free Sugarloaf instance

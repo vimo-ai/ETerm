@@ -9,9 +9,16 @@
 #define SugarloafBridge_h
 
 #include <stddef.h>
+#include <stdbool.h>
 
 // Opaque handle
 typedef void* SugarloafHandle;
+
+typedef struct {
+    float cell_width;
+    float cell_height;
+    float line_height;
+} SugarloafFontMetrics;
 
 // Initialize Sugarloaf
 SugarloafHandle sugarloaf_new(
@@ -43,6 +50,10 @@ void sugarloaf_commit_rich_text(SugarloafHandle handle, size_t rt_id);
 void sugarloaf_clear(SugarloafHandle handle);
 void sugarloaf_set_test_objects(SugarloafHandle handle);
 void sugarloaf_render(SugarloafHandle handle);
+void sugarloaf_render_demo(SugarloafHandle handle);
+void sugarloaf_render_demo_with_rich_text(SugarloafHandle handle, size_t rich_text_id);
+
+bool sugarloaf_get_font_metrics(SugarloafHandle handle, SugarloafFontMetrics* out_metrics);
 
 // Cleanup
 void sugarloaf_free(SugarloafHandle handle);
@@ -116,5 +127,85 @@ int terminal_resize(
 
 // Free terminal
 void terminal_free(TerminalHandle handle);
+
+// Scroll terminal view (positive = scroll up/history, negative = scroll down/bottom)
+int terminal_scroll(TerminalHandle handle, int delta_lines);
+
+// Render terminal to Sugarloaf (uses visible_rows API)
+int terminal_render_to_sugarloaf(
+    TerminalHandle handle,
+    SugarloafHandle sugarloaf,
+    size_t rich_text_id
+);
+
+// ===== Tab Manager API =====
+typedef void* TabManagerHandle;
+
+// Create tab manager
+TabManagerHandle tab_manager_new(
+    SugarloafHandle sugarloaf,
+    unsigned short cols,
+    unsigned short rows,
+    const char* shell_program
+);
+
+// Create a new tab (returns tab_id or -1 on failure)
+int tab_manager_create_tab(TabManagerHandle manager);
+
+// Switch to a specific tab
+int tab_manager_switch_tab(TabManagerHandle manager, size_t tab_id);
+
+// Close a specific tab
+int tab_manager_close_tab(TabManagerHandle manager, size_t tab_id);
+
+// Get active tab ID (returns -1 if no active tab)
+int tab_manager_get_active_tab(TabManagerHandle manager);
+
+// Read output from all tabs (updates all terminal states)
+int tab_manager_read_all_tabs(TabManagerHandle manager);
+
+// Render the currently active tab
+int tab_manager_render_active_tab(TabManagerHandle manager);
+
+// Write input to the active tab
+int tab_manager_write_input(TabManagerHandle manager, const char* data);
+
+// Scroll the active tab
+int tab_manager_scroll_active_tab(TabManagerHandle manager, int delta_lines);
+
+// Resize all tabs
+int tab_manager_resize_all_tabs(
+    TabManagerHandle manager,
+    unsigned short cols,
+    unsigned short rows
+);
+
+// Get tab count
+size_t tab_manager_get_tab_count(TabManagerHandle manager);
+
+// Get all tab IDs
+size_t tab_manager_get_tab_ids(
+    TabManagerHandle manager,
+    size_t* out_ids,
+    size_t max_count
+);
+
+// Set tab title
+int tab_manager_set_tab_title(
+    TabManagerHandle manager,
+    size_t tab_id,
+    const char* title
+);
+
+// Get tab title
+int tab_manager_get_tab_title(
+    TabManagerHandle manager,
+    size_t tab_id,
+    char* buffer,
+    size_t buffer_size
+);
+
+// Free tab manager
+void tab_manager_free(TabManagerHandle manager);
 
 #endif /* SugarloafBridge_h */

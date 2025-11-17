@@ -129,7 +129,6 @@ class ViewController: NSViewController, LocalProcessTerminalViewDelegate, NSUser
         ViewController.lastTerminal = terminal
         terminal.processDelegate = self
         terminal.feed(text: "Welcome to SwiftTerm")
-
         let shell = getShell()
         let shellIdiom = "-" + NSString(string: shell).lastPathComponent
         
@@ -151,7 +150,7 @@ class ViewController: NSViewController, LocalProcessTerminalViewDelegate, NSUser
     override func viewWillDisappear() {
         //terminal = nil
     }
-    
+
     @objc
     func zoomGestureHandler (_ sender: NSMagnificationGestureRecognizer) {
         if sender.magnification > 0 {
@@ -412,4 +411,3 @@ class ViewController: NSViewController, LocalProcessTerminalViewDelegate, NSUser
     }
     
 }
-

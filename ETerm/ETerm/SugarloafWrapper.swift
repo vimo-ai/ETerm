@@ -10,7 +10,8 @@ import AppKit
 
 /// Swift wrapper for Sugarloaf C FFI
 class SugarloafWrapper {
-    private var handle: SugarloafHandle?
+    var handle: SugarloafHandle?  // 公开 handle 供 TerminalWrapper 使用
+    private(set) var fontMetrics: SugarloafFontMetrics?
 
     init?(windowHandle: UnsafeMutableRawPointer,
           displayHandle: UnsafeMutableRawPointer,
@@ -22,6 +23,8 @@ class SugarloafWrapper {
         guard handle != nil else {
             return nil
         }
+
+        refreshFontMetrics()
     }
 
     deinit {
@@ -89,8 +92,35 @@ class SugarloafWrapper {
 
     /// 渲染
     func render() {
-        guard let handle = handle else { return }
+        guard let handle = handle else {
+            return
+        }
         sugarloaf_render(handle)
+    }
+
+    /// 调用纯 Rust 的富文本 demo
+    func renderRustDemo() {
+        guard let handle = handle else {
+            return
+        }
+        sugarloaf_render_demo(handle)
+    }
+
+    func renderRustDemo(usingRichTextId richTextId: Int) {
+        guard let handle = handle else {
+            return
+        }
+        sugarloaf_render_demo_with_rich_text(handle, richTextId)
+    }
+}
+
+extension SugarloafWrapper {
+    private func refreshFontMetrics() {
+        guard let handle = handle else { return }
+        var metrics = SugarloafFontMetrics(cell_width: 0, cell_height: 0, line_height: 0)
+        if sugarloaf_get_font_metrics(handle, &metrics) {
+            fontMetrics = metrics
+        }
     }
 }
 
