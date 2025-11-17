@@ -374,12 +374,14 @@ class TerminalManagerNSView: NSView {
                 }
             } else {
                 // 水平分隔线（检查 y 坐标）
-                if abs(y - position) <= tolerance {
+                // 🎯 关键：需要转换坐标系！Rust 从上往下，Swift 从下往上
+                let positionInView = bounds.height - position
+                if abs(y - positionInView) <= tolerance {
                     return PaneDivider(
                         paneId1: Int(dividerInfo.pane_id_1),
                         paneId2: Int(dividerInfo.pane_id_2),
                         type: .horizontal,
-                        position: position
+                        position: position  // 保存 Rust 坐标，后续拖动会用到
                     )
                 }
             }

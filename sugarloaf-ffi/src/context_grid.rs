@@ -528,9 +528,6 @@ impl ContextGrid {
             objects.push(item.get_rich_text_object().clone());
         }
 
-        // TODO: 添加分隔线
-        // objects.extend(self.borders());
-
         eprintln!("[ContextGrid] Total objects: {}", objects.len());
         objects
     }
