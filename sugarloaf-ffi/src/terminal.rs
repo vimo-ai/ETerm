@@ -26,6 +26,50 @@ pub struct TerminalCell {
     pub bg_b: u8,
 }
 
+/// 简单的选区范围
+#[derive(Debug, Clone, Copy)]
+pub struct SelectionRange {
+    pub start_col: u16,
+    pub start_row: u16,
+    pub end_col: u16,
+    pub end_row: u16,
+}
+
+impl SelectionRange {
+    /// 检查某个位置是否在选区内
+    pub fn contains(&self, col: u16, row: i32) -> bool {
+        let row = row as u16;
+
+        // 归一化起点和终点（确保 start <= end）
+        let (start_row, start_col, end_row, end_col) = if self.start_row < self.end_row
+            || (self.start_row == self.end_row && self.start_col <= self.end_col)
+        {
+            (self.start_row, self.start_col, self.end_row, self.end_col)
+        } else {
+            (self.end_row, self.end_col, self.start_row, self.start_col)
+        };
+
+        // 检查是否在范围内
+        if row < start_row || row > end_row {
+            return false;
+        }
+
+        if row == start_row && row == end_row {
+            // 同一行
+            col >= start_col && col <= end_col
+        } else if row == start_row {
+            // 起始行
+            col >= start_col
+        } else if row == end_row {
+            // 结束行
+            col <= end_col
+        } else {
+            // 中间行
+            true
+        }
+    }
+}
+
 /// 终端句柄
 pub struct TerminalHandle {
     pty: Arc<Mutex<teletypewriter::Pty>>,
@@ -34,6 +78,7 @@ pub struct TerminalHandle {
     cols: u16,
     rows: u16,
     font_metrics: SugarloafFontMetrics,
+    selection: Arc<Mutex<Option<SelectionRange>>>,  // 🎯 添加选区状态
 }
 
 /// 简单的事件监听器实现 (不发送任何事件)
@@ -191,6 +236,7 @@ pub extern "C" fn terminal_create(
         cols,
         rows,
         font_metrics,
+        selection: Arc::new(Mutex::new(None)),  // 🎯 初始化选区为空
     });
 
     Box::into_raw(handle)
@@ -628,8 +674,11 @@ pub extern "C" fn terminal_render_to_sugarloaf(
     let terminal = handle_ref.terminal.lock();
 
     let rows = terminal.visible_rows();
-    let debug_overlay = false;
+    let _debug_overlay = false;
     let _cursor = terminal.cursor();
+
+    // 🎯 获取选区范围（用于高亮）
+    let selection_range = handle_ref.selection.lock().clone();
 
     // 获取 content builder - 使用链式调用
     let content = sugarloaf_ref.instance.content();
@@ -638,16 +687,16 @@ pub extern "C" fn terminal_render_to_sugarloaf(
     use sugarloaf::FragmentStyle;
 
     // 渲染所有可见行
-    for row in rows.iter() {
-        // 🔍 调试：打印第一行的详细信息
+    for (row_idx, row) in rows.iter().enumerate() {
         // ⚠️ 关键修复：在每一行开始时调用 new_line()（匹配 Rio 示例的做法）
         content.new_line();
 
         let cols = row.len();
+        let row_num = row_idx as i32;  // 🎯 使用枚举索引作为行号
 
-        // 跟踪当前颜色，以便批量渲染相同颜色的字符
+        // 跟踪当前颜色和选区状态，以便批量渲染相同样式的字符
         let mut current_line = String::new();
-        let mut current_style: Option<((u8, u8, u8), f32)> = None;
+        let mut current_style: Option<((u8, u8, u8), f32, bool)> = None;  // 添加 is_selected
 
         for col in 0..cols {
             let cell = &row.inner[col];
@@ -664,12 +713,21 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                 1.0
             };
 
-            if let Some((prev_fg, prev_width)) = current_style {
-                if (prev_fg != fg_color || (prev_width - glyph_width).abs() > f32::EPSILON)
+            // 🎯 检查当前 cell 是否在选区内
+            let is_selected = selection_range
+                .as_ref()
+                .map(|range| range.contains(col as u16, row_num))
+                .unwrap_or(false);
+
+            // 如果样式改变（颜色/宽度/选区状态），需要 flush 当前累积的文本
+            if let Some((prev_fg, prev_width, prev_selected)) = current_style {
+                if (prev_fg != fg_color
+                    || (prev_width - glyph_width).abs() > f32::EPSILON
+                    || prev_selected != is_selected)  // 🎯 选区状态改变也要 flush
                     && !current_line.is_empty()
                 {
                     let (r, g, b) = prev_fg;
-                    let style = FragmentStyle {
+                    let mut style = FragmentStyle {
                         color: [
                             r as f32 / 255.0,
                             g as f32 / 255.0,
@@ -679,18 +737,26 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                         width: prev_width,
                         ..FragmentStyle::default()
                     };
+
+                    // 🎨 应用选区高亮
+                    if prev_selected {
+                        style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
+                        // 可选：反色前景色
+                        // style.color = [1.0, 1.0, 1.0, 1.0];
+                    }
+
                     content.add_text(&current_line, style);
                     current_line.clear();
                 }
             }
 
             current_line.push(cell.c);
-            current_style = Some((fg_color, glyph_width));
+            current_style = Some((fg_color, glyph_width, is_selected));  // 🎯 保存选区状态
         }
 
         if !current_line.is_empty() {
-            if let Some(((r, g, b), width)) = current_style {
-                let style = FragmentStyle {
+            if let Some(((r, g, b), width, is_selected)) = current_style {
+                let mut style = FragmentStyle {
                     color: [
                         r as f32 / 255.0,
                         g as f32 / 255.0,
@@ -700,6 +766,12 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                     width,
                     ..FragmentStyle::default()
                 };
+
+                // 🎨 应用选区高亮
+                if is_selected {
+                    style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
+                }
+
                 content.add_text(&current_line, style);
             }
         } else {
@@ -1115,6 +1187,25 @@ impl TabManager {
         }
         None
     }
+
+    /// 获取当前 Tab 的所有分隔线
+    fn get_dividers(&self) -> Vec<crate::context_grid::DividerInfo> {
+        if let Some(tab_id) = self.active_tab_id {
+            if let Some(tab_info) = self.tabs.get(&tab_id) {
+                return tab_info.grid.get_dividers();
+            }
+        }
+        Vec::new()
+    }
+
+    /// 调整分隔线位置
+    fn resize_divider(&mut self, pane_id_1: usize, pane_id_2: usize, delta: f32) -> bool {
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            tab_info.grid.resize_divider(pane_id_1, pane_id_2, delta)
+        } else {
+            false
+        }
+    }
 }
 
 // ============================================================================
@@ -1256,6 +1347,31 @@ pub extern "C" fn tab_manager_scroll_active_tab(
 
     let manager = unsafe { &mut *manager };
     manager.scroll_active_tab(delta_lines)
+}
+
+/// 滚动指定 pane（不改变焦点）- 用于鼠标位置滚动
+#[no_mangle]
+pub extern "C" fn tab_manager_scroll_pane(
+    manager: *mut TabManager,
+    pane_id: usize,
+    delta_lines: i32,
+) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    if let Some(tab_info) = manager.get_active_tab_mut() {
+        // 直接操作指定 pane，不通过 grid.current
+        if let Some(pane) = tab_info.grid.get_mut(pane_id) {
+            let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+            terminal_scroll(terminal_ptr, delta_lines)
+        } else {
+            false
+        }
+    } else {
+        false
+    }
 }
 
 /// 调整所有 Tab 的大小
@@ -1477,4 +1593,293 @@ pub extern "C" fn tab_manager_get_pane_info(
     } else {
         false
     }
+}
+
+/// 分隔线信息结构（用于 FFI）
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DividerInfoFFI {
+    pub pane_id_1: usize,
+    pub pane_id_2: usize,
+    pub divider_type: u8,  // 0=vertical, 1=horizontal
+    pub position: f32,     // 逻辑坐标
+}
+
+/// 获取当前 Tab 的所有分隔线
+/// out_dividers: 输出数组
+/// max_count: 数组最大容量
+/// 返回实际分隔线数量
+#[no_mangle]
+pub extern "C" fn tab_manager_get_dividers(
+    manager: *mut TabManager,
+    out_dividers: *mut DividerInfoFFI,
+    max_count: usize,
+) -> usize {
+    if manager.is_null() || out_dividers.is_null() {
+        return 0;
+    }
+
+    let manager = unsafe { &*manager };
+    let dividers = manager.get_dividers();
+    let count = dividers.len().min(max_count);
+
+    for (i, divider) in dividers.iter().take(count).enumerate() {
+        unsafe {
+            let out = out_dividers.add(i);
+            (*out).pane_id_1 = divider.pane_id_1;
+            (*out).pane_id_2 = divider.pane_id_2;
+            (*out).divider_type = divider.divider_type;
+            (*out).position = divider.position;
+        }
+    }
+
+    count
+}
+
+/// 调整分隔线位置
+/// pane_id_1, pane_id_2: 分隔线两侧的 pane ID
+/// delta: 移动量（逻辑坐标），正数向右/下，负数向左/上
+#[no_mangle]
+pub extern "C" fn tab_manager_resize_divider(
+    manager: *mut TabManager,
+    pane_id_1: usize,
+    pane_id_2: usize,
+    delta: f32,
+) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.resize_divider(pane_id_1, pane_id_2, delta)
+}
+
+// ============================================================================
+// Text Selection API
+// ============================================================================
+
+/// Selection type (matching C enum)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub enum SelectionTypeFFI {
+    Simple = 0,
+    Semantic = 1,
+    Lines = 2,
+}
+
+/// Start text selection in the active pane
+#[no_mangle]
+pub extern "C" fn tab_manager_start_selection(
+    manager: *mut TabManager,
+    col: u16,
+    row: u16,
+    selection_type: SelectionTypeFFI,
+) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+
+    if let Some(tab_info) = manager.get_active_tab_mut() {
+        if let Some(pane) = tab_info.grid.get_current_mut() {
+            let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+            return terminal_start_selection(terminal_ptr, col, row, selection_type);
+        }
+    }
+    false
+}
+
+/// Update selection end point in the active pane
+#[no_mangle]
+pub extern "C" fn tab_manager_update_selection(
+    manager: *mut TabManager,
+    col: u16,
+    row: u16,
+) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+
+    if let Some(tab_info) = manager.get_active_tab_mut() {
+        if let Some(pane) = tab_info.grid.get_current_mut() {
+            let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+            return terminal_update_selection(terminal_ptr, col, row);
+        }
+    }
+    false
+}
+
+/// Clear selection in the active pane
+#[no_mangle]
+pub extern "C" fn tab_manager_clear_selection(manager: *mut TabManager) {
+    if manager.is_null() {
+        return;
+    }
+
+    let manager = unsafe { &mut *manager };
+
+    if let Some(tab_info) = manager.get_active_tab_mut() {
+        if let Some(pane) = tab_info.grid.get_current_mut() {
+            let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+            terminal_clear_selection(terminal_ptr);
+        }
+    }
+}
+
+/// Get selected text from the active pane
+#[no_mangle]
+pub extern "C" fn tab_manager_get_selected_text(
+    manager: *mut TabManager,
+    buffer: *mut c_char,
+    buffer_size: usize,
+) -> usize {
+    if manager.is_null() || buffer.is_null() || buffer_size == 0 {
+        return 0;
+    }
+
+    let manager = unsafe { &mut *manager };
+
+    if let Some(tab_info) = manager.get_active_tab_mut() {
+        if let Some(pane) = tab_info.grid.get_current_mut() {
+            let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+            return terminal_get_selected_text(terminal_ptr, buffer, buffer_size);
+        }
+    }
+    0
+}
+
+// ============================================================================
+// Terminal-level Selection Functions
+// ============================================================================
+
+/// Start text selection in a terminal
+#[no_mangle]
+pub extern "C" fn terminal_start_selection(
+    handle: *mut TerminalHandle,
+    col: u16,
+    row: u16,
+    _selection_type: SelectionTypeFFI,  // 暂时不使用，未来可以实现 Semantic/Lines 模式
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let handle = unsafe { &mut *handle };
+
+    // 创建新的选区（起点和终点相同）
+    let range = SelectionRange {
+        start_col: col,
+        start_row: row,
+        end_col: col,
+        end_row: row,
+    };
+
+    *handle.selection.lock() = Some(range);
+
+    eprintln!("[Selection] Started selection at ({}, {})", col, row);
+    true
+}
+
+/// Update selection end point
+#[no_mangle]
+pub extern "C" fn terminal_update_selection(
+    handle: *mut TerminalHandle,
+    col: u16,
+    row: u16,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let mut selection_lock = handle.selection.lock();
+
+    if let Some(ref mut range) = *selection_lock {
+        // 更新终点
+        range.end_col = col;
+        range.end_row = row;
+        eprintln!("[Selection] Updated to ({}, {})", col, row);
+        true
+    } else {
+        eprintln!("[Selection] No active selection to update");
+        false
+    }
+}
+
+/// Clear selection
+#[no_mangle]
+pub extern "C" fn terminal_clear_selection(handle: *mut TerminalHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+    *handle.selection.lock() = None;
+    eprintln!("[Selection] Cleared");
+}
+
+/// Get selected text
+#[no_mangle]
+pub extern "C" fn terminal_get_selected_text(
+    handle: *mut TerminalHandle,
+    buffer: *mut c_char,
+    buffer_size: usize,
+) -> usize {
+    if handle.is_null() || buffer.is_null() || buffer_size == 0 {
+        return 0;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let selection_lock = handle.selection.lock();
+    let terminal = handle.terminal.lock();
+
+    if let Some(range) = *selection_lock {
+        // 归一化起点和终点
+        let (start_row, start_col, end_row, end_col) = if range.start_row < range.end_row
+            || (range.start_row == range.end_row && range.start_col <= range.end_col)
+        {
+            (range.start_row, range.start_col, range.end_row, range.end_col)
+        } else {
+            (range.end_row, range.end_col, range.start_row, range.start_col)
+        };
+
+        // 提取文本
+        let mut text = String::new();
+        use rio_backend::crosswords::pos::{Pos, Line, Column};
+
+        for row in start_row..=end_row {
+            let line_start_col = if row == start_row { start_col } else { 0 };
+            let line_end_col = if row == end_row { end_col } else { handle.cols - 1 };
+
+            for col in line_start_col..=line_end_col {
+                let pos = Pos {
+                    row: Line(row as i32),
+                    col: Column(col as usize),
+                };
+                let cell = &terminal.grid[pos];
+                text.push(cell.c);
+            }
+
+            if row < end_row {
+                text.push('\n');
+            }
+        }
+
+        let bytes = text.trim_end().as_bytes();
+        let copy_len = bytes.len().min(buffer_size - 1);
+
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer as *mut u8, copy_len);
+            *buffer.add(copy_len) = 0; // null terminator
+        }
+
+        eprintln!("[Selection] Extracted text: {} chars", copy_len);
+        return copy_len;
+    }
+
+    eprintln!("[Selection] No selection");
+    0
 }

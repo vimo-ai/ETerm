@@ -189,6 +189,14 @@ int tab_manager_write_input(TabManagerHandle manager, const char* data);
 // Scroll the active tab
 int tab_manager_scroll_active_tab(TabManagerHandle manager, int delta_lines);
 
+// Scroll a specific pane (without changing focus) - for mouse position scrolling
+// Returns 0 on failure, non-zero on success
+int tab_manager_scroll_pane(
+    TabManagerHandle manager,
+    size_t pane_id,
+    int delta_lines
+);
+
 // Resize all tabs
 int tab_manager_resize_all_tabs(
     TabManagerHandle manager,
@@ -268,6 +276,73 @@ int tab_manager_get_pane_info(
     TabManagerHandle manager,
     size_t pane_id,
     PaneInfo* out_info
+);
+
+// ===== Divider Resizing API =====
+
+// Divider information
+typedef struct {
+    size_t pane_id_1;      // Left/top pane
+    size_t pane_id_2;      // Right/bottom pane
+    unsigned char divider_type;  // 0=vertical (left-right), 1=horizontal (top-bottom)
+    float position;        // Divider position in logical coordinates
+} DividerInfo;
+
+// Get all dividers in the current tab
+// Returns the number of dividers found
+size_t tab_manager_get_dividers(
+    TabManagerHandle manager,
+    DividerInfo* out_dividers,
+    size_t max_count
+);
+
+// Resize divider by moving it
+// delta: movement in logical coordinates (positive = right/down, negative = left/up)
+// Returns 0 on failure, non-zero on success
+int tab_manager_resize_divider(
+    TabManagerHandle manager,
+    size_t pane_id_1,
+    size_t pane_id_2,
+    float delta
+);
+
+// ===== Text Selection API =====
+
+// Selection type
+typedef enum {
+    SelectionTypeSimple = 0,    // Normal drag selection
+    SelectionTypeSemantic = 1,  // Word selection (double-click)
+    SelectionTypeLines = 2,     // Line selection (triple-click)
+} SelectionType;
+
+// Start text selection in the active pane
+// col, row are in terminal grid coordinates (not pixels)
+// Returns 0 on failure, non-zero on success
+int tab_manager_start_selection(
+    TabManagerHandle manager,
+    unsigned short col,
+    unsigned short row,
+    SelectionType type
+);
+
+// Update selection end point in the active pane
+// col, row are in terminal grid coordinates
+// Returns 0 on failure, non-zero on success
+int tab_manager_update_selection(
+    TabManagerHandle manager,
+    unsigned short col,
+    unsigned short row
+);
+
+// Clear selection in the active pane
+void tab_manager_clear_selection(TabManagerHandle manager);
+
+// Get selected text from the active pane
+// Returns the number of bytes written to buffer (excluding null terminator)
+size_t tab_manager_get_selected_text(
+    TabManagerHandle manager,
+    char* buffer,
+    size_t buffer_size
 );
 
 #endif /* SugarloafBridge_h */

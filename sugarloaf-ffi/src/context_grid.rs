@@ -118,6 +118,15 @@ impl ContextGridItem {
     }
 }
 
+/// 分隔线信息
+#[derive(Debug, Clone, Copy)]
+pub struct DividerInfo {
+    pub pane_id_1: usize,   // 左/上 pane
+    pub pane_id_2: usize,   // 右/下 pane
+    pub divider_type: u8,   // 0=vertical (左右), 1=horizontal (上下)
+    pub position: f32,      // 分隔线的逻辑坐标（x 或 y）
+}
+
 /// ContextGrid - 管理一个 Tab 内的所有 Split Panes
 pub struct ContextGrid {
     pub width: f32,
@@ -642,6 +651,214 @@ impl ContextGrid {
             let height = item.dimension.height / self.scale;
             (pos[0], pos[1], width, height)
         })
+    }
+
+    /// 获取所有分隔线的信息
+    pub fn get_dividers(&self) -> Vec<DividerInfo> {
+        let mut dividers = Vec::new();
+
+        for item in self.inner.values() {
+            // 检查右侧 pane（垂直分隔线）
+            if let Some(right_id) = item.right {
+                if self.inner.contains_key(&right_id) {
+                    // 分隔线位置 = 左 pane 的 x + width
+                    let divider_x = item.position()[0] + (item.dimension.width / self.scale);
+                    dividers.push(DividerInfo {
+                        pane_id_1: item.pane_id,
+                        pane_id_2: right_id,
+                        divider_type: 0,  // vertical
+                        position: divider_x,
+                    });
+                }
+            }
+
+            // 检查下方 pane（水平分隔线）
+            if let Some(down_id) = item.down {
+                if self.inner.contains_key(&down_id) {
+                    // 分隔线位置 = 上 pane 的 y + height
+                    let divider_y = item.position()[1] + (item.dimension.height / self.scale);
+                    dividers.push(DividerInfo {
+                        pane_id_1: item.pane_id,
+                        pane_id_2: down_id,
+                        divider_type: 1,  // horizontal
+                        position: divider_y,
+                    });
+                }
+            }
+        }
+
+        dividers
+    }
+
+    /// 调整分隔线位置（调整相邻两个 pane 的大小）
+    /// delta: 正数表示向右/下移动，负数表示向左/上移动（逻辑坐标）
+    pub fn resize_divider(
+        &mut self,
+        pane_id_1: usize,
+        pane_id_2: usize,
+        delta: f32,  // 逻辑坐标的偏移量
+    ) -> bool {
+        eprintln!("[ContextGrid] resize_divider: pane {} <-> {}, delta: {}",
+                  pane_id_1, pane_id_2, delta);
+
+        // 检查是垂直还是水平分隔线
+        let is_vertical = {
+            if let Some(pane_1) = self.inner.get(&pane_id_1) {
+                pane_1.right == Some(pane_id_2)
+            } else {
+                return false;
+            }
+        };
+
+        if is_vertical {
+            self.resize_vertical_divider(pane_id_1, pane_id_2, delta)
+        } else {
+            self.resize_horizontal_divider(pane_id_1, pane_id_2, delta)
+        }
+    }
+
+    /// 调整垂直分隔线（左右分割）
+    fn resize_vertical_divider(
+        &mut self,
+        left_pane_id: usize,
+        right_pane_id: usize,
+        delta: f32,
+    ) -> bool {
+        // 最小 pane 宽度（逻辑坐标）
+        const MIN_PANE_WIDTH: f32 = 100.0;
+
+        // 获取当前尺寸
+        let (left_width, right_width) = {
+            let left = match self.inner.get(&left_pane_id) {
+                Some(p) => p,
+                None => return false,
+            };
+            let right = match self.inner.get(&right_pane_id) {
+                Some(p) => p,
+                None => return false,
+            };
+            (left.dimension.width / self.scale, right.dimension.width / self.scale)
+        };
+
+        // 计算新尺寸（确保不小于最小值）
+        let new_left_width = (left_width + delta).max(MIN_PANE_WIDTH);
+        let new_right_width = (right_width - delta).max(MIN_PANE_WIDTH);
+
+        eprintln!("[ContextGrid] Vertical resize: left {} -> {}, right {} -> {}",
+                  left_width, new_left_width, right_width, new_right_width);
+
+        // 先计算新的列数（避免借用冲突）
+        let new_left_width_pixels = new_left_width * self.scale;
+        let new_right_width_pixels = new_right_width * self.scale;
+        let new_left_cols = self.calculate_cols(new_left_width_pixels);
+        let new_right_cols = self.calculate_cols(new_right_width_pixels);
+
+        // 更新左 pane 尺寸
+        if let Some(left_pane) = self.inner.get_mut(&left_pane_id) {
+            left_pane.dimension.update_width(new_left_width_pixels);
+            left_pane.cols = new_left_cols;
+            let left_rows = left_pane.rows;
+            let terminal_ptr = &mut *left_pane.terminal as *mut crate::TerminalHandle;
+            eprintln!("[ContextGrid] Resizing left pane terminal to {}x{}", new_left_cols, left_rows);
+            crate::terminal_resize(terminal_ptr, new_left_cols, left_rows);
+        }
+
+        // 更新右 pane 尺寸
+        if let Some(right_pane) = self.inner.get_mut(&right_pane_id) {
+            right_pane.dimension.update_width(new_right_width_pixels);
+            right_pane.cols = new_right_cols;
+            let right_rows = right_pane.rows;
+            let terminal_ptr = &mut *right_pane.terminal as *mut crate::TerminalHandle;
+            eprintln!("[ContextGrid] Resizing right pane terminal to {}x{}", new_right_cols, right_rows);
+            crate::terminal_resize(terminal_ptr, new_right_cols, right_rows);
+        }
+
+        // 重新计算所有位置
+        self.calculate_positions_for_affected_nodes(&[left_pane_id, right_pane_id]);
+
+        true
+    }
+
+    /// 调整水平分隔线（上下分割）
+    fn resize_horizontal_divider(
+        &mut self,
+        top_pane_id: usize,
+        bottom_pane_id: usize,
+        delta: f32,
+    ) -> bool {
+        // 最小 pane 高度（逻辑坐标）
+        const MIN_PANE_HEIGHT: f32 = 50.0;
+
+        // 获取当前尺寸
+        let (top_height, bottom_height) = {
+            let top = match self.inner.get(&top_pane_id) {
+                Some(p) => p,
+                None => return false,
+            };
+            let bottom = match self.inner.get(&bottom_pane_id) {
+                Some(p) => p,
+                None => return false,
+            };
+            (top.dimension.height / self.scale, bottom.dimension.height / self.scale)
+        };
+
+        // 计算新尺寸（确保不小于最小值）
+        let new_top_height = (top_height + delta).max(MIN_PANE_HEIGHT);
+        let new_bottom_height = (bottom_height - delta).max(MIN_PANE_HEIGHT);
+
+        eprintln!("[ContextGrid] Horizontal resize: top {} -> {}, bottom {} -> {}",
+                  top_height, new_top_height, bottom_height, new_bottom_height);
+
+        // 先计算新的行数（避免借用冲突）
+        let new_top_height_pixels = new_top_height * self.scale;
+        let new_bottom_height_pixels = new_bottom_height * self.scale;
+        let new_top_rows = self.calculate_rows(new_top_height_pixels);
+        let new_bottom_rows = self.calculate_rows(new_bottom_height_pixels);
+
+        // 更新上 pane 尺寸
+        if let Some(top_pane) = self.inner.get_mut(&top_pane_id) {
+            top_pane.dimension.update_height(new_top_height_pixels);
+            top_pane.rows = new_top_rows;
+            let top_cols = top_pane.cols;
+            let terminal_ptr = &mut *top_pane.terminal as *mut crate::TerminalHandle;
+            eprintln!("[ContextGrid] Resizing top pane terminal to {}x{}", top_cols, new_top_rows);
+            crate::terminal_resize(terminal_ptr, top_cols, new_top_rows);
+        }
+
+        // 更新下 pane 尺寸
+        if let Some(bottom_pane) = self.inner.get_mut(&bottom_pane_id) {
+            bottom_pane.dimension.update_height(new_bottom_height_pixels);
+            bottom_pane.rows = new_bottom_rows;
+            let bottom_cols = bottom_pane.cols;
+            let terminal_ptr = &mut *bottom_pane.terminal as *mut crate::TerminalHandle;
+            eprintln!("[ContextGrid] Resizing bottom pane terminal to {}x{}", bottom_cols, new_bottom_rows);
+            crate::terminal_resize(terminal_ptr, bottom_cols, new_bottom_rows);
+        }
+
+        // 重新计算所有位置
+        self.calculate_positions_for_affected_nodes(&[top_pane_id, bottom_pane_id]);
+
+        true
+    }
+
+    /// 根据像素宽度计算终端列数
+    fn calculate_cols(&self, width_pixels: f32) -> u16 {
+        let metrics = crate::global_font_metrics().unwrap_or_else(|| {
+            crate::SugarloafFontMetrics::fallback(14.0)
+        });
+        // metrics.cell_width 是像素值，width_pixels 也是像素值
+        let cols = (width_pixels / metrics.cell_width).max(2.0) as u16;
+        cols
+    }
+
+    /// 根据像素高度计算终端行数
+    fn calculate_rows(&self, height_pixels: f32) -> u16 {
+        let metrics = crate::global_font_metrics().unwrap_or_else(|| {
+            crate::SugarloafFontMetrics::fallback(14.0)
+        });
+        // metrics.line_height 是像素值，height_pixels 也是像素值
+        let rows = (height_pixels / metrics.line_height).max(1.0) as u16;
+        rows
     }
 }
 

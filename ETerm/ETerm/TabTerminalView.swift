@@ -11,6 +11,20 @@ import Metal
 import QuartzCore
 import Combine
 
+/// 分隔线类型
+enum PaneDividerType {
+    case vertical    // 垂直（左右分割）
+    case horizontal  // 水平（上下分割）
+}
+
+/// 分隔线信息
+struct PaneDivider {
+    let paneId1: Int
+    let paneId2: Int
+    let type: PaneDividerType
+    let position: CGFloat  // 逻辑坐标
+}
+
 /// 完整的终端管理器（包含 Sugarloaf 和多个 Tab）
 class TerminalManagerNSView: NSView {
     private var sugarloaf: SugarloafWrapper?
@@ -33,6 +47,12 @@ class TerminalManagerNSView: NSView {
     var onTabsChanged: (([Int]) -> Void)?
     var onActiveTabChanged: ((Int) -> Void)?
 
+    // 🎯 分隔线拖动相关
+    private var isDraggingDivider = false
+    private var draggingDivider: PaneDivider?
+    private var dragStartLocation: CGPoint = .zero
+    private var currentHoverDivider: PaneDivider?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupView()
@@ -54,6 +74,15 @@ class TerminalManagerNSView: NSView {
     private func setupView() {
         wantsLayer = true
         layer?.contentsScale = window?.backingScaleFactor ?? 2.0
+
+        // 🎯 启用鼠标移动追踪（用于检测分隔线悬停）
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
 
         NotificationCenter.default.addObserver(
             self,
@@ -290,57 +319,204 @@ class TerminalManagerNSView: NSView {
             return
         }
 
+        // 🎯 获取鼠标位置（逻辑坐标）
+        let locationInView = convert(event.locationInWindow, from: nil)
+        let x = Float(locationInView.x)
+        let y = Float(locationInView.y)
+
+        // 查找鼠标下的 pane
+        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
+
         scrollAccumulator += deltaY
         let threshold: CGFloat = 10.0
 
         while abs(scrollAccumulator) >= threshold {
             let direction: Int32 = scrollAccumulator > 0 ? 1 : -1
-            tabManager.scrollActiveTab(direction)
+
+            if paneId >= 0 {
+                // 🎯 滚动鼠标下的 pane（不改变焦点）
+                tab_manager_scroll_pane(tabManager.handle, size_t(paneId), direction)
+            } else {
+                // 鼠标不在任何 pane 上（例如在 padding 区域），滚动激活的 pane
+                tabManager.scrollActiveTab(direction)
+            }
+
             scrollAccumulator -= threshold * (scrollAccumulator > 0 ? 1 : -1)
         }
 
         requestRender()
     }
 
-    // 🎯 点击切换 Pane 焦点
-    override func mouseDown(with event: NSEvent) {
-        print("[TabTerminalView] 🖱️ mouseDown called")
+    // 🎯 检查鼠标位置是否在分隔线上
+    private func findDividerAtPosition(x: CGFloat, y: CGFloat, tolerance: CGFloat = 5.0) -> PaneDivider? {
+        guard let tabManager = tabManager else { return nil }
 
+        // 获取所有分隔线（使用 C struct）
+        var dividersArray = Array(repeating: DividerInfo(pane_id_1: 0, pane_id_2: 0, divider_type: 0, position: 0), count: 10)
+        let count = tab_manager_get_dividers(tabManager.handle, &dividersArray, 10)
+
+        guard count > 0 else { return nil }
+
+        // 检查每条分隔线
+        for i in 0..<count {
+            let dividerInfo = dividersArray[i]
+            let position = CGFloat(dividerInfo.position)
+
+            if dividerInfo.divider_type == 0 {
+                // 垂直分隔线（检查 x 坐标）
+                if abs(x - position) <= tolerance {
+                    return PaneDivider(
+                        paneId1: Int(dividerInfo.pane_id_1),
+                        paneId2: Int(dividerInfo.pane_id_2),
+                        type: .vertical,
+                        position: position
+                    )
+                }
+            } else {
+                // 水平分隔线（检查 y 坐标）
+                if abs(y - position) <= tolerance {
+                    return PaneDivider(
+                        paneId1: Int(dividerInfo.pane_id_1),
+                        paneId2: Int(dividerInfo.pane_id_2),
+                        type: .horizontal,
+                        position: position
+                    )
+                }
+            }
+        }
+
+        return nil
+    }
+
+    // 🎯 鼠标移动：检测是否悬停在分隔线上
+    override func mouseMoved(with event: NSEvent) {
+        let locationInView = convert(event.locationInWindow, from: nil)
+
+        if let divider = findDividerAtPosition(x: locationInView.x, y: locationInView.y) {
+            // 鼠标在分隔线上，改变鼠标样式
+            if divider.type == .vertical {
+                NSCursor.resizeLeftRight.set()
+            } else {
+                NSCursor.resizeUpDown.set()
+            }
+            currentHoverDivider = divider
+        } else {
+            // 鼠标不在分隔线上，恢复箭头
+            NSCursor.arrow.set()
+            currentHoverDivider = nil
+        }
+
+        super.mouseMoved(with: event)
+    }
+
+    // 🎯 鼠标按下：开始拖动分隔线或切换焦点
+    override func mouseDown(with event: NSEvent) {
         guard let tabManager = tabManager else {
-            print("[TabTerminalView] ⚠️ No tabManager")
             super.mouseDown(with: event)
             return
         }
 
-        // 获取点击位置（逻辑坐标）
         let locationInView = convert(event.locationInWindow, from: nil)
         let x = Float(locationInView.x)
         let y = Float(locationInView.y)
 
-        print("[TabTerminalView] Click at logical coords: (\(x), \(y))")
-        print("[TabTerminalView] Bounds: \(bounds)")
-        print("[TabTerminalView] Current pane count: \(tab_manager_get_pane_count(tabManager.handle))")
+        // 🎯 优先检查是否点击在分隔线上
+        if let divider = findDividerAtPosition(x: CGFloat(x), y: CGFloat(y)) {
+            isDraggingDivider = true
+            draggingDivider = divider
+            dragStartLocation = locationInView
+            print("[Divider] 🖱️ Started dragging \(divider.type) divider at \(divider.position)")
+            return
+        }
 
-        // 查找点击的 pane
+        // 否则切换 pane 焦点
         let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
-        print("[TabTerminalView] Found pane ID: \(paneId)")
-
         if paneId >= 0 {
-            // 切换焦点到点击的 pane
-            let result = tab_manager_set_active_pane(tabManager.handle, size_t(paneId))
-            print("[TabTerminalView] Set active pane result: \(result)")
-
-            if result != 0 {
-                print("[TabTerminalView] ✅ Switched focus to pane \(paneId)")
-                requestRender()
-            } else {
-                print("[TabTerminalView] ❌ Failed to switch focus to pane \(paneId)")
-            }
-        } else {
-            print("[TabTerminalView] ❌ No pane found at click position")
+            tab_manager_set_active_pane(tabManager.handle, size_t(paneId))
+            requestRender()
         }
 
         super.mouseDown(with: event)
+    }
+
+    // 🎯 鼠标拖拽：拖动分隔线
+    override func mouseDragged(with event: NSEvent) {
+        guard isDraggingDivider, let divider = draggingDivider, let tabManager = tabManager else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let currentLocation = convert(event.locationInWindow, from: nil)
+
+        // 计算拖动偏移量（逻辑坐标）
+        let delta: Float
+        if divider.type == .vertical {
+            delta = Float(currentLocation.x - dragStartLocation.x)
+        } else {
+            // macOS 坐标系 Y 轴向上，需要反转：向下拖动（Y减小）应该让上面 pane 变大
+            delta = Float(dragStartLocation.y - currentLocation.y)
+        }
+
+        print("[Divider] 🎯 Drag delta: \(delta), current: \(currentLocation), start: \(dragStartLocation), scale: \(window?.backingScaleFactor ?? 1.0)")
+
+        // 调用 Rust FFI 调整分隔线
+        let success = tab_manager_resize_divider(
+            tabManager.handle,
+            size_t(divider.paneId1),
+            size_t(divider.paneId2),
+            delta
+        )
+
+        if success != 0 {
+            // 更新起始位置（累积拖动）
+            dragStartLocation = currentLocation
+
+            // 触发重新渲染
+            requestRender()
+        }
+
+        // 不调用 super，避免其他拖动行为
+    }
+
+    // 🎯 鼠标松开：结束拖动
+    override func mouseUp(with event: NSEvent) {
+        if isDraggingDivider {
+            isDraggingDivider = false
+            draggingDivider = nil
+            print("[Divider] ✅ Finished dragging")
+
+            // 恢复鼠标样式
+            NSCursor.arrow.set()
+        }
+
+        super.mouseUp(with: event)
+    }
+
+    // 🎯 辅助函数：全局坐标 → 终端网格坐标（相对于 Pane）
+    private func pixelToGridCoords(
+        globalX: Float,
+        globalY: Float,
+        paneX: Float,
+        paneY: Float,
+        metrics: SugarloafFontMetrics
+    ) -> (UInt16, UInt16) {
+        // 1️⃣ 转换为 Pane 内的相对坐标
+        let relativeX = globalX - paneX
+        let relativeY = globalY - paneY
+
+        // 2️⃣ 扣除 padding（每个 Pane 内部有 10pt padding）
+        let adjustedX = max(0, relativeX - 10.0)
+        let adjustedY = max(0, relativeY - 10.0)
+
+        // 3️⃣ 转换为网格坐标
+        // metrics 已经是 points（逻辑坐标），不需要除以 scale
+        let col = UInt16(adjustedX / metrics.cell_width)
+        let row = UInt16(adjustedY / metrics.line_height)
+
+        // 调试输出
+        print("[Coords] Global: (\(globalX), \(globalY)) -> Pane: (\(paneX), \(paneY)) -> Relative: (\(relativeX), \(relativeY)) -> Grid: (\(col), \(row))")
+
+        return (col, row)
     }
 
     override func keyDown(with event: NSEvent) {
