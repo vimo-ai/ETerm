@@ -411,9 +411,9 @@ class TerminalManagerNSView: NSView {
         super.mouseMoved(with: event)
     }
 
-    // 🎯 鼠标按下：开始拖动分隔线或切换焦点
+    // 🎯 鼠标按下：分隔线拖动 OR 文本选择
     override func mouseDown(with event: NSEvent) {
-        guard let tabManager = tabManager else {
+        guard let tabManager = tabManager, let metrics = fontMetrics else {
             super.mouseDown(with: event)
             return
         }
@@ -422,66 +422,136 @@ class TerminalManagerNSView: NSView {
         let x = Float(locationInView.x)
         let y = Float(locationInView.y)
 
-        // 🎯 优先检查是否点击在分隔线上
+        // 1️⃣ 优先检查是否点击在分隔线上
         if let divider = findDividerAtPosition(x: CGFloat(x), y: CGFloat(y)) {
             isDraggingDivider = true
             draggingDivider = divider
             dragStartLocation = locationInView
             print("[Divider] 🖱️ Started dragging \(divider.type) divider at \(divider.position)")
-            return
+            return  // 早返回，不处理文本选择
         }
 
-        // 否则切换 pane 焦点
+        // 2️⃣ 否则处理文本选择
         let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
         if paneId >= 0 {
+            // 切换焦点
             tab_manager_set_active_pane(tabManager.handle, size_t(paneId))
+
+            // 获取 Pane 的位置信息
+            var paneInfo = PaneInfo(x: 0, y: 0, width: 0, height: 0)
+            if tab_manager_get_pane_info(tabManager.handle, size_t(paneId), &paneInfo) != 0 {
+                // 计算终端网格坐标（相对于 Pane 内部）
+                let (col, row) = pixelToGridCoords(
+                    globalX: x,
+                    globalY: y,
+                    paneX: paneInfo.x,
+                    paneY: paneInfo.y,
+                    paneHeight: paneInfo.height,  // 🎯 传入 Pane 高度
+                    metrics: metrics
+                )
+
+                // 开始选择
+                let selectionType: SelectionType = event.clickCount == 2 ? SelectionTypeSemantic : SelectionTypeSimple
+                tab_manager_start_selection(tabManager.handle, col, row, selectionType)
+
+                print("""
+                [Selection] ✅ Started Selection
+                            0-based grid: (\(col), \(row))
+                            1-based display: (\(col+1), \(row+1))
+                            Pane: \(paneId), clicks: \(event.clickCount)
+                """)
+            }
+
             requestRender()
         }
 
         super.mouseDown(with: event)
     }
 
-    // 🎯 鼠标拖拽：拖动分隔线
+    // 🎯 鼠标拖拽：分隔线拖动 OR 文本选择更新
     override func mouseDragged(with event: NSEvent) {
-        guard isDraggingDivider, let divider = draggingDivider, let tabManager = tabManager else {
+        guard let tabManager = tabManager else {
             super.mouseDragged(with: event)
             return
         }
 
-        let currentLocation = convert(event.locationInWindow, from: nil)
+        // 1️⃣ 如果正在拖动分隔线
+        if isDraggingDivider, let divider = draggingDivider {
+            let currentLocation = convert(event.locationInWindow, from: nil)
 
-        // 计算拖动偏移量（逻辑坐标）
-        let delta: Float
-        if divider.type == .vertical {
-            delta = Float(currentLocation.x - dragStartLocation.x)
-        } else {
-            // macOS 坐标系 Y 轴向上，需要反转：向下拖动（Y减小）应该让上面 pane 变大
-            delta = Float(dragStartLocation.y - currentLocation.y)
+            // 计算拖动偏移量（逻辑坐标）
+            let delta: Float
+            if divider.type == .vertical {
+                delta = Float(currentLocation.x - dragStartLocation.x)
+            } else {
+                // macOS 坐标系 Y 轴向上，需要反转：向下拖动（Y减小）应该让上面 pane 变大
+                delta = Float(dragStartLocation.y - currentLocation.y)
+            }
+
+            // 调用 Rust FFI 调整分隔线
+            let success = tab_manager_resize_divider(
+                tabManager.handle,
+                size_t(divider.paneId1),
+                size_t(divider.paneId2),
+                delta
+            )
+
+            if success != 0 {
+                // 更新起始位置（累积拖动）
+                dragStartLocation = currentLocation
+
+                // 触发重新渲染
+                requestRender()
+            }
+            return  // 早返回，不处理文本选择
         }
 
-        print("[Divider] 🎯 Drag delta: \(delta), current: \(currentLocation), start: \(dragStartLocation), scale: \(window?.backingScaleFactor ?? 1.0)")
-
-        // 调用 Rust FFI 调整分隔线
-        let success = tab_manager_resize_divider(
-            tabManager.handle,
-            size_t(divider.paneId1),
-            size_t(divider.paneId2),
-            delta
-        )
-
-        if success != 0 {
-            // 更新起始位置（累积拖动）
-            dragStartLocation = currentLocation
-
-            // 触发重新渲染
-            requestRender()
+        // 2️⃣ 否则处理文本选择拖拽
+        guard let metrics = fontMetrics else {
+            super.mouseDragged(with: event)
+            return
         }
 
-        // 不调用 super，避免其他拖动行为
+        let locationInView = convert(event.locationInWindow, from: nil)
+        let x = Float(locationInView.x)
+        let y = Float(locationInView.y)
+
+        // 获取当前鼠标位置的 Pane（拖拽时可能跨 Pane，但通常在同一个）
+        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
+        if paneId >= 0 {
+            var paneInfo = PaneInfo(x: 0, y: 0, width: 0, height: 0)
+            if tab_manager_get_pane_info(tabManager.handle, size_t(paneId), &paneInfo) != 0 {
+                // 计算终端网格坐标（相对于 Pane 内部）
+                let (col, row) = pixelToGridCoords(
+                    globalX: x,
+                    globalY: y,
+                    paneX: paneInfo.x,
+                    paneY: paneInfo.y,
+                    paneHeight: paneInfo.height,  // 🎯 传入 Pane 高度
+                    metrics: metrics
+                )
+
+                // 更新选择终点
+                tab_manager_update_selection(tabManager.handle, col, row)
+
+                print("[Selection] Dragging to grid (\(col), \(row))")
+
+                // 实时渲染高亮
+                requestRender()
+            }
+        }
+
+        super.mouseDragged(with: event)
     }
 
-    // 🎯 鼠标松开：结束拖动
+    // 🎯 鼠标松开：结束分隔线拖动 OR 完成文本选择
     override func mouseUp(with event: NSEvent) {
+        guard let tabManager = tabManager else {
+            super.mouseUp(with: event)
+            return
+        }
+
+        // 1️⃣ 如果正在拖动分隔线
         if isDraggingDivider {
             isDraggingDivider = false
             draggingDivider = nil
@@ -489,6 +559,20 @@ class TerminalManagerNSView: NSView {
 
             // 恢复鼠标样式
             NSCursor.arrow.set()
+            super.mouseUp(with: event)
+            return
+        }
+
+        // 2️⃣ 否则完成文本选择
+        // 获取选中的文本
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let length = tab_manager_get_selected_text(tabManager.handle, &buffer, 4096)
+
+        if length > 0, let selectedText = String(cString: buffer, encoding: .utf8) {
+            print("[Selection] ✅ Selected text (\(length) chars): \(selectedText)")
+
+            // TODO: 这里可以触发翻译 UI
+            // TranslationManager.shared.showTranslation(for: selectedText)
         }
 
         super.mouseUp(with: event)
@@ -500,23 +584,38 @@ class TerminalManagerNSView: NSView {
         globalY: Float,
         paneX: Float,
         paneY: Float,
+        paneHeight: Float,  // 🎯 新增：Pane 的高度
         metrics: SugarloafFontMetrics
     ) -> (UInt16, UInt16) {
-        // 1️⃣ 转换为 Pane 内的相对坐标
+        // 1️⃣ 转换为 Pane 内的相对坐标（NSView 左下角原点）
         let relativeX = globalX - paneX
         let relativeY = globalY - paneY
 
-        // 2️⃣ 扣除 padding（每个 Pane 内部有 10pt padding）
-        let adjustedX = max(0, relativeX - 10.0)
-        let adjustedY = max(0, relativeY - 10.0)
+        // 2️⃣ 扣除 padding（测试：暂时不扣除 padding）
+        let adjustedX = max(0, relativeX - 0.0)
+        let adjustedY = max(0, relativeY - 0.0)
 
         // 3️⃣ 转换为网格坐标
-        // metrics 已经是 points（逻辑坐标），不需要除以 scale
+        // X 轴：直接向下取整
         let col = UInt16(adjustedX / metrics.cell_width)
-        let row = UInt16(adjustedY / metrics.line_height)
+
+        // 🎯 Y 轴：需要翻转
+        // NSView: Y 向上递增（左下角原点）
+        // 终端: row 向下递增（第一行是 row=0）
+        let contentHeight = paneHeight - 0.0  // 测试：暂时不扣除 padding
+        let yFromTop = contentHeight - adjustedY  // 从顶部的距离
+        let row = UInt16(max(0, yFromTop / metrics.line_height))
 
         // 调试输出
-        print("[Coords] Global: (\(globalX), \(globalY)) -> Pane: (\(paneX), \(paneY)) -> Relative: (\(relativeX), \(relativeY)) -> Grid: (\(col), \(row))")
+        print("""
+        [Coords] Global: (\(globalX), \(globalY))
+                 Pane: (\(paneX), \(paneY), h=\(paneHeight))
+                 Relative: (\(relativeX), \(relativeY))
+                 Adjusted: (\(adjustedX), \(adjustedY))
+                 yFromTop: \(yFromTop)
+                 Metrics: cell=(\(metrics.cell_width), \(metrics.line_height))
+                 Grid: (\(col), \(row))
+        """)
 
         return (col, row)
     }

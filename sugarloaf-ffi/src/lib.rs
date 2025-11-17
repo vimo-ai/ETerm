@@ -25,13 +25,11 @@ pub struct SugarloafFontMetrics {
 
 impl SugarloafFontMetrics {
     fn from_metrics(metrics: Metrics) -> Self {
-        // ⚠️ 实测发现：Sugarloaf 实际渲染的行高是 cell_height × 2
-        // 这可能是因为包含了 ascent、descent、leading 等
-        // 所以这里返回 2 倍的 cell_height 用于计算行数
+        // 🎯 二分法: (1.875 + 2.0) / 2 = 1.9375
         Self {
             cell_width: metrics.cell_width as f32,
             cell_height: metrics.cell_height as f32,
-            line_height: metrics.cell_height as f32 * 2.0,  // 实测 2 倍
+            line_height: metrics.cell_height as f32 * 1.9375,
         }
     }
 
@@ -41,7 +39,7 @@ impl SugarloafFontMetrics {
         Self {
             cell_width,
             cell_height,
-            line_height: cell_height * 2.0,  // 实测 2 倍
+            line_height: cell_height * 1.9375,
         }
     }
 }
@@ -166,10 +164,21 @@ pub extern "C" fn sugarloaf_new(
 
     let font_metrics = {
         let mut data = font_library.inner.write();
-        data.get_primary_metrics(font_size)
+        let metrics = data.get_primary_metrics(font_size);
+        eprintln!("[Sugarloaf Init] 🔍 Raw Metrics from font_library:");
+        if let Some(ref m) = metrics {
+            eprintln!("  cell_width: {}", m.cell_width);
+            eprintln!("  cell_height: {}", m.cell_height);
+            eprintln!("  cell_baseline: {}", m.cell_baseline);
+        }
+        metrics
             .map(SugarloafFontMetrics::from_metrics)
             .unwrap_or_else(|| SugarloafFontMetrics::fallback(font_size))
     };
+    eprintln!("[Sugarloaf Init] 📊 Calculated SugarloafFontMetrics:");
+    eprintln!("  cell_width: {}", font_metrics.cell_width);
+    eprintln!("  cell_height: {}", font_metrics.cell_height);
+    eprintln!("  line_height: {}", font_metrics.line_height);
     set_global_font_metrics(font_metrics);
 
     let layout = RootStyle {

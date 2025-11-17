@@ -679,6 +679,10 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
     // 🎯 获取选区范围（用于高亮）
     let selection_range = handle_ref.selection.lock().clone();
+    if let Some(ref range) = selection_range {
+        eprintln!("[Rust Render] 🎯 Active selection: ({},{}) -> ({},{})",
+            range.start_col, range.start_row, range.end_col, range.end_row);
+    }
 
     // 获取 content builder - 使用链式调用
     let content = sugarloaf_ref.instance.content();
@@ -688,11 +692,22 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
     // 渲染所有可见行
     for (row_idx, row) in rows.iter().enumerate() {
-        // ⚠️ 关键修复：在每一行开始时调用 new_line()（匹配 Rio 示例的做法）
-        content.new_line();
+        // 🎯 关键修复：第一行之后才调用 new_line()
+        if row_idx > 0 {
+            content.new_line();
+        }
 
         let cols = row.len();
-        let row_num = row_idx as i32;  // 🎯 使用枚举索引作为行号
+        // 🎯 关键：row_idx 是可见行的索引（0, 1, 2...）
+        // 对于选区判断，我们使用相对于可见区域的行号
+        let row_num = row_idx as i32;
+
+        // 🐛 调试：在渲染选区所在行时打印信息
+        if let Some(ref range) = selection_range {
+            if row_num == range.start_row as i32 {
+                eprintln!("[Rust Render] 📍 Rendering row {} (selection row!), cols={}", row_num, cols);
+            }
+        }
 
         // 跟踪当前颜色和选区状态，以便批量渲染相同样式的字符
         let mut current_line = String::new();
@@ -714,18 +729,32 @@ pub extern "C" fn terminal_render_to_sugarloaf(
             };
 
             // 🎯 检查当前 cell 是否在选区内
+            // row_num 是相对于可见区域的行号（从 0 开始）
             let is_selected = selection_range
                 .as_ref()
-                .map(|range| range.contains(col as u16, row_num))
+                .map(|range| {
+                    let contains = range.contains(col as u16, row_num);
+                    // 🐛 调试：打印选区匹配情况
+                    if contains {
+                        eprintln!("[Rust Selection] ✅ Cell ({}, {}) is SELECTED", col, row_num);
+                    }
+                    contains
+                })
                 .unwrap_or(false);
 
-            // 如果样式改变（颜色/宽度/选区状态），需要 flush 当前累积的文本
-            if let Some((prev_fg, prev_width, prev_selected)) = current_style {
-                if (prev_fg != fg_color
+            // 🎯 关键修复：在添加当前字符前,检查样式是否改变
+            // 如果改变了,先 flush 之前累积的文本
+            let style_changed = if let Some((prev_fg, prev_width, prev_selected)) = current_style {
+                prev_fg != fg_color
                     || (prev_width - glyph_width).abs() > f32::EPSILON
-                    || prev_selected != is_selected)  // 🎯 选区状态改变也要 flush
-                    && !current_line.is_empty()
-                {
+                    || prev_selected != is_selected  // 选区状态改变
+            } else {
+                false
+            };
+
+            if style_changed && !current_line.is_empty() {
+                // Flush 之前的文本（使用之前的样式）
+                if let Some((prev_fg, prev_width, prev_selected)) = current_style {
                     let (r, g, b) = prev_fg;
                     let mut style = FragmentStyle {
                         color: [
@@ -741,8 +770,8 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                     // 🎨 应用选区高亮
                     if prev_selected {
                         style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
-                        // 可选：反色前景色
-                        // style.color = [1.0, 1.0, 1.0, 1.0];
+                        eprintln!("[Rust Render] 🎨 Flushing SELECTED text at row {}: {:?} ({} chars)",
+                            row_num, &current_line, current_line.len());
                     }
 
                     content.add_text(&current_line, style);
@@ -770,6 +799,8 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                 // 🎨 应用选区高亮
                 if is_selected {
                     style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
+                    eprintln!("[Rust Render] 🎨 End-of-row flush SELECTED text at row {}: {:?} ({} chars)",
+                        row_num, &current_line, current_line.len());
                 }
 
                 content.add_text(&current_line, style);
@@ -1779,7 +1810,8 @@ pub extern "C" fn terminal_start_selection(
 
     *handle.selection.lock() = Some(range);
 
-    eprintln!("[Selection] Started selection at ({}, {})", col, row);
+    eprintln!("[Rust Selection] ✅ Created range: ({},{}) -> ({},{})",
+        range.start_col, range.start_row, range.end_col, range.end_row);
     true
 }
 
