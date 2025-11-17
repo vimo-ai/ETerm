@@ -1,4 +1,4 @@
-use std::ffi::{c_char, CStr};
+use std::ffi::{c_char, c_void, CStr};
 use std::io::Read;
 use std::ptr;
 use std::sync::Arc;
@@ -610,7 +610,9 @@ pub extern "C" fn terminal_scroll(
     true
 }
 
-/// 渲染终端到 Sugarloaf（完整版本，使用 visible_rows）
+/// 渲染终端内容到 Sugarloaf RichText
+/// 注意: 此函数只负责填充 RichText 内容,不设置 Objects 和触发渲染
+/// Objects 设置和渲染由调用者统一处理
 #[no_mangle]
 pub extern "C" fn terminal_render_to_sugarloaf(
     handle: *mut TerminalHandle,
@@ -628,10 +630,6 @@ pub extern "C" fn terminal_render_to_sugarloaf(
     let rows = terminal.visible_rows();
     let debug_overlay = false;
     let _cursor = terminal.cursor();
-
-    // ⚠️ 关键修复：不要在这里 drop terminal!
-    // rows 是对 terminal 内部数据的引用,必须在使用完 rows 之后才能释放 terminal
-    // drop(terminal);  // ❌ 删除这行
 
     // 获取 content builder - 使用链式调用
     let content = sugarloaf_ref.instance.content();
@@ -721,27 +719,10 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
     }
 
-    // 正确顺序：先 build content，再 set objects，最后 render
+    // 构建内容(不调用 set_objects 和 render,由调用者处理)
     content.build();
 
-    use sugarloaf::{Object, RichText};
-
-    // 添加一些 padding 让 UI 更舒适
-    const PADDING_LEFT: f32 = 10.0;
-    const PADDING_TOP: f32 = 10.0;
-
-    sugarloaf_ref.instance.set_objects(vec![Object::RichText(RichText {
-        id: rich_text_id,
-        position: [PADDING_LEFT, PADDING_TOP],
-        lines: None,
-    })]);
-
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        sugarloaf_ref.instance.render();
-    })) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    true
 }
 
 // ============================================================================
@@ -749,13 +730,16 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 // ============================================================================
 
 use std::collections::HashMap;
+use crate::context_grid::{ContextGrid, Delta};
 
-/// Tab 信息
+/// Tab 信息（现在包含 ContextGrid 以支持 Split）
 pub struct TabInfo {
-    terminal: Box<TerminalHandle>,
-    rich_text_id: usize,
+    grid: ContextGrid,  // Split 布局管理
     title: String,
 }
+
+/// 渲染回调函数类型
+pub type RenderCallback = extern "C" fn(*mut c_void);
 
 /// Tab 管理器
 pub struct TabManager {
@@ -766,6 +750,9 @@ pub struct TabManager {
     cols: u16,
     rows: u16,
     shell: String,
+    // 渲染回调
+    render_callback: Option<RenderCallback>,
+    callback_context: *mut c_void,
 }
 
 impl TabManager {
@@ -783,7 +770,15 @@ impl TabManager {
             cols,
             rows,
             shell,
+            render_callback: None,
+            callback_context: ptr::null_mut(),
         }
+    }
+
+    /// 设置渲染回调函数
+    fn set_render_callback(&mut self, callback: RenderCallback, context: *mut c_void) {
+        self.render_callback = Some(callback);
+        self.callback_context = context;
     }
 
     fn create_tab(&mut self) -> Option<usize> {
@@ -803,12 +798,36 @@ impl TabManager {
 
         let terminal = unsafe { Box::from_raw(terminal_ptr) };
 
-        // 创建 RichText (使用 sugarloaf_create_rich_text FFI 函数)
+        // 创建 RichText
         let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
 
-        let tab_info = TabInfo {
+        // 计算初始尺寸（基于 cols 和 rows）
+        let font_metrics = crate::global_font_metrics().unwrap_or_else(|| {
+            crate::SugarloafFontMetrics::fallback(14.0)
+        });
+
+        let width = (self.cols as f32) * font_metrics.cell_width;
+        let height = (self.rows as f32) * font_metrics.line_height;
+
+        // 创建 ContextGrid（初始只有一个 pane）
+        let initial_pane_id = 1;
+        let margin = Delta { x: 0.0, top_y: 0.0, bottom_y: 0.0 };
+        let border_color = [0.3, 0.3, 0.3, 1.0];  // 灰色边框
+        let scale = 2.0;  // TODO: 从 window scale 获取
+
+        let grid = ContextGrid::new(
+            initial_pane_id,
             terminal,
             rich_text_id,
+            width,
+            height,
+            scale,
+            margin,
+            border_color,
+        );
+
+        let tab_info = TabInfo {
+            grid,
             title: format!("Tab {}", tab_id),
         };
 
@@ -861,39 +880,78 @@ impl TabManager {
     fn read_all_tabs(&mut self) -> bool {
         let mut has_updates = false;
         for tab_info in self.tabs.values_mut() {
-            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
-            if terminal_read_output(terminal_ptr) {
-                has_updates = true;
+            // 读取该 Tab 中所有 pane 的输出
+            for pane in tab_info.grid.get_all_panes_mut() {
+                let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+                if terminal_read_output(terminal_ptr) {
+                    has_updates = true;
+                }
             }
         }
+
+        // 如果有更新,调用渲染回调通知 Swift
+        if has_updates {
+            if let Some(callback) = self.render_callback {
+                callback(self.callback_context);
+            }
+        }
+
         has_updates
     }
 
     fn render_active_tab(&mut self) -> bool {
-        // 先获取需要的值,避免借用冲突
-        let (terminal_ptr, rich_text_id) = if let Some(tab_info) = self.get_active_tab_mut() {
-            let ptr = &mut *tab_info.terminal as *mut TerminalHandle;
-            let id = tab_info.rich_text_id;
-            (ptr, id)
-        } else {
-            return false;
-        };
+        eprintln!("[Rust Render] render_active_tab internal called");
+        // 先获取 sugarloaf_handle，避免借用冲突
+        let sugarloaf_handle = self.sugarloaf_handle;
 
-        terminal_render_to_sugarloaf(
-            terminal_ptr,
-            self.sugarloaf_handle,
-            rich_text_id,
-        )
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            let pane_count = tab_info.grid.len();
+            eprintln!("[Rust Render] Active tab has {} panes", pane_count);
+
+            // 渲染该 Tab 的所有 panes
+            for (i, pane) in tab_info.grid.get_all_panes_mut().enumerate() {
+                eprintln!("[Rust Render] Rendering pane {} (id={})", i, pane.pane_id);
+                let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+                terminal_render_to_sugarloaf(
+                    terminal_ptr,
+                    sugarloaf_handle,
+                    pane.rich_text_id,
+                );
+            }
+
+            // 设置所有 pane 的 RichText Objects 到 Sugarloaf
+            let objects = tab_info.grid.objects();
+            eprintln!("[Rust Render] Setting {} objects to Sugarloaf", objects.len());
+            unsafe {
+                if let Some(sugarloaf) = sugarloaf_handle.as_mut() {
+                    sugarloaf.set_objects(objects);
+                    // 🎯 关键修复：调用 render() 触发实际的 GPU 渲染
+                    eprintln!("[Rust Render] 🎨 Calling sugarloaf.render()...");
+                    sugarloaf.render();
+                    eprintln!("[Rust Render] ✅ Render completed");
+                }
+            }
+
+            true
+        } else {
+            eprintln!("[Rust Render] ❌ No active tab");
+            false
+        }
     }
 
     fn write_input_to_active(&mut self, data: &[u8]) -> bool {
         if let Some(tab_info) = self.get_active_tab_mut() {
-            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
-            let cstring = match std::ffi::CString::new(data) {
-                Ok(s) => s,
-                Err(_) => return false,
-            };
-            terminal_write_input(terminal_ptr, cstring.as_ptr())
+            // 写入到当前激活的 pane
+            if let Some(pane) = tab_info.grid.get_current_mut() {
+                let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+                let cstring = match std::ffi::CString::new(data) {
+                    Ok(s) => s,
+                    Err(_) => return false,
+                };
+                terminal_write_input(terminal_ptr, cstring.as_ptr())
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -901,8 +959,13 @@ impl TabManager {
 
     fn scroll_active_tab(&mut self, delta_lines: i32) -> bool {
         if let Some(tab_info) = self.get_active_tab_mut() {
-            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
-            terminal_scroll(terminal_ptr, delta_lines)
+            // 滚动当前激活的 pane
+            if let Some(pane) = tab_info.grid.get_current_mut() {
+                let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+                terminal_scroll(terminal_ptr, delta_lines)
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -914,10 +977,21 @@ impl TabManager {
 
         let mut all_success = true;
         for tab_info in self.tabs.values_mut() {
-            let terminal_ptr = &mut *tab_info.terminal as *mut TerminalHandle;
-            if !terminal_resize(terminal_ptr, cols, rows) {
-                all_success = false;
+            // Resize 所有 panes
+            for pane in tab_info.grid.get_all_panes_mut() {
+                let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
+                if !terminal_resize(terminal_ptr, cols, rows) {
+                    all_success = false;
+                }
             }
+
+            // 更新 ContextGrid 的尺寸
+            let font_metrics = crate::global_font_metrics().unwrap_or_else(|| {
+                crate::SugarloafFontMetrics::fallback(14.0)
+            });
+            let width = (cols as f32) * font_metrics.cell_width;
+            let height = (rows as f32) * font_metrics.line_height;
+            tab_info.grid.resize(width, height);
         }
         all_success
     }
@@ -936,6 +1010,98 @@ impl TabManager {
         } else {
             false
         }
+    }
+
+    // ===== Split 相关方法 =====
+
+    /// 垂直分割当前激活的 pane（左右）
+    fn split_active_pane_right(&mut self) -> Option<usize> {
+        eprintln!("[Rust Split] split_active_pane_right called");
+
+        // 先获取需要的值，避免借用冲突
+        let shell_cstr = std::ffi::CString::new(self.shell.as_str()).ok()?;
+        let cols = self.cols;
+        let rows = self.rows;
+        let sugarloaf_handle = self.sugarloaf_handle;
+
+        eprintln!("[Rust Split] Creating new terminal: cols={}, rows={}", cols, rows);
+
+        // 创建新终端
+        let terminal_ptr = terminal_create(cols, rows, shell_cstr.as_ptr());
+        if terminal_ptr.is_null() {
+            eprintln!("[Rust Split] ❌ Failed to create terminal");
+            return None;
+        }
+        let terminal = unsafe { Box::from_raw(terminal_ptr) };
+
+        // 创建新 RichText
+        let rich_text_id = crate::sugarloaf_create_rich_text(sugarloaf_handle);
+        eprintln!("[Rust Split] Created rich_text_id: {}", rich_text_id);
+
+        // 调用 ContextGrid 的 split_right
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            eprintln!("[Rust Split] Calling grid.split_right");
+            let result = tab_info.grid.split_right(terminal, rich_text_id);
+            eprintln!("[Rust Split] split_right returned: {:?}", result);
+            result
+        } else {
+            eprintln!("[Rust Split] ❌ No active tab");
+            None
+        }
+    }
+
+    /// 水平分割当前激活的 pane（上下）
+    fn split_active_pane_down(&mut self) -> Option<usize> {
+        // 先获取需要的值，避免借用冲突
+        let shell_cstr = std::ffi::CString::new(self.shell.as_str()).ok()?;
+        let cols = self.cols;
+        let rows = self.rows;
+        let sugarloaf_handle = self.sugarloaf_handle;
+
+        // 创建新终端
+        let terminal_ptr = terminal_create(cols, rows, shell_cstr.as_ptr());
+        if terminal_ptr.is_null() {
+            return None;
+        }
+        let terminal = unsafe { Box::from_raw(terminal_ptr) };
+
+        // 创建新 RichText
+        let rich_text_id = crate::sugarloaf_create_rich_text(sugarloaf_handle);
+
+        // 调用 ContextGrid 的 split_down
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            tab_info.grid.split_down(terminal, rich_text_id)
+        } else {
+            None
+        }
+    }
+
+    /// 关闭指定 pane
+    fn close_pane(&mut self, pane_id: usize) -> bool {
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            tab_info.grid.close_pane(pane_id)
+        } else {
+            false
+        }
+    }
+
+    /// 切换激活的 pane
+    fn set_active_pane(&mut self, pane_id: usize) -> bool {
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            tab_info.grid.set_current(pane_id)
+        } else {
+            false
+        }
+    }
+
+    /// 获取当前 Tab 的 pane 数量
+    fn get_pane_count(&self) -> usize {
+        if let Some(tab_id) = self.active_tab_id {
+            if let Some(tab_info) = self.tabs.get(&tab_id) {
+                return tab_info.grid.len();
+            }
+        }
+        0
     }
 }
 
@@ -964,6 +1130,21 @@ pub extern "C" fn tab_manager_new(
 
     let manager = Box::new(TabManager::new(sugarloaf, cols, rows, shell));
     Box::into_raw(manager)
+}
+
+/// 设置渲染回调
+#[no_mangle]
+pub extern "C" fn tab_manager_set_render_callback(
+    manager: *mut TabManager,
+    callback: RenderCallback,
+    context: *mut c_void,
+) {
+    if manager.is_null() {
+        return;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.set_render_callback(callback, context);
 }
 
 /// 创建新 Tab
@@ -1024,12 +1205,16 @@ pub extern "C" fn tab_manager_read_all_tabs(manager: *mut TabManager) -> bool {
 /// 渲染当前激活的 Tab
 #[no_mangle]
 pub extern "C" fn tab_manager_render_active_tab(manager: *mut TabManager) -> bool {
+    eprintln!("[Rust Render] tab_manager_render_active_tab called");
     if manager.is_null() {
+        eprintln!("[Rust Render] ❌ manager is null");
         return false;
     }
 
     let manager = unsafe { &mut *manager };
-    manager.render_active_tab()
+    let result = manager.render_active_tab();
+    eprintln!("[Rust Render] render_active_tab returned: {}", result);
+    result
 }
 
 /// 向当前激活的 Tab 写入输入
@@ -1169,4 +1354,63 @@ pub extern "C" fn tab_manager_free(manager: *mut TabManager) {
             let _ = Box::from_raw(manager);
         }
     }
+}
+
+// ============================================================================
+// Split Pane FFI
+// ============================================================================
+
+/// 垂直分割当前激活的 pane（左右分割）
+#[no_mangle]
+pub extern "C" fn tab_manager_split_right(manager: *mut TabManager) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.split_active_pane_right().map(|id| id as i32).unwrap_or(-1)
+}
+
+/// 水平分割当前激活的 pane（上下分割）
+#[no_mangle]
+pub extern "C" fn tab_manager_split_down(manager: *mut TabManager) -> i32 {
+    if manager.is_null() {
+        return -1;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.split_active_pane_down().map(|id| id as i32).unwrap_or(-1)
+}
+
+/// 关闭指定 pane
+#[no_mangle]
+pub extern "C" fn tab_manager_close_pane(manager: *mut TabManager, pane_id: usize) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.close_pane(pane_id)
+}
+
+/// 切换激活的 pane
+#[no_mangle]
+pub extern "C" fn tab_manager_set_active_pane(manager: *mut TabManager, pane_id: usize) -> bool {
+    if manager.is_null() {
+        return false;
+    }
+
+    let manager = unsafe { &mut *manager };
+    manager.set_active_pane(pane_id)
+}
+
+/// 获取当前 Tab 的 pane 数量
+#[no_mangle]
+pub extern "C" fn tab_manager_get_pane_count(manager: *mut TabManager) -> usize {
+    if manager.is_null() {
+        return 0;
+    }
+
+    let manager = unsafe { &*manager };
+    manager.get_pane_count()
 }

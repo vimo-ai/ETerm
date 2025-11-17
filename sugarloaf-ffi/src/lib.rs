@@ -11,6 +11,10 @@ use parking_lot::RwLock;
 mod terminal;
 pub use terminal::*;
 
+// Context Grid 模块（Split 布局管理）
+mod context_grid;
+pub use context_grid::*;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SugarloafFontMetrics {
@@ -68,6 +72,10 @@ impl SugarloafHandle {
 
     fn clear(&mut self) {
         self.instance.clear();
+    }
+
+    fn render(&mut self) {
+        self.instance.render();
     }
 }
 
@@ -508,6 +516,51 @@ pub extern "C" fn sugarloaf_render(handle: *mut SugarloafHandle) {
         Ok(_) => eprintln!("[Sugarloaf FFI] ✅ render() completed successfully"),
         Err(e) => eprintln!("[Sugarloaf FFI] ❌ render() panicked: {:?}", e),
     }
+}
+
+/// Resize Sugarloaf rendering surface
+#[no_mangle]
+pub extern "C" fn sugarloaf_resize(
+    handle: *mut SugarloafHandle,
+    width: f32,
+    height: f32,
+) {
+    if handle.is_null() {
+        eprintln!("[Sugarloaf FFI] resize() called with null handle!");
+        return;
+    }
+
+    if width <= 0.0 || height <= 0.0 {
+        eprintln!("[Sugarloaf FFI] resize() called with invalid dimensions: {}x{}", width, height);
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+    eprintln!("[Sugarloaf FFI] 🔄 Resizing Sugarloaf to {}x{}", width, height);
+    handle.instance.resize(width as u32, height as u32);
+    eprintln!("[Sugarloaf FFI] ✅ Resize completed");
+}
+
+/// Rescale Sugarloaf (for DPI changes)
+#[no_mangle]
+pub extern "C" fn sugarloaf_rescale(
+    handle: *mut SugarloafHandle,
+    scale: f32,
+) {
+    if handle.is_null() {
+        eprintln!("[Sugarloaf FFI] rescale() called with null handle!");
+        return;
+    }
+
+    if scale <= 0.0 {
+        eprintln!("[Sugarloaf FFI] rescale() called with invalid scale: {}", scale);
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+    eprintln!("[Sugarloaf FFI] 🔄 Rescaling Sugarloaf to scale {}", scale);
+    handle.instance.rescale(scale);
+    eprintln!("[Sugarloaf FFI] ✅ Rescale completed");
 }
 
 /// Free Sugarloaf instance

@@ -14,11 +14,16 @@ import Combine
 /// 完整的终端管理器（包含 Sugarloaf 和多个 Tab）
 class TerminalManagerNSView: NSView {
     private var sugarloaf: SugarloafWrapper?
-    private var tabManager: TabManagerWrapper?
-    private var updateTimer: Timer?
-    private var hasRenderedFirstFrame = false
+    var tabManager: TabManagerWrapper?  // 改为 internal，供 Split 功能访问
+    private var displayLink: CVDisplayLink?
+    private var needsRender = false
+    private let renderLock = NSLock()  // 保护 needsRender 标记
     private var scrollAccumulator: CGFloat = 0.0
     private var fontMetrics: SugarloafFontMetrics?
+    private var lastResizePixels: (width: Float, height: Float) = (0, 0)
+    private var lastScale: Float = 0.0
+    private var ptyReadQueue: DispatchQueue?  // 后台队列用于读取 PTY
+    private var shouldStopReading = false
 
     // 公开属性供 SwiftUI 访问
     var tabIds: [Int] = []
@@ -80,13 +85,9 @@ class TerminalManagerNSView: NSView {
 
         let scale = Float(effectiveScale)
 
-        let PADDING_LEFT: Float = 10.0
-        let PADDING_TOP: Float = 10.0
-        let PADDING_RIGHT: Float = 10.0
-        let PADDING_BOTTOM: Float = 10.0
-
-        let widthPoints = Float(bounds.width) - PADDING_LEFT - PADDING_RIGHT
-        let heightPoints = Float(bounds.height) - PADDING_TOP - PADDING_BOTTOM
+        // 不再手动扣除 padding，SwiftUI 层面已经通过 .padding() 处理了
+        let widthPoints = Float(bounds.width)
+        let heightPoints = Float(bounds.height)
         let widthPixels = widthPoints * scale
         let heightPixels = heightPoints * scale
 
@@ -102,6 +103,8 @@ class TerminalManagerNSView: NSView {
         }
 
         self.sugarloaf = sugarloaf
+        self.lastResizePixels = (widthPixels, heightPixels)  // 记录初始尺寸
+        self.lastScale = scale  // 记录初始缩放
         let fontSize: Float = 14.0
 
         let metricsInPixels = sugarloaf.fontMetrics ?? SugarloafFontMetrics(
@@ -135,12 +138,49 @@ class TerminalManagerNSView: NSView {
 
         self.tabManager = tabManager
 
+        // 设置渲染回调
+        tabManager.setRenderCallback { [weak self] in
+            guard let self = self else { return }
+            self.renderLock.lock()
+            self.needsRender = true
+            self.renderLock.unlock()
+        }
+
         // 创建第一个 Tab
         createNewTab()
 
-        startUpdateTimer()
+        // 启动 CVDisplayLink (替代 Timer)
+        setupDisplayLink()
+
+        // 启动后台 PTY 读取线程
+        startPTYReadLoop()
+
+        // 初始渲染
         renderTerminal()
         needsDisplay = true
+    }
+
+    /// 启动后台 PTY 读取循环
+    private func startPTYReadLoop() {
+        let queue = DispatchQueue(label: "com.eterm.pty-reader", qos: .userInteractive)
+        self.ptyReadQueue = queue
+
+        queue.async { [weak self] in
+            guard let self = self else { return }
+
+            print("[PTY Reader] ✅ Background read loop started")
+
+            while !self.shouldStopReading {
+                // 读取所有 Tab 的 PTY 输出
+                // readAllTabs() 内部会在有数据时调用渲染回调
+                self.tabManager?.readAllTabs()
+
+                // 短暂休眠,避免过度占用 CPU (可以调整这个值)
+                usleep(1000)  // 1ms
+            }
+
+            print("[PTY Reader] ✅ Background read loop stopped")
+        }
     }
 
     func createNewTab() {
@@ -163,31 +203,67 @@ class TerminalManagerNSView: NSView {
         if tabManager.switchTab(tabId) {
             activeTabId = tabId
             onActiveTabChanged?(activeTabId)
-            renderTerminal()
+            requestRender()
         }
     }
 
-    private func startUpdateTimer() {
-        let interval = 1.0 / 60.0
-        updateTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.updateTerminal()
+    /// 设置 CVDisplayLink (替代 Timer 轮询)
+    private func setupDisplayLink() {
+        var link: CVDisplayLink?
+        let status = CVDisplayLinkCreateWithActiveCGDisplays(&link)
+
+        guard status == kCVReturnSuccess, let displayLink = link else {
+            print("[CVDisplayLink] ❌ Failed to create CVDisplayLink: \(status)")
+            return
         }
+
+        // 设置回调
+        let callbackContext = Unmanaged.passUnretained(self).toOpaque()
+        CVDisplayLinkSetOutputCallback(displayLink, { (_, _, _, _, _, context) -> CVReturn in
+            guard let context = context else { return kCVReturnSuccess }
+
+            let view = Unmanaged<TerminalManagerNSView>.fromOpaque(context).takeUnretainedValue()
+
+            // 检查是否需要渲染
+            view.renderLock.lock()
+            let shouldRender = view.needsRender
+            if shouldRender {
+                view.needsRender = false
+            }
+            view.renderLock.unlock()
+
+            // 在主线程执行渲染
+            if shouldRender {
+                DispatchQueue.main.async {
+                    view.performRender()
+                }
+            }
+
+            return kCVReturnSuccess
+        }, callbackContext)
+
+        // 启动 CVDisplayLink
+        CVDisplayLinkStart(displayLink)
+        self.displayLink = displayLink
+
+        print("[CVDisplayLink] ✅ Started successfully")
     }
 
-    private func updateTerminal() {
-        guard let tabManager = tabManager else { return }
-
-        let hasNewData = tabManager.readAllTabs()
-
-        if !hasRenderedFirstFrame || hasNewData {
-            renderTerminal()
-            hasRenderedFirstFrame = true
-        }
+    /// 标记需要渲染 (线程安全)
+    private func requestRender() {
+        renderLock.lock()
+        needsRender = true
+        renderLock.unlock()
     }
 
-    private func renderTerminal() {
+    /// 执行实际的渲染 (必须在主线程调用)
+    private func performRender() {
         guard let tabManager = tabManager else { return }
         _ = tabManager.renderActiveTab()
+    }
+
+    func renderTerminal() {  // 改为 internal，供 Split 功能访问(兼容旧代码)
+        requestRender()
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -218,7 +294,7 @@ class TerminalManagerNSView: NSView {
             scrollAccumulator -= threshold * (scrollAccumulator > 0 ? 1 : -1)
         }
 
-        renderTerminal()
+        requestRender()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -257,16 +333,37 @@ class TerminalManagerNSView: NSView {
 
     override func layout() {
         super.layout()
-        guard let tabManager else { return }
+        guard let tabManager, let sugarloaf else { return }
 
-        let PADDING_LEFT: Float = 10.0
-        let PADDING_TOP: Float = 10.0
-        let PADDING_RIGHT: Float = 10.0
-        let PADDING_BOTTOM: Float = 10.0
+        // 不再手动扣除 padding，SwiftUI 层面已经通过 .padding() 处理了
+        let widthPoints = Float(bounds.width)
+        let heightPoints = Float(bounds.height)
 
-        let widthPoints = Float(bounds.width) - PADDING_LEFT - PADDING_RIGHT
-        let heightPoints = Float(bounds.height) - PADDING_TOP - PADDING_BOTTOM
+        // 1️⃣ 检测 scale 和尺寸变化
+        let scale = Float(window?.backingScaleFactor ?? 2.0)
+        let widthPixels = widthPoints * scale
+        let heightPixels = heightPoints * scale
 
+        let scaleChanged = abs(scale - lastScale) > 0.01
+        let sizeChanged = abs(widthPixels - lastResizePixels.width) > 1.0 ||
+                         abs(heightPixels - lastResizePixels.height) > 1.0
+
+        // 先处理 scale 变化（DPI 变化，如切换显示器）
+        if scaleChanged {
+            print("[TabTerminalView] 🔄 Scale changed from \(lastScale) to \(scale) - rescaling")
+            sugarloaf.rescale(scale: scale)
+            lastScale = scale
+        }
+
+        // 再处理尺寸变化
+        if sizeChanged || scaleChanged {
+            print("[TabTerminalView] layout() - bounds: \(bounds.width)x\(bounds.height), scale: \(scale)")
+            print("[TabTerminalView] layout() - resizing Sugarloaf to: \(widthPixels)x\(heightPixels) pixels")
+            sugarloaf.resize(width: widthPixels, height: heightPixels)
+            lastResizePixels = (widthPixels, heightPixels)
+        }
+
+        // 2️⃣ 再通知 Terminal 调整网格尺寸（行列）
         let metricsInPoints = self.fontMetrics ?? fallbackMetrics(for: 14.0)
 
         let (cols, rows) = calculateGridSize(
@@ -276,7 +373,7 @@ class TerminalManagerNSView: NSView {
         )
 
         tabManager.resizeAllTabs(cols: cols, rows: rows)
-        renderTerminal()
+        requestRender()
     }
 
     private func fallbackMetrics(for fontSize: Float) -> SugarloafFontMetrics {
@@ -308,7 +405,15 @@ class TerminalManagerNSView: NSView {
     }
 
     deinit {
-        updateTimer?.invalidate()
+        // 停止后台读取循环
+        shouldStopReading = true
+
+        // 停止并释放 CVDisplayLink
+        if let displayLink = displayLink {
+            CVDisplayLinkStop(displayLink)
+            print("[CVDisplayLink] ✅ Stopped")
+        }
+
         NotificationCenter.default.removeObserver(self)
     }
 }
@@ -374,6 +479,21 @@ struct TabTerminalView: View {
                     .keyboardShortcut("t", modifiers: .command)
                     .help("⌘T")
 
+                    Divider()
+                        .frame(height: 20)
+
+                    Button(action: splitRight) {
+                        Label("垂直分割", systemImage: "rectangle.split.2x1")
+                    }
+                    .keyboardShortcut("d", modifiers: .command)
+                    .help("⌘D - 垂直分割")
+
+                    Button(action: splitDown) {
+                        Label("水平分割", systemImage: "rectangle.split.1x2")
+                    }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                    .help("⌘⇧D - 水平分割")
+
                     Spacer()
 
                     Text("\(coordinator.tabIds.count) tab\(coordinator.tabIds.count > 1 ? "s" : "")")
@@ -386,8 +506,20 @@ struct TabTerminalView: View {
 
             // 终端内容
             ZStack {
-                // 始终显示终端管理器视图（在后台）
+                // 背景图片层（最底层）
+                GeometryReader { geometry in
+                    Image("night")
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .opacity(0.3)  // 高透明度
+                }
+                .ignoresSafeArea()
+
+                // 始终显示终端管理器视图（在背景之上）
                 TerminalManagerView()
+                    .padding(10)  // 添加 10pt 的内边距
 
                 // TabView 只用于显示 tab 栏，不显示内容
                 if !coordinator.tabIds.isEmpty {
@@ -415,6 +547,46 @@ struct TabTerminalView: View {
 
     private func createNewTab() {
         coordinator.terminalView?.createNewTab()
+    }
+
+    private func splitRight() {
+        print("[Split] splitRight() called")
+        guard let tabManager = coordinator.terminalView?.tabManager else {
+            print("[Split] ERROR: tabManager is nil")
+            return
+        }
+        print("[Split] Calling tabManager.splitRight()")
+        let newPaneId = tabManager.splitRight()
+        print("[Split] splitRight returned paneId: \(newPaneId)")
+
+        if newPaneId >= 0 {
+            let paneCount = tabManager.getPaneCount()
+            print("[Split] ✅ Created right pane with ID: \(newPaneId), total panes: \(paneCount)")
+            // 触发重新渲染
+            coordinator.terminalView?.renderTerminal()
+        } else {
+            print("[Split] ❌ Failed to create right pane")
+        }
+    }
+
+    private func splitDown() {
+        print("[Split] splitDown() called")
+        guard let tabManager = coordinator.terminalView?.tabManager else {
+            print("[Split] ERROR: tabManager is nil")
+            return
+        }
+        print("[Split] Calling tabManager.splitDown()")
+        let newPaneId = tabManager.splitDown()
+        print("[Split] splitDown returned paneId: \(newPaneId)")
+
+        if newPaneId >= 0 {
+            let paneCount = tabManager.getPaneCount()
+            print("[Split] ✅ Created down pane with ID: \(newPaneId), total panes: \(paneCount)")
+            // 触发重新渲染
+            coordinator.terminalView?.renderTerminal()
+        } else {
+            print("[Split] ❌ Failed to create down pane")
+        }
     }
 }
 

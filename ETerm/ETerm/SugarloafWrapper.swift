@@ -98,6 +98,18 @@ class SugarloafWrapper {
         sugarloaf_render(handle)
     }
 
+    /// 调整渲染表面大小 (像素)
+    func resize(width: Float, height: Float) {
+        guard let handle = handle else { return }
+        sugarloaf_resize(handle, width, height)
+    }
+
+    /// 重新缩放 (DPI 变化)
+    func rescale(scale: Float) {
+        guard let handle = handle else { return }
+        sugarloaf_rescale(handle, scale)
+    }
+
     /// 调用纯 Rust 的富文本 demo
     func renderRustDemo() {
         guard let handle = handle else {

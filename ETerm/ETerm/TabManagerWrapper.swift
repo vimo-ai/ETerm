@@ -10,6 +10,8 @@ import Foundation
 /// Tab Manager 的 Swift 封装
 class TabManagerWrapper {
     private(set) var handle: TabManagerHandle?
+    // 保持对回调的强引用,防止被释放
+    private var renderCallbackClosure: (() -> Void)?
 
     init?(sugarloaf: SugarloafWrapper, cols: UInt16, rows: UInt16, shell: String) {
         guard let sugarloafHandle = sugarloaf.handle else { return nil }
@@ -19,6 +21,31 @@ class TabManagerWrapper {
         }
 
         guard handle != nil else { return nil }
+    }
+
+    /// 设置渲染回调
+    /// - Parameter callback: 当 PTY 有新数据时会被调用(在 Rust 线程中)
+    func setRenderCallback(_ callback: @escaping () -> Void) {
+        guard let handle = handle else { return }
+
+        // 保持对闭包的强引用
+        self.renderCallbackClosure = callback
+
+        // 将 self 作为 context 传递
+        let context = Unmanaged.passUnretained(self).toOpaque()
+
+        // 设置 C 回调函数
+        tab_manager_set_render_callback(handle, { contextPtr in
+            guard let contextPtr = contextPtr else { return }
+
+            // 从 context 恢复 TabManagerWrapper 实例
+            let wrapper = Unmanaged<TabManagerWrapper>.fromOpaque(contextPtr).takeUnretainedValue()
+
+            // 在主线程调用 Swift 闭包
+            DispatchQueue.main.async {
+                wrapper.renderCallbackClosure?()
+            }
+        }, context)
     }
 
     deinit {
@@ -124,5 +151,39 @@ class TabManagerWrapper {
 
         guard success else { return nil }
         return String(cString: buffer)
+    }
+
+    // MARK: - Split Pane Methods
+
+    /// 垂直分割（左右）
+    @discardableResult
+    func splitRight() -> Int {
+        guard let handle = handle else { return -1 }
+        return Int(tab_manager_split_right(handle))
+    }
+
+    /// 水平分割（上下）
+    @discardableResult
+    func splitDown() -> Int {
+        guard let handle = handle else { return -1 }
+        return Int(tab_manager_split_down(handle))
+    }
+
+    /// 关闭指定 pane
+    func closePane(_ paneId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return tab_manager_close_pane(handle, paneId) != 0
+    }
+
+    /// 设置激活的 pane
+    func setActivePane(_ paneId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return tab_manager_set_active_pane(handle, paneId) != 0
+    }
+
+    /// 获取当前 Tab 的 pane 数量
+    func getPaneCount() -> Int {
+        guard let handle = handle else { return 0 }
+        return Int(tab_manager_get_pane_count(handle))
     }
 }

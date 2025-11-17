@@ -55,6 +55,12 @@ void sugarloaf_render_demo_with_rich_text(SugarloafHandle handle, size_t rich_te
 
 bool sugarloaf_get_font_metrics(SugarloafHandle handle, SugarloafFontMetrics* out_metrics);
 
+// Resize Sugarloaf rendering surface
+void sugarloaf_resize(SugarloafHandle handle, float width, float height);
+
+// Rescale Sugarloaf (for DPI changes)
+void sugarloaf_rescale(SugarloafHandle handle, float scale);
+
 // Cleanup
 void sugarloaf_free(SugarloafHandle handle);
 
@@ -141,12 +147,22 @@ int terminal_render_to_sugarloaf(
 // ===== Tab Manager API =====
 typedef void* TabManagerHandle;
 
+// 渲染回调函数类型
+typedef void (*RenderCallback)(void* context);
+
 // Create tab manager
 TabManagerHandle tab_manager_new(
     SugarloafHandle sugarloaf,
     unsigned short cols,
     unsigned short rows,
     const char* shell_program
+);
+
+// Set render callback (called from PTY read thread when data arrives)
+void tab_manager_set_render_callback(
+    TabManagerHandle manager,
+    RenderCallback callback,
+    void* context
 );
 
 // Create a new tab (returns tab_id or -1 on failure)
@@ -207,5 +223,26 @@ int tab_manager_get_tab_title(
 
 // Free tab manager
 void tab_manager_free(TabManagerHandle manager);
+
+// ===== Split Pane API =====
+
+// Split the active pane vertically (left-right)
+// Returns new pane_id or -1 on failure
+int tab_manager_split_right(TabManagerHandle manager);
+
+// Split the active pane horizontally (top-bottom)
+// Returns new pane_id or -1 on failure
+int tab_manager_split_down(TabManagerHandle manager);
+
+// Close a specific pane
+// Returns 0 on failure, non-zero on success
+int tab_manager_close_pane(TabManagerHandle manager, size_t pane_id);
+
+// Set the active pane
+// Returns 0 on failure, non-zero on success
+int tab_manager_set_active_pane(TabManagerHandle manager, size_t pane_id);
+
+// Get the number of panes in the current tab
+size_t tab_manager_get_pane_count(TabManagerHandle manager);
 
 #endif /* SugarloafBridge_h */
