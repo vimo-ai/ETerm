@@ -49,6 +49,10 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             setupTransparentWindow()
+            setupScreenChangeNotification()
+        }
+        .onDisappear {
+            removeScreenChangeNotification()
         }
     }
 
@@ -61,6 +65,34 @@ struct ContentView: View {
 
         // 设置毛玻璃效果
         window.titlebarAppearsTransparent = true
+    }
+
+    /// 监听窗口跨屏幕移动事件
+    private func setupScreenChangeNotification() {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: nil,
+            queue: .main
+        ) { [weak windowController] _ in
+            guard let controller = windowController else { return }
+
+            // 窗口移动到新屏幕,重新获取 scale
+            if let window = NSApp.windows.first,
+               let screen = window.screen {
+                let newScale = screen.backingScaleFactor
+                let currentSize = controller.containerSize
+                controller.resizeContainer(newSize: currentSize, scale: newScale)
+            }
+        }
+    }
+
+    /// 移除屏幕变化监听
+    private func removeScreenChangeNotification() {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSWindow.didChangeScreenNotification,
+            object: nil
+        )
     }
 }
 

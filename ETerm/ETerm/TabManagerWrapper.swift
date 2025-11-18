@@ -153,35 +153,22 @@ class TabManagerWrapper {
         return String(cString: buffer)
     }
 
-    // MARK: - Split Pane Methods
+    // MARK: - Split Pane Methods（已废弃，Swift 负责 Split 逻辑）
 
-    /// 垂直分割（左右）
-    @discardableResult
-    func splitRight() -> Int {
-        guard let handle = handle else { return -1 }
-        return Int(tab_manager_split_right(handle))
-    }
+    // ❌ 已删除：这些方法依赖已删除的 FFI 函数
+    /*
+    func splitRight() -> Int { ... }
+    func splitDown() -> Int { ... }
+    func closePane(_ paneId: Int) -> Bool { ... }
+    */
 
-    /// 水平分割（上下）
-    @discardableResult
-    func splitDown() -> Int {
-        guard let handle = handle else { return -1 }
-        return Int(tab_manager_split_down(handle))
-    }
-
-    /// 关闭指定 pane
-    func closePane(_ paneId: Int) -> Bool {
-        guard let handle = handle else { return false }
-        return tab_manager_close_pane(handle, paneId) != 0
-    }
-
-    /// 设置激活的 pane
+    /// ✅ 保留：设置激活的 pane
     func setActivePane(_ paneId: Int) -> Bool {
         guard let handle = handle else { return false }
         return tab_manager_set_active_pane(handle, paneId) != 0
     }
 
-    /// 获取当前 Tab 的 pane 数量
+    /// ✅ 保留：获取当前 Tab 的 pane 数量
     func getPaneCount() -> Int {
         guard let handle = handle else { return 0 }
         return Int(tab_manager_get_pane_count(handle))

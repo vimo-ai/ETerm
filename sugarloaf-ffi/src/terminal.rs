@@ -1080,13 +1080,13 @@ impl TabManager {
                 }
             }
 
-            // 更新 ContextGrid 的尺寸
-            let font_metrics = crate::global_font_metrics().unwrap_or_else(|| {
-                crate::SugarloafFontMetrics::fallback(14.0)
-            });
-            let width = (cols as f32) * font_metrics.cell_width;
-            let height = (rows as f32) * font_metrics.line_height;
-            tab_info.grid.resize(width, height);
+            // ❌ 删除：不再调用 resize（Swift 负责布局）
+            // let font_metrics = crate::global_font_metrics().unwrap_or_else(|| {
+            //     crate::SugarloafFontMetrics::fallback(14.0)
+            // });
+            // let width = (cols as f32) * font_metrics.cell_width;
+            // let height = (rows as f32) * font_metrics.line_height;
+            // tab_info.grid.resize(width, height);
         }
         all_success
     }
@@ -1107,78 +1107,22 @@ impl TabManager {
         }
     }
 
-    // ===== Split 相关方法 =====
+    // ===== Split 相关方法（已废弃，Swift 负责 Split 逻辑）=====
 
-    /// 垂直分割当前激活的 pane（左右）
+    // ❌ 删除：split_active_pane_right（Swift 负责 Split）
+    /*
     fn split_active_pane_right(&mut self) -> Option<usize> {
-        eprintln!("[Rust Split] split_active_pane_right called");
-
-        // 先获取需要的值，避免借用冲突
-        let shell_cstr = std::ffi::CString::new(self.shell.as_str()).ok()?;
-        let cols = self.cols;
-        let rows = self.rows;
-        let sugarloaf_handle = self.sugarloaf_handle;
-
-        eprintln!("[Rust Split] Creating new terminal: cols={}, rows={}", cols, rows);
-
-        // 创建新终端
-        let terminal_ptr = terminal_create(cols, rows, shell_cstr.as_ptr());
-        if terminal_ptr.is_null() {
-            eprintln!("[Rust Split] ❌ Failed to create terminal");
-            return None;
-        }
-        let terminal = unsafe { Box::from_raw(terminal_ptr) };
-
-        // 创建新 RichText
-        let rich_text_id = crate::sugarloaf_create_rich_text(sugarloaf_handle);
-        eprintln!("[Rust Split] Created rich_text_id: {}", rich_text_id);
-
-        // 调用 ContextGrid 的 split_right
-        if let Some(tab_info) = self.get_active_tab_mut() {
-            eprintln!("[Rust Split] Calling grid.split_right");
-            let result = tab_info.grid.split_right(terminal, rich_text_id);
-            eprintln!("[Rust Split] split_right returned: {:?}", result);
-            result
-        } else {
-            eprintln!("[Rust Split] ❌ No active tab");
-            None
-        }
+        ...
     }
 
-    /// 水平分割当前激活的 pane（上下）
     fn split_active_pane_down(&mut self) -> Option<usize> {
-        // 先获取需要的值，避免借用冲突
-        let shell_cstr = std::ffi::CString::new(self.shell.as_str()).ok()?;
-        let cols = self.cols;
-        let rows = self.rows;
-        let sugarloaf_handle = self.sugarloaf_handle;
-
-        // 创建新终端
-        let terminal_ptr = terminal_create(cols, rows, shell_cstr.as_ptr());
-        if terminal_ptr.is_null() {
-            return None;
-        }
-        let terminal = unsafe { Box::from_raw(terminal_ptr) };
-
-        // 创建新 RichText
-        let rich_text_id = crate::sugarloaf_create_rich_text(sugarloaf_handle);
-
-        // 调用 ContextGrid 的 split_down
-        if let Some(tab_info) = self.get_active_tab_mut() {
-            tab_info.grid.split_down(terminal, rich_text_id)
-        } else {
-            None
-        }
+        ...
     }
 
-    /// 关闭指定 pane
     fn close_pane(&mut self, pane_id: usize) -> bool {
-        if let Some(tab_info) = self.get_active_tab_mut() {
-            tab_info.grid.close_pane(pane_id)
-        } else {
-            false
-        }
+        ...
     }
+    */
 
     /// 切换激活的 pane
     fn set_active_pane(&mut self, pane_id: usize) -> bool {
@@ -1199,98 +1143,126 @@ impl TabManager {
         0
     }
 
-    /// 根据坐标查找对应的 pane
-    fn get_pane_at_position(&self, x: f32, y: f32) -> Option<usize> {
-        if let Some(tab_id) = self.active_tab_id {
-            if let Some(tab_info) = self.tabs.get(&tab_id) {
-                return tab_info.grid.get_pane_at_position(x, y);
-            }
-        }
-        None
-    }
-
-    /// 获取指定 pane 的位置和尺寸信息
-    fn get_pane_info(&self, pane_id: usize) -> Option<(f32, f32, f32, f32)> {
-        if let Some(tab_id) = self.active_tab_id {
-            if let Some(tab_info) = self.tabs.get(&tab_id) {
-                return tab_info.grid.get_pane_info(pane_id);
-            }
-        }
-        None
-    }
-
-    /// 获取当前 Tab 的所有分隔线
-    fn get_dividers(&self) -> Vec<crate::context_grid::DividerInfo> {
-        if let Some(tab_id) = self.active_tab_id {
-            if let Some(tab_info) = self.tabs.get(&tab_id) {
-                return tab_info.grid.get_dividers();
-            }
-        }
-        Vec::new()
-    }
-
-    /// 调整分隔线位置
-    fn resize_divider(&mut self, pane_id_1: usize, pane_id_2: usize, delta: f32) -> bool {
-        if let Some(tab_info) = self.get_active_tab_mut() {
-            tab_info.grid.resize_divider(pane_id_1, pane_id_2, delta)
-        } else {
-            false
-        }
-    }
+    // ❌ 删除：这些方法依赖已删除的 ContextGrid 方法
+    /*
+    fn get_pane_at_position(&self, x: f32, y: f32) -> Option<usize> { ... }
+    fn get_pane_info(&self, pane_id: usize) -> Option<(f32, f32, f32, f32)> { ... }
+    fn get_dividers(&self) -> Vec<crate::context_grid::DividerInfo> { ... }
+    fn resize_divider(&mut self, pane_id_1: usize, pane_id_2: usize, delta: f32) -> bool { ... }
+    */
 
     // ===== 新的 Panel 配置 API（为 Swift DDD 架构提供支持）=====
 
-    /// 创建新的 Panel（由 Swift 调用）
-    /// 这个方法绕过 ContextGrid，直接创建独立的终端
+    // ❌ 删除：create_panel 依赖 split_right（Swift 负责创建 Panel）
+    /*
     pub fn create_panel(&mut self, cols: u16, rows: u16) -> usize {
-        eprintln!("[TabManager] create_panel called: cols={}, rows={}", cols, rows);
+        ...
+    }
+    */
 
-        // 创建新终端
-        let shell_cstr = std::ffi::CString::new(self.shell.as_str()).unwrap();
-        let terminal_ptr = terminal_create(cols, rows, shell_cstr.as_ptr());
-        if terminal_ptr.is_null() {
-            eprintln!("[TabManager] ❌ Failed to create terminal");
-            return usize::MAX;
-        }
+    /// 🧪 测试函数：在四个角创建测试 pane
+    /// 用于验证坐标系和渲染位置
+    pub fn test_corner_panes(&mut self, container_width: f32, container_height: f32) {
+        eprintln!("[TabManager] 🧪 Testing corner panes: container {}x{}", container_width, container_height);
 
-        // 创建 RichText
-        let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
+        // 定义四个角的位置（物理像素，Rust 坐标系）
+        let corners = [
+            (100, 0.0, 0.0, "TL"),           // 左上角
+            (101, container_width - 100.0, 0.0, "TR"),  // 右上角
+            (102, 0.0, container_height - 100.0, "BL"), // 左下角
+            (103, container_width - 100.0, container_height - 100.0, "BR"), // 右下角
+        ];
 
-        // 暂时利用 split_right 来创建新 pane
-        // TODO: 在完整的 DDD 架构中，这应该由 Swift 的 Panel Domain 管理
-        if let Some(tab_info) = self.get_active_tab_mut() {
-            let terminal = unsafe { Box::from_raw(terminal_ptr) };
-            if let Some(pane_id) = tab_info.grid.split_right(terminal, rich_text_id) {
-                eprintln!("[TabManager] ✅ Created panel {}", pane_id);
-                pane_id
-            } else {
-                eprintln!("[TabManager] ❌ Failed to split_right");
-                usize::MAX
+        let sugarloaf_handle = self.sugarloaf_handle;
+
+        for (pane_id, x, y, label) in corners.iter() {
+            eprintln!("[TabManager] Creating test pane {} at ({}, {}) - {}", pane_id, x, y, label);
+
+            // 创建终端
+            let shell_cstr = std::ffi::CString::new("/bin/zsh").unwrap();
+            let terminal_ptr = crate::terminal_create(10, 3, shell_cstr.as_ptr());
+            if terminal_ptr.is_null() {
+                eprintln!("[TabManager] ❌ Failed to create terminal for test pane {}", pane_id);
+                continue;
             }
-        } else {
-            eprintln!("[TabManager] ❌ No active tab");
-            usize::MAX
+            let terminal = unsafe { Box::from_raw(terminal_ptr) };
+
+            // 写入标记文本
+            let marker = format!("[[{}]]\n", label);
+            crate::terminal_write_input(terminal_ptr, marker.as_ptr() as *const i8);
+
+            // 创建 RichText
+            let rich_text_id = crate::sugarloaf_create_rich_text(sugarloaf_handle);
+
+            // 添加 pane
+            if let Some(tab_info) = self.get_active_tab_mut() {
+                tab_info.grid.add_pane(*pane_id, terminal, rich_text_id, 10, 3);
+                tab_info.grid.set_pane_position(*pane_id, *x, *y);
+            }
         }
+
+        eprintln!("[TabManager] 🧪 Test panes created successfully");
     }
 
     /// 更新 Panel 的渲染配置（由 Swift 调用）
-    /// Swift 负责布局计算，Rust 只负责存储配置并渲染
+    /// Swift 负责布局计算，Rust 只负责接收位置和尺寸
     pub fn update_panel_config(
         &mut self,
-        _panel_id: usize,
-        _x: f32,
-        _y: f32,
-        _width: f32,
+        panel_id: usize,
+        x: f32,           // Swift 传来的位置（物理像素，Rust 坐标系）
+        y: f32,
+        _width: f32,      // 暂时不使用 width/height（通过 cols/rows 计算）
         _height: f32,
         cols: u16,
         rows: u16,
     ) -> bool {
-        eprintln!("[TabManager] update_panel_config: panel_id={}, cols={}, rows={}",
-                  _panel_id, cols, rows);
+        eprintln!("[TabManager] update_panel_config: panel={}, pos=({}, {}), size={}x{}, grid={}x{}",
+                  panel_id, x, y, _width, _height, cols, rows);
 
-        // 暂时调用 resize_all_tabs 来调整所有 pane 尺寸
-        // TODO: 在完整的 DDD 架构中，应该只调整指定 panel 的尺寸
-        self.resize_all_tabs(cols, rows)
+        // 先检查是否需要创建 pane
+        let needs_creation = if let Some(tab_id) = self.active_tab_id {
+            if let Some(tab_info) = self.tabs.get(&tab_id) {
+                !tab_info.grid.has_pane(panel_id)
+            } else {
+                eprintln!("[TabManager] ❌ Tab {} not found", tab_id);
+                return false;
+            }
+        } else {
+            eprintln!("[TabManager] ❌ No active tab");
+            return false;
+        };
+
+        // 如果需要创建，先创建终端和 RichText
+        if needs_creation {
+            eprintln!("[TabManager] Creating new pane {}", panel_id);
+
+            // 创建新终端
+            let shell_cstr = std::ffi::CString::new(self.shell.as_str()).unwrap();
+            let terminal_ptr = crate::terminal_create(cols, rows, shell_cstr.as_ptr());
+            if terminal_ptr.is_null() {
+                eprintln!("[TabManager] ❌ Failed to create terminal for pane {}", panel_id);
+                return false;
+            }
+            let terminal = unsafe { Box::from_raw(terminal_ptr) };
+
+            // 创建 RichText
+            let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
+
+            // 添加到 ContextGrid
+            if let Some(tab_info) = self.get_active_tab_mut() {
+                tab_info.grid.add_pane(panel_id, terminal, rich_text_id, cols, rows);
+            }
+        }
+
+        // 设置位置和尺寸
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            tab_info.grid.set_pane_position(panel_id, x, y);
+            tab_info.grid.set_pane_size(panel_id, cols, rows);
+            eprintln!("[TabManager] ✅ Successfully updated panel {}", panel_id);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -1571,41 +1543,20 @@ pub extern "C" fn tab_manager_free(manager: *mut TabManager) {
 }
 
 // ============================================================================
-// Split Pane FFI
+// Split Pane FFI（已废弃，Swift 负责 Split 逻辑）
 // ============================================================================
 
-/// 垂直分割当前激活的 pane（左右分割）
+// ❌ 删除：这些 FFI 函数依赖已删除的方法
+/*
 #[no_mangle]
-pub extern "C" fn tab_manager_split_right(manager: *mut TabManager) -> i32 {
-    if manager.is_null() {
-        return -1;
-    }
+pub extern "C" fn tab_manager_split_right(manager: *mut TabManager) -> i32 { ... }
 
-    let manager = unsafe { &mut *manager };
-    manager.split_active_pane_right().map(|id| id as i32).unwrap_or(-1)
-}
-
-/// 水平分割当前激活的 pane（上下分割）
 #[no_mangle]
-pub extern "C" fn tab_manager_split_down(manager: *mut TabManager) -> i32 {
-    if manager.is_null() {
-        return -1;
-    }
+pub extern "C" fn tab_manager_split_down(manager: *mut TabManager) -> i32 { ... }
 
-    let manager = unsafe { &mut *manager };
-    manager.split_active_pane_down().map(|id| id as i32).unwrap_or(-1)
-}
-
-/// 关闭指定 pane
 #[no_mangle]
-pub extern "C" fn tab_manager_close_pane(manager: *mut TabManager, pane_id: usize) -> bool {
-    if manager.is_null() {
-        return false;
-    }
-
-    let manager = unsafe { &mut *manager };
-    manager.close_pane(pane_id)
-}
+pub extern "C" fn tab_manager_close_pane(manager: *mut TabManager, pane_id: usize) -> bool { ... }
+*/
 
 /// 切换激活的 pane
 #[no_mangle]
@@ -1629,116 +1580,29 @@ pub extern "C" fn tab_manager_get_pane_count(manager: *mut TabManager) -> usize 
     manager.get_pane_count()
 }
 
-/// 根据坐标查找对应的 pane（用于点击切换焦点）
-/// x, y 是逻辑坐标
+// ❌ 删除：这些 FFI 函数依赖已删除的方法
+/*
 #[no_mangle]
-pub extern "C" fn tab_manager_get_pane_at_position(
-    manager: *mut TabManager,
-    x: f32,
-    y: f32,
-) -> i32 {
-    if manager.is_null() {
-        return -1;
-    }
+pub extern "C" fn tab_manager_get_pane_at_position(...) -> i32 { ... }
 
-    let manager = unsafe { &*manager };
-    manager.get_pane_at_position(x, y)
-        .map(|id| id as i32)
-        .unwrap_or(-1)
-}
-
-/// Pane 信息结构（用于 FFI）
 #[repr(C)]
-pub struct PaneInfo {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
+pub struct PaneInfo { ... }
 
-/// 获取指定 pane 的位置和尺寸信息
 #[no_mangle]
-pub extern "C" fn tab_manager_get_pane_info(
-    manager: *mut TabManager,
-    pane_id: usize,
-    out_info: *mut PaneInfo,
-) -> bool {
-    if manager.is_null() || out_info.is_null() {
-        return false;
-    }
+pub extern "C" fn tab_manager_get_pane_info(...) -> bool { ... }
+*/
 
-    let manager = unsafe { &*manager };
-    if let Some((x, y, width, height)) = manager.get_pane_info(pane_id) {
-        unsafe {
-            (*out_info).x = x;
-            (*out_info).y = y;
-            (*out_info).width = width;
-            (*out_info).height = height;
-        }
-        true
-    } else {
-        false
-    }
-}
-
-/// 分隔线信息结构（用于 FFI）
+// ❌ 删除：分隔线相关 FFI（依赖已删除的方法）
+/*
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct DividerInfoFFI {
-    pub pane_id_1: usize,
-    pub pane_id_2: usize,
-    pub divider_type: u8,  // 0=vertical, 1=horizontal
-    pub position: f32,     // 逻辑坐标
-}
+pub struct DividerInfoFFI { ... }
 
-/// 获取当前 Tab 的所有分隔线
-/// out_dividers: 输出数组
-/// max_count: 数组最大容量
-/// 返回实际分隔线数量
 #[no_mangle]
-pub extern "C" fn tab_manager_get_dividers(
-    manager: *mut TabManager,
-    out_dividers: *mut DividerInfoFFI,
-    max_count: usize,
-) -> usize {
-    if manager.is_null() || out_dividers.is_null() {
-        return 0;
-    }
+pub extern "C" fn tab_manager_get_dividers(...) -> usize { ... }
 
-    let manager = unsafe { &*manager };
-    let dividers = manager.get_dividers();
-    let count = dividers.len().min(max_count);
-
-    for (i, divider) in dividers.iter().take(count).enumerate() {
-        unsafe {
-            let out = out_dividers.add(i);
-            (*out).pane_id_1 = divider.pane_id_1;
-            (*out).pane_id_2 = divider.pane_id_2;
-            (*out).divider_type = divider.divider_type;
-            (*out).position = divider.position;
-        }
-    }
-
-    count
-}
-
-/// 调整分隔线位置
-/// pane_id_1, pane_id_2: 分隔线两侧的 pane ID
-/// delta: 移动量（逻辑坐标），正数向右/下，负数向左/上
 #[no_mangle]
-pub extern "C" fn tab_manager_resize_divider(
-    manager: *mut TabManager,
-    pane_id_1: usize,
-    pane_id_2: usize,
-    delta: f32,
-) -> bool {
-    if manager.is_null() {
-        return false;
-    }
-
-    let manager = unsafe { &mut *manager };
-    manager.resize_divider(pane_id_1, pane_id_2, delta)
-}
+pub extern "C" fn tab_manager_resize_divider(...) -> bool { ... }
+*/
 
 // ============================================================================
 // Text Selection API

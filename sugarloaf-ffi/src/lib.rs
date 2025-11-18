@@ -586,21 +586,26 @@ pub extern "C" fn sugarloaf_free(handle: *mut SugarloafHandle) {
 // 新的 Panel 配置 API
 // ============================================================================
 
+// ❌ 删除：create_panel 已废弃（Swift 负责创建 Panel）
+/*
 #[no_mangle]
-pub extern "C" fn tab_manager_create_panel(
+pub extern "C" fn tab_manager_create_panel(...) -> usize { ... }
+*/
+
+/// 🧪 测试函数：在四个角创建测试 pane
+#[no_mangle]
+pub extern "C" fn tab_manager_test_corner_panes(
     manager: *mut terminal::TabManager,
-    cols: u16,
-    rows: u16,
-) -> usize {
+    container_width: f32,
+    container_height: f32,
+) {
     if manager.is_null() {
-        eprintln!("[FFI] ❌ tab_manager_create_panel: manager is null");
-        return usize::MAX;
+        eprintln!("[FFI] ❌ tab_manager_test_corner_panes: manager is null");
+        return;
     }
 
     let manager = unsafe { &mut *manager };
-    let panel_id = manager.create_panel(cols, rows);
-    eprintln!("[FFI] ✅ Created panel {}", panel_id);
-    panel_id
+    manager.test_corner_panes(container_width, container_height);
 }
 
 #[no_mangle]

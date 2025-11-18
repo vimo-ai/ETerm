@@ -90,6 +90,80 @@ final class TerminalWindow {
     func containsPanel(_ panelId: UUID) -> Bool {
         return rootLayout.contains(panelId)
     }
+
+    /// 更新分隔线比例
+    ///
+    /// - Parameters:
+    ///   - path: 布局路径
+    ///   - newRatio: 新的比例
+    func updateDividerRatio(path: [Int], newRatio: CGFloat) {
+        rootLayout = updateRatioInLayout(layout: rootLayout, path: path, newRatio: newRatio)
+    }
+
+    // MARK: - Private Helpers
+
+    /// 递归更新布局树中的比例
+    private func updateRatioInLayout(
+        layout: PanelLayout,
+        path: [Int],
+        newRatio: CGFloat
+    ) -> PanelLayout {
+        // 如果路径为空,说明到达目标节点
+        if path.isEmpty {
+            switch layout {
+            case .split(let direction, let first, let second, _):
+                return .split(
+                    direction: direction,
+                    first: first,
+                    second: second,
+                    ratio: newRatio
+                )
+            case .leaf:
+                return layout  // 叶子节点不能更新比例
+            }
+        }
+
+        // 继续递归
+        guard let nextIndex = path.first else {
+            return layout
+        }
+
+        let remainingPath = Array(path.dropFirst())
+
+        switch layout {
+        case .split(let direction, let first, let second, let ratio):
+            if nextIndex == 0 {
+                // 更新 first 分支
+                let newFirst = updateRatioInLayout(
+                    layout: first,
+                    path: remainingPath,
+                    newRatio: newRatio
+                )
+                return .split(
+                    direction: direction,
+                    first: newFirst,
+                    second: second,
+                    ratio: ratio
+                )
+            } else {
+                // 更新 second 分支
+                let newSecond = updateRatioInLayout(
+                    layout: second,
+                    path: remainingPath,
+                    newRatio: newRatio
+                )
+                return .split(
+                    direction: direction,
+                    first: first,
+                    second: newSecond,
+                    ratio: ratio
+                )
+            }
+
+        case .leaf:
+            return layout  // 叶子节点,返回原样
+        }
+    }
 }
 
 // MARK: - Equatable

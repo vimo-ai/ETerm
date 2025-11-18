@@ -52,24 +52,40 @@ struct TerminalRenderConfig {
         let contentWidth = bounds.width - 2 * padding
         let contentHeight = bounds.height - 2 * padding
 
+        print("[RenderConfig] 🧮 Row calculation:")
+        print("               bounds.height = \(bounds.height)")
+        print("               padding = \(padding)")
+        print("               contentHeight = bounds.height - 2 * padding = \(bounds.height) - \(2 * padding) = \(contentHeight)")
+        print("               cellHeight = \(cellHeight)")
+        print("               rows (before max) = contentHeight / cellHeight = \(contentHeight) / \(cellHeight) = \(contentHeight / cellHeight)")
+
         // 2. 计算终端网格尺寸（行列）
         let cols = UInt16(max(2, contentWidth / cellWidth))
         let rows = UInt16(max(1, contentHeight / cellHeight))
 
-        // 3. 计算渲染区域的原点（左下角 + padding）
-        let swiftOrigin = CGPoint(
+        print("               rows (final) = max(1, \(contentHeight / cellHeight)) = \(rows)")
+
+        // 3. 计算渲染区域的左上角（Swift 坐标系）
+        // Swift: 左下角为原点，所以左上角 = (x, y + height)
+        let swiftTopLeft = CGPoint(
             x: bounds.x + padding,
-            y: bounds.y + padding
+            y: bounds.y + bounds.height - padding  // 左上角 Y 坐标
         )
 
-        // 4. 转换为 Rust 坐标系（Y 轴翻转）
-        let rustOrigin = mapper.swiftToRust(point: swiftOrigin)
+        // 4. 转换为 Rust 坐标系（Y 轴翻转，得到 Rust 的左上角）
+        let rustOrigin = mapper.swiftToRust(point: swiftTopLeft)
 
         // 5. 转换为物理坐标（Pixels）
         let physicalX = mapper.logicalToPhysical(value: rustOrigin.x)
         let physicalY = mapper.logicalToPhysical(value: rustOrigin.y)
         let physicalWidth = mapper.logicalToPhysical(value: contentWidth)
         let physicalHeight = mapper.logicalToPhysical(value: contentHeight)
+
+        print("[RenderConfig] 📐 Coordinate transform:")
+        print("               Input bounds (Swift): x=\(bounds.x), y=\(bounds.y), w=\(bounds.width), h=\(bounds.height)")
+        print("               Swift top-left: (\(swiftTopLeft.x), \(swiftTopLeft.y))")
+        print("               Rust top-left (Y-flipped): (\(rustOrigin.x), \(rustOrigin.y))")
+        print("               Physical (pixels): (\(physicalX), \(physicalY))")
 
         return TerminalRenderConfig(
             x: Float(physicalX),

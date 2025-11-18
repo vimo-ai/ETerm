@@ -54,17 +54,19 @@ pub struct ContextGridItem {
     pub pane_id: usize,
     pub terminal: Box<TerminalHandle>,
     pub rich_text_id: usize,
-    pub dimension: PaneDimension,
     rich_text_object: Object,
 
     // 🎯 终端网格尺寸
     pub cols: u16,  // 终端列数
     pub rows: u16,  // 终端行数
 
-    // 链表关系
-    right: Option<usize>,
-    down: Option<usize>,
-    parent: Option<usize>,
+    // ❌ 删除链表关系（Swift 负责布局）
+    // right: Option<usize>,
+    // down: Option<usize>,
+    // parent: Option<usize>,
+
+    // ❌ 删除 dimension（Swift 负责布局）
+    // pub dimension: PaneDimension,
 }
 
 impl ContextGridItem {
@@ -72,7 +74,6 @@ impl ContextGridItem {
         pane_id: usize,
         terminal: Box<TerminalHandle>,
         rich_text_id: usize,
-        dimension: PaneDimension,
         cols: u16,
         rows: u16,
     ) -> Self {
@@ -86,13 +87,9 @@ impl ContextGridItem {
             pane_id,
             terminal,
             rich_text_id,
-            dimension,
             rich_text_object,
             cols,
             rows,
-            right: None,
-            down: None,
-            parent: None,
         }
     }
 
@@ -105,8 +102,9 @@ impl ContextGridItem {
         }
     }
 
+    /// ✅ 新增：让 Swift 设置位置
     #[inline]
-    fn set_position(&mut self, position: [f32; 2]) {
+    pub fn set_position(&mut self, position: [f32; 2]) {
         if let Object::RichText(ref mut rich_text) = self.rich_text_object {
             rich_text.position = position;
         }
@@ -156,15 +154,14 @@ impl ContextGrid {
         rows: u16,
     ) -> Self {
         let scaled_padding = PADDING * scale;
-        let dimension = PaneDimension::new(width, height);
 
         let mut inner = HashMap::new();
         inner.insert(
             initial_pane_id,
-            ContextGridItem::new(initial_pane_id, terminal, rich_text_id, dimension, cols, rows),
+            ContextGridItem::new(initial_pane_id, terminal, rich_text_id, cols, rows),
         );
 
-        let mut grid = Self {
+        Self {
             inner,
             current: initial_pane_id,
             margin,
@@ -175,10 +172,7 @@ impl ContextGrid {
             scale,
             root: Some(initial_pane_id),
             next_pane_id: initial_pane_id + 1,
-        };
-
-        grid.calculate_positions_for_affected_nodes(&[initial_pane_id]);
-        grid
+        }
     }
 
     /// 获取下一个 pane ID
@@ -212,7 +206,8 @@ impl ContextGrid {
         self.inner.values_mut()
     }
 
-    /// 垂直分割（左右）
+    // ❌ 删除：split_right 和 split_down（Swift 负责 split 逻辑）
+    /*
     pub fn split_right(
         &mut self,
         terminal: Box<TerminalHandle>,
@@ -306,7 +301,6 @@ impl ContextGrid {
         Some(new_pane_id)
     }
 
-    /// 水平分割（上下）
     pub fn split_down(
         &mut self,
         terminal: Box<TerminalHandle>,
@@ -448,6 +442,7 @@ impl ContextGrid {
 
         true
     }
+    */
 
     /// 设置激活的 pane
     pub fn set_current(&mut self, pane_id: usize) -> bool {
@@ -459,15 +454,65 @@ impl ContextGrid {
         }
     }
 
-    /// 重新计算受影响节点的位置
+    /// ✅ 检查 pane 是否存在
+    pub fn has_pane(&self, pane_id: usize) -> bool {
+        self.inner.contains_key(&pane_id)
+    }
+
+    /// ✅ 添加新的 pane（由 Swift 调用）
+    pub fn add_pane(
+        &mut self,
+        pane_id: usize,
+        terminal: Box<TerminalHandle>,
+        rich_text_id: usize,
+        cols: u16,
+        rows: u16,
+    ) {
+        let item = ContextGridItem::new(pane_id, terminal, rich_text_id, cols, rows);
+        self.inner.insert(pane_id, item);
+        eprintln!("[ContextGrid] Added pane {} with grid {}x{}", pane_id, cols, rows);
+    }
+
+    /// ✅ 让 Swift 设置 pane 位置
+    pub fn set_pane_position(&mut self, pane_id: usize, x: f32, y: f32) {
+        if let Some(item) = self.inner.get_mut(&pane_id) {
+            // 转换为逻辑坐标
+            let logical_x = x / self.scale;
+            let logical_y = y / self.scale;
+            item.set_position([logical_x, logical_y]);
+
+            eprintln!("[ContextGrid] Set pane {} position: ({}, {}) logical, ({}, {}) physical",
+                      pane_id, logical_x, logical_y, x, y);
+        } else {
+            eprintln!("[ContextGrid] ⚠️ Pane {} not found when setting position", pane_id);
+        }
+    }
+
+    /// ✅ 让 Swift 设置 pane 尺寸
+    pub fn set_pane_size(&mut self, pane_id: usize, cols: u16, rows: u16) {
+        if let Some(item) = self.inner.get_mut(&pane_id) {
+            if item.cols != cols || item.rows != rows {
+                item.cols = cols;
+                item.rows = rows;
+
+                let terminal_ptr = &mut *item.terminal as *mut TerminalHandle;
+                crate::terminal_resize(terminal_ptr, cols, rows);
+
+                eprintln!("[ContextGrid] Resized pane {} terminal: {}x{}", pane_id, cols, rows);
+            }
+        } else {
+            eprintln!("[ContextGrid] ⚠️ Pane {} not found when setting size", pane_id);
+        }
+    }
+
+    // ❌ 删除：重新计算受影响节点的位置（不再需要，Swift 负责布局）
+    /*
     fn calculate_positions_for_affected_nodes(&mut self, _affected: &[usize]) {
-        // 从 root 开始重新计算所有位置
         if let Some(root) = self.root {
             self.calculate_positions_recursive(root, 0.0, 0.0);
         }
     }
 
-    /// 递归计算位置
     fn calculate_positions_recursive(&mut self, pane_id: usize, x: f32, y: f32) {
         // 获取当前 pane 的信息
         let (right, down, width, height) = {
@@ -514,8 +559,9 @@ impl ContextGrid {
             );
         }
     }
+    */
 
-    /// 生成所有 pane 的 RichText Objects（用于渲染）
+    /// ✅ 修改：objects() 不计算位置，直接使用已设置的位置
     pub fn objects(&self) -> Vec<Object> {
         eprintln!("[ContextGrid] Generating objects for {} panes", self.inner.len());
         let mut objects = Vec::new();
@@ -532,7 +578,8 @@ impl ContextGrid {
         objects
     }
 
-    /// 调整所有 pane 的大小
+    // ❌ 删除：resize 相关方法（Swift 负责布局和尺寸管理）
+    /*
     pub fn resize(&mut self, width: f32, height: f32) {
         eprintln!("[ContextGrid] resize called: old={}x{}, new={}x{}",
                   self.width, self.height, width, height);
@@ -837,8 +884,9 @@ impl ContextGrid {
 
         true
     }
+    */
 
-    /// 根据像素宽度计算终端列数
+    // ✅ 保留：辅助方法（用于终端尺寸计算）
     fn calculate_cols(&self, width_pixels: f32) -> u16 {
         let metrics = crate::global_font_metrics().unwrap_or_else(|| {
             crate::SugarloafFontMetrics::fallback(14.0)

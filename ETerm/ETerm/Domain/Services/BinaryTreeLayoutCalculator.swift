@@ -164,6 +164,12 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
                 height: secondHeight
             )
 
+            print("[Layout] 🔸 Vertical split:")
+            print("         Input bounds: x=\(bounds.x), y=\(bounds.y), w=\(bounds.width), h=\(bounds.height)")
+            print("         Ratio: \(clampedRatio)")
+            print("         First (下):  x=\(firstBounds.x), y=\(firstBounds.y), w=\(firstBounds.width), h=\(firstBounds.height)")
+            print("         Second (上): x=\(secondBounds.x), y=\(secondBounds.y), w=\(secondBounds.width), h=\(secondBounds.height)")
+
             return (firstBounds, secondBounds)
         }
     }

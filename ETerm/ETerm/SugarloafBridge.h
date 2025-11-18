@@ -232,79 +232,30 @@ int tab_manager_get_tab_title(
 // Free tab manager
 void tab_manager_free(TabManagerHandle manager);
 
-// ===== Split Pane API =====
+// ===== Split Pane API（已废弃，Swift 负责 Split 逻辑）=====
 
-// Split the active pane vertically (left-right)
-// Returns new pane_id or -1 on failure
-int tab_manager_split_right(TabManagerHandle manager);
+// ❌ 已删除：这些函数已从 Rust FFI 中移除
+// int tab_manager_split_right(TabManagerHandle manager);
+// int tab_manager_split_down(TabManagerHandle manager);
+// int tab_manager_close_pane(TabManagerHandle manager, size_t pane_id);
 
-// Split the active pane horizontally (top-bottom)
-// Returns new pane_id or -1 on failure
-int tab_manager_split_down(TabManagerHandle manager);
-
-// Close a specific pane
-// Returns 0 on failure, non-zero on success
-int tab_manager_close_pane(TabManagerHandle manager, size_t pane_id);
-
-// Set the active pane
-// Returns 0 on failure, non-zero on success
+// ✅ 保留：设置激活 pane
 int tab_manager_set_active_pane(TabManagerHandle manager, size_t pane_id);
 
-// Get the number of panes in the current tab
+// ✅ 保留：获取 pane 数量
 size_t tab_manager_get_pane_count(TabManagerHandle manager);
 
-// Get pane at specific position (for click focus switching)
-// Returns pane_id or -1 if no pane found at that position
-// x, y are in logical coordinates
-int tab_manager_get_pane_at_position(
-    TabManagerHandle manager,
-    float x,
-    float y
-);
+// ❌ 已删除：这些函数已从 Rust FFI 中移除
+// int tab_manager_get_pane_at_position(TabManagerHandle manager, float x, float y);
+// typedef struct PaneInfo { ... };
+// int tab_manager_get_pane_info(TabManagerHandle manager, size_t pane_id, PaneInfo* out_info);
 
-// Pane position and size information
-typedef struct {
-    float x;
-    float y;
-    float width;
-    float height;
-} PaneInfo;
+// ===== Divider Resizing API（已废弃）=====
 
-// Get pane position and size information (in logical coordinates)
-// Returns 0 on failure, non-zero on success
-int tab_manager_get_pane_info(
-    TabManagerHandle manager,
-    size_t pane_id,
-    PaneInfo* out_info
-);
-
-// ===== Divider Resizing API =====
-
-// Divider information
-typedef struct {
-    size_t pane_id_1;      // Left/top pane
-    size_t pane_id_2;      // Right/bottom pane
-    unsigned char divider_type;  // 0=vertical (left-right), 1=horizontal (top-bottom)
-    float position;        // Divider position in logical coordinates
-} DividerInfo;
-
-// Get all dividers in the current tab
-// Returns the number of dividers found
-size_t tab_manager_get_dividers(
-    TabManagerHandle manager,
-    DividerInfo* out_dividers,
-    size_t max_count
-);
-
-// Resize divider by moving it
-// delta: movement in logical coordinates (positive = right/down, negative = left/up)
-// Returns 0 on failure, non-zero on success
-int tab_manager_resize_divider(
-    TabManagerHandle manager,
-    size_t pane_id_1,
-    size_t pane_id_2,
-    float delta
-);
+// ❌ 已删除：分隔线相关函数已从 Rust FFI 中移除
+// typedef struct DividerInfo { ... };
+// size_t tab_manager_get_dividers(...);
+// int tab_manager_resize_divider(...);
 
 // ===== Text Selection API =====
 
@@ -347,15 +298,17 @@ size_t tab_manager_get_selected_text(
 
 // ===== 新的 Panel 配置 API =====
 
-// 创建新的 Panel（用于 split）
-// 返回 panel_id，失败返回 SIZE_MAX
-size_t tab_manager_create_panel(
+// ❌ 已删除：Swift 负责创建 Panel
+// size_t tab_manager_create_panel(TabManagerHandle manager, unsigned short cols, unsigned short rows);
+
+// 🧪 测试函数：在四个角创建测试 pane
+void tab_manager_test_corner_panes(
     TabManagerHandle manager,
-    unsigned short cols,
-    unsigned short rows
+    float container_width,
+    float container_height
 );
 
-// 更新 Panel 的渲染配置（位置、尺寸、网格大小）
+// ✅ 更新 Panel 的渲染配置（位置、尺寸、网格大小）
 // 返回 1 成功，0 失败
 int tab_manager_update_panel_config(
     TabManagerHandle manager,
