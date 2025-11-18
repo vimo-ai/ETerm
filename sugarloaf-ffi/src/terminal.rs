@@ -1237,6 +1237,61 @@ impl TabManager {
             false
         }
     }
+
+    // ===== 新的 Panel 配置 API（为 Swift DDD 架构提供支持）=====
+
+    /// 创建新的 Panel（由 Swift 调用）
+    /// 这个方法绕过 ContextGrid，直接创建独立的终端
+    pub fn create_panel(&mut self, cols: u16, rows: u16) -> usize {
+        eprintln!("[TabManager] create_panel called: cols={}, rows={}", cols, rows);
+
+        // 创建新终端
+        let shell_cstr = std::ffi::CString::new(self.shell.as_str()).unwrap();
+        let terminal_ptr = terminal_create(cols, rows, shell_cstr.as_ptr());
+        if terminal_ptr.is_null() {
+            eprintln!("[TabManager] ❌ Failed to create terminal");
+            return usize::MAX;
+        }
+
+        // 创建 RichText
+        let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
+
+        // 暂时利用 split_right 来创建新 pane
+        // TODO: 在完整的 DDD 架构中，这应该由 Swift 的 Panel Domain 管理
+        if let Some(tab_info) = self.get_active_tab_mut() {
+            let terminal = unsafe { Box::from_raw(terminal_ptr) };
+            if let Some(pane_id) = tab_info.grid.split_right(terminal, rich_text_id) {
+                eprintln!("[TabManager] ✅ Created panel {}", pane_id);
+                pane_id
+            } else {
+                eprintln!("[TabManager] ❌ Failed to split_right");
+                usize::MAX
+            }
+        } else {
+            eprintln!("[TabManager] ❌ No active tab");
+            usize::MAX
+        }
+    }
+
+    /// 更新 Panel 的渲染配置（由 Swift 调用）
+    /// Swift 负责布局计算，Rust 只负责存储配置并渲染
+    pub fn update_panel_config(
+        &mut self,
+        _panel_id: usize,
+        _x: f32,
+        _y: f32,
+        _width: f32,
+        _height: f32,
+        cols: u16,
+        rows: u16,
+    ) -> bool {
+        eprintln!("[TabManager] update_panel_config: panel_id={}, cols={}, rows={}",
+                  _panel_id, cols, rows);
+
+        // 暂时调用 resize_all_tabs 来调整所有 pane 尺寸
+        // TODO: 在完整的 DDD 架构中，应该只调整指定 panel 的尺寸
+        self.resize_all_tabs(cols, rows)
+    }
 }
 
 // ============================================================================

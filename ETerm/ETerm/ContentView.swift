@@ -9,10 +9,12 @@ import SwiftUI
 import Combine
 
 struct ContentView: View {
+    @Bindable var windowController: WindowController
+
     var body: some View {
         TabView {
             // 完整的终端 Tab (PTY + Sugarloaf) - 使用新的 Tab 支持版本
-            TabTerminalView()
+            TabTerminalView(controller: windowController)
 
                 .frame(minWidth: 800, minHeight: 600)
                 .tabItem {
@@ -98,5 +100,10 @@ struct TransparentWindowBackground: NSViewRepresentable {
 }
 
 #Preview {
-    ContentView()
+    // Preview 环境下创建临时的 WindowController
+    let controller = WindowController(
+        containerSize: CGSize(width: 1000, height: 800),
+        scale: 2.0
+    )
+    return ContentView(windowController: controller)
 }

@@ -345,4 +345,27 @@ size_t tab_manager_get_selected_text(
     size_t buffer_size
 );
 
+// ===== 新的 Panel 配置 API =====
+
+// 创建新的 Panel（用于 split）
+// 返回 panel_id，失败返回 SIZE_MAX
+size_t tab_manager_create_panel(
+    TabManagerHandle manager,
+    unsigned short cols,
+    unsigned short rows
+);
+
+// 更新 Panel 的渲染配置（位置、尺寸、网格大小）
+// 返回 1 成功，0 失败
+int tab_manager_update_panel_config(
+    TabManagerHandle manager,
+    size_t panel_id,
+    float x,           // 左上角 x（物理像素，Rust 坐标系）
+    float y,           // 左上角 y（物理像素，Rust 坐标系）
+    float width,       // 宽度（物理像素）
+    float height,      // 高度（物理像素）
+    unsigned short cols,
+    unsigned short rows
+);
+
 #endif /* SugarloafBridge_h */

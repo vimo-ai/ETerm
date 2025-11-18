@@ -789,43 +789,42 @@ struct TerminalManagerView: NSViewRepresentable {
 
 /// 使用原生 SwiftUI TabView 的终端视图
 struct TabTerminalView: View {
+    @Bindable var controller: WindowController
     @ObservedObject var coordinator = TerminalCoordinator.shared
 
     var body: some View {
         VStack(spacing: 0) {
             // 工具栏
-            if !coordinator.tabIds.isEmpty {
-                HStack {
-                    Button(action: createNewTab) {
-                        Label("新建 Tab", systemImage: "plus")
-                    }
-                    .keyboardShortcut("t", modifiers: .command)
-                    .help("⌘T")
-
-                    Divider()
-                        .frame(height: 20)
-
-                    Button(action: splitRight) {
-                        Label("垂直分割", systemImage: "rectangle.split.2x1")
-                    }
-                    .keyboardShortcut("d", modifiers: .command)
-                    .help("⌘D - 垂直分割")
-
-                    Button(action: splitDown) {
-                        Label("水平分割", systemImage: "rectangle.split.1x2")
-                    }
-                    .keyboardShortcut("d", modifiers: [.command, .shift])
-                    .help("⌘⇧D - 水平分割")
-
-                    Spacer()
-
-                    Text("\(coordinator.tabIds.count) tab\(coordinator.tabIds.count > 1 ? "s" : "")")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
+            HStack {
+                Button(action: createNewTab) {
+                    Label("新建 Tab", systemImage: "plus")
                 }
-                .padding(8)
-                .background(Color.clear)
+                .keyboardShortcut("t", modifiers: .command)
+                .help("⌘T")
+
+                Divider()
+                    .frame(height: 20)
+
+                Button(action: splitRight) {
+                    Label("垂直分割", systemImage: "rectangle.split.2x1")
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                .help("⌘D - 垂直分割")
+
+                Button(action: splitDown) {
+                    Label("水平分割", systemImage: "rectangle.split.1x2")
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .help("⌘⇧D - 水平分割")
+
+                Spacer()
+
+                Text("\(controller.panelCount) panel\(controller.panelCount > 1 ? "s" : "")")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
             }
+            .padding(8)
+            .background(Color.clear)
 
             // 终端内容
             ZStack {
@@ -922,49 +921,95 @@ struct TabTerminalView: View {
 
     private func splitRight() {
         print("[Split] splitRight() called")
-        guard let tabManager = coordinator.terminalView?.tabManager else {
-            print("[Split] ERROR: tabManager is nil")
-            return
-        }
-        print("[Split] Calling tabManager.splitRight()")
-        let newPaneId = tabManager.splitRight()
-        print("[Split] splitRight returned paneId: \(newPaneId)")
 
-        if newPaneId >= 0 {
-            let paneCount = tabManager.getPaneCount()
-            print("[Split] ✅ Created right pane with ID: \(newPaneId), total panes: \(paneCount)")
-            // 触发重新渲染
-            coordinator.terminalView?.renderTerminal()
+        // 使用新的 DDD 架构
+        if let firstPanelId = controller.allPanelIds.first {
+            print("[Split] Splitting panel \(firstPanelId) horizontally")
+            if let newPanelId = controller.splitPanel(
+                panelId: firstPanelId,
+                direction: .horizontal
+            ) {
+                print("[Split] ✅ Created right panel with ID: \(newPanelId), total panels: \(controller.panelCount)")
+
+                // TODO: 通知 Rust 层更新配置
+                updateRustConfigs()
+            } else {
+                print("[Split] ❌ Failed to create right panel")
+            }
         } else {
-            print("[Split] ❌ Failed to create right pane")
+            print("[Split] ❌ No panels available")
         }
     }
 
     private func splitDown() {
         print("[Split] splitDown() called")
-        guard let tabManager = coordinator.terminalView?.tabManager else {
-            print("[Split] ERROR: tabManager is nil")
-            return
-        }
-        print("[Split] Calling tabManager.splitDown()")
-        let newPaneId = tabManager.splitDown()
-        print("[Split] splitDown returned paneId: \(newPaneId)")
 
-        if newPaneId >= 0 {
-            let paneCount = tabManager.getPaneCount()
-            print("[Split] ✅ Created down pane with ID: \(newPaneId), total panes: \(paneCount)")
-            // 触发重新渲染
-            coordinator.terminalView?.renderTerminal()
+        // 使用新的 DDD 架构
+        if let firstPanelId = controller.allPanelIds.first {
+            print("[Split] Splitting panel \(firstPanelId) vertically")
+            if let newPanelId = controller.splitPanel(
+                panelId: firstPanelId,
+                direction: .vertical
+            ) {
+                print("[Split] ✅ Created down panel with ID: \(newPanelId), total panels: \(controller.panelCount)")
+
+                // TODO: 通知 Rust 层更新配置
+                updateRustConfigs()
+            } else {
+                print("[Split] ❌ Failed to create down panel")
+            }
         } else {
-            print("[Split] ❌ Failed to create down pane")
+            print("[Split] ❌ No panels available")
         }
+    }
+
+    // 更新 Rust 配置
+    private func updateRustConfigs() {
+        guard let terminalView = coordinator.terminalView,
+              let tabManager = terminalView.tabManager else { return }
+
+        let configs = controller.panelRenderConfigs
+
+        print("[Swift] Updating \(configs.count) panel configs")
+
+        for (panelId, config) in configs {
+            print("[Swift] Panel \(panelId): x=\(config.x), y=\(config.y), size=\(config.width)x\(config.height), grid=\(config.cols)x\(config.rows)")
+
+            // TODO: 需要正确的 panel_id 映射（UUID -> usize）
+            // 暂时使用 hash 值作为临时方案
+            let rustPanelId = size_t(panelId.hashValue)
+
+            let success = tab_manager_update_panel_config(
+                tabManager.handle,
+                rustPanelId,
+                config.x,
+                config.y,
+                config.width,
+                config.height,
+                config.cols,
+                config.rows
+            )
+
+            if success != 0 {
+                print("[Swift] ✅ Updated panel \(panelId)")
+            } else {
+                print("[Swift] ❌ Failed to update panel \(panelId)")
+            }
+        }
+
+        // 触发重新渲染
+        terminalView.renderTerminal()
     }
 }
 
 // MARK: - Preview
 struct TabTerminalView_Previews: PreviewProvider {
     static var previews: some View {
-        TabTerminalView()
+        let controller = WindowController(
+            containerSize: CGSize(width: 800, height: 600),
+            scale: 2.0
+        )
+        return TabTerminalView(controller: controller)
             .frame(width: 800, height: 600)
     }
 }
