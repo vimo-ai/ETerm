@@ -35,6 +35,17 @@ public struct LayoutRestructurer {
         dropZone: DropZone,
         targetPanelId: UUID
     ) -> LayoutTree {
+        // 查找源 Panel（Tab 当前所在的 Panel）
+        let sourcePanel = layout.findPanel(containingTab: tab.id)
+
+        // 特殊情况：拖拽唯一的 Tab 到自己身上（通常是双击触发）
+        if let sourcePanel = sourcePanel,
+           sourcePanel.id == targetPanelId,
+           sourcePanel.tabs.count == 1 {
+            // 不做任何操作，返回原 layout
+            return layout
+        }
+
         // 1. 先从原位置移除 Tab
         let layoutWithoutTab = layout.removingTab(tab.id) ?? layout
 
@@ -42,11 +53,22 @@ public struct LayoutRestructurer {
         switch dropZone.type {
         case .header:
             // 添加到 Header（现有 Panel 的 Tab 列表）
+            var adjustedInsertIndex = dropZone.insertIndex ?? 0
+
+            // 如果源 Panel 和目标 Panel 是同一个，需要调整 insertIndex
+            if let sourcePanel = sourcePanel,
+               sourcePanel.id == targetPanelId,
+               let originalIndex = sourcePanel.tabs.firstIndex(where: { $0.id == tab.id }),
+               originalIndex < adjustedInsertIndex {
+                // Tab 原来在 insertIndex 之前，移除后位置会前移
+                adjustedInsertIndex -= 1
+            }
+
             return handleHeaderDrop(
                 layout: layoutWithoutTab,
                 tab: tab,
                 targetPanelId: targetPanelId,
-                insertIndex: dropZone.insertIndex ?? 0
+                insertIndex: adjustedInsertIndex
             )
 
         case .body:
@@ -59,43 +81,85 @@ public struct LayoutRestructurer {
 
         case .left:
             // 在左侧分割
-            return handleSplitDrop(
-                layout: layoutWithoutTab,
-                tab: tab,
-                targetPanelId: targetPanelId,
-                direction: .horizontal,
-                insertBefore: true
-            )
+            // 检查 targetPanel 是否还存在（移除后可能被删除）
+            if layoutWithoutTab.findPanel(byId: targetPanelId) != nil {
+                return handleSplitDrop(
+                    layout: layoutWithoutTab,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .horizontal,
+                    insertBefore: true
+                )
+            } else {
+                // targetPanel 被删除了，使用原始 layout（但需要替换 Panel 的内容）
+                return handleSplitDropWithReplace(
+                    layout: layout,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .horizontal,
+                    insertBefore: true
+                )
+            }
 
         case .right:
             // 在右侧分割
-            return handleSplitDrop(
-                layout: layoutWithoutTab,
-                tab: tab,
-                targetPanelId: targetPanelId,
-                direction: .horizontal,
-                insertBefore: false
-            )
+            if layoutWithoutTab.findPanel(byId: targetPanelId) != nil {
+                return handleSplitDrop(
+                    layout: layoutWithoutTab,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .horizontal,
+                    insertBefore: false
+                )
+            } else {
+                return handleSplitDropWithReplace(
+                    layout: layout,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .horizontal,
+                    insertBefore: false
+                )
+            }
 
         case .top:
             // 在顶部分割（macOS 坐标系）
-            return handleSplitDrop(
-                layout: layoutWithoutTab,
-                tab: tab,
-                targetPanelId: targetPanelId,
-                direction: .vertical,
-                insertBefore: false  // top 在 second（上方）
-            )
+            if layoutWithoutTab.findPanel(byId: targetPanelId) != nil {
+                return handleSplitDrop(
+                    layout: layoutWithoutTab,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .vertical,
+                    insertBefore: false  // top 在 second（上方）
+                )
+            } else {
+                return handleSplitDropWithReplace(
+                    layout: layout,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .vertical,
+                    insertBefore: false
+                )
+            }
 
         case .bottom:
             // 在底部分割
-            return handleSplitDrop(
-                layout: layoutWithoutTab,
-                tab: tab,
-                targetPanelId: targetPanelId,
-                direction: .vertical,
-                insertBefore: true  // bottom 在 first（下方）
-            )
+            if layoutWithoutTab.findPanel(byId: targetPanelId) != nil {
+                return handleSplitDrop(
+                    layout: layoutWithoutTab,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .vertical,
+                    insertBefore: true  // bottom 在 first（下方）
+                )
+            } else {
+                return handleSplitDropWithReplace(
+                    layout: layout,
+                    tab: tab,
+                    targetPanelId: targetPanelId,
+                    direction: .vertical,
+                    insertBefore: true
+                )
+            }
         }
     }
 
@@ -126,6 +190,59 @@ public struct LayoutRestructurer {
         return layout.updatingPanel(targetPanelId) { panel in
             panel.addingTab(tab)
         }
+    }
+
+    /// 处理分割 Drop（targetPanel 被删除的特殊情况）
+    ///
+    /// 当 targetPanel 只有一个 Tab（就是被拖拽的 Tab）时，移除后 Panel 会被删除。
+    /// 这种情况下，实现 Split 行为：创建分割视图，每个 Panel 都有一个独立的 Tab。
+    /// 类似 VS Code 的 "Split Editor" 功能（创建新的编辑器实例）。
+    private func handleSplitDropWithReplace(
+        layout: LayoutTree,
+        tab: TabNode,
+        targetPanelId: UUID,
+        direction: SplitDirection,
+        insertBefore: Bool
+    ) -> LayoutTree {
+        // 创建新 Tab（新的 ID，但标题和内容相同）
+        // 这样确保每个 Tab ID 在布局树中唯一
+        let newTab = TabNode(
+            id: UUID(),  // 新的 ID
+            title: tab.title,
+            rustTerminalId: tab.rustTerminalId
+        )
+
+        // 创建新 Panel（包含新的 Tab）
+        let newPanel = PanelNode(
+            tabs: [newTab],
+            activeTabIndex: 0
+        )
+
+        // 替换 targetPanel 为分割节点
+        return layout.replacingPanel(targetPanelId, with: {
+            // 获取原 Panel
+            guard let originalPanel = layout.findPanel(byId: targetPanelId) else {
+                return .panel(newPanel)
+            }
+
+            if insertBefore {
+                // 新 Panel 在前
+                return .split(
+                    direction: direction,
+                    first: .panel(newPanel),
+                    second: .panel(originalPanel),
+                    ratio: defaultSplitRatio
+                )
+            } else {
+                // 新 Panel 在后
+                return .split(
+                    direction: direction,
+                    first: .panel(originalPanel),
+                    second: .panel(newPanel),
+                    ratio: defaultSplitRatio
+                )
+            }
+        }())
     }
 
     /// 处理分割 Drop

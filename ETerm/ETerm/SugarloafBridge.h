@@ -321,4 +321,80 @@ int tab_manager_update_panel_config(
     unsigned short rows
 );
 
+// =============================================================================
+// 新架构：Terminal Pool API - 简化的终端池
+// =============================================================================
+
+typedef void* TerminalPoolHandle;
+
+/// 创建终端池
+TerminalPoolHandle terminal_pool_new(SugarloafHandle sugarloaf);
+
+/// 设置渲染回调
+void terminal_pool_set_render_callback(
+    TerminalPoolHandle pool,
+    RenderCallback callback,
+    void* context
+);
+
+/// 创建终端（返回 terminal_id，失败返回 -1）
+int terminal_pool_create_terminal(
+    TerminalPoolHandle pool,
+    unsigned short cols,
+    unsigned short rows,
+    const char* shell
+);
+
+/// 关闭终端
+int terminal_pool_close_terminal(
+    TerminalPoolHandle pool,
+    size_t terminal_id
+);
+
+/// 读取所有终端的 PTY 输出
+int terminal_pool_read_all(TerminalPoolHandle pool);
+
+/// 渲染指定终端到指定位置
+/// x, y: 左上角位置（Rust 坐标系，左上角为原点）
+/// width, height: 渲染区域尺寸
+/// cols, rows: 终端网格大小
+int terminal_pool_render(
+    TerminalPoolHandle pool,
+    size_t terminal_id,
+    float x,
+    float y,
+    float width,
+    float height,
+    unsigned short cols,
+    unsigned short rows
+);
+
+/// 写入输入到指定终端
+int terminal_pool_write_input(
+    TerminalPoolHandle pool,
+    size_t terminal_id,
+    const char* data
+);
+
+/// 滚动指定终端
+int terminal_pool_scroll(
+    TerminalPoolHandle pool,
+    size_t terminal_id,
+    int delta_lines
+);
+
+/// 调整指定终端尺寸
+int terminal_pool_resize(
+    TerminalPoolHandle pool,
+    size_t terminal_id,
+    unsigned short cols,
+    unsigned short rows
+);
+
+/// 获取终端数量
+size_t terminal_pool_count(TerminalPoolHandle pool);
+
+/// 释放终端池
+void terminal_pool_free(TerminalPoolHandle pool);
+
 #endif /* SugarloafBridge_h */

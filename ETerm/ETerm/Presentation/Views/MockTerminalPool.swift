@@ -16,7 +16,7 @@ import Foundation
 ///
 /// 在测试环境中模拟 TerminalPoolWrapper 的行为，
 /// 确保终端生命周期管理逻辑正确。
-class MockTerminalPool {
+class MockTerminalPool: TerminalPoolProtocol {
     // MARK: - State
 
     /// 下一个终端 ID

@@ -159,11 +159,14 @@ final class PanelView: NSView {
 
     private func setupUI() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        // 🎯 让 PanelView 背景透明，这样 Metal 渲染可以透过来
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.isOpaque = false
 
         // 配置 Content 视图
         contentView.wantsLayer = true
         contentView.layer?.backgroundColor = NSColor.clear.cgColor
+        contentView.layer?.isOpaque = false
 
         // 配置高亮层
         highlightLayer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.3).cgColor

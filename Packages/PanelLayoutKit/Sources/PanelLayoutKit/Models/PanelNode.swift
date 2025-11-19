@@ -55,22 +55,26 @@ public struct PanelNode: Codable, Equatable, Hashable, Identifiable {
     public func addingTab(_ tab: TabNode, at index: Int? = nil) -> PanelNode {
         var newTabs = tabs
         let insertIndex = index ?? tabs.count
-        newTabs.insert(tab, at: insertIndex)
+
+        // 边界检查：确保 insertIndex 在有效范围内 [0...count]
+        let safeInsertIndex = max(0, min(insertIndex, newTabs.count))
+        newTabs.insert(tab, at: safeInsertIndex)
 
         return PanelNode(
             id: id,
             tabs: newTabs,
-            activeTabIndex: insertIndex
+            activeTabIndex: safeInsertIndex
         )
     }
 
     /// 移除一个 Tab
     ///
     /// - Parameter tabId: 要移除的 Tab ID
-    /// - Returns: 新的 Panel 节点（如果 Tab 不存在则返回 nil）
+    /// - Returns: 新的 Panel 节点（如果移除后为空则返回 nil）
     public func removingTab(_ tabId: UUID) -> PanelNode? {
         guard let index = tabs.firstIndex(where: { $0.id == tabId }) else {
-            return nil
+            // 找不到 Tab，返回原 Panel（没有变化）
+            return self
         }
 
         var newTabs = tabs

@@ -14,10 +14,14 @@ import PanelLayoutKit
 struct PanelTestView: View {
     @State private var selectedTestCase: TestCase = .singlePanel
     @State private var dragInfo: String = "未开始拖拽"
+    @State private var useRealTerminalPool: Bool = false
 
     // 布局树（主数据源）
     @State private var layoutTree: LayoutTree?
     @State private var containerSize: CGSize = .zero
+
+    // 终端池（可选，用于集成真实的 TerminalPoolWrapper）
+    @State private var terminalPool: TerminalPoolProtocol? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +29,19 @@ struct PanelTestView: View {
             HStack {
                 Text("Panel UI 测试")
                     .font(.headline)
+
+                Spacer()
+
+                // 终端池状态显示
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(useRealTerminalPool ? Color.green : Color.orange)
+                        .frame(width: 8, height: 8)
+                    Text(useRealTerminalPool ? "真实终端池" : "模拟终端池")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .help("当前使用的终端池类型")
 
                 Spacer()
 
@@ -67,6 +84,10 @@ struct PanelTestView: View {
                     },
                     onLayoutChange: { newLayoutTree in
                         layoutTree = newLayoutTree
+                    },
+                    terminalPool: terminalPool,
+                    onTerminalPoolReady: {
+                        useRealTerminalPool = true
                     }
                 )
                 .onChange(of: geometry.size) { _, newSize in
@@ -230,6 +251,184 @@ enum TestCase: CaseIterable {
     }
 }
 
+// MARK: - Panel 渲染视图（支持 Sugarloaf）
+
+/// Panel 渲染视图
+///
+/// 包含 Metal 渲染层，支持真实的终端渲染
+class PanelTestRenderView: NSView {
+    private var sugarloaf: SugarloafWrapper?
+    private var displayLink: CVDisplayLink?
+    private var needsRender = false
+    private let renderLock = NSLock()
+    private var ptyReadQueue: DispatchQueue?
+    private var shouldStopReading = false
+
+    weak var coordinator: PanelTestContainerView.Coordinator?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupView()
+    }
+
+    override func makeBackingLayer() -> CALayer {
+        let metalLayer = CAMetalLayer()
+        metalLayer.device = MTLCreateSystemDefaultDevice()
+        metalLayer.pixelFormat = .bgra8Unorm
+        metalLayer.framebufferOnly = false
+        return metalLayer
+    }
+
+    private func setupView() {
+        wantsLayer = true
+        layer?.contentsScale = window?.backingScaleFactor ?? 2.0
+        // Metal 层不需要额外的背景色
+        layer?.isOpaque = true
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+    }
+
+    @objc private func windowDidBecomeKey() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.initialize()
+        }
+    }
+
+    private func initialize() {
+        guard sugarloaf == nil, let window = window else { return }
+        guard bounds.width > 0 && bounds.height > 0 else { return }
+
+        let windowScale = window.backingScaleFactor
+        let effectiveScale = max(windowScale, layer?.contentsScale ?? windowScale)
+        layer?.contentsScale = effectiveScale
+
+        let viewPointer = Unmanaged.passUnretained(self).toOpaque()
+        let windowHandle = UnsafeMutableRawPointer(mutating: viewPointer)
+        let displayHandle = windowHandle
+        let scale = Float(effectiveScale)
+
+        let widthPixels = Float(bounds.width) * scale
+        let heightPixels = Float(bounds.height) * scale
+
+        guard let sugarloaf = SugarloafWrapper(
+            windowHandle: windowHandle,
+            displayHandle: displayHandle,
+            width: widthPixels,
+            height: heightPixels,
+            scale: scale,
+            fontSize: 14.0
+        ) else {
+            print("[PanelTestRenderView] ❌ Failed to create SugarloafWrapper")
+            return
+        }
+
+        self.sugarloaf = sugarloaf
+        print("[PanelTestRenderView] ✅ Sugarloaf initialized")
+
+        // 创建真实的 TerminalPoolWrapper
+        guard let realTerminalPool = TerminalPoolWrapper(sugarloaf: sugarloaf) else {
+            print("[PanelTestRenderView] ❌ Failed to create TerminalPoolWrapper")
+            return
+        }
+
+        coordinator?.setTerminalPool(realTerminalPool)
+
+        // 设置渲染回调
+        realTerminalPool.setRenderCallback { [weak self] in
+            self?.requestRender()
+        }
+
+        // 启动 PTY 读取循环
+        startPTYReadLoop(terminalPool: realTerminalPool)
+
+        // 启动 CVDisplayLink
+        setupDisplayLink()
+
+        print("[PanelTestRenderView] ✅ Initialization complete")
+    }
+
+    private func startPTYReadLoop(terminalPool: TerminalPoolWrapper) {
+        let queue = DispatchQueue(label: "com.eterm.panel-test.pty-reader", qos: .userInteractive)
+        self.ptyReadQueue = queue
+
+        queue.async { [weak self, weak terminalPool] in
+            guard let self = self else { return }
+            print("[PTY Reader] ✅ Background read loop started")
+
+            while !self.shouldStopReading {
+                terminalPool?.readAllOutputs()
+                usleep(1000)  // 1ms
+            }
+
+            print("[PTY Reader] ✅ Background read loop stopped")
+        }
+    }
+
+    private func setupDisplayLink() {
+        var link: CVDisplayLink?
+        let status = CVDisplayLinkCreateWithActiveCGDisplays(&link)
+
+        guard status == kCVReturnSuccess, let displayLink = link else {
+            print("[CVDisplayLink] ❌ Failed to create: \(status)")
+            return
+        }
+
+        let callbackContext = Unmanaged.passUnretained(self).toOpaque()
+        CVDisplayLinkSetOutputCallback(displayLink, { (_, _, _, _, _, context) -> CVReturn in
+            guard let context = context else { return kCVReturnSuccess }
+
+            let view = Unmanaged<PanelTestRenderView>.fromOpaque(context).takeUnretainedValue()
+
+            view.renderLock.lock()
+            let shouldRender = view.needsRender
+            if shouldRender {
+                view.needsRender = false
+            }
+            view.renderLock.unlock()
+
+            if shouldRender {
+                DispatchQueue.main.async {
+                    view.performRender()
+                }
+            }
+
+            return kCVReturnSuccess
+        }, callbackContext)
+
+        CVDisplayLinkStart(displayLink)
+        self.displayLink = displayLink
+        print("[CVDisplayLink] ✅ Started")
+    }
+
+    private func requestRender() {
+        renderLock.lock()
+        needsRender = true
+        renderLock.unlock()
+    }
+
+    private func performRender() {
+        coordinator?.renderAllPanels()
+    }
+
+    deinit {
+        shouldStopReading = true
+        if let displayLink = displayLink {
+            CVDisplayLinkStop(displayLink)
+        }
+        print("[PanelTestRenderView] 🔄 Deinitialized")
+    }
+}
+
 // MARK: - Panel 容器视图（NSViewRepresentable）
 
 struct PanelTestContainerView: NSViewRepresentable {
@@ -238,19 +437,22 @@ struct PanelTestContainerView: NSViewRepresentable {
     let onDragInfo: (String) -> Void
     let onTabClick: (UUID, UUID) -> Void  // (panelId, tabId)
     let onLayoutChange: (LayoutTree) -> Void
+    let terminalPool: TerminalPoolProtocol?
+    let onTerminalPoolReady: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onDragInfo: onDragInfo,
             onTabClick: onTabClick,
-            onLayoutChange: onLayoutChange
+            onLayoutChange: onLayoutChange,
+            terminalPool: terminalPool,
+            onTerminalPoolReady: onTerminalPoolReady
         )
     }
 
     func makeNSView(context: Context) -> NSView {
-        let containerView = NSView()
-        containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        let containerView = PanelTestRenderView()
+        containerView.coordinator = context.coordinator
         return containerView
     }
 
@@ -264,13 +466,14 @@ struct PanelTestContainerView: NSViewRepresentable {
         let onDragInfo: (String) -> Void
         let onTabClick: (UUID, UUID) -> Void
         let onLayoutChange: (LayoutTree) -> Void
+        let onTerminalPoolReady: (() -> Void)?
 
         private let layoutKit = PanelLayoutKit()
         private var panelViews: [UUID: PanelView] = [:]
         private var currentLayoutTree: LayoutTree?
 
-        // 🎯 终端池（模拟）
-        private let terminalPool = MockTerminalPool()
+        // 🎯 终端池（支持多种实现）
+        private var terminalPool: TerminalPoolProtocol
 
         // 🎯 Tab ID 到终端 ID 的映射
         private var tabTerminalMapping: [UUID: Int] = [:]
@@ -278,16 +481,76 @@ struct PanelTestContainerView: NSViewRepresentable {
         init(
             onDragInfo: @escaping (String) -> Void,
             onTabClick: @escaping (UUID, UUID) -> Void,
-            onLayoutChange: @escaping (LayoutTree) -> Void
+            onLayoutChange: @escaping (LayoutTree) -> Void,
+            terminalPool: TerminalPoolProtocol? = nil,
+            onTerminalPoolReady: (() -> Void)? = nil
         ) {
             self.onDragInfo = onDragInfo
             self.onTabClick = onTabClick
             self.onLayoutChange = onLayoutChange
+            self.onTerminalPoolReady = onTerminalPoolReady
+            // 如果没有提供终端池，使用模拟实现
+            self.terminalPool = terminalPool ?? MockTerminalPool()
         }
 
         deinit {
             print("[Coordinator] 🔄 析构，检查终端泄露...")
-            terminalPool.printStatistics()
+            // 如果是 MockTerminalPool，打印统计信息
+            if let mockPool = terminalPool as? MockTerminalPool {
+                mockPool.printStatistics()
+            }
+        }
+
+        /// 设置终端池（由 PanelTestRenderView 调用）
+        func setTerminalPool(_ pool: TerminalPoolProtocol) {
+            print("[Coordinator] 🔄 切换到真实终端池")
+            self.terminalPool = pool
+
+            // 为已有的 Tab 重新创建终端
+            if let layoutTree = currentLayoutTree {
+                ensureTerminalsForAllTabs(layoutTree)
+            }
+
+            // 通知 SwiftUI 层
+            onTerminalPoolReady?()
+        }
+
+        /// 渲染所有 Panel
+        func renderAllPanels() {
+            guard let layoutTree = currentLayoutTree else { return }
+            guard let terminalPool = terminalPool as? TerminalPoolWrapper else {
+                // 如果是 MockTerminalPool，不需要渲染
+                return
+            }
+
+            // 遍历所有 Panel，渲染激活的 Tab
+            for panel in layoutTree.allPanels() {
+                guard let activeTab = panel.activeTab,
+                      let panelView = panelViews[panel.id] else { continue }
+
+                // 使用 contentView 的 frame（在父视图中的位置）
+                let contentFrame = panelView.contentView.frame
+
+                // 计算终端网格尺寸（假设字符大小）
+                let cellWidth: Float = 9.6
+                let cellHeight: Float = 20.0
+                let cols = UInt16(Float(contentFrame.width) / cellWidth)
+                let rows = UInt16(Float(contentFrame.height) / cellHeight)
+
+                print("[Coordinator] 🎨 渲染 Panel \(panel.id.uuidString.prefix(8)), Terminal ID: \(activeTab.rustTerminalId)")
+                print("  位置: x=\(contentFrame.origin.x), y=\(contentFrame.origin.y)")
+                print("  尺寸: \(contentFrame.width)x\(contentFrame.height), 网格: \(cols)x\(rows)")
+
+                terminalPool.render(
+                    terminalId: activeTab.rustTerminalId,
+                    x: Float(contentFrame.origin.x),
+                    y: Float(contentFrame.origin.y),
+                    width: Float(contentFrame.width),
+                    height: Float(contentFrame.height),
+                    cols: cols,
+                    rows: rows
+                )
+            }
         }
 
         func updateLayout(_ layoutTree: LayoutTree?, containerSize: CGSize, in containerView: NSView) {
@@ -446,9 +709,11 @@ struct PanelTestContainerView: NSViewRepresentable {
                 return "Panel(\($0.id.uuidString.prefix(8)), tabs=[\(tabInfo)])"
             })
 
-            // 更新布局树
-            onDragInfo("✅ 添加 Tab: \(newTab.title) (终端 ID: \(terminalId))")
-            onLayoutChange(newLayoutTree)
+            // 更新布局树（延迟执行，避免在 view update 期间修改状态）
+            DispatchQueue.main.async { [weak self] in
+                self?.onDragInfo("✅ 添加 Tab: \(newTab.title) (终端 ID: \(terminalId))")
+                self?.onLayoutChange(newLayoutTree)
+            }
         }
 
         private func handleTabClose(tabId: UUID) {
@@ -489,8 +754,10 @@ struct PanelTestContainerView: NSViewRepresentable {
                     return "Panel(\($0.id.uuidString.prefix(8)), tabs=[\(tabInfo)])"
                 })
 
-                onDragInfo("✅ 关闭 Tab: \(tab.title)")
-                onLayoutChange(newLayoutTree)
+                DispatchQueue.main.async { [weak self] in
+                    self?.onDragInfo("✅ 关闭 Tab: \(tab.title)")
+                    self?.onLayoutChange(newLayoutTree)
+                }
             } else {
                 // 🎯 所有 Tab 都被关闭了，创建一个新的默认 Tab（带终端）
                 print("⚠️ 所有 Tab 已关闭，创建新的默认 Tab")
@@ -502,8 +769,10 @@ struct PanelTestContainerView: NSViewRepresentable {
                 let defaultPanel = PanelNode(tabs: [defaultTab], activeTabIndex: 0)
                 let defaultLayout = LayoutTree.panel(defaultPanel)
 
-                onDragInfo("⚠️ 所有 Tab 已关闭，已创建新 Tab (终端 ID: \(terminalId))")
-                onLayoutChange(defaultLayout)
+                DispatchQueue.main.async { [weak self] in
+                    self?.onDragInfo("⚠️ 所有 Tab 已关闭，已创建新 Tab (终端 ID: \(terminalId))")
+                    self?.onLayoutChange(defaultLayout)
+                }
             }
         }
 

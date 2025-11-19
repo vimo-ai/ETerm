@@ -1812,3 +1812,383 @@ pub extern "C" fn terminal_get_selected_text(
     eprintln!("[Selection] No selection");
     0
 }
+
+// =============================================================================
+// 新架构：TerminalPool - 简化的终端池
+// =============================================================================
+
+/// 终端池 - 只管理终端实例，不关心 Page/Panel/Tab 布局
+pub struct TerminalPool {
+    terminals: HashMap<usize, TerminalInfo>,
+    next_id: usize,
+    sugarloaf_handle: *mut SugarloafHandle,
+    render_callback: Option<RenderCallback>,
+    callback_context: *mut c_void,
+}
+
+/// 单个终端的信息
+struct TerminalInfo {
+    terminal: Box<TerminalHandle>,
+    rich_text_id: usize,
+}
+
+impl TerminalPool {
+    /// 创建新的终端池
+    fn new(sugarloaf_handle: *mut SugarloafHandle) -> Self {
+        Self {
+            terminals: HashMap::new(),
+            next_id: 1,
+            sugarloaf_handle,
+            render_callback: None,
+            callback_context: ptr::null_mut(),
+        }
+    }
+
+    /// 设置渲染回调
+    fn set_render_callback(&mut self, callback: RenderCallback, context: *mut c_void) {
+        self.render_callback = Some(callback);
+        self.callback_context = context;
+    }
+
+    /// 创建新终端
+    fn create_terminal(&mut self, cols: u16, rows: u16, shell: &str) -> Option<usize> {
+        if self.sugarloaf_handle.is_null() {
+            return None;
+        }
+
+        let terminal_id = self.next_id;
+        self.next_id += 1;
+
+        // 创建终端
+        let shell_cstr = std::ffi::CString::new(shell).ok()?;
+        let terminal_ptr = terminal_create(cols, rows, shell_cstr.as_ptr());
+        if terminal_ptr.is_null() {
+            return None;
+        }
+
+        let terminal = unsafe { Box::from_raw(terminal_ptr) };
+
+        // 创建 RichText
+        let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
+
+        let info = TerminalInfo {
+            terminal,
+            rich_text_id,
+        };
+
+        self.terminals.insert(terminal_id, info);
+
+        Some(terminal_id)
+    }
+
+    /// 关闭终端
+    fn close_terminal(&mut self, terminal_id: usize) -> bool {
+        self.terminals.remove(&terminal_id).is_some()
+    }
+
+    /// 读取所有终端的 PTY 输出
+    fn read_all(&mut self) -> bool {
+        let mut has_updates = false;
+        for info in self.terminals.values_mut() {
+            let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+            if unsafe { terminal_read_output(terminal_ptr) } {
+                has_updates = true;
+            }
+        }
+
+        // 如果有更新，触发渲染回调
+        if has_updates {
+            if let Some(callback) = self.render_callback {
+                callback(self.callback_context);
+            }
+        }
+
+        has_updates
+    }
+
+    /// 渲染指定终端到指定位置
+    fn render(
+        &mut self,
+        terminal_id: usize,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        cols: u16,
+        rows: u16,
+    ) -> bool {
+        if self.sugarloaf_handle.is_null() {
+            return false;
+        }
+
+        let info = match self.terminals.get_mut(&terminal_id) {
+            Some(info) => info,
+            None => return false,
+        };
+
+        // 调整终端尺寸（如果需要）
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        unsafe { terminal_resize(terminal_ptr, cols, rows) };
+
+        // 渲染到 RichText
+        if !unsafe {
+            terminal_render_to_sugarloaf(
+                terminal_ptr,
+                self.sugarloaf_handle,
+                info.rich_text_id,
+            )
+        } {
+            return false;
+        }
+
+        // 设置渲染位置
+        crate::sugarloaf_content_sel(self.sugarloaf_handle, info.rich_text_id);
+
+        // 提交到指定位置
+        // TODO: 需要在 Sugarloaf 中实现位置控制
+        crate::sugarloaf_commit_rich_text(self.sugarloaf_handle, info.rich_text_id);
+
+        true
+    }
+
+    /// 写入输入到指定终端
+    fn write_input(&mut self, terminal_id: usize, data: &str) -> bool {
+        let info = match self.terminals.get_mut(&terminal_id) {
+            Some(info) => info,
+            None => return false,
+        };
+
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        let data_cstr = match std::ffi::CString::new(data) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+
+        unsafe { terminal_write_input(terminal_ptr, data_cstr.as_ptr()) }
+    }
+
+    /// 滚动指定终端
+    fn scroll(&mut self, terminal_id: usize, delta_lines: i32) -> bool {
+        let info = match self.terminals.get_mut(&terminal_id) {
+            Some(info) => info,
+            None => return false,
+        };
+
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        unsafe { terminal_scroll(terminal_ptr, delta_lines) }
+    }
+
+    /// 调整指定终端尺寸
+    fn resize(&mut self, terminal_id: usize, cols: u16, rows: u16) -> bool {
+        let info = match self.terminals.get_mut(&terminal_id) {
+            Some(info) => info,
+            None => return false,
+        };
+
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        unsafe { terminal_resize(terminal_ptr, cols, rows) }
+    }
+
+    /// 获取终端数量
+    fn count(&self) -> usize {
+        self.terminals.len()
+    }
+
+    /// 获取所有终端 ID
+    fn get_all_ids(&self) -> Vec<usize> {
+        self.terminals.keys().copied().collect()
+    }
+}
+
+// FFI 导出函数
+
+/// 创建终端池
+#[no_mangle]
+pub extern "C" fn terminal_pool_new(sugarloaf: *mut SugarloafHandle) -> *mut TerminalPool {
+    if sugarloaf.is_null() {
+        return ptr::null_mut();
+    }
+
+    let pool = Box::new(TerminalPool::new(sugarloaf));
+    Box::into_raw(pool)
+}
+
+/// 设置渲染回调
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_render_callback(
+    pool: *mut TerminalPool,
+    callback: RenderCallback,
+    context: *mut c_void,
+) {
+    if pool.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *pool };
+    pool.set_render_callback(callback, context);
+}
+
+/// 创建终端
+#[no_mangle]
+pub extern "C" fn terminal_pool_create_terminal(
+    pool: *mut TerminalPool,
+    cols: u16,
+    rows: u16,
+    shell: *const c_char,
+) -> isize {
+    if pool.is_null() || shell.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &mut *pool };
+    let shell_str = match unsafe { CStr::from_ptr(shell) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    match pool.create_terminal(cols, rows, shell_str) {
+        Some(id) => id as isize,
+        None => -1,
+    }
+}
+
+/// 关闭终端
+#[no_mangle]
+pub extern "C" fn terminal_pool_close_terminal(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    if pool.close_terminal(terminal_id) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 读取所有终端的 PTY 输出
+#[no_mangle]
+pub extern "C" fn terminal_pool_read_all(pool: *mut TerminalPool) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    if pool.read_all() {
+        1
+    } else {
+        0
+    }
+}
+
+/// 渲染指定终端
+#[no_mangle]
+pub extern "C" fn terminal_pool_render(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    cols: u16,
+    rows: u16,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    if pool.render(terminal_id, x, y, width, height, cols, rows) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 写入输入
+#[no_mangle]
+pub extern "C" fn terminal_pool_write_input(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    data: *const c_char,
+) -> i32 {
+    if pool.is_null() || data.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    let data_str = match unsafe { CStr::from_ptr(data) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if pool.write_input(terminal_id, data_str) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 滚动终端
+#[no_mangle]
+pub extern "C" fn terminal_pool_scroll(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    delta_lines: i32,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    if pool.scroll(terminal_id, delta_lines) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 调整终端尺寸
+#[no_mangle]
+pub extern "C" fn terminal_pool_resize(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    cols: u16,
+    rows: u16,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    if pool.resize(terminal_id, cols, rows) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 获取终端数量
+#[no_mangle]
+pub extern "C" fn terminal_pool_count(pool: *mut TerminalPool) -> usize {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &*pool };
+    pool.count()
+}
+
+/// 释放终端池
+#[no_mangle]
+pub extern "C" fn terminal_pool_free(pool: *mut TerminalPool) {
+    if !pool.is_null() {
+        unsafe {
+            let _ = Box::from_raw(pool);
+        }
+    }
+}

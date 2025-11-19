@@ -14,7 +14,7 @@
 import Foundation
 
 /// Terminal Pool 的 Swift 封装
-class TerminalPoolWrapper {
+class TerminalPoolWrapper: TerminalPoolProtocol {
     private(set) var handle: TerminalPoolHandle?
 
     // 保持对回调的强引用，防止被释放
