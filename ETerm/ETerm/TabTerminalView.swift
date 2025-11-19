@@ -1122,34 +1122,28 @@ struct TabTerminalView: View {
 
     /// 处理 Pane 点击事件
     private func handlePaneClick(at location: CGPoint, in geometry: GeometryProxy) {
-        print("[Focus] 🖱️ Click at: \(location)")
+        print("[Focus] 🖱️ Click at (screen coords): \(location)")
 
-        // 获取所有 Panel 的边界
-        let panelBounds = controller.panelBounds
-        print("[Focus] Panel bounds: \(panelBounds.mapValues { "(\($0.x), \($0.y), \($0.width)x\($0.height))" })")
-
-        // 查找包含点击位置的 Panel
-        for (panelId, bounds) in panelBounds {
-            if bounds.contains(location) {
-                print("[Focus] ✅ Found panel: \(panelId)")
-
-                // 获取 Rust Panel ID
-                let rustPanelId = controller.registerPanel(panelId)
-
-                // 调用 Rust FFI 设置激活 Pane
-                guard let terminalView = coordinator.terminalView,
-                      let tabManager = terminalView.tabManager else {
-                    print("[Focus] ❌ No terminalView or tabManager")
-                    return
-                }
-
-                print("[Focus] 🎯 Setting active pane to: \(rustPanelId)")
-                tab_manager_set_active_pane(tabManager.handle, size_t(rustPanelId))
-                return
-            }
+        // 🎯 使用 CoordinateMapper 查找 Panel（自动处理坐标转换）
+        guard let panelId = controller.findPanel(atScreenPoint: location) else {
+            print("[Focus] ❌ No panel found at click location")
+            return
         }
 
-        print("[Focus] ❌ No panel found at click location")
+        print("[Focus] ✅ Found panel: \(panelId)")
+
+        // 获取 Rust Panel ID
+        let rustPanelId = controller.registerPanel(panelId)
+
+        // 调用 Rust FFI 设置激活 Pane
+        guard let terminalView = coordinator.terminalView,
+              let tabManager = terminalView.tabManager else {
+            print("[Focus] ❌ No terminalView or tabManager")
+            return
+        }
+
+        print("[Focus] 🎯 Setting active pane to: \(rustPanelId)")
+        tab_manager_set_active_pane(tabManager.handle, size_t(rustPanelId))
     }
 
     private func splitRight() {

@@ -20,15 +20,33 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
         newPanelId: UUID,  // 🎯 接收新 Panel 的 UUID，而不是自己创建
         direction: SplitDirection
     ) -> PanelLayout {
+        // 🎯 根据分割方向决定 Panel 顺序，确保符合用户习惯：
+        // - vertical（上下分割）: 原 Panel 在上方，新 Panel 在下方
+        // - horizontal（左右分割）: 原 Panel 在左侧，新 Panel 在右侧
+        //
+        // 注意：在 splitBounds 中：
+        // - vertical: first 在下方，second 在上方
+        // - horizontal: first 在左侧，second 在右侧
+        let (firstPanel, secondPanel): (UUID, UUID) = {
+            switch direction {
+            case .vertical:
+                // 上下分割：新 Panel 在下（first），原 Panel 在上（second）
+                return (newPanelId, targetPanelId)
+            case .horizontal:
+                // 左右分割：原 Panel 在左（first），新 Panel 在右（second）
+                return (targetPanelId, newPanelId)
+            }
+        }()
+
         // 在布局树中找到目标节点并替换为分割节点
         return replaceNode(
             in: currentLayout,
             targetId: targetPanelId,
             with: .split(
                 direction: direction,
-                first: .leaf(panelId: targetPanelId),  // 保留原 Panel
-                second: .leaf(panelId: newPanelId),    // 新 Panel
-                ratio: 0.5                              // 默认 50/50 分割
+                first: .leaf(panelId: firstPanel),
+                second: .leaf(panelId: secondPanel),
+                ratio: 0.5  // 默认 50/50 分割
             )
         )
     }

@@ -307,10 +307,20 @@ final class WindowController {
         )
     }
 
-    /// 查找指定坐标下的 Panel ID
+    /// 查找指定坐标下的 Panel ID（Swift 坐标系）
     func findPanel(at point: CGPoint) -> UUID? {
         return panelBounds.first { (panelId, bounds) in
             bounds.contains(point)
         }?.key
+    }
+
+    /// 查找指定屏幕坐标下的 Panel ID
+    ///
+    /// - Parameter screenPoint: 屏幕坐标（左上角原点，Y 向下，类似 Rust 坐标系）
+    /// - Returns: 找到的 Panel ID，如果没有找到返回 nil
+    func findPanel(atScreenPoint screenPoint: CGPoint) -> UUID? {
+        // 使用 CoordinateMapper 将屏幕坐标转换为 Swift 坐标
+        let swiftPoint = coordinateMapper.rustToSwift(point: screenPoint)
+        return findPanel(at: swiftPoint)
     }
 }
