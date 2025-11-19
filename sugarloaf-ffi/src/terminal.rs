@@ -995,17 +995,12 @@ impl TabManager {
     }
 
     fn render_active_tab(&mut self) -> bool {
-        eprintln!("[Rust Render] render_active_tab internal called");
         // 先获取 sugarloaf_handle，避免借用冲突
         let sugarloaf_handle = self.sugarloaf_handle;
 
         if let Some(tab_info) = self.get_active_tab_mut() {
-            let pane_count = tab_info.grid.len();
-            eprintln!("[Rust Render] Active tab has {} panes", pane_count);
-
             // 渲染该 Tab 的所有 panes
-            for (i, pane) in tab_info.grid.get_all_panes_mut().enumerate() {
-                eprintln!("[Rust Render] Rendering pane {} (id={})", i, pane.pane_id);
+            for (_i, pane) in tab_info.grid.get_all_panes_mut().enumerate() {
                 let terminal_ptr = &mut *pane.terminal as *mut TerminalHandle;
                 terminal_render_to_sugarloaf(
                     terminal_ptr,
@@ -1016,20 +1011,16 @@ impl TabManager {
 
             // 设置所有 pane 的 RichText Objects 到 Sugarloaf
             let objects = tab_info.grid.objects();
-            eprintln!("[Rust Render] Setting {} objects to Sugarloaf", objects.len());
             unsafe {
                 if let Some(sugarloaf) = sugarloaf_handle.as_mut() {
                     sugarloaf.set_objects(objects);
                     // 🎯 关键修复：调用 render() 触发实际的 GPU 渲染
-                    eprintln!("[Rust Render] 🎨 Calling sugarloaf.render()...");
                     sugarloaf.render();
-                    eprintln!("[Rust Render] ✅ Render completed");
                 }
             }
 
             true
         } else {
-            eprintln!("[Rust Render] ❌ No active tab");
             false
         }
     }
@@ -1216,31 +1207,23 @@ impl TabManager {
         cols: u16,
         rows: u16,
     ) -> bool {
-        eprintln!("[TabManager] update_panel_config: panel={}, pos=({}, {}), size={}x{}, grid={}x{}",
-                  panel_id, x, y, _width, _height, cols, rows);
-
         // 先检查是否需要创建 pane
         let needs_creation = if let Some(tab_id) = self.active_tab_id {
             if let Some(tab_info) = self.tabs.get(&tab_id) {
                 !tab_info.grid.has_pane(panel_id)
             } else {
-                eprintln!("[TabManager] ❌ Tab {} not found", tab_id);
                 return false;
             }
         } else {
-            eprintln!("[TabManager] ❌ No active tab");
             return false;
         };
 
         // 如果需要创建，先创建终端和 RichText
         if needs_creation {
-            eprintln!("[TabManager] Creating new pane {}", panel_id);
-
             // 创建新终端
             let shell_cstr = std::ffi::CString::new(self.shell.as_str()).unwrap();
             let terminal_ptr = crate::terminal_create(cols, rows, shell_cstr.as_ptr());
             if terminal_ptr.is_null() {
-                eprintln!("[TabManager] ❌ Failed to create terminal for pane {}", panel_id);
                 return false;
             }
             let terminal = unsafe { Box::from_raw(terminal_ptr) };
@@ -1258,7 +1241,6 @@ impl TabManager {
         if let Some(tab_info) = self.get_active_tab_mut() {
             tab_info.grid.set_pane_position(panel_id, x, y);
             tab_info.grid.set_pane_size(panel_id, cols, rows);
-            eprintln!("[TabManager] ✅ Successfully updated panel {}", panel_id);
             true
         } else {
             false
@@ -1366,16 +1348,12 @@ pub extern "C" fn tab_manager_read_all_tabs(manager: *mut TabManager) -> bool {
 /// 渲染当前激活的 Tab
 #[no_mangle]
 pub extern "C" fn tab_manager_render_active_tab(manager: *mut TabManager) -> bool {
-    eprintln!("[Rust Render] tab_manager_render_active_tab called");
     if manager.is_null() {
-        eprintln!("[Rust Render] ❌ manager is null");
         return false;
     }
 
     let manager = unsafe { &mut *manager };
-    let result = manager.render_active_tab();
-    eprintln!("[Rust Render] render_active_tab returned: {}", result);
-    result
+    manager.render_active_tab()
 }
 
 /// 向当前激活的 Tab 写入输入

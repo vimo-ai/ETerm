@@ -16,11 +16,13 @@ protocol LayoutCalculator {
     /// - Parameters:
     ///   - currentLayout: 当前的布局树
     ///   - targetPanelId: 要分割的 Panel ID
+    ///   - newPanelId: 新创建的 Panel ID
     ///   - direction: 分割方向
     /// - Returns: 新的布局树
     func calculateSplitLayout(
         currentLayout: PanelLayout,
         targetPanelId: UUID,
+        newPanelId: UUID,
         direction: SplitDirection
     ) -> PanelLayout
 

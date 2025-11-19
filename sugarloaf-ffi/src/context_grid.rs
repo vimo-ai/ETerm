@@ -478,12 +478,6 @@ impl ContextGrid {
             // 转换为逻辑坐标
             let logical_x = x / self.scale;
             let logical_y = y / self.scale;
-
-            eprintln!("[ContextGrid] 🎯 set_pane_position for pane {}:", pane_id);
-            eprintln!("              Input (physical): x={}, y={}", x, y);
-            eprintln!("              Scale: {}", self.scale);
-            eprintln!("              Output (logical): x={}, y={}", logical_x, logical_y);
-
             item.set_position([logical_x, logical_y]);
         }
     }
@@ -561,12 +555,8 @@ impl ContextGrid {
     pub fn objects(&self) -> Vec<Object> {
         let mut objects = Vec::new();
 
-        eprintln!("[ContextGrid] 📦 objects() called, returning {} panes:", self.inner.len());
-
         // 添加所有 pane 的 RichText
-        for (pane_id, item) in self.inner.iter() {
-            let position = item.position();
-            eprintln!("              Pane {}: position=[{}, {}]", pane_id, position[0], position[1]);
+        for (_pane_id, item) in self.inner.iter() {
             objects.push(item.get_rich_text_object().clone());
         }
 

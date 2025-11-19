@@ -17,11 +17,9 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
     func calculateSplitLayout(
         currentLayout: PanelLayout,
         targetPanelId: UUID,
+        newPanelId: UUID,  // 🎯 接收新 Panel 的 UUID，而不是自己创建
         direction: SplitDirection
     ) -> PanelLayout {
-        // 创建新的 Panel ID
-        let newPanelId = UUID()
-
         // 在布局树中找到目标节点并替换为分割节点
         return replaceNode(
             in: currentLayout,
@@ -168,12 +166,6 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
                 width: bounds.width,
                 height: secondHeight
             )
-
-            print("[Layout] 🔸 Vertical split:")
-            print("         Input bounds: x=\(bounds.x), y=\(bounds.y), w=\(bounds.width), h=\(bounds.height)")
-            print("         Ratio: \(clampedRatio)")
-            print("         First (下):  x=\(firstBounds.x), y=\(firstBounds.y), w=\(firstBounds.width), h=\(firstBounds.height)")
-            print("         Second (上): x=\(secondBounds.x), y=\(secondBounds.y), w=\(secondBounds.width), h=\(secondBounds.height)")
 
             return (firstBounds, secondBounds)
         }

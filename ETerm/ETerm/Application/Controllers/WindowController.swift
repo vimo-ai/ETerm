@@ -46,6 +46,9 @@ final class WindowController {
             scale: scale,
             containerBounds: CGRect(origin: .zero, size: containerSize)
         )
+
+        // 🎯 为初始 Panel 分配 Rust ID = 1
+        _ = registerPanel(initialPanel.panelId)
     }
 
     // MARK: - Layout Query
@@ -95,11 +98,21 @@ final class WindowController {
     /// - Returns: 新创建的 Panel ID，如果失败返回 nil
     @discardableResult
     func splitPanel(panelId: UUID, direction: SplitDirection) -> UUID? {
-        return window.splitPanel(
+        // 🎯 确保被分割的 Panel 也已注册（防御性编程）
+        _ = registerPanel(panelId)
+
+        guard let newPanelId = window.splitPanel(
             panelId: panelId,
             direction: direction,
             layoutCalculator: layoutCalculator
-        )
+        ) else {
+            return nil
+        }
+
+        // 🎯 立即为新 Panel 分配 Rust ID，确保顺序稳定
+        _ = registerPanel(newPanelId)
+
+        return newPanelId
     }
 
     /// 获取指定 Panel

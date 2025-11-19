@@ -51,10 +51,11 @@ final class TerminalWindow {
             initialTab: TerminalTab(metadata: .defaultTerminal())
         )
 
-        // 计算新布局
+        // 🎯 计算新布局，传入新 Panel 的 ID
         rootLayout = layoutCalculator.calculateSplitLayout(
             currentLayout: rootLayout,
             targetPanelId: panelId,
+            newPanelId: newPanel.panelId,  // 使用实际的 Panel ID
             direction: direction
         )
 

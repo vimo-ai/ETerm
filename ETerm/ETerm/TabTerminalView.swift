@@ -740,18 +740,14 @@ extension DividerOverlayView {
 
         // 绘制分隔线
         let dividers = controller.panelDividers
-        print("[DividerOverlay] 🎨 draw: found \(dividers.count) dividers")
-
-        // 设置绘制颜色为更明显的颜色用于测试
         NSColor.systemRed.setFill()
-        let dividerWidth: CGFloat = 3.0  // 暂时用粗一点的线便于观察
+        let dividerWidth: CGFloat = 3.0
 
-        for (index, divider) in dividers.enumerated() {
+        for divider in dividers {
             let rect: NSRect
 
             switch divider.direction {
             case .horizontal:
-                // 垂直分隔线（左右分割）
                 rect = NSRect(
                     x: divider.position - dividerWidth / 2,
                     y: 0,
@@ -760,7 +756,6 @@ extension DividerOverlayView {
                 )
 
             case .vertical:
-                // 水平分隔线（上下分割）
                 rect = NSRect(
                     x: 0,
                     y: divider.position - dividerWidth / 2,
@@ -769,7 +764,6 @@ extension DividerOverlayView {
                 )
             }
 
-            print("[DividerOverlay] 🖍️ Drawing divider \(index): \(divider.direction) at \(divider.position), rect: \(rect)")
             rect.fill()
         }
     }
@@ -920,24 +914,18 @@ struct TerminalManagerView: NSViewRepresentable {
     let controller: WindowController
 
     func makeNSView(context: Context) -> NSView {
-        print("[TerminalManagerView] makeNSView called")
-
         // 如果已有实例，直接返回容器
         if let existingView = coordinator.terminalView,
            let existingContainer = existingView.superview {
-            print("[TerminalManagerView] Reusing existing view")
             existingView.controller = controller
 
             // 更新已有的 overlay
             if let overlay = existingView.dividerOverlay {
                 overlay.controller = controller
-                print("[TerminalManagerView] ✅ Updated existing overlay controller")
             }
 
             return existingContainer
         }
-
-        print("[TerminalManagerView] Creating new view")
 
         // 创建新实例
         let terminalView = TerminalManagerNSView()
@@ -961,8 +949,6 @@ struct TerminalManagerView: NSViewRepresentable {
         overlayView.autoresizingMask = [.width, .height]
         container.addSubview(overlayView)
 
-        print("[TerminalManagerView] ✅ Created new overlay with controller")
-
         // 保存 overlay 引用以便后续更新
         terminalView.dividerOverlay = overlayView
 
@@ -973,38 +959,28 @@ struct TerminalManagerView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        // 确保 controller 引用是最新的
-        // nsView 是 container，包含 terminalView 和 overlayView
-        print("[TerminalManagerView] updateNSView: subviews count = \(nsView.subviews.count)")
-
-        // 🎯 关键修复：从实际的 view bounds 更新 containerSize
+        // 🎯 从实际的 view bounds 更新 containerSize
         let actualSize = nsView.bounds.size
         let currentSize = controller.containerSize
         if actualSize != currentSize && actualSize.width > 0 && actualSize.height > 0 {
             if let window = nsView.window {
                 let scale = window.backingScaleFactor
-                print("[TerminalManagerView] 📏 Updating containerSize from \(currentSize) to \(actualSize), scale=\(scale)")
                 controller.resizeContainer(newSize: actualSize, scale: scale)
             }
         }
 
         guard nsView.subviews.count >= 2 else {
-            print("[TerminalManagerView] ⚠️ Not enough subviews!")
             return
         }
 
         if let terminalView = nsView.subviews[0] as? TerminalManagerNSView {
             terminalView.controller = controller
-            print("[TerminalManagerView] ✅ Updated terminalView controller")
         }
 
-        // 更新 overlay (第二个 subview)
+        // 更新 overlay
         if let overlay = nsView.subviews[1] as? DividerOverlayView {
             overlay.controller = controller
             overlay.needsDisplay = true
-            print("[TerminalManagerView] ✅ Updated overlay controller, dividers: \(controller.panelDividers.count)")
-        } else {
-            print("[TerminalManagerView] ❌ Failed to get overlay from subviews[1]")
         }
     }
 }
@@ -1225,14 +1201,10 @@ struct TabTerminalView: View {
 
         let configs = controller.panelRenderConfigs
 
-        // 🎯 关键修复：按 Y 坐标排序，确保遍历顺序稳定
-        // Y 坐标小的在前（Rust 坐标系，Y 向下，所以 Y 小的在上面）
-        let sortedConfigs = configs.sorted { $0.value.y < $1.value.y }
-
-        for (panelId, config) in sortedConfigs {
-            let rustPanelId = controller.registerPanel(panelId)
-
-            print("[Swift→Rust] Panel \(rustPanelId): pos=(\(config.x), \(config.y)), size=\(config.width)x\(config.height), grid=\(config.cols)x\(config.rows)")
+        for (panelId, config) in configs {
+            guard let rustPanelId = controller.getRustPanelId(panelId) else {
+                continue
+            }
 
             tab_manager_update_panel_config(
                 tabManager.handle,
