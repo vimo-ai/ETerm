@@ -32,6 +32,9 @@ final class TabItemView: NSView {
     /// 是否激活
     private var isActive: Bool = false
 
+    /// 是否正在拖拽
+    private var isDragging: Bool = false
+
     // MARK: - 回调
 
     /// 点击回调
@@ -106,13 +109,7 @@ final class TabItemView: NSView {
     }
 
     private func setupGestures() {
-        // 添加点击手势
-        let tapGesture = NSClickGestureRecognizer(target: self, action: #selector(handleTap))
-        addGestureRecognizer(tapGesture)
-
-        // 添加拖拽手势
-        let panGesture = NSPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
-        addGestureRecognizer(panGesture)
+        // 拖拽通过 mouseDown 启动，不需要手势识别器
     }
 
     private func updateAppearance() {
@@ -152,23 +149,49 @@ final class TabItemView: NSView {
 
     // MARK: - Event Handlers
 
-    @objc private func handleTap() {
-        onTap?()
+    override func mouseDown(with event: NSEvent) {
+        // 检查点击位置是否在关闭按钮上
+        let location = convert(event.locationInWindow, from: nil)
+        if closeButton.frame.contains(location) {
+            // 点击了关闭按钮，交给按钮处理
+            super.mouseDown(with: event)
+            return
+        }
+
+        // 启动拖拽会话
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setDataProvider(self, forTypes: [.string])
+
+        let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
+        draggingItem.setDraggingFrame(bounds, contents: createSnapshot())
+
+        isDragging = true
+        onDragStart?()
+
+        beginDraggingSession(with: [draggingItem], event: event, source: self)
     }
 
-    @objc private func handlePan(_ gesture: NSPanGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            onDragStart?()
-        case .changed:
-            // 拖拽中，由 DragCoordinator 处理
-            break
-        case .ended, .cancelled:
-            // 拖拽结束，由 DragCoordinator 处理
-            break
-        default:
-            break
+    override func mouseUp(with event: NSEvent) {
+        // 如果没有拖拽，触发点击
+        if !isDragging {
+            onTap?()
         }
+
+        // 重置拖拽状态（延迟一下避免立即触发点击）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.isDragging = false
+        }
+
+        super.mouseUp(with: event)
+    }
+
+    // MARK: - 拖拽预览
+
+    /// 创建拖拽预览图像
+    private func createSnapshot() -> NSImage {
+        // 使用 PDF 数据创建快照
+        let pdfData = dataWithPDF(inside: bounds)
+        return NSImage(data: pdfData) ?? NSImage()
     }
 
     @objc private func handleClose() {
@@ -205,5 +228,31 @@ final class TabItemView: NSView {
         if !isActive {
             layer?.backgroundColor = NSColor.clear.cgColor
         }
+    }
+}
+
+// MARK: - NSDraggingSource
+
+extension TabItemView: NSDraggingSource {
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        return .move
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) {
+        // 拖拽结束（由目标处理布局更新）
+    }
+}
+
+// MARK: - NSPasteboardItemDataProvider
+
+extension TabItemView: NSPasteboardItemDataProvider {
+    func pasteboard(_ pasteboard: NSPasteboard?,
+                    item: NSPasteboardItem,
+                    provideDataForType type: NSPasteboard.PasteboardType) {
+        // 提供拖拽数据（Tab ID）
+        item.setString(tabId.uuidString, forType: .string)
     }
 }

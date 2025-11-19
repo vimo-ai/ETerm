@@ -63,6 +63,14 @@ final class PanelView: NSView {
     /// 添加 Tab 回调
     var onAddTab: (() -> Void)?
 
+    /// Drop 回调（用于执行布局重构）
+    /// - Parameters:
+    ///   - tabId: 被拖拽的 Tab ID
+    ///   - dropZone: Drop Zone
+    ///   - targetPanelId: 目标 Panel ID
+    /// - Returns: 是否成功处理 Drop
+    var onDrop: ((UUID, DropZone, UUID) -> Bool)?
+
     // MARK: - 初始化
 
     init(panel: PanelNode, frame: CGRect, layoutKit: PanelLayoutKit) {
@@ -127,12 +135,6 @@ final class PanelView: NSView {
         highlightLayer.frame = zone.highlightArea
         highlightLayer.isHidden = false
         CATransaction.commit()
-
-        // 如果是 Header Drop Zone，显示插入指示器
-        if zone.type == .header, let insertIndex = zone.insertIndex {
-            // TODO: 显示插入位置指示器
-            print("[PanelView] Header drop at index: \(insertIndex)")
-        }
     }
 
     /// 清除高亮
@@ -175,6 +177,9 @@ final class PanelView: NSView {
         // 添加高亮层到 Content 视图
         contentView.layer?.addSublayer(highlightLayer)
 
+        // 注册接受拖拽类型
+        registerForDraggedTypes([.string])
+
         // 设置 Header 的回调
         headerView.onTabClick = { [weak self] tabId in
             self?.setActiveTab(tabId)
@@ -191,8 +196,8 @@ final class PanelView: NSView {
     }
 
     private func updateTabs() {
-        // 更新 Header 显示的 Tab
-        let tabs = Dictionary(uniqueKeysWithValues: panel.tabs.map { ($0.id, $0.title) })
+        // 更新 Header 显示的 Tab（保持顺序）
+        let tabs = panel.tabs.map { (id: $0.id, title: $0.title) }
         headerView.setTabs(tabs)
 
         // 更新激活的 Tab
@@ -238,5 +243,56 @@ final class PanelView: NSView {
         } else {
             setAccessibilityLabel("Panel")
         }
+    }
+}
+
+// MARK: - NSDraggingDestination
+
+extension PanelView {
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 计算 Drop Zone
+        let locationInView = convert(sender.draggingLocation, from: nil)
+        guard let dropZone = calculateDropZone(mousePosition: locationInView) else {
+            return []
+        }
+
+        // 高亮 Drop Zone
+        highlightDropZone(dropZone)
+        return .move
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 与 draggingEntered 逻辑相同
+        return draggingEntered(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        // 清除高亮
+        clearHighlight()
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        // 获取拖拽的 Tab ID
+        guard let tabIdString = sender.draggingPasteboard.string(forType: .string),
+              let tabId = UUID(uuidString: tabIdString) else {
+            return false
+        }
+
+        // 计算最终的 Drop Zone
+        let locationInView = convert(sender.draggingLocation, from: nil)
+        guard let dropZone = calculateDropZone(mousePosition: locationInView) else {
+            return false
+        }
+
+        clearHighlight()
+
+        // 调用回调执行布局重构
+        if let onDrop = onDrop {
+            return onDrop(tabId, dropZone, panel.id)
+        }
+
+        // 如果没有设置回调，只打印日志
+        print("[PanelView] performDragOperation: tabId=\(tabId), dropZone=\(dropZone.type), targetPanel=\(panel.id)")
+        return true
     }
 }

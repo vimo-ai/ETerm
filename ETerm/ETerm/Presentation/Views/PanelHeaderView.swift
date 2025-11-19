@@ -70,23 +70,23 @@ final class PanelHeaderView: NSView {
 
     /// 设置 Tab 列表
     ///
-    /// - Parameter tabs: Tab 节点列表
-    func setTabs(_ tabs: [UUID: String]) {
+    /// - Parameter tabs: Tab 节点列表（按顺序）
+    func setTabs(_ tabs: [(id: UUID, title: String)]) {
         // 移除旧的 TabItemView
         tabItemViews.forEach { $0.removeFromSuperview() }
         tabItemViews.removeAll()
 
-        // 创建新的 TabItemView
-        for (tabId, title) in tabs {
-            let tabView = TabItemView(tabId: tabId, title: title)
+        // 创建新的 TabItemView（保持顺序）
+        for tab in tabs {
+            let tabView = TabItemView(tabId: tab.id, title: tab.title)
             tabView.onTap = { [weak self] in
-                self?.onTabClick?(tabId)
+                self?.onTabClick?(tab.id)
             }
             tabView.onDragStart = { [weak self] in
-                self?.onTabDragStart?(tabId)
+                self?.onTabDragStart?(tab.id)
             }
             tabView.onClose = { [weak self] in
-                self?.onTabClose?(tabId)
+                self?.onTabClose?(tab.id)
             }
             tabContainer.addSubview(tabView)
             tabItemViews.append(tabView)
@@ -99,9 +99,16 @@ final class PanelHeaderView: NSView {
     ///
     /// - Returns: Tab ID 到边界的映射
     func getTabBounds() -> [UUID: CGRect] {
-        return Dictionary(uniqueKeysWithValues:
-            tabItemViews.map { ($0.tabId, $0.frame) }
-        )
+        var result: [UUID: CGRect] = [:]
+        for tabView in tabItemViews {
+            if result[tabView.tabId] != nil {
+                // 检测到重复的 Tab ID
+                print("⚠️ 警告：检测到重复的 Tab ID: \(tabView.tabId.uuidString.prefix(8))")
+                print("  当前 tabItemViews:", tabItemViews.map { $0.tabId.uuidString.prefix(8) })
+            }
+            result[tabView.tabId] = tabView.frame
+        }
+        return result
     }
 
     /// 设置激活的 Tab
