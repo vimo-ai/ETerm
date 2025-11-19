@@ -63,6 +63,49 @@ public struct DropZoneCalculator {
         )
     }
 
+    /// 计算 Drop Zone（完整版，支持 Tab 边界）
+    ///
+    /// - Parameters:
+    ///   - panel: Panel 节点
+    ///   - panelBounds: Panel 的边界（使用 macOS 坐标系）
+    ///   - headerBounds: Header 的边界（Tab 区域）
+    ///   - tabBounds: Tab ID 到边界的映射（用于精确计算插入索引）
+    ///   - mousePosition: 鼠标位置
+    /// - Returns: 计算出的 Drop Zone，如果鼠标不在任何区域则返回 nil
+    public func calculateDropZoneWithTabBounds(
+        panel: PanelNode,
+        panelBounds: CGRect,
+        headerBounds: CGRect,
+        tabBounds: [UUID: CGRect],
+        mousePosition: CGPoint
+    ) -> DropZone? {
+        // 1. 检查是否在 Header 区域
+        if headerBounds.contains(mousePosition) {
+            let tabOrder = panel.tabs.map { $0.id }
+            return calculateHeaderDropZoneWithTabBounds(
+                panel: panel,
+                headerBounds: headerBounds,
+                tabBounds: tabBounds,
+                tabOrder: tabOrder,
+                mousePosition: mousePosition
+            )
+        }
+
+        // 2. 如果 Panel 为空，整个 Body 都是 Drop Zone
+        if panel.isEmpty {
+            return DropZone(
+                type: .body,
+                highlightArea: panelBounds
+            )
+        }
+
+        // 3. 计算 Body 区域的 Drop Zone（left/top/right/bottom）
+        return calculateBodyDropZone(
+            panelBounds: panelBounds,
+            mousePosition: mousePosition
+        )
+    }
+
     // MARK: - Private Methods
 
     /// 计算 Header Drop Zone
@@ -95,6 +138,57 @@ public struct DropZoneCalculator {
             type: .header,
             highlightArea: headerBounds,
             insertIndex: insertIndex
+        )
+    }
+
+    /// 计算 Header Drop Zone（完整版，接收 Tab 边界）
+    ///
+    /// - Parameters:
+    ///   - panel: Panel 节点
+    ///   - headerBounds: Header 边界
+    ///   - tabBounds: Tab ID 到边界的映射
+    ///   - tabOrder: Tab 的顺序（按显示顺序）
+    ///   - mousePosition: 鼠标位置
+    /// - Returns: Drop Zone
+    private func calculateHeaderDropZoneWithTabBounds(
+        panel: PanelNode,
+        headerBounds: CGRect,
+        tabBounds: [UUID: CGRect],
+        tabOrder: [UUID],
+        mousePosition: CGPoint
+    ) -> DropZone? {
+        // 如果 Panel 为空，插入索引为 0
+        if panel.isEmpty {
+            return DropZone(
+                type: .header,
+                highlightArea: headerBounds,
+                insertIndex: 0
+            )
+        }
+
+        let mouseX = mousePosition.x
+
+        // 遍历 Tab，找到插入位置
+        for (index, tabId) in tabOrder.enumerated() {
+            guard let tabBound = tabBounds[tabId] else { continue }
+
+            let tabMidX = tabBound.midX
+
+            // 如果鼠标在 Tab 的左半部分，插入到这个 Tab 之前
+            if mouseX < tabMidX {
+                return DropZone(
+                    type: .header,
+                    highlightArea: headerBounds,
+                    insertIndex: index
+                )
+            }
+        }
+
+        // 如果都不满足，插入到末尾
+        return DropZone(
+            type: .header,
+            highlightArea: headerBounds,
+            insertIndex: tabOrder.count
         )
     }
 

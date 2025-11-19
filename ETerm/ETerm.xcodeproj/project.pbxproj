@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */ = {isa = PBXBuildFile; productRef = 481CC84B2ECD995E009F969C /* PanelLayoutKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		481CC2C92EC7B633009F969C /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -120,6 +125,7 @@
 			);
 			name = ETerm;
 			packageProductDependencies = (
+				481CC84B2ECD995E009F969C /* PanelLayoutKit */,
 			);
 			productName = ETerm;
 			productReference = 481CC2B92EC7B632009F969C /* ETerm.app */;
@@ -204,6 +210,7 @@
 			mainGroup = 481CC2B02EC7B632009F969C;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 481CC2BA2EC7B632009F969C /* Products */;
@@ -615,6 +622,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/PanelLayoutKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		481CC84B2ECD995E009F969C /* PanelLayoutKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */;
+			productName = PanelLayoutKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 481CC2B12EC7B632009F969C /* Project object */;
 }

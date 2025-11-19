@@ -1024,6 +1024,12 @@ struct TabTerminalView: View {
                 }
                 .help("测试 Rust 坐标系")
 
+                // ✨ Panel UI 测试按钮
+                Button(action: openPanelTestWindow) {
+                    Label("Panel UI 测试", systemImage: "rectangle.3.group")
+                }
+                .help("打开 Panel UI 测试窗口")
+
                 Spacer()
 
                 Text("\(controller.panelCount) panel\(controller.panelCount > 1 ? "s" : "")")
@@ -1118,6 +1124,23 @@ struct TabTerminalView: View {
         terminalView.renderTerminal()
 
         print("[Test] 🧪 Test initiated. Look for [[TL]], [[TR]], [[BL]], [[BR]] in corners")
+    }
+
+    // ✨ 打开 Panel UI 测试窗口
+    private func openPanelTestWindow() {
+        let testWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+
+        testWindow.title = "Panel UI 测试"
+        testWindow.contentView = NSHostingView(rootView: PanelTestView())
+        testWindow.center()
+        testWindow.makeKeyAndOrderFront(nil)
+
+        print("[Test] ✨ Panel UI 测试窗口已打开")
     }
 
     /// 处理 Pane 点击事件
