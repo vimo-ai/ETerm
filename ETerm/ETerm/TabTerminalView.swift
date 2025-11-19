@@ -11,18 +11,27 @@ import Metal
 import QuartzCore
 import Combine
 
-/// 分隔线类型
-enum PaneDividerType {
-    case vertical    // 垂直（左右分割）
-    case horizontal  // 水平（上下分割）
-}
+// MARK: - Forward Declaration
+class DividerOverlayView: NSView {
+    // 🎯 使用真正的存储属性，而不是 associated objects
+    weak var controller: WindowController?
+    var onDividerDragged: (() -> Void)?
 
-/// 分隔线信息
-struct PaneDivider {
-    let paneId1: Int
-    let paneId2: Int
-    let type: PaneDividerType
-    let position: CGFloat  // 逻辑坐标
+    // 拖动状态
+    private var isDraggingDivider: Bool = false
+    private var draggingDivider: PanelDivider?
+    private var currentHoverDivider: PanelDivider?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.wantsLayer = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var isOpaque: Bool { false }
 }
 
 /// 完整的终端管理器（包含 Sugarloaf 和多个 Tab）
@@ -43,15 +52,15 @@ class TerminalManagerNSView: NSView {
     var tabIds: [Int] = []
     var activeTabId: Int = -1
 
+    // WindowController 引用 (用于分隔线拖动)
+    weak var controller: WindowController?
+
+    // 🎯 分隔线 overlay 视图引用
+    weak var dividerOverlay: DividerOverlayView?
+
     // 回调
     var onTabsChanged: (([Int]) -> Void)?
     var onActiveTabChanged: ((Int) -> Void)?
-
-    // 🎯 分隔线拖动相关
-    private var isDraggingDivider = false
-    private var draggingDivider: PaneDivider?
-    private var dragStartLocation: CGPoint = .zero
-    private var currentHoverDivider: PaneDivider?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -74,15 +83,6 @@ class TerminalManagerNSView: NSView {
     private func setupView() {
         wantsLayer = true
         layer?.contentsScale = window?.backingScaleFactor ?? 2.0
-
-        // 🎯 启用鼠标移动追踪（用于检测分隔线悬停）
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .mouseMoved, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
 
         NotificationCenter.default.addObserver(
             self,
@@ -319,13 +319,11 @@ class TerminalManagerNSView: NSView {
             return
         }
 
-        // 🎯 获取鼠标位置（逻辑坐标）
-        let locationInView = convert(event.locationInWindow, from: nil)
-        let x = Float(locationInView.x)
-        let y = Float(locationInView.y)
-
-        // 查找鼠标下的 pane
-        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
+        // ❌ 临时禁用：等待 Swift 实现 pane 位置查询
+        // let locationInView = convert(event.locationInWindow, from: nil)
+        // let x = Float(locationInView.x)
+        // let y = Float(locationInView.y)
+        // let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
 
         scrollAccumulator += deltaY
         let threshold: CGFloat = 10.0
@@ -333,249 +331,13 @@ class TerminalManagerNSView: NSView {
         while abs(scrollAccumulator) >= threshold {
             let direction: Int32 = scrollAccumulator > 0 ? 1 : -1
 
-            if paneId >= 0 {
-                // 🎯 滚动鼠标下的 pane（不改变焦点）
-                tab_manager_scroll_pane(tabManager.handle, size_t(paneId), direction)
-            } else {
-                // 鼠标不在任何 pane 上（例如在 padding 区域），滚动激活的 pane
-                tabManager.scrollActiveTab(direction)
-            }
+            // 暂时总是滚动激活的 pane
+            tabManager.scrollActiveTab(direction)
 
             scrollAccumulator -= threshold * (scrollAccumulator > 0 ? 1 : -1)
         }
 
         requestRender()
-    }
-
-    // 🎯 检查鼠标位置是否在分隔线上
-    private func findDividerAtPosition(x: CGFloat, y: CGFloat, tolerance: CGFloat = 5.0) -> PaneDivider? {
-        guard let tabManager = tabManager else { return nil }
-
-        // 获取所有分隔线（使用 C struct）
-        var dividersArray = Array(repeating: DividerInfo(pane_id_1: 0, pane_id_2: 0, divider_type: 0, position: 0), count: 10)
-        let count = tab_manager_get_dividers(tabManager.handle, &dividersArray, 10)
-
-        guard count > 0 else { return nil }
-
-        // 检查每条分隔线
-        for i in 0..<count {
-            let dividerInfo = dividersArray[i]
-            let position = CGFloat(dividerInfo.position)
-
-            if dividerInfo.divider_type == 0 {
-                // 垂直分隔线（检查 x 坐标）
-                if abs(x - position) <= tolerance {
-                    return PaneDivider(
-                        paneId1: Int(dividerInfo.pane_id_1),
-                        paneId2: Int(dividerInfo.pane_id_2),
-                        type: .vertical,
-                        position: position
-                    )
-                }
-            } else {
-                // 水平分隔线（检查 y 坐标）
-                // 🎯 关键：需要转换坐标系！Rust 从上往下，Swift 从下往上
-                let positionInView = bounds.height - position
-                if abs(y - positionInView) <= tolerance {
-                    return PaneDivider(
-                        paneId1: Int(dividerInfo.pane_id_1),
-                        paneId2: Int(dividerInfo.pane_id_2),
-                        type: .horizontal,
-                        position: position  // 保存 Rust 坐标，后续拖动会用到
-                    )
-                }
-            }
-        }
-
-        return nil
-    }
-
-    // 🎯 鼠标移动：检测是否悬停在分隔线上
-    override func mouseMoved(with event: NSEvent) {
-        let locationInView = convert(event.locationInWindow, from: nil)
-
-        if let divider = findDividerAtPosition(x: locationInView.x, y: locationInView.y) {
-            // 鼠标在分隔线上，改变鼠标样式
-            if divider.type == .vertical {
-                NSCursor.resizeLeftRight.set()
-            } else {
-                NSCursor.resizeUpDown.set()
-            }
-            currentHoverDivider = divider
-        } else {
-            // 鼠标不在分隔线上，恢复箭头
-            NSCursor.arrow.set()
-            currentHoverDivider = nil
-        }
-
-        super.mouseMoved(with: event)
-    }
-
-    // 🎯 鼠标按下：分隔线拖动 OR 文本选择
-    override func mouseDown(with event: NSEvent) {
-        guard let tabManager = tabManager, let metrics = fontMetrics else {
-            super.mouseDown(with: event)
-            return
-        }
-
-        let locationInView = convert(event.locationInWindow, from: nil)
-        let x = Float(locationInView.x)
-        let y = Float(locationInView.y)
-
-        // 1️⃣ 优先检查是否点击在分隔线上
-        if let divider = findDividerAtPosition(x: CGFloat(x), y: CGFloat(y)) {
-            isDraggingDivider = true
-            draggingDivider = divider
-            dragStartLocation = locationInView
-            print("[Divider] 🖱️ Started dragging \(divider.type) divider at \(divider.position)")
-            return  // 早返回，不处理文本选择
-        }
-
-        // 2️⃣ 否则处理文本选择
-        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
-        if paneId >= 0 {
-            // 切换焦点
-            tab_manager_set_active_pane(tabManager.handle, size_t(paneId))
-
-            // 获取 Pane 的位置信息
-            var paneInfo = PaneInfo(x: 0, y: 0, width: 0, height: 0)
-            if tab_manager_get_pane_info(tabManager.handle, size_t(paneId), &paneInfo) != 0 {
-                // 计算终端网格坐标（相对于 Pane 内部）
-                let (col, row) = pixelToGridCoords(
-                    globalX: x,
-                    globalY: y,
-                    paneX: paneInfo.x,
-                    paneY: paneInfo.y,
-                    paneHeight: paneInfo.height,  // 🎯 传入 Pane 高度
-                    metrics: metrics
-                )
-
-                // 开始选择
-                let selectionType: SelectionType = event.clickCount == 2 ? SelectionTypeSemantic : SelectionTypeSimple
-                tab_manager_start_selection(tabManager.handle, col, row, selectionType)
-
-                print("""
-                [Selection] ✅ Started Selection
-                            0-based grid: (\(col), \(row))
-                            1-based display: (\(col+1), \(row+1))
-                            Pane: \(paneId), clicks: \(event.clickCount)
-                """)
-            }
-
-            requestRender()
-        }
-
-        super.mouseDown(with: event)
-    }
-
-    // 🎯 鼠标拖拽：分隔线拖动 OR 文本选择更新
-    override func mouseDragged(with event: NSEvent) {
-        guard let tabManager = tabManager else {
-            super.mouseDragged(with: event)
-            return
-        }
-
-        // 1️⃣ 如果正在拖动分隔线
-        if isDraggingDivider, let divider = draggingDivider {
-            let currentLocation = convert(event.locationInWindow, from: nil)
-
-            // 计算拖动偏移量（逻辑坐标）
-            let delta: Float
-            if divider.type == .vertical {
-                delta = Float(currentLocation.x - dragStartLocation.x)
-            } else {
-                // macOS 坐标系 Y 轴向上，需要反转：向下拖动（Y减小）应该让上面 pane 变大
-                delta = Float(dragStartLocation.y - currentLocation.y)
-            }
-
-            // 调用 Rust FFI 调整分隔线
-            let success = tab_manager_resize_divider(
-                tabManager.handle,
-                size_t(divider.paneId1),
-                size_t(divider.paneId2),
-                delta
-            )
-
-            if success != 0 {
-                // 更新起始位置（累积拖动）
-                dragStartLocation = currentLocation
-
-                // 触发重新渲染
-                requestRender()
-            }
-            return  // 早返回，不处理文本选择
-        }
-
-        // 2️⃣ 否则处理文本选择拖拽
-        guard let metrics = fontMetrics else {
-            super.mouseDragged(with: event)
-            return
-        }
-
-        let locationInView = convert(event.locationInWindow, from: nil)
-        let x = Float(locationInView.x)
-        let y = Float(locationInView.y)
-
-        // 获取当前鼠标位置的 Pane（拖拽时可能跨 Pane，但通常在同一个）
-        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
-        if paneId >= 0 {
-            var paneInfo = PaneInfo(x: 0, y: 0, width: 0, height: 0)
-            if tab_manager_get_pane_info(tabManager.handle, size_t(paneId), &paneInfo) != 0 {
-                // 计算终端网格坐标（相对于 Pane 内部）
-                let (col, row) = pixelToGridCoords(
-                    globalX: x,
-                    globalY: y,
-                    paneX: paneInfo.x,
-                    paneY: paneInfo.y,
-                    paneHeight: paneInfo.height,  // 🎯 传入 Pane 高度
-                    metrics: metrics
-                )
-
-                // 更新选择终点
-                tab_manager_update_selection(tabManager.handle, col, row)
-
-                print("[Selection] Dragging to grid (\(col), \(row))")
-
-                // 实时渲染高亮
-                requestRender()
-            }
-        }
-
-        super.mouseDragged(with: event)
-    }
-
-    // 🎯 鼠标松开：结束分隔线拖动 OR 完成文本选择
-    override func mouseUp(with event: NSEvent) {
-        guard let tabManager = tabManager else {
-            super.mouseUp(with: event)
-            return
-        }
-
-        // 1️⃣ 如果正在拖动分隔线
-        if isDraggingDivider {
-            isDraggingDivider = false
-            draggingDivider = nil
-            print("[Divider] ✅ Finished dragging")
-
-            // 恢复鼠标样式
-            NSCursor.arrow.set()
-            super.mouseUp(with: event)
-            return
-        }
-
-        // 2️⃣ 否则完成文本选择
-        // 获取选中的文本
-        var buffer = [CChar](repeating: 0, count: 4096)
-        let length = tab_manager_get_selected_text(tabManager.handle, &buffer, 4096)
-
-        if length > 0, let selectedText = String(cString: buffer, encoding: .utf8) {
-            print("[Selection] ✅ Selected text (\(length) chars): \(selectedText)")
-
-            // TODO: 这里可以触发翻译 UI
-            // TranslationManager.shared.showTranslation(for: selectedText)
-        }
-
-        super.mouseUp(with: event)
     }
 
     // 🎯 辅助函数：全局坐标 → 终端网格坐标（相对于 Pane）
@@ -673,7 +435,6 @@ class TerminalManagerNSView: NSView {
 
         // 先处理 scale 变化（DPI 变化，如切换显示器）
         if scaleChanged {
-            print("[TabTerminalView] 🔄 Scale changed from \(lastScale) to \(scale) - rescaling")
             sugarloaf.rescale(scale: scale)
             lastScale = scale
         }
@@ -749,6 +510,9 @@ class TerminalCoordinator: ObservableObject {
     @Published var tabIds: [Int] = []
     @Published var activeTabId: Int = -1
 
+    // 🎯 新增：controller 引用（用于拖动时更新配置）
+    weak var controller: WindowController?
+
     private init() {}
 
     func setTerminalView(_ view: TerminalManagerNSView) {
@@ -764,26 +528,484 @@ class TerminalCoordinator: ObservableObject {
             }
         }
     }
+
+    /// 设置分隔线 overlay 的回调
+    func setupDividerOverlay(_ overlay: DividerOverlayView) {
+        overlay.onDividerDragged = { [weak self] in
+            self?.updateRustConfigs()
+        }
+    }
+
+    /// 更新 Rust 配置（从 TabTerminalView 提取）
+    func updateRustConfigs() {
+        guard let terminalView = terminalView,
+              let tabManager = terminalView.tabManager,
+              let controller = controller else {
+            return
+        }
+
+        let configs = controller.panelRenderConfigs
+
+        for (panelId, config) in configs {
+            let rustPanelId = controller.registerPanel(panelId)
+
+            tab_manager_update_panel_config(
+                tabManager.handle,
+                size_t(rustPanelId),
+                config.x,
+                config.y,
+                config.width,
+                config.height,
+                config.cols,
+                config.rows
+            )
+        }
+
+        // 触发重新渲染
+        terminalView.renderTerminal()
+
+        // 触发分隔线 overlay 重绘
+        terminalView.dividerOverlay?.needsDisplay = true
+    }
+}
+
+// MARK: - Divider Overlay Implementation
+
+/// 分隔线绘制视图（Overlay）
+extension DividerOverlayView {
+    // 所有属性都已在类定义中声明为真正的存储属性
+    // 不再需要 associated objects
+
+    // 🎯 关键：让 overlay 只响应分隔线区域的点击
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 检查点击位置是否在分隔线附近
+        guard let controller = controller else {
+            return nil  // 没有 controller，不响应任何点击
+        }
+
+        let containerBounds = CGRect(origin: .zero, size: controller.containerSize)
+        let dividers = controller.panelDividers
+
+        // 如果点击位置在任何一条分隔线附近，返回自己
+        for divider in dividers {
+            if divider.contains(point: point, in: containerBounds, tolerance: 5.0) {
+                return self  // 响应此点击
+            }
+        }
+
+        // 否则返回 nil，让事件穿透到下层视图
+        return nil
+    }
+
+    // MARK: - Mouse Tracking
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        // 移除旧的 tracking area
+        trackingAreas.forEach { removeTrackingArea($0) }
+
+        // 添加新的 tracking area
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+    }
+
+    // MARK: - Mouse Events
+
+    /// 查找鼠标位置处的分隔线
+    private func findDividerAtPosition(_ location: CGPoint) -> PanelDivider? {
+        guard let controller = controller else { return nil }
+
+        let containerBounds = CGRect(origin: .zero, size: controller.containerSize)
+        return controller.panelDividers.first { divider in
+            divider.contains(point: location, in: containerBounds, tolerance: 5.0)
+        }
+    }
+
+    /// 鼠标移动 - 检测分隔线悬停
+    override func mouseMoved(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+
+        if let divider = findDividerAtPosition(location) {
+            print("[DividerOverlay] 🖱️ Hovering over \(divider.direction) divider")
+            // 设置光标
+            switch divider.direction {
+            case .horizontal:
+                NSCursor.resizeLeftRight.set()
+            case .vertical:
+                NSCursor.resizeUpDown.set()
+            }
+
+            currentHoverDivider = divider
+        } else {
+            if currentHoverDivider != nil {
+                print("[DividerOverlay] ⬅️ Left divider area, resetting cursor")
+                NSCursor.arrow.set()
+                currentHoverDivider = nil
+            }
+        }
+
+        super.mouseMoved(with: event)
+    }
+
+    /// 鼠标退出视图 - 恢复光标
+    override func mouseExited(with event: NSEvent) {
+        print("[DividerOverlay] 🚪 Mouse exited view")
+        NSCursor.arrow.set()
+        currentHoverDivider = nil
+        super.mouseExited(with: event)
+    }
+
+    /// 鼠标按下 - 开始拖动分隔线
+    override func mouseDown(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        print("[DividerOverlay] 🖱️ mouseDown at: \(location)")
+
+        if let divider = findDividerAtPosition(location) {
+            print("[DividerOverlay] ✅ Start dragging \(divider.direction) divider")
+            isDraggingDivider = true
+            draggingDivider = divider
+            return
+        }
+
+        print("[DividerOverlay] ⚠️ No divider found at click position")
+        super.mouseDown(with: event)
+    }
+
+    /// 鼠标拖拽 - 更新分隔线位置
+    override func mouseDragged(with event: NSEvent) {
+        guard isDraggingDivider,
+              let divider = draggingDivider,
+              let controller = controller else {
+            print("[DividerOverlay] ⚠️ mouseDragged but not dragging or no controller")
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+
+        // 计算新位置
+        let newPosition: CGFloat
+        switch divider.direction {
+        case .horizontal:
+            newPosition = location.x
+        case .vertical:
+            newPosition = location.y
+        }
+
+        print("[DividerOverlay] 📏 Dragging to: \(newPosition)")
+
+        // 更新分隔线比例
+        controller.updateDivider(divider, newPosition: newPosition)
+
+        // 触发回调，通知上层更新 Rust 配置
+        onDividerDragged?()
+
+        // 触发重绘
+        needsDisplay = true
+    }
+
+    /// 鼠标松开 - 结束拖动
+    override func mouseUp(with event: NSEvent) {
+        if isDraggingDivider {
+            print("[DividerOverlay] ✅ Drag ended")
+            isDraggingDivider = false
+            draggingDivider = nil
+            return
+        }
+
+        super.mouseUp(with: event)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        guard let controller = controller else {
+            print("[DividerOverlay] ⚠️ draw: no controller")
+            return
+        }
+
+        let containerSize = controller.containerSize
+
+        // 🎯 调试标尺：绘制坐标网格
+        drawDebugRuler(containerSize: containerSize)
+
+        // 🎯 调试：绘制 Panel 边界和坐标信息
+        drawPanelBounds(controller: controller)
+
+        // 绘制分隔线
+        let dividers = controller.panelDividers
+        print("[DividerOverlay] 🎨 draw: found \(dividers.count) dividers")
+
+        // 设置绘制颜色为更明显的颜色用于测试
+        NSColor.systemRed.setFill()
+        let dividerWidth: CGFloat = 3.0  // 暂时用粗一点的线便于观察
+
+        for (index, divider) in dividers.enumerated() {
+            let rect: NSRect
+
+            switch divider.direction {
+            case .horizontal:
+                // 垂直分隔线（左右分割）
+                rect = NSRect(
+                    x: divider.position - dividerWidth / 2,
+                    y: 0,
+                    width: dividerWidth,
+                    height: containerSize.height
+                )
+
+            case .vertical:
+                // 水平分隔线（上下分割）
+                rect = NSRect(
+                    x: 0,
+                    y: divider.position - dividerWidth / 2,
+                    width: containerSize.width,
+                    height: dividerWidth
+                )
+            }
+
+            print("[DividerOverlay] 🖍️ Drawing divider \(index): \(divider.direction) at \(divider.position), rect: \(rect)")
+            rect.fill()
+        }
+    }
+
+    // MARK: - Debug Drawing
+
+    /// 绘制调试标尺：显示坐标网格
+    private func drawDebugRuler(containerSize: CGSize) {
+        // 网格线颜色：淡蓝色
+        NSColor.systemBlue.withAlphaComponent(0.3).setStroke()
+
+        let path = NSBezierPath()
+        path.lineWidth = 0.5
+
+        // 垂直线：每 100pt 一条
+        var x: CGFloat = 0
+        while x <= containerSize.width {
+            path.move(to: NSPoint(x: x, y: 0))
+            path.line(to: NSPoint(x: x, y: containerSize.height))
+
+            // 绘制 X 坐标标签
+            drawCoordinateLabel(text: "x=\(Int(x))", at: NSPoint(x: x + 2, y: containerSize.height - 20), color: .systemBlue)
+
+            x += 100
+        }
+
+        // 水平线：每 100pt 一条
+        var y: CGFloat = 0
+        while y <= containerSize.height {
+            path.move(to: NSPoint(x: 0, y: y))
+            path.line(to: NSPoint(x: containerSize.width, y: y))
+
+            // 绘制 Y 坐标标签
+            drawCoordinateLabel(text: "y=\(Int(y))", at: NSPoint(x: 5, y: y + 2), color: .systemBlue)
+
+            y += 100
+        }
+
+        path.stroke()
+
+        // 特殊标记：关键坐标点
+        drawKeyPoint(at: NSPoint(x: 0, y: 0), label: "(0,0) 左下角")
+        drawKeyPoint(at: NSPoint(x: 0, y: containerSize.height), label: "(0,\(Int(containerSize.height))) 左上角")
+        drawKeyPoint(at: NSPoint(x: containerSize.width, y: 0), label: "(\(Int(containerSize.width)),0) 右下角")
+        drawKeyPoint(at: NSPoint(x: containerSize.width, y: containerSize.height), label: "(\(Int(containerSize.width)),\(Int(containerSize.height))) 右上角")
+    }
+
+    /// 绘制 Panel 边界和坐标信息
+    private func drawPanelBounds(controller: WindowController) {
+        let panelBounds = controller.panelBounds
+        let panelConfigs = controller.panelRenderConfigs
+
+        let colors: [NSColor] = [.systemGreen, .systemOrange, .systemPurple, .systemPink]
+        var colorIndex = 0
+
+        for (panelId, bounds) in panelBounds {
+            let color = colors[colorIndex % colors.count]
+            colorIndex += 1
+
+            // 绘制 Panel 边界矩形
+            color.withAlphaComponent(0.2).setStroke()
+            let borderPath = NSBezierPath(rect: NSRect(
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: bounds.height
+            ))
+            borderPath.lineWidth = 2.0
+            borderPath.stroke()
+
+            // 获取传给 Rust 的配置
+            if let config = panelConfigs[panelId] {
+                let rustPanelId = controller.getRustPanelId(panelId) ?? 0
+
+                // 在 Panel 中心显示信息
+                let centerX = bounds.x + bounds.width / 2
+                let centerY = bounds.y + bounds.height / 2
+
+                let info = """
+                Panel \(rustPanelId)
+                Swift: (\(Int(bounds.x)), \(Int(bounds.y)))
+                Size: \(Int(bounds.width))x\(Int(bounds.height))
+                Rust: (\(Int(config.x)), \(Int(config.y)))
+                Grid: \(config.cols)x\(config.rows)
+                """
+
+                drawMultilineLabel(text: info, at: NSPoint(x: centerX - 100, y: centerY), color: color)
+            }
+
+            // 标注四个角
+            drawCornerMarker(at: NSPoint(x: bounds.x, y: bounds.y), label: "左下", color: color)
+            drawCornerMarker(at: NSPoint(x: bounds.x, y: bounds.y + bounds.height), label: "左上", color: color)
+            drawCornerMarker(at: NSPoint(x: bounds.x + bounds.width, y: bounds.y), label: "右下", color: color)
+            drawCornerMarker(at: NSPoint(x: bounds.x + bounds.width, y: bounds.y + bounds.height), label: "右上", color: color)
+        }
+    }
+
+    /// 绘制坐标标签
+    private func drawCoordinateLabel(text: String, at point: NSPoint, color: NSColor) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10),
+            .foregroundColor: color
+        ]
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        attributedString.draw(at: point)
+    }
+
+    /// 绘制多行文本标签
+    private func drawMultilineLabel(text: String, at point: NSPoint, color: NSColor) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: color,
+            .backgroundColor: NSColor.black.withAlphaComponent(0.7)
+        ]
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        attributedString.draw(at: point)
+    }
+
+    /// 绘制关键坐标点
+    private func drawKeyPoint(at point: NSPoint, label: String) {
+        // 绘制圆点
+        NSColor.systemRed.setFill()
+        let circle = NSBezierPath(ovalIn: NSRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6))
+        circle.fill()
+
+        // 绘制标签
+        drawCoordinateLabel(text: label, at: NSPoint(x: point.x + 5, y: point.y + 5), color: .systemRed)
+    }
+
+    /// 绘制角标记
+    private func drawCornerMarker(at point: NSPoint, label: String, color: NSColor) {
+        color.setFill()
+        let circle = NSBezierPath(ovalIn: NSRect(x: point.x - 2, y: point.y - 2, width: 4, height: 4))
+        circle.fill()
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 9),
+            .foregroundColor: color
+        ]
+        let attributedString = NSAttributedString(string: label, attributes: attributes)
+        attributedString.draw(at: NSPoint(x: point.x + 3, y: point.y + 3))
+    }
 }
 
 /// SwiftUI 包装器 - 单例视图
 struct TerminalManagerView: NSViewRepresentable {
     @ObservedObject var coordinator = TerminalCoordinator.shared
+    let controller: WindowController
 
-    func makeNSView(context: Context) -> TerminalManagerNSView {
-        // 如果已有实例，直接返回
-        if let existingView = coordinator.terminalView {
-            return existingView
+    func makeNSView(context: Context) -> NSView {
+        print("[TerminalManagerView] makeNSView called")
+
+        // 如果已有实例，直接返回容器
+        if let existingView = coordinator.terminalView,
+           let existingContainer = existingView.superview {
+            print("[TerminalManagerView] Reusing existing view")
+            existingView.controller = controller
+
+            // 更新已有的 overlay
+            if let overlay = existingView.dividerOverlay {
+                overlay.controller = controller
+                print("[TerminalManagerView] ✅ Updated existing overlay controller")
+            }
+
+            return existingContainer
         }
 
+        print("[TerminalManagerView] Creating new view")
+
         // 创建新实例
-        let view = TerminalManagerNSView()
-        coordinator.setTerminalView(view)
-        return view
+        let terminalView = TerminalManagerNSView()
+        terminalView.controller = controller
+        coordinator.setTerminalView(terminalView)
+
+        return createContainerView(with: terminalView)
     }
 
-    func updateNSView(_ nsView: TerminalManagerNSView, context: Context) {
-        // 不需要做什么，状态由 coordinator 管理
+    private func createContainerView(with terminalView: TerminalManagerNSView) -> NSView {
+        let container = NSView()
+
+        // 添加终端视图
+        terminalView.frame = container.bounds
+        terminalView.autoresizingMask = [.width, .height]
+        container.addSubview(terminalView)
+
+        // 添加分隔线 overlay
+        let overlayView = DividerOverlayView(frame: container.bounds)
+        overlayView.controller = controller
+        overlayView.autoresizingMask = [.width, .height]
+        container.addSubview(overlayView)
+
+        print("[TerminalManagerView] ✅ Created new overlay with controller")
+
+        // 保存 overlay 引用以便后续更新
+        terminalView.dividerOverlay = overlayView
+
+        // 🎯 设置 overlay 的拖动回调
+        coordinator.setupDividerOverlay(overlayView)
+
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // 确保 controller 引用是最新的
+        // nsView 是 container，包含 terminalView 和 overlayView
+        print("[TerminalManagerView] updateNSView: subviews count = \(nsView.subviews.count)")
+
+        // 🎯 关键修复：从实际的 view bounds 更新 containerSize
+        let actualSize = nsView.bounds.size
+        let currentSize = controller.containerSize
+        if actualSize != currentSize && actualSize.width > 0 && actualSize.height > 0 {
+            if let window = nsView.window {
+                let scale = window.backingScaleFactor
+                print("[TerminalManagerView] 📏 Updating containerSize from \(currentSize) to \(actualSize), scale=\(scale)")
+                controller.resizeContainer(newSize: actualSize, scale: scale)
+            }
+        }
+
+        guard nsView.subviews.count >= 2 else {
+            print("[TerminalManagerView] ⚠️ Not enough subviews!")
+            return
+        }
+
+        if let terminalView = nsView.subviews[0] as? TerminalManagerNSView {
+            terminalView.controller = controller
+            print("[TerminalManagerView] ✅ Updated terminalView controller")
+        }
+
+        // 更新 overlay (第二个 subview)
+        if let overlay = nsView.subviews[1] as? DividerOverlayView {
+            overlay.controller = controller
+            overlay.needsDisplay = true
+            print("[TerminalManagerView] ✅ Updated overlay controller, dividers: \(controller.panelDividers.count)")
+        } else {
+            print("[TerminalManagerView] ❌ Failed to get overlay from subviews[1]")
+        }
     }
 }
 
@@ -806,16 +1028,25 @@ struct TabTerminalView: View {
                     .frame(height: 20)
 
                 Button(action: splitRight) {
-                    Label("垂直分割", systemImage: "rectangle.split.2x1")
+                    Label("垂直分割（左右）", systemImage: "rectangle.split.2x1")
                 }
                 .keyboardShortcut("d", modifiers: .command)
-                .help("⌘D - 垂直分割")
+                .help("⌘D - 垂直分割（左右）")
 
                 Button(action: splitDown) {
-                    Label("水平分割", systemImage: "rectangle.split.1x2")
+                    Label("水平分割（上下）", systemImage: "rectangle.split.1x2")
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
-                .help("⌘⇧D - 水平分割")
+                .help("⌘⇧D - 水平分割（上下）")
+
+                Divider()
+                    .frame(height: 20)
+
+                // 🧪 测试按钮
+                Button(action: testCornerPanes) {
+                    Label("测试四角", systemImage: "square.grid.2x2")
+                }
+                .help("测试 Rust 坐标系")
 
                 Spacer()
 
@@ -841,7 +1072,7 @@ struct TabTerminalView: View {
 
                 // 始终显示终端管理器视图（在背景之上）
                 GeometryReader { geometry in
-                    TerminalManagerView()
+                    TerminalManagerView(controller: controller)
                         .padding(10)  // 添加 10pt 的内边距
                         .contentShape(Rectangle())  // 确保整个区域可以接收点击
                         .gesture(
@@ -850,6 +1081,9 @@ struct TabTerminalView: View {
                                     handlePaneClick(at: value.location, in: geometry)
                                 }
                         )
+                        .onChange(of: controller.containerSize) { oldSize, newSize in
+                            updateRustConfigs()
+                        }
                 }
 
                 // 🧪 临时注释掉 TabView 测试点击事件
@@ -875,113 +1109,134 @@ struct TabTerminalView: View {
 //                }
             }
         }
+        .onAppear {
+            // 🎯 设置 coordinator 的 controller 引用
+            coordinator.controller = controller
+        }
     }
 
     private func createNewTab() {
         coordinator.terminalView?.createNewTab()
     }
 
-    // 🎯 处理 Pane 点击切换焦点
-    private func handlePaneClick(at location: CGPoint, in geometry: GeometryProxy) {
-        print("[TabTerminalView] 🖱️ Click detected at: \(location)")
-
+    // 🧪 测试四角坐标
+    private func testCornerPanes() {
         guard let terminalView = coordinator.terminalView,
               let tabManager = terminalView.tabManager else {
-            print("[TabTerminalView] ⚠️ No terminal view or tab manager")
+            print("[Test] ⚠️ No terminal view or tab manager")
             return
         }
 
-        // 调整坐标（需要减去 padding）
-        let x = Float(location.x - 10)  // 减去 padding
-        let y = Float(location.y - 10)
+        // 获取容器尺寸（物理像素）
+        let bounds = terminalView.bounds
+        let scale = terminalView.window?.backingScaleFactor ?? 2.0
+        let containerWidth = Float(bounds.width) * Float(scale)
+        let containerHeight = Float(bounds.height) * Float(scale)
 
-        print("[TabTerminalView] Adjusted coords: (\(x), \(y))")
-        print("[TabTerminalView] Geometry size: \(geometry.size)")
-        print("[TabTerminalView] Current pane count: \(tab_manager_get_pane_count(tabManager.handle))")
+        print("[Test] 🧪 Testing corner panes: container \(containerWidth)x\(containerHeight) pixels")
 
-        // 查找点击的 pane
-        let paneId = tab_manager_get_pane_at_position(tabManager.handle, x, y)
-        print("[TabTerminalView] Found pane ID: \(paneId)")
+        // 调用 Rust 测试函数
+        tab_manager_test_corner_panes(tabManager.handle, containerWidth, containerHeight)
 
-        if paneId >= 0 {
-            // 切换焦点
-            let result = tab_manager_set_active_pane(tabManager.handle, size_t(paneId))
-            print("[TabTerminalView] Set active pane result: \(result)")
+        // 触发渲染
+        terminalView.renderTerminal()
 
-            if result != 0 {
-                print("[TabTerminalView] ✅ Switched focus to pane \(paneId)")
-                terminalView.renderTerminal()
-            } else {
-                print("[TabTerminalView] ❌ Failed to switch focus")
+        print("[Test] 🧪 Test initiated. Look for [[TL]], [[TR]], [[BL]], [[BR]] in corners")
+    }
+
+    /// 处理 Pane 点击事件
+    private func handlePaneClick(at location: CGPoint, in geometry: GeometryProxy) {
+        print("[Focus] 🖱️ Click at: \(location)")
+
+        // 获取所有 Panel 的边界
+        let panelBounds = controller.panelBounds
+        print("[Focus] Panel bounds: \(panelBounds.mapValues { "(\($0.x), \($0.y), \($0.width)x\($0.height))" })")
+
+        // 查找包含点击位置的 Panel
+        for (panelId, bounds) in panelBounds {
+            if bounds.contains(location) {
+                print("[Focus] ✅ Found panel: \(panelId)")
+
+                // 获取 Rust Panel ID
+                let rustPanelId = controller.registerPanel(panelId)
+
+                // 调用 Rust FFI 设置激活 Pane
+                guard let terminalView = coordinator.terminalView,
+                      let tabManager = terminalView.tabManager else {
+                    print("[Focus] ❌ No terminalView or tabManager")
+                    return
+                }
+
+                print("[Focus] 🎯 Setting active pane to: \(rustPanelId)")
+                tab_manager_set_active_pane(tabManager.handle, size_t(rustPanelId))
+                return
             }
-        } else {
-            print("[TabTerminalView] ❌ No pane found at this position")
         }
+
+        print("[Focus] ❌ No panel found at click location")
     }
 
     private func splitRight() {
-        print("[Split] splitRight() called")
-
+        print("[Split] 🔪 splitRight called, current panels: \(controller.panelCount)")
         // 使用新的 DDD 架构
         if let firstPanelId = controller.allPanelIds.first {
-            print("[Split] Splitting panel \(firstPanelId) horizontally")
             if let newPanelId = controller.splitPanel(
                 panelId: firstPanelId,
                 direction: .horizontal
             ) {
-                print("[Split] ✅ Created right panel with ID: \(newPanelId), total panels: \(controller.panelCount)")
-
-                // TODO: 通知 Rust 层更新配置
+                print("[Split] ✅ Created new panel: \(newPanelId), total: \(controller.panelCount)")
+                print("[Split] 📏 Dividers: \(controller.panelDividers.count)")
                 updateRustConfigs()
+
+                // 触发 overlay 重绘
+                coordinator.terminalView?.dividerOverlay?.needsDisplay = true
             } else {
-                print("[Split] ❌ Failed to create right panel")
+                print("[Split] ❌ Failed to split")
             }
-        } else {
-            print("[Split] ❌ No panels available")
         }
     }
 
     private func splitDown() {
-        print("[Split] splitDown() called")
-
+        print("[Split] 🔪 splitDown called, current panels: \(controller.panelCount)")
         // 使用新的 DDD 架构
         if let firstPanelId = controller.allPanelIds.first {
-            print("[Split] Splitting panel \(firstPanelId) vertically")
             if let newPanelId = controller.splitPanel(
                 panelId: firstPanelId,
                 direction: .vertical
             ) {
-                print("[Split] ✅ Created down panel with ID: \(newPanelId), total panels: \(controller.panelCount)")
-
-                // TODO: 通知 Rust 层更新配置
+                print("[Split] ✅ Created new panel: \(newPanelId), total: \(controller.panelCount)")
+                print("[Split] 📏 Dividers: \(controller.panelDividers.count)")
                 updateRustConfigs()
+
+                // 触发 overlay 重绘
+                coordinator.terminalView?.dividerOverlay?.needsDisplay = true
             } else {
-                print("[Split] ❌ Failed to create down panel")
+                print("[Split] ❌ Failed to split")
             }
-        } else {
-            print("[Split] ❌ No panels available")
         }
     }
 
     // 更新 Rust 配置
     private func updateRustConfigs() {
         guard let terminalView = coordinator.terminalView,
-              let tabManager = terminalView.tabManager else { return }
+              let tabManager = terminalView.tabManager else {
+            return
+        }
 
         let configs = controller.panelRenderConfigs
 
-        print("[Swift] Updating \(configs.count) panel configs")
+        // 🎯 关键修复：按 Y 坐标排序，确保遍历顺序稳定
+        // Y 坐标小的在前（Rust 坐标系，Y 向下，所以 Y 小的在上面）
+        let sortedConfigs = configs.sorted { $0.value.y < $1.value.y }
 
-        for (panelId, config) in configs {
-            print("[Swift] Panel \(panelId): x=\(config.x), y=\(config.y), size=\(config.width)x\(config.height), grid=\(config.cols)x\(config.rows)")
+        for (panelId, config) in sortedConfigs {
+            let rustPanelId = controller.registerPanel(panelId)
 
-            // TODO: 需要正确的 panel_id 映射（UUID -> usize）
-            // 暂时使用 hash 值作为临时方案
-            let rustPanelId = size_t(panelId.hashValue)
+            print("[Swift→Rust] Panel \(rustPanelId): pos=(\(config.x), \(config.y)), size=\(config.width)x\(config.height), grid=\(config.cols)x\(config.rows)")
 
-            let success = tab_manager_update_panel_config(
+            tab_manager_update_panel_config(
                 tabManager.handle,
-                rustPanelId,
+                size_t(rustPanelId),
                 config.x,
                 config.y,
                 config.width,
@@ -989,16 +1244,13 @@ struct TabTerminalView: View {
                 config.cols,
                 config.rows
             )
-
-            if success != 0 {
-                print("[Swift] ✅ Updated panel \(panelId)")
-            } else {
-                print("[Swift] ❌ Failed to update panel \(panelId)")
-            }
         }
 
         // 触发重新渲染
         terminalView.renderTerminal()
+
+        // 触发分隔线 overlay 重绘
+        terminalView.dividerOverlay?.needsDisplay = true
     }
 }
 

@@ -470,7 +470,6 @@ impl ContextGrid {
     ) {
         let item = ContextGridItem::new(pane_id, terminal, rich_text_id, cols, rows);
         self.inner.insert(pane_id, item);
-        eprintln!("[ContextGrid] Added pane {} with grid {}x{}", pane_id, cols, rows);
     }
 
     /// ✅ 让 Swift 设置 pane 位置
@@ -479,12 +478,13 @@ impl ContextGrid {
             // 转换为逻辑坐标
             let logical_x = x / self.scale;
             let logical_y = y / self.scale;
-            item.set_position([logical_x, logical_y]);
 
-            eprintln!("[ContextGrid] Set pane {} position: ({}, {}) logical, ({}, {}) physical",
-                      pane_id, logical_x, logical_y, x, y);
-        } else {
-            eprintln!("[ContextGrid] ⚠️ Pane {} not found when setting position", pane_id);
+            eprintln!("[ContextGrid] 🎯 set_pane_position for pane {}:", pane_id);
+            eprintln!("              Input (physical): x={}, y={}", x, y);
+            eprintln!("              Scale: {}", self.scale);
+            eprintln!("              Output (logical): x={}, y={}", logical_x, logical_y);
+
+            item.set_position([logical_x, logical_y]);
         }
     }
 
@@ -497,11 +497,7 @@ impl ContextGrid {
 
                 let terminal_ptr = &mut *item.terminal as *mut TerminalHandle;
                 crate::terminal_resize(terminal_ptr, cols, rows);
-
-                eprintln!("[ContextGrid] Resized pane {} terminal: {}x{}", pane_id, cols, rows);
             }
-        } else {
-            eprintln!("[ContextGrid] ⚠️ Pane {} not found when setting size", pane_id);
         }
     }
 
@@ -563,18 +559,17 @@ impl ContextGrid {
 
     /// ✅ 修改：objects() 不计算位置，直接使用已设置的位置
     pub fn objects(&self) -> Vec<Object> {
-        eprintln!("[ContextGrid] Generating objects for {} panes", self.inner.len());
         let mut objects = Vec::new();
 
+        eprintln!("[ContextGrid] 📦 objects() called, returning {} panes:", self.inner.len());
+
         // 添加所有 pane 的 RichText
-        for item in self.inner.values() {
-            let pos = item.position();
-            eprintln!("[ContextGrid] -> Pane {} RichText at position [{}, {}]",
-                      item.pane_id, pos[0], pos[1]);
+        for (pane_id, item) in self.inner.iter() {
+            let position = item.position();
+            eprintln!("              Pane {}: position=[{}, {}]", pane_id, position[0], position[1]);
             objects.push(item.get_rich_text_object().clone());
         }
 
-        eprintln!("[ContextGrid] Total objects: {}", objects.len());
         objects
     }
 

@@ -120,10 +120,13 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
         ratio: CGFloat
     ) -> (PanelBounds, PanelBounds) {
         let clampedRatio = max(0.1, min(0.9, ratio))  // 限制比例在 10% ~ 90%
+        let dividerWidth: CGFloat = 3.0  // 分隔线宽度
 
         switch direction {
         case .horizontal:
             // 水平分割（左右）
+            // 🎯 分割线是覆盖层，不占用布局空间
+            // 直接按比例分配整个容器宽度
             let firstWidth = bounds.width * clampedRatio
             let secondWidth = bounds.width * (1 - clampedRatio)
 
@@ -135,7 +138,7 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
             )
 
             let secondBounds = PanelBounds(
-                x: bounds.x + firstWidth,
+                x: bounds.x + firstWidth,  // 紧接着 first panel
                 y: bounds.y,
                 width: secondWidth,
                 height: bounds.height
@@ -145,6 +148,8 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
 
         case .vertical:
             // 垂直分割（上下）
+            // 🎯 分割线是覆盖层，不占用布局空间
+            // 直接按比例分配整个容器高度
             let firstHeight = bounds.height * clampedRatio
             let secondHeight = bounds.height * (1 - clampedRatio)
 
@@ -159,7 +164,7 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
 
             let secondBounds = PanelBounds(
                 x: bounds.x,
-                y: bounds.y + firstHeight,
+                y: bounds.y + firstHeight,  // 紧接着 first panel
                 width: bounds.width,
                 height: secondHeight
             )
