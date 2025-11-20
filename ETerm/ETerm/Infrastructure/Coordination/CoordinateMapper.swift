@@ -138,4 +138,75 @@ final class CoordinateMapper {
 
         return (col, row)
     }
+
+    // MARK: - 光标上下文专用转换（Grid ↔ Screen）
+
+    /// 终端网格坐标 → 屏幕矩形（用于 IME 候选框定位）
+    ///
+    /// - Parameters:
+    ///   - position: 网格坐标
+    ///   - panelOrigin: Panel 左下角坐标（Swift 坐标系）
+    ///   - panelHeight: Panel 高度
+    ///   - cellWidth: 字符宽度
+    ///   - cellHeight: 字符高度
+    ///   - padding: 内边距
+    /// - Returns: 光标在屏幕上的矩形（Swift 坐标系）
+    func gridToScreen(
+        position: CursorPosition,
+        panelOrigin: CGPoint,
+        panelHeight: CGFloat,
+        cellWidth: CGFloat,
+        cellHeight: CGFloat,
+        padding: CGFloat = 10.0
+    ) -> NSRect {
+        // 1. 计算光标在 Panel 内的相对位置（逻辑坐标）
+        let x = panelOrigin.x + padding + CGFloat(position.col) * cellWidth
+
+        // 2. Y 轴翻转（终端 row=0 在顶部，Swift row=0 在底部）
+        let contentHeight = panelHeight - 2 * padding
+        let yFromTop = CGFloat(position.row) * cellHeight
+        let yFromBottom = contentHeight - yFromTop - cellHeight
+        let y = panelOrigin.y + padding + yFromBottom
+
+        // 3. 构建矩形
+        return NSRect(
+            x: x,
+            y: y,
+            width: cellWidth,
+            height: cellHeight
+        )
+    }
+
+    /// 屏幕坐标 → 终端网格坐标（用于鼠标选中）
+    ///
+    /// - Parameters:
+    ///   - screenPoint: 屏幕坐标（Swift 坐标系）
+    ///   - panelOrigin: Panel 左下角坐标（Swift 坐标系）
+    ///   - panelHeight: Panel 高度
+    ///   - cellWidth: 字符宽度
+    ///   - cellHeight: 字符高度
+    ///   - padding: 内边距
+    /// - Returns: 网格坐标
+    func screenToGrid(
+        screenPoint: CGPoint,
+        panelOrigin: CGPoint,
+        panelHeight: CGFloat,
+        cellWidth: CGFloat,
+        cellHeight: CGFloat,
+        padding: CGFloat = 10.0
+    ) -> CursorPosition {
+        // 1. 转换为 Panel 内的相对坐标
+        let relativeX = screenPoint.x - panelOrigin.x - padding
+        let relativeY = screenPoint.y - panelOrigin.y - padding
+
+        // 2. Y 轴翻转
+        let contentHeight = panelHeight - 2 * padding
+        let yFromTop = contentHeight - relativeY
+
+        // 3. 转换为网格坐标
+        let col = UInt16(max(0, relativeX / cellWidth))
+        let row = UInt16(max(0, yFromTop / cellHeight))
+
+        return CursorPosition(col: col, row: row)
+    }
 }

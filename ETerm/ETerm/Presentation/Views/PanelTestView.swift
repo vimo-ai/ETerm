@@ -263,6 +263,7 @@ class PanelTestRenderView: NSView {
     private let renderLock = NSLock()
     private var ptyReadQueue: DispatchQueue?
     private var shouldStopReading = false
+    private var isInitialized = false  // 防止重复初始化
 
     weak var coordinator: PanelTestContainerView.Coordinator?
 
@@ -289,13 +290,30 @@ class PanelTestRenderView: NSView {
         layer?.contentsScale = window?.backingScaleFactor ?? 2.0
         // Metal 层不需要额外的背景色
         layer?.isOpaque = true
+    }
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(windowDidBecomeKey),
-            name: NSWindow.didBecomeKeyNotification,
-            object: nil
-        )
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+
+        if let window = window {
+            // 只监听当前窗口的事件
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidBecomeKey),
+                name: NSWindow.didBecomeKeyNotification,
+                object: window  // 只监听当前窗口
+            )
+
+            // 如果窗口已经是焦点，立即初始化
+            if window.isKeyWindow {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                    self?.initialize()
+                }
+            }
+        } else {
+            // 窗口被移除时，清理观察者
+            NotificationCenter.default.removeObserver(self)
+        }
     }
 
     @objc private func windowDidBecomeKey() {
@@ -305,8 +323,15 @@ class PanelTestRenderView: NSView {
     }
 
     private func initialize() {
+        // 防止重复初始化
+        guard !isInitialized else {
+            print("[PanelTestRenderView] ⚠️ Already initialized, skipping")
+            return
+        }
         guard sugarloaf == nil, let window = window else { return }
         guard bounds.width > 0 && bounds.height > 0 else { return }
+
+        isInitialized = true
 
         let windowScale = window.backingScaleFactor
         let effectiveScale = max(windowScale, layer?.contentsScale ?? windowScale)
@@ -421,11 +446,20 @@ class PanelTestRenderView: NSView {
     }
 
     deinit {
+        print("[PanelTestRenderView] 🔄 开始清理资源...")
+
+        // 1. 移除通知观察者（最重要！防止访问已释放对象）
+        NotificationCenter.default.removeObserver(self)
+
+        // 2. 停止 PTY 读取循环
         shouldStopReading = true
+
+        // 3. 停止 CVDisplayLink
         if let displayLink = displayLink {
             CVDisplayLinkStop(displayLink)
         }
-        print("[PanelTestRenderView] 🔄 Deinitialized")
+
+        print("[PanelTestRenderView] ✅ 资源清理完成")
     }
 }
 

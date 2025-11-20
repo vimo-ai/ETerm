@@ -48,7 +48,7 @@ final class TerminalWindow {
 
         // 创建新 Panel（包含一个默认 Tab）
         let newPanel = EditorPanel(
-            initialTab: TerminalTab(metadata: .defaultTerminal())
+            initialTab: TerminalTab(tabId: UUID(), title: "Terminal")
         )
 
         // 🎯 计算新布局，传入新 Panel 的 ID

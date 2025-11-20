@@ -52,7 +52,7 @@ class TerminalManagerNSView: NSView {
     var tabIds: [Int] = []
     var activeTabId: Int = -1
 
-    // WindowController 引用 (用于分隔线拖动)
+    // WindowController 引用 (用于分隔线拖动和协调器)
     weak var controller: WindowController?
 
     // 🎯 分隔线 overlay 视图引用
@@ -61,6 +61,10 @@ class TerminalManagerNSView: NSView {
     // 回调
     var onTabsChanged: (([Int]) -> Void)?
     var onActiveTabChanged: ((Int) -> Void)?
+
+    // 🖱️ 鼠标拖拽状态
+    private var isDraggingSelection = false
+    private var selectionPanelId: UUID?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -388,6 +392,17 @@ class TerminalManagerNSView: NSView {
             return
         }
 
+        // 🎯 先尝试用协调器处理（Cmd+C、Shift+方向键等）
+        if let controller = controller,
+           let panelId = findPanelAtCursor() {
+            if controller.keyboardCoordinator.handleKeyDown(event: event, panelId: panelId) {
+                // 协调器已处理，触发渲染
+                requestRender()
+                return
+            }
+        }
+
+        // 原有的终端输入处理
         if let characters = event.characters {
             if event.modifierFlags.contains(.control) && characters == "c" {
                 tabManager.writeInput("\u{03}")
@@ -406,6 +421,87 @@ class TerminalManagerNSView: NSView {
 
             tabManager.writeInput(characters)
         }
+    }
+
+    // MARK: - 鼠标事件处理
+
+    override func mouseDown(with event: NSEvent) {
+        let locationInView = convert(event.locationInWindow, from: nil)
+        print("[Mouse] 🖱️ mouseDown at: \(locationInView)")
+
+        // 查找点击位置的 Panel
+        guard let controller = controller,
+              let panelId = controller.findPanel(at: locationInView) else {
+            print("[Mouse] ⚠️ No panel found at click location")
+            super.mouseDown(with: event)
+            return
+        }
+
+        print("[Mouse] ✅ Found panel: \(panelId)")
+
+        // 开始选中
+        isDraggingSelection = true
+        selectionPanelId = panelId
+
+        // 调用协调器
+        controller.textSelectionCoordinator.handleMouseDown(
+            at: locationInView,
+            panelId: panelId
+        )
+
+        // 触发渲染
+        requestRender()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDraggingSelection,
+              let panelId = selectionPanelId,
+              let controller = controller else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let locationInView = convert(event.locationInWindow, from: nil)
+
+        // 调用协调器
+        controller.textSelectionCoordinator.handleMouseDragged(
+            to: locationInView,
+            panelId: panelId
+        )
+
+        // 触发渲染
+        requestRender()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if isDraggingSelection,
+           let panelId = selectionPanelId,
+           let controller = controller {
+            // 调用协调器
+            controller.textSelectionCoordinator.handleMouseUp(panelId: panelId)
+
+            // 结束拖拽
+            isDraggingSelection = false
+            selectionPanelId = nil
+
+            // 触发渲染
+            requestRender()
+        } else {
+            super.mouseUp(with: event)
+        }
+    }
+
+    // MARK: - Helper Methods
+
+    /// 查找当前光标下的 Panel（用于键盘事件）
+    ///
+    /// 优先使用激活的 Panel，如果没有则返回第一个 Panel
+    private func findPanelAtCursor() -> UUID? {
+        guard let controller = controller else { return nil }
+
+        // TODO: 实现基于焦点的 Panel 查找
+        // 目前返回第一个 Panel
+        return controller.allPanelIds.first
     }
 
     override var acceptsFirstResponder: Bool {
@@ -732,11 +828,11 @@ extension DividerOverlayView {
 
         let containerSize = controller.containerSize
 
-        // 🎯 调试标尺：绘制坐标网格
-        drawDebugRuler(containerSize: containerSize)
+        // 🎯 调试标尺：绘制坐标网格（已禁用 - 影响使用）
+        // drawDebugRuler(containerSize: containerSize)
 
-        // 🎯 调试：绘制 Panel 边界和坐标信息
-        drawPanelBounds(controller: controller)
+        // 🎯 调试：绘制 Panel 边界和坐标信息（已禁用 - 影响使用）
+        // drawPanelBounds(controller: controller)
 
         // 绘制分隔线
         let dividers = controller.panelDividers

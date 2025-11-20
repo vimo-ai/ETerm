@@ -21,6 +21,12 @@ final class WindowController {
     private let layoutCalculator: LayoutCalculator
     private var coordinateMapper: CoordinateMapper
 
+    // MARK: - Coordinators（协调器）
+
+    private(set) var textSelectionCoordinator: TextSelectionCoordinator!
+    private(set) var keyboardCoordinator: KeyboardCoordinator!
+    private(set) var inputCoordinator: InputCoordinator!
+
     // MARK: - State
 
     private(set) var containerSize: CGSize
@@ -35,7 +41,7 @@ final class WindowController {
 
     init(containerSize: CGSize, scale: CGFloat) {
         // 创建初始 Tab 和 Panel
-        let initialTab = TerminalTab(metadata: .defaultTerminal())
+        let initialTab = TerminalTab(tabId: UUID(), title: "Terminal")
         let initialPanel = EditorPanel(initialTab: initialTab)
 
         // 创建窗口
@@ -49,6 +55,36 @@ final class WindowController {
 
         // 🎯 为初始 Panel 分配 Rust ID = 1
         _ = registerPanel(initialPanel.panelId)
+
+        // 初始化协调器
+        setupCoordinators()
+    }
+
+    // MARK: - Coordinator Setup
+
+    /// 设置所有协调器
+    private func setupCoordinators() {
+        // 创建 InputCoordinator
+        inputCoordinator = InputCoordinator(
+            windowController: self,
+            coordinateMapper: coordinateMapper,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+
+        // 创建 TextSelectionCoordinator
+        textSelectionCoordinator = TextSelectionCoordinator(
+            windowController: self,
+            coordinateMapper: coordinateMapper,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+
+        // 创建 KeyboardCoordinator
+        keyboardCoordinator = KeyboardCoordinator(
+            windowController: self,
+            selectionCoordinator: textSelectionCoordinator
+        )
     }
 
     // MARK: - Layout Query
