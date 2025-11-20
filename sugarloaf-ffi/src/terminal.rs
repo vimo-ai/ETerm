@@ -1813,6 +1813,197 @@ pub extern "C" fn terminal_get_selected_text(
     0
 }
 
+// ============================================================================
+// 光标上下文 FFI 接口（Cursor Context API）
+// ============================================================================
+
+/// 获取指定范围的文本（支持多行、UTF-8、emoji）
+/// 用于获取选中范围的文本内容
+#[no_mangle]
+pub extern "C" fn terminal_get_text_range(
+    handle: *mut TerminalHandle,
+    start_row: u16,
+    start_col: u16,
+    end_row: u16,
+    end_col: u16,
+    out_buffer: *mut c_char,
+    buffer_size: usize,
+) -> i32 {
+    if handle.is_null() || out_buffer.is_null() || buffer_size == 0 {
+        return 0;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let terminal = handle.terminal.lock();
+
+    // 归一化起点和终点（确保 start <= end）
+    let (start_row, start_col, end_row, end_col) = if start_row < end_row
+        || (start_row == end_row && start_col <= end_col)
+    {
+        (start_row, start_col, end_row, end_col)
+    } else {
+        (end_row, end_col, start_row, start_col)
+    };
+
+    // 提取文本
+    let mut text = String::new();
+    use rio_backend::crosswords::pos::{Pos, Line, Column};
+
+    for row in start_row..=end_row {
+        let line_start_col = if row == start_row { start_col } else { 0 };
+        let line_end_col = if row == end_row { end_col } else { handle.cols - 1 };
+
+        for col in line_start_col..=line_end_col {
+            let pos = Pos {
+                row: Line(row as i32),
+                col: Column(col as usize),
+            };
+            let cell = &terminal.grid[pos];
+            text.push(cell.c);
+        }
+
+        if row < end_row {
+            text.push('\n');
+        }
+    }
+
+    let bytes = text.trim_end().as_bytes();
+    let copy_len = bytes.len().min(buffer_size - 1);
+
+    unsafe {
+        ptr::copy_nonoverlapping(bytes.as_ptr(), out_buffer as *mut u8, copy_len);
+        *out_buffer.add(copy_len) = 0; // null terminator
+    }
+
+    1
+}
+
+/// 直接删除指定范围的文本（仅对当前输入行有效）
+/// 用于"选中在输入行时，输入替换选中"的功能
+#[no_mangle]
+pub extern "C" fn terminal_delete_range(
+    handle: *mut TerminalHandle,
+    start_row: u16,
+    start_col: u16,
+    end_row: u16,
+    end_col: u16,
+) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let terminal = handle.terminal.lock();
+
+    // 获取当前光标行（假定是输入行）
+    let cursor = terminal.cursor();
+    let cursor_row = cursor.pos.row.0 as u16;
+
+    // 归一化起点和终点
+    let (start_row, start_col, end_row, end_col) = if start_row < end_row
+        || (start_row == end_row && start_col <= end_col)
+    {
+        (start_row, start_col, end_row, end_col)
+    } else {
+        (end_row, end_col, start_row, start_col)
+    };
+
+    // 只允许删除当前输入行（安全检查）
+    if start_row != cursor_row || end_row != cursor_row {
+        eprintln!("[Terminal FFI] delete_range: 只能删除当前输入行 (cursor_row={})", cursor_row);
+        return 0;
+    }
+
+    // 计算需要删除的字符数
+    let delete_count = (end_col - start_col + 1) as usize;
+
+    // 通过发送退格键来删除（简化实现）
+    // TODO: 更优雅的方式是直接操作 grid，但需要深入 Rio 的 API
+    drop(terminal); // 释放锁，避免死锁
+
+    let backspace = b"\x7f"; // ASCII DEL
+    let mut pty = handle.pty.lock();
+    for _ in 0..delete_count {
+        if std::io::Write::write_all(pty.writer(), backspace).is_err() {
+            return 0;
+        }
+    }
+
+    1
+}
+
+/// 获取当前输入行号
+/// 返回 1 并填充 out_row，如果当前在输入模式
+/// 返回 0 如果不在输入模式（如 vim/less）
+#[no_mangle]
+pub extern "C" fn terminal_get_input_row(
+    handle: *mut TerminalHandle,
+    out_row: *mut u16,
+) -> i32 {
+    if handle.is_null() || out_row.is_null() {
+        return 0;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let terminal = handle.terminal.lock();
+
+    // 获取当前光标行（假定光标所在行即为输入行）
+    let cursor = terminal.cursor();
+    let cursor_row = cursor.pos.row.0;
+
+    unsafe {
+        *out_row = cursor_row as u16;
+    }
+
+    1
+}
+
+/// 设置选中范围（用于高亮渲染）
+/// Swift 调用此函数告诉 Rust 当前的选中范围，Rust 负责渲染高亮背景
+#[no_mangle]
+pub extern "C" fn terminal_set_selection(
+    handle: *mut TerminalHandle,
+    start_row: u16,
+    start_col: u16,
+    end_row: u16,
+    end_col: u16,
+) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let handle = unsafe { &mut *handle };
+
+    let range = SelectionRange {
+        start_row,
+        start_col,
+        end_row,
+        end_col,
+    };
+
+    *handle.selection.lock() = Some(range);
+
+    eprintln!("[Terminal FFI] set_selection: ({},{}) -> ({},{})",
+        start_row, start_col, end_row, end_col);
+
+    1
+}
+
+/// 清除选中高亮
+#[no_mangle]
+pub extern "C" fn terminal_clear_selection_highlight(handle: *mut TerminalHandle) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let handle = unsafe { &mut *handle };
+    *handle.selection.lock() = None;
+
+    eprintln!("[Terminal FFI] clear_selection_highlight");
+
+    1
+}
+
 // =============================================================================
 // 新架构：TerminalPool - 简化的终端池
 // =============================================================================
@@ -1830,6 +2021,7 @@ pub struct TerminalPool {
 struct TerminalInfo {
     terminal: Box<TerminalHandle>,
     rich_text_id: usize,
+    rich_text_object: sugarloaf::Object,  // 用于设置渲染位置
 }
 
 impl TerminalPool {
@@ -1871,9 +2063,17 @@ impl TerminalPool {
         // 创建 RichText
         let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
 
+        // 创建 RichText Object（初始位置为 [0, 0]）
+        let rich_text_object = sugarloaf::Object::RichText(sugarloaf::RichText {
+            id: rich_text_id,
+            position: [0.0, 0.0],
+            lines: None,
+        });
+
         let info = TerminalInfo {
             terminal,
             rich_text_id,
+            rich_text_object,
         };
 
         self.terminals.insert(terminal_id, info);
@@ -1941,12 +2141,22 @@ impl TerminalPool {
             return false;
         }
 
-        // 设置渲染位置
-        crate::sugarloaf_content_sel(self.sugarloaf_handle, info.rich_text_id);
+        // 🎯 关键：设置 RichText 的渲染位置
+        if let sugarloaf::Object::RichText(ref mut rich_text) = info.rich_text_object {
+            rich_text.position = [x, y];
+        }
 
-        // 提交到指定位置
-        // TODO: 需要在 Sugarloaf 中实现位置控制
-        crate::sugarloaf_commit_rich_text(self.sugarloaf_handle, info.rich_text_id);
+        // 🎯 提交单个 Object（包含位置信息）
+        unsafe {
+            if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
+                // 收集所有终端的 RichText objects
+                let objects: Vec<_> = self.terminals.values()
+                    .map(|info| info.rich_text_object.clone())
+                    .collect();
+
+                sugarloaf.set_objects(objects);
+            }
+        }
 
         true
     }

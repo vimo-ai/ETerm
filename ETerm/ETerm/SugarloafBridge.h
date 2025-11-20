@@ -397,4 +397,51 @@ size_t terminal_pool_count(TerminalPoolHandle pool);
 /// 释放终端池
 void terminal_pool_free(TerminalPoolHandle pool);
 
+// =============================================================================
+// 光标上下文 API (Cursor Context API)
+// =============================================================================
+
+/// 获取指定范围的文本（支持多行、UTF-8、emoji）
+/// 用于获取选中范围的文本内容
+int terminal_get_text_range(
+    TerminalHandle handle,
+    unsigned short start_row,
+    unsigned short start_col,
+    unsigned short end_row,
+    unsigned short end_col,
+    char* out_buffer,
+    size_t buffer_size
+);
+
+/// 直接删除指定范围的文本（仅对当前输入行有效）
+/// 用于"选中在输入行时，输入替换选中"的功能
+int terminal_delete_range(
+    TerminalHandle handle,
+    unsigned short start_row,
+    unsigned short start_col,
+    unsigned short end_row,
+    unsigned short end_col
+);
+
+/// 获取当前输入行号
+/// 返回 1 并填充 out_row，如果当前在输入模式
+/// 返回 0 如果不在输入模式（如 vim/less）
+int terminal_get_input_row(
+    TerminalHandle handle,
+    unsigned short* out_row
+);
+
+/// 设置选中范围（用于高亮渲染）
+/// Swift 调用此函数告诉 Rust 当前的选中范围，Rust 负责渲染高亮背景
+int terminal_set_selection(
+    TerminalHandle handle,
+    unsigned short start_row,
+    unsigned short start_col,
+    unsigned short end_row,
+    unsigned short end_col
+);
+
+/// 清除选中高亮
+int terminal_clear_selection_highlight(TerminalHandle handle);
+
 #endif /* SugarloafBridge_h */

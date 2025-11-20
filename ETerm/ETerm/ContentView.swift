@@ -9,13 +9,10 @@ import SwiftUI
 import Combine
 
 struct ContentView: View {
-    @Bindable var windowController: WindowController
-
     var body: some View {
         TabView {
-            // 完整的终端 Tab (PTY + Sugarloaf) - 使用新的 Tab 支持版本
-            TabTerminalView(controller: windowController)
-
+            // 终端 Tab - 使用 PanelLayoutKit 新架构
+            TabTerminalView()
                 .frame(minWidth: 800, minHeight: 600)
                 .tabItem {
                     Label("终端", systemImage: "terminal")
@@ -69,30 +66,12 @@ struct ContentView: View {
 
     /// 监听窗口跨屏幕移动事件
     private func setupScreenChangeNotification() {
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.didChangeScreenNotification,
-            object: nil,
-            queue: .main
-        ) { [weak windowController] _ in
-            guard let controller = windowController else { return }
-
-            // 窗口移动到新屏幕,重新获取 scale
-            if let window = NSApp.windows.first,
-               let screen = window.screen {
-                let newScale = screen.backingScaleFactor
-                let currentSize = controller.containerSize
-                controller.resizeContainer(newSize: currentSize, scale: newScale)
-            }
-        }
+        // 新架构中 scale 由 PanelRenderView 自动处理，不需要手动监听
     }
 
     /// 移除屏幕变化监听
     private func removeScreenChangeNotification() {
-        NotificationCenter.default.removeObserver(
-            self,
-            name: NSWindow.didChangeScreenNotification,
-            object: nil
-        )
+        // 新架构中不需要手动移除
     }
 }
 
@@ -132,10 +111,5 @@ struct TransparentWindowBackground: NSViewRepresentable {
 }
 
 #Preview {
-    // Preview 环境下创建临时的 WindowController
-    let controller = WindowController(
-        containerSize: CGSize(width: 1000, height: 800),
-        scale: 2.0
-    )
-    return ContentView(windowController: controller)
+    ContentView()
 }

@@ -103,4 +103,21 @@ public struct PanelNode: Codable, Equatable, Hashable, Identifiable {
             activeTabIndex: newActiveIndex
         )
     }
+
+    /// 激活指定的 Tab
+    ///
+    /// - Parameter tabId: 要激活的 Tab ID
+    /// - Returns: 新的 Panel 节点
+    public func activatingTab(_ tabId: UUID) -> PanelNode {
+        guard let index = tabs.firstIndex(where: { $0.id == tabId }) else {
+            // 找不到 Tab，返回原 Panel
+            return self
+        }
+
+        return PanelNode(
+            id: id,
+            tabs: tabs,
+            activeTabIndex: index
+        )
+    }
 }
