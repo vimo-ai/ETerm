@@ -17,7 +17,7 @@ import CoreGraphics
 /// 3. **逻辑坐标**: Points (与屏幕分辨率无关)
 /// 4. **物理坐标**: Pixels (实际渲染坐标，考虑 DPI/scale)
 final class CoordinateMapper {
-    private let scale: CGFloat
+    let scale: CGFloat  // 公开 scale，供 Grid 计算使用
     private let containerBounds: CGRect
 
     // MARK: - Initialization

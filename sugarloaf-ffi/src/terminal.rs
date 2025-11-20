@@ -2146,14 +2146,12 @@ impl TerminalPool {
             rich_text.position = [x, y];
         }
 
-        // 🎯 提交单个 Object（包含位置信息）
+        // 🎯 只提交当前 terminal 的 RichText（避免内容叠加）
+        // 注意：Swift 端会为每个激活的 Tab 调用 render()，所以只提交一个即可
         unsafe {
             if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
-                // 收集所有终端的 RichText objects
-                let objects: Vec<_> = self.terminals.values()
-                    .map(|info| info.rich_text_object.clone())
-                    .collect();
-
+                // 只提交当前渲染的 terminal
+                let objects = vec![info.rich_text_object.clone()];
                 sugarloaf.set_objects(objects);
             }
         }

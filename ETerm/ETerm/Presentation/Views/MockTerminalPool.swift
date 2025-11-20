@@ -100,6 +100,11 @@ class MockTerminalPool: TerminalPoolProtocol {
         return aliveTerminals.count
     }
 
+    /// 写入输入到指定终端（Mock 实现，不做实际操作）
+    func writeInput(terminalId: Int, data: String) -> Bool {
+        return aliveTerminals.contains(terminalId)
+    }
+
     /// 检查终端是否存在
     ///
     /// - Parameter terminalId: 终端 ID

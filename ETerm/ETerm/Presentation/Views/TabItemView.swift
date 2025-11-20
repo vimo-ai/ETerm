@@ -158,7 +158,12 @@ final class TabItemView: NSView {
             return
         }
 
-        // 启动拖拽会话
+        // 🚧 临时禁用拖拽，只保留点击功能
+        // TODO: 后续迁移完整的拖拽逻辑（需要 DragCoordinator）
+        // 当前直接触发点击
+        onTap?()
+
+        /* 原本的拖拽逻辑（暂时注释）
         let pasteboardItem = NSPasteboardItem()
         pasteboardItem.setDataProvider(self, forTypes: [.string])
 
@@ -169,19 +174,11 @@ final class TabItemView: NSView {
         onDragStart?()
 
         beginDraggingSession(with: [draggingItem], event: event, source: self)
+        */
     }
 
     override func mouseUp(with event: NSEvent) {
-        // 如果没有拖拽，触发点击
-        if !isDragging {
-            onTap?()
-        }
-
-        // 重置拖拽状态（延迟一下避免立即触发点击）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.isDragging = false
-        }
-
+        // 拖拽功能临时禁用，mouseUp 不需要处理
         super.mouseUp(with: event)
     }
 

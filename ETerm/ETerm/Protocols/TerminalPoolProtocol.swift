@@ -35,4 +35,13 @@ protocol TerminalPoolProtocol: AnyObject {
     ///
     /// - Returns: 当前存活的终端数量
     func getTerminalCount() -> Int
+
+    /// 写入输入到指定终端
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - data: 输入数据
+    /// - Returns: 是否成功
+    @discardableResult
+    func writeInput(terminalId: Int, data: String) -> Bool
 }

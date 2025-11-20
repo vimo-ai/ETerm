@@ -223,7 +223,7 @@ class PanelRenderView: NSView {
         print("[CVDisplayLink] ✅ Started")
     }
 
-    private func requestRender() {
+    fileprivate func requestRender() {
         renderLock.lock()
         needsRender = true
         renderLock.unlock()
@@ -242,6 +242,53 @@ class PanelRenderView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         return true
+    }
+
+    // MARK: - 键盘输入处理
+
+    override func keyDown(with event: NSEvent) {
+        guard let coordinator = coordinator,
+              let characters = event.characters else {
+            super.keyDown(with: event)
+            return
+        }
+
+        // 获取当前活动的终端
+        guard let activeTerminalId = coordinator.getActiveTerminalId() else {
+            super.keyDown(with: event)
+            return
+        }
+
+        // 处理特殊键
+        var inputText: String?
+
+        if event.modifierFlags.contains(.control) && characters == "c" {
+            // Ctrl+C
+            inputText = "\u{03}"
+        } else if event.keyCode == 36 {  // Return key
+            inputText = "\r"
+        } else if event.keyCode == 51 {  // Delete key (Backspace)
+            inputText = "\u{7F}"
+        } else if event.keyCode == 48 {  // Tab key
+            inputText = "\t"
+        } else if event.keyCode == 53 {  // Escape key
+            inputText = "\u{1B}"
+        } else if event.keyCode == 123 {  // Left arrow
+            inputText = "\u{1B}[D"
+        } else if event.keyCode == 124 {  // Right arrow
+            inputText = "\u{1B}[C"
+        } else if event.keyCode == 125 {  // Down arrow
+            inputText = "\u{1B}[B"
+        } else if event.keyCode == 126 {  // Up arrow
+            inputText = "\u{1B}[A"
+        } else {
+            // 普通字符
+            inputText = characters
+        }
+
+        if let inputText = inputText {
+            coordinator.writeInput(terminalId: activeTerminalId, data: inputText)
+        }
     }
 
     deinit {
@@ -293,6 +340,9 @@ class TerminalCoordinator: ObservableObject {
 
     /// 字体度量（从 Sugarloaf 获取实际字符尺寸）
     private var fontMetrics: SugarloafFontMetrics?
+
+    /// 渲染视图引用（用于触发重新渲染）
+    weak var renderView: PanelRenderView?
 
     // MARK: - 初始化
 
@@ -375,6 +425,25 @@ class TerminalCoordinator: ObservableObject {
         updatePanelViews(in: containerView)
     }
 
+    // MARK: - 输入处理
+
+    /// 获取当前活动的终端 ID
+    func getActiveTerminalId() -> Int? {
+        // 遍历所有 Panel，找到第一个活动的 Tab
+        for panel in layoutTree.allPanels() {
+            if let activeTab = panel.activeTab,
+               let terminalId = tabTerminalMapping[activeTab.id] {
+                return terminalId
+            }
+        }
+        return nil
+    }
+
+    /// 写入输入到指定终端
+    func writeInput(terminalId: Int, data: String) {
+        _ = terminalPool.writeInput(terminalId: terminalId, data: data)
+    }
+
     /// 更新 Panel 视图
     func updatePanelViews(in containerView: NSView) {
         print("[TerminalCoordinator] 🔄 Updating panel views, containerSize: \(containerSize)")
@@ -431,12 +500,33 @@ class TerminalCoordinator: ObservableObject {
     // MARK: - 事件处理
 
     private func handleTabClick(panelId: UUID, tabId: UUID) {
+        print("[TerminalCoordinator] 👆 handleTabClick called: panelId=\(panelId.uuidString.prefix(8)), tabId=\(tabId.uuidString.prefix(8))")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+
+            // 🎯 防止重复点击：如果点击的 Tab 已经是 active，直接返回
+            if let currentPanel = self.layoutTree.findPanel(byId: panelId),
+               let currentActiveTab = currentPanel.activeTab,
+               currentActiveTab.id == tabId {
+                print("[TerminalCoordinator] ⏭️ Tab already active, ignoring click")
+                return
+            }
+
+            print("[TerminalCoordinator] 🔄 Switching tab...")
             let newLayoutTree = self.layoutTree.updatingPanel(panelId) { panel in
                 panel.activatingTab(tabId)
             }
             self.layoutTree = newLayoutTree
+
+            // 🎯 关键：更新 PanelView 的数据（否则 UI 不会变化）
+            if let panelView = self.panelViews[panelId],
+               let updatedPanel = newLayoutTree.findPanel(byId: panelId) {
+                print("[TerminalCoordinator] ✅ Updated to tab: \(tabId.uuidString.prefix(8))")
+                panelView.updatePanel(updatedPanel)
+            }
+
+            // 触发重新渲染，显示切换后的 Tab 内容
+            self.renderView?.requestRender()
         }
     }
 
@@ -468,17 +558,20 @@ class TerminalCoordinator: ObservableObject {
     }
 
     private func handleAddTab(panelId: UUID, in containerView: NSView) {
+        print("[TerminalCoordinator] ➕ Adding new tab to panel \(panelId.uuidString.prefix(8))")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
             // 1. 创建终端
             let terminalId = self.terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
+            print("[TerminalCoordinator] ➕ Created terminal \(terminalId) for new tab")
 
             // 2. 创建 Tab
             let panel = self.layoutTree.findPanel(byId: panelId)
             let tabNumber = (panel?.tabs.count ?? 0) + 1
             let newTab = TabNode(id: UUID(), title: "终端 \(tabNumber)", rustTerminalId: terminalId)
             self.tabTerminalMapping[newTab.id] = terminalId
+            print("[TerminalCoordinator] 📝 Mapped tab \(newTab.id.uuidString.prefix(8)) → terminal \(terminalId)")
 
             // 3. 更新布局树
             let newLayoutTree = self.layoutTree.updatingPanel(panelId) { panel in
@@ -563,11 +656,16 @@ class TerminalCoordinator: ObservableObject {
             // 注意：传给 Rust 的是逻辑坐标，Sugarloaf 内部会 × scale_factor
             let rustRect = mapper.swiftToRust(rect: contentBoundsInContainer)
 
-            // 🎯 步骤5: 计算终端网格尺寸（使用逻辑坐标尺寸）
+            // 🎯 步骤5: 计算终端网格尺寸（必须用物理坐标尺寸）
+            // 原因：终端的列数基于物理像素，cellWidth/Height 是物理单位
+            let scale = mapper.scale
+            let physicalWidth = rustRect.width * scale
+            let physicalHeight = rustRect.height * scale
+
             let cellWidth = Float(metrics.cell_width)
             let cellHeight = Float(metrics.cell_height)
-            let cols = UInt16(Float(rustRect.width) / cellWidth)
-            let rows = UInt16(Float(rustRect.height) / cellHeight)
+            let cols = UInt16(Float(physicalWidth) / cellWidth)
+            let rows = UInt16(Float(physicalHeight) / cellHeight)
 
             print("[TerminalCoordinator] 🖥️ Rendering terminal \(terminalId)")
             print("  Tab: \(activeTab.id.uuidString.prefix(8))")
@@ -607,6 +705,8 @@ struct PanelContainerView: NSViewRepresentable {
         let renderView = PanelRenderView()
         renderView.coordinator = coordinator
         context.coordinator.renderView = renderView
+        // 设置 TerminalCoordinator 的 renderView 引用，用于触发渲染
+        context.coordinator.terminalCoordinator.renderView = renderView
         return renderView
     }
 
