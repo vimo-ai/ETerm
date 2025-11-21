@@ -126,10 +126,7 @@ class DDDContainerView: NSView {
     }
 
     @objc func updatePanelViews() {
-        print("[DDDContainerView] 🔄 updatePanelViews called")
-        print("[DDDContainerView] 📏 DDDContainerView.bounds = \(bounds)")
         guard let coordinator = coordinator else {
-            print("[DDDContainerView] ❌ coordinator is nil")
             return
         }
 
@@ -140,7 +137,6 @@ class DDDContainerView: NSView {
         )
 
         let panels = coordinator.terminalWindow.allPanels
-        print("[DDDContainerView] 📊 Found \(panels.count) panels")
         let panelIds = Set(panels.map { $0.panelId })
 
         // 删除不存在的 Panel UI
@@ -158,14 +154,9 @@ class DDDContainerView: NSView {
                 existingView.frame = panel.bounds
             } else {
                 // 创建新视图
-                print("[DDDContainerView] 创建 PanelView: \(panel.panelId.uuidString.prefix(8))")
-                print("  Panel bounds: \(panel.bounds)")
                 let view = DomainPanelView(panel: panel, coordinator: coordinator)
                 view.frame = panel.bounds
-                print("  View frame: \(view.frame)")
-                print("  View added to superview: \(view.superview != nil)")
                 addSubview(view)
-                print("  After addSubview - superview: \(view.superview != nil)")
                 panelUIViews[panel.panelId] = view
             }
         }
@@ -188,6 +179,17 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
     private var isInitialized = false
 
     weak var coordinator: TerminalWindowCoordinator?
+
+    // MARK: - 文本选中状态
+
+    /// 是否正在拖拽选中
+    private var isDraggingSelection = false
+
+    /// 当前选中的 Panel ID
+    private var selectionPanelId: UUID?
+
+    /// 当前选中的 Tab
+    private weak var selectionTab: TerminalTab?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -301,12 +303,10 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             scale: Float(effectiveScale),
             fontSize: 14.0
         ) else {
-            print("[DDDPanelRenderView] ❌ Failed to create SugarloafWrapper")
             return
         }
 
         self.sugarloaf = sugarloaf
-        print("[DDDPanelRenderView] ✅ Sugarloaf initialized")
 
         // 5. 创建 TerminalPool
         guard let realTerminalPool = TerminalPoolWrapper(sugarloaf: sugarloaf) else {
@@ -329,8 +329,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         startPTYReadLoop(terminalPool: realTerminalPool)
         setupDisplayLink()
 
-        print("[DDDPanelRenderView] ✅ Initialization complete")
-
         // 触发初始渲染
         DispatchQueue.main.async { [weak self] in
             self?.requestRender()
@@ -343,14 +341,11 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
 
         queue.async { [weak self, weak terminalPool] in
             guard let self = self else { return }
-            print("[PTY Reader] ✅ Background read loop started")
 
             while !self.shouldStopReading {
                 terminalPool?.readAllOutputs()
                 usleep(1000)
             }
-
-            print("[PTY Reader] ✅ Background read loop stopped")
         }
     }
 
@@ -387,7 +382,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
 
         CVDisplayLinkStart(displayLink)
         self.displayLink = displayLink
-        print("[CVDisplayLink] ✅ Started")
     }
 
     func requestRender() {
@@ -397,8 +391,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
     }
 
     private func performRender() {
-        print("[DDDPanelRenderView] 📏 DDDPanelRenderView.bounds = \(bounds)")
-
         // 从 AR 获取数据并渲染
         // flush() 内部已经调用了 render()，不需要再调用
         coordinator?.renderAllPanels(containerBounds: bounds)
@@ -478,14 +470,144 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         // 获取鼠标位置（相对于当前视图）
         let location = convert(event.locationInWindow, from: nil)
 
-        // 根据位置找到对应的 Panel
-        if let coordinator = coordinator,
-           let panelId = coordinator.findPanel(at: location, containerBounds: bounds) {
-            // 设置激活的 Panel
-            coordinator.setActivePanel(panelId)
+        guard let coordinator = coordinator else {
+            super.mouseDown(with: event)
+            return
         }
 
-        super.mouseDown(with: event)
+        // 根据位置找到对应的 Panel
+        guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
+              let panel = coordinator.terminalWindow.getPanel(panelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        // 设置激活的 Panel
+        coordinator.setActivePanel(panelId)
+
+        // 转换为网格坐标
+        let gridPos = screenToGrid(location: location, panelId: panelId)
+
+        // 调试日志
+        print("[TextSelection] === 坐标调试 ===")
+        print("  鼠标 window: \(event.locationInWindow)")
+        print("  鼠标 view: \(location)")
+        print("  view.bounds: \(bounds)")
+        if let metrics = coordinator.fontMetrics {
+            print("  fontMetrics: cellW=\(metrics.cell_width), cellH=\(metrics.cell_height), lineH=\(metrics.line_height)")
+        }
+        print("  计算得到 grid: (\(gridPos.col), \(gridPos.row))")
+
+        // 更新 Domain 层状态
+        activeTab.startSelection(at: gridPos)
+
+        // 通知 Rust 层渲染高亮
+        if let selection = activeTab.textSelection {
+            _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
+        }
+
+        // 记录选中状态
+        isDraggingSelection = true
+        selectionPanelId = panelId
+        selectionTab = activeTab
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDraggingSelection,
+              let panelId = selectionPanelId,
+              let activeTab = selectionTab,
+              let terminalId = activeTab.rustTerminalId,
+              let coordinator = coordinator else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        // 获取鼠标位置
+        let location = convert(event.locationInWindow, from: nil)
+
+        // 转换为网格坐标
+        let gridPos = screenToGrid(location: location, panelId: panelId)
+
+        // 更新 Domain 层状态
+        activeTab.updateSelection(to: gridPos)
+
+        // 通知 Rust 层渲染高亮
+        if let selection = activeTab.textSelection {
+            _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isDraggingSelection else {
+            super.mouseUp(with: event)
+            return
+        }
+
+        // 获取选中的文本（调试用）
+        if let activeTab = selectionTab,
+           let terminalId = activeTab.rustTerminalId,
+           let selection = activeTab.textSelection,
+           let coordinator = coordinator {
+            if let text = coordinator.getSelectedText(terminalId: terminalId, selection: selection) {
+                print("[TextSelection] 📋 Selected text: \"\(text)\"")
+            }
+        }
+
+        // 重置选中状态
+        isDraggingSelection = false
+        // 注意：不清除 selectionPanelId 和 selectionTab，保持选中状态用于 Cmd+C 复制
+    }
+
+    // MARK: - 坐标转换
+
+    /// 将屏幕坐标转换为网格坐标
+    private func screenToGrid(location: CGPoint, panelId: UUID) -> CursorPosition {
+        guard let coordinator = coordinator,
+              let mapper = coordinator.coordinateMapper else {
+            return CursorPosition(col: 0, row: 0)
+        }
+
+        // 获取 Panel 的 bounds
+        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
+            containerBounds: bounds,
+            headerHeight: 30.0  // 与 coordinator 中的 headerHeight 一致
+        )
+
+        // 获取 Panel 对应的 contentBounds
+        guard let panel = coordinator.terminalWindow.getPanel(panelId),
+              let contentBounds = tabsToRender.first(where: { $0.0 == panel.activeTab?.rustTerminalId })?.1 else {
+            return CursorPosition(col: 0, row: 0)
+        }
+
+        // 从 fontMetrics 获取实际的 cell 尺寸
+        let cellWidth: CGFloat
+        let cellHeight: CGFloat
+        if let metrics = coordinator.fontMetrics {
+            // fontMetrics 是物理像素，需要转换为逻辑点
+            cellWidth = CGFloat(metrics.cell_width) / mapper.scale
+            cellHeight = CGFloat(metrics.line_height) / mapper.scale
+        } else {
+            cellWidth = 9.6
+            cellHeight = 20.0
+        }
+
+        // 调试：打印 contentBounds 和 cellSize
+        print("  contentBounds: origin=\(contentBounds.origin), size=\(contentBounds.size)")
+        print("  cellSize (逻辑点): \(cellWidth) × \(cellHeight)")
+        print("  scale: \(mapper.scale)")
+
+        // 使用 CoordinateMapper 转换
+        let gridPos = mapper.screenToGrid(
+            screenPoint: location,
+            panelOrigin: contentBounds.origin,
+            panelHeight: contentBounds.height,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+
+        return gridPos
     }
 
     override func scrollWheel(with event: NSEvent) {

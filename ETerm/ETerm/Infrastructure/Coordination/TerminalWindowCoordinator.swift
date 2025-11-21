@@ -48,7 +48,7 @@ class TerminalWindowCoordinator: ObservableObject {
     private(set) var coordinateMapper: CoordinateMapper?
 
     /// 字体度量
-    private var fontMetrics: SugarloafFontMetrics?
+    private(set) var fontMetrics: SugarloafFontMetrics?
 
     /// 渲染视图引用
     weak var renderView: RenderViewProtocol?
@@ -76,12 +76,10 @@ class TerminalWindowCoordinator: ObservableObject {
     func createNewTab(in panelId: UUID) -> TerminalTab? {
         let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
         guard terminalId >= 0 else {
-            print("[TerminalWindowCoordinator] 创建终端失败")
             return nil
         }
 
         guard let panel = terminalWindow.getPanel(panelId) else {
-            print("[TerminalWindowCoordinator] Panel 不存在: \(panelId)")
             return nil
         }
 
@@ -93,7 +91,6 @@ class TerminalWindowCoordinator: ObservableObject {
         )
 
         panel.addTab(newTab)
-        print("[TerminalWindowCoordinator] 创建新 Tab，终端 ID: \(terminalId)")
 
         return newTab
     }
@@ -103,7 +100,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
 
     deinit {
-        print("[TerminalWindowCoordinator] 析构，清理所有终端")
         // 关闭所有终端
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
@@ -118,8 +114,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 设置终端池（由 PanelRenderView 初始化后调用）
     func setTerminalPool(_ pool: TerminalPoolProtocol) {
-        print("[TerminalWindowCoordinator] 切换到真实终端池")
-
         // 关闭旧终端池的所有终端，并清空 rustTerminalId
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
@@ -140,19 +134,16 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 设置坐标映射器（初始化时使用）
     func setCoordinateMapper(_ mapper: CoordinateMapper) {
         self.coordinateMapper = mapper
-        print("[TerminalWindowCoordinator] 设置 CoordinateMapper: scale=\(mapper.scale), bounds=\(mapper.logicalContainerSize)")
     }
 
     /// 更新坐标映射器（容器尺寸变化时使用）
     func updateCoordinateMapper(scale: CGFloat, containerBounds: CGRect) {
         self.coordinateMapper = CoordinateMapper(scale: scale, containerBounds: containerBounds)
-        print("[TerminalWindowCoordinator] 更新 CoordinateMapper: scale=\(scale), bounds=\(containerBounds)")
     }
 
     /// 更新字体度量
     func updateFontMetrics(_ metrics: SugarloafFontMetrics) {
         self.fontMetrics = metrics
-        print("[TerminalWindowCoordinator] 更新 FontMetrics: cellWidth=\(metrics.cell_width), cellHeight=\(metrics.cell_height)")
     }
 
     // MARK: - Terminal Lifecycle
@@ -166,9 +157,6 @@ class TerminalWindowCoordinator: ObservableObject {
                     let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
-                        print("[TerminalWindowCoordinator] 为 Tab \(tab.tabId.uuidString.prefix(8)) 创建终端 \(terminalId)")
-                    } else {
-                        print("[TerminalWindowCoordinator] 创建终端失败")
                     }
                 }
             }
@@ -182,19 +170,16 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 用户点击 Tab
     func handleTabClick(panelId: UUID, tabId: UUID) {
         guard let panel = terminalWindow.getPanel(panelId) else {
-            print("[TerminalWindowCoordinator] Panel 不存在: \(panelId)")
             return
         }
 
         // 检查是否已经是激活的 Tab
         if panel.activeTabId == tabId {
-            print("[TerminalWindowCoordinator] Tab 已激活，忽略点击")
             return
         }
 
         // 调用 AR 的方法切换 Tab
         if panel.setActiveTab(tabId) {
-            print("[TerminalWindowCoordinator] 切换到 Tab: \(tabId.uuidString.prefix(8))")
             // 触发渲染更新
             objectWillChange.send()
             updateTrigger = UUID()
@@ -205,20 +190,17 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 设置激活的 Panel（用于键盘输入）
     func setActivePanel(_ panelId: UUID) {
         guard terminalWindow.getPanel(panelId) != nil else {
-            print("[TerminalWindowCoordinator] Panel 不存在: \(panelId)")
             return
         }
 
         if activePanelId != panelId {
             activePanelId = panelId
-            print("[TerminalWindowCoordinator] 激活 Panel: \(panelId.uuidString.prefix(8))")
         }
     }
 
     /// 用户关闭 Tab
     func handleTabClose(panelId: UUID, tabId: UUID) {
         guard let panel = terminalWindow.getPanel(panelId) else {
-            print("[TerminalWindowCoordinator] Panel 不存在: \(panelId)")
             return
         }
 
@@ -226,17 +208,13 @@ class TerminalWindowCoordinator: ObservableObject {
         if let tab = panel.tabs.first(where: { $0.tabId == tabId }),
            let terminalId = tab.rustTerminalId {
             terminalPool.closeTerminal(Int(terminalId))
-            print("[TerminalWindowCoordinator] 关闭终端 \(terminalId)")
         }
 
         // 调用 AR 的方法关闭 Tab
         if panel.closeTab(tabId) {
-            print("[TerminalWindowCoordinator] 关闭 Tab: \(tabId.uuidString.prefix(8))")
             objectWillChange.send()
             updateTrigger = UUID()
             renderView?.requestRender()
-        } else {
-            print("[TerminalWindowCoordinator] 关闭 Tab 失败（可能是最后一个 Tab）")
         }
     }
 
@@ -269,8 +247,6 @@ class TerminalWindowCoordinator: ObservableObject {
             direction: direction,
             layoutCalculator: layoutCalculator
         ) {
-            print("[TerminalWindowCoordinator] 分割 Panel 成功，新 Panel: \(newPanelId.uuidString.prefix(8))")
-
             // 为新 Panel 的默认 Tab 创建终端
             if let newPanel = terminalWindow.getPanel(newPanelId) {
                 for tab in newPanel.tabs {
@@ -278,7 +254,6 @@ class TerminalWindowCoordinator: ObservableObject {
                         let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
                         if terminalId >= 0 {
                             tab.setRustTerminalId(UInt32(terminalId))
-                            print("[TerminalWindowCoordinator] 为新 Panel 的 Tab 创建终端 \(terminalId)")
                         }
                     }
                 }
@@ -303,24 +278,16 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - targetPanelId: 目标 Panel ID
     /// - Returns: 是否成功处理
     func handleDrop(tabId: UUID, dropZone: DropZone, targetPanelId: UUID) -> Bool {
-        print("[TerminalWindowCoordinator] 🎯 handleDrop:")
-        print("  Tab ID: \(tabId.uuidString.prefix(8))")
-        print("  DropZone: \(dropZone.type)")
-        print("  InsertIndex: \(dropZone.insertIndex?.description ?? "nil")")
-        print("  Target Panel: \(targetPanelId.uuidString.prefix(8))")
-
         // 1. 找到源 Panel 和 Tab
         guard let sourcePanel = terminalWindow.allPanels.first(where: { panel in
             panel.tabs.contains(where: { $0.tabId == tabId })
         }),
               let tab = sourcePanel.tabs.first(where: { $0.tabId == tabId }) else {
-            print("[TerminalWindowCoordinator] ❌ 找不到源 Tab")
             return false
         }
 
         // 2. 找到目标 Panel
         guard let targetPanel = terminalWindow.getPanel(targetPanelId) else {
-            print("[TerminalWindowCoordinator] ❌ 找不到目标 Panel")
             return false
         }
 
@@ -329,8 +296,7 @@ class TerminalWindowCoordinator: ObservableObject {
         case .header:
             // Tab 合并：移动到目标 Panel
             if sourcePanel.panelId == targetPanel.panelId {
-                // 同一个 Panel 内部移动（重新排序）
-                print("[TerminalWindowCoordinator] ⚠️ 同一 Panel 内 Tab 重新排序暂未实现")
+                // 同一个 Panel 内部移动（重新排序）暂未实现
                 return false
             } else {
                 // 跨 Panel 移动
@@ -345,7 +311,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
         case .left, .right, .top, .bottom:
             // 拖拽到边缘 → 分割 Panel
-            print("[TerminalWindowCoordinator] 🔀 拖拽到边缘，分割 Panel")
 
             // 1. 确定分割方向
             let splitDirection: SplitDirection = {
@@ -366,15 +331,11 @@ class TerminalWindowCoordinator: ObservableObject {
                 direction: splitDirection,
                 layoutCalculator: layoutCalculator
             ) else {
-                print("[TerminalWindowCoordinator] ❌ 分割 Panel 失败")
                 return false
             }
 
-            print("[TerminalWindowCoordinator] ✅ 分割成功，新 Panel: \(newPanelId.uuidString.prefix(8))")
-
             // 3. 获取新 Panel
             guard let newPanel = terminalWindow.getPanel(newPanelId) else {
-                print("[TerminalWindowCoordinator] ❌ 找不到新 Panel")
                 return false
             }
 
@@ -393,8 +354,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
             // 4.3 从源 Panel 移除拖拽的 Tab（处理最后一个 Tab 的情况）
             removeTabFromSource(tab: tab, sourcePanel: sourcePanel)
-
-            print("[TerminalWindowCoordinator] ✅ Tab 移动到新 Panel 成功")
         }
 
         // 4. 触发 UI 更新
@@ -415,25 +374,16 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 2. 从源 Panel 移除
         removeTabFromSource(tab: tab, sourcePanel: sourcePanel)
-
-        print("[TerminalWindowCoordinator] ✅ Tab 跨 Panel 移动成功")
     }
 
     /// 从源 Panel 移除 Tab（如果只剩一个 Tab，则移除整个 Panel）
     private func removeTabFromSource(tab: TerminalTab, sourcePanel: EditorPanel) {
         if sourcePanel.tabCount > 1 {
             // 还有其他 Tab，直接关闭
-            if !sourcePanel.closeTab(tab.tabId) {
-                print("[TerminalWindowCoordinator] ❌ 关闭源 Tab 失败")
-            }
+            _ = sourcePanel.closeTab(tab.tabId)
         } else {
             // 最后一个 Tab，移除整个 Panel
-            print("[TerminalWindowCoordinator] 源 Panel 只剩最后一个 Tab，移除 Panel")
-            if terminalWindow.removePanel(sourcePanel.panelId) {
-                print("[TerminalWindowCoordinator] ✅ 源 Panel 已移除")
-            } else {
-                print("[TerminalWindowCoordinator] ❌ 移除源 Panel 失败")
-            }
+            _ = terminalWindow.removePanel(sourcePanel.panelId)
         }
     }
 
@@ -487,17 +437,97 @@ class TerminalWindowCoordinator: ObservableObject {
         renderView?.requestRender()
     }
 
+    // MARK: - 文本选中 API (Text Selection)
+
+    /// 设置指定终端的选中范围（用于高亮渲染）
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - selection: 选中范围
+    /// - Returns: 是否成功
+    func setSelection(terminalId: UInt32, selection: TextSelection) -> Bool {
+        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
+            return false
+        }
+
+        let (start, end) = selection.normalized()
+
+        let success = terminalPoolWrapper.setSelection(
+            terminalId: Int(terminalId),
+            startRow: start.row,
+            startCol: start.col,
+            endRow: end.row,
+            endCol: end.col
+        )
+
+        if success {
+            // 触发渲染更新
+            renderView?.requestRender()
+        }
+
+        return success
+    }
+
+    /// 清除指定终端的选中高亮
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 是否成功
+    func clearSelection(terminalId: UInt32) -> Bool {
+        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
+            return false
+        }
+
+        let success = terminalPoolWrapper.clearSelection(terminalId: Int(terminalId))
+
+        if success {
+            renderView?.requestRender()
+        }
+
+        return success
+    }
+
+    /// 获取指定终端的选中文本
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - selection: 选中范围
+    /// - Returns: 选中的文本，失败返回 nil
+    func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
+        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
+            return nil
+        }
+
+        let (start, end) = selection.normalized()
+
+        return terminalPoolWrapper.getTextRange(
+            terminalId: Int(terminalId),
+            startRow: start.row,
+            startCol: start.col,
+            endRow: end.row,
+            endCol: end.col
+        )
+    }
+
+    /// 获取指定终端的当前输入行号
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 输入行号，如果不在输入模式返回 nil
+    func getInputRow(terminalId: UInt32) -> UInt16? {
+        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
+            return nil
+        }
+
+        return terminalPoolWrapper.getInputRow(terminalId: Int(terminalId))
+    }
+
     // MARK: - Rendering (核心方法)
 
     /// 渲染所有 Panel
     ///
     /// 单向数据流：从 AR 拉取数据，调用 Rust 渲染
     func renderAllPanels(containerBounds: CGRect) {
-        print("[TerminalWindowCoordinator] 📏 收到 containerBounds = \(containerBounds)")
-
         guard let mapper = coordinateMapper,
               let metrics = fontMetrics else {
-            print("[TerminalWindowCoordinator] 坐标映射器或字体度量未初始化")
             return
         }
 
@@ -510,8 +540,6 @@ class TerminalWindowCoordinator: ObservableObject {
             containerBounds: containerBounds,
             headerHeight: headerHeight
         )
-
-        print("[TerminalWindowCoordinator] 渲染 \(tabsToRender.count) 个 Tab")
 
         // 渲染每个 Tab
         guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
@@ -544,11 +572,6 @@ class TerminalWindowCoordinator: ObservableObject {
             let physicalHeight = logicalRect.height * mapper.scale
             let rows = UInt16(physicalHeight / lineHeight)
 
-            print("[TerminalWindowCoordinator] 渲染终端 \(terminalId)")
-            print("  Swift Rect: \(contentBounds)")
-            print("  Logical Rect: \(logicalRect)")
-            print("  Cell: \(cellWidth)×\(lineHeight), Grid: \(cols)×\(rows)")
-
             let success = terminalPoolWrapper.render(
                 terminalId: Int(terminalId),
                 x: Float(logicalRect.origin.x),
@@ -560,12 +583,11 @@ class TerminalWindowCoordinator: ObservableObject {
             )
 
             if !success {
-                print("[TerminalWindowCoordinator] 渲染失败: 终端 \(terminalId)")
+                // 渲染失败，静默处理
             }
         }
 
         // 统一提交所有 objects
         terminalPoolWrapper.flush()
-        print("[TerminalWindowCoordinator] 提交了 \(tabsToRender.count) 个终端的渲染内容")
     }
 }

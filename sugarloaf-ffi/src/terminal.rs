@@ -679,10 +679,6 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
     // 🎯 获取选区范围（用于高亮）
     let selection_range = handle_ref.selection.lock().clone();
-    if let Some(ref range) = selection_range {
-        eprintln!("[Rust Render] 🎯 Active selection: ({},{}) -> ({},{})",
-            range.start_col, range.start_row, range.end_col, range.end_row);
-    }
 
     // 获取 content builder - 使用链式调用
     let content = sugarloaf_ref.instance.content();
@@ -693,8 +689,6 @@ pub extern "C" fn terminal_render_to_sugarloaf(
     // 🎯 使用终端的实际列数，而不是 grid 行的长度
     let terminal_cols = handle_ref.cols as usize;
     let terminal_rows = handle_ref.rows as usize;
-    eprintln!("[Rust Render] 📊 RichText {}: terminal size = {}×{}, visible_rows = {}",
-        rich_text_id, terminal_cols, terminal_rows, rows.len());
 
     // 渲染所有可见行（限制为 terminal_rows）
     for (row_idx, row) in rows.iter().enumerate().take(terminal_rows) {
@@ -708,13 +702,6 @@ pub extern "C" fn terminal_render_to_sugarloaf(
         // 🎯 关键：row_idx 是可见行的索引（0, 1, 2...）
         // 对于选区判断，我们使用相对于可见区域的行号
         let row_num = row_idx as i32;
-
-        // 🐛 调试：在渲染选区所在行时打印信息
-        if let Some(ref range) = selection_range {
-            if row_num == range.start_row as i32 {
-                eprintln!("[Rust Render] 📍 Rendering row {} (selection row!), cols={}", row_num, cols);
-            }
-        }
 
         // 跟踪当前颜色和选区状态，以便批量渲染相同样式的字符
         let mut current_line = String::new();
@@ -739,14 +726,7 @@ pub extern "C" fn terminal_render_to_sugarloaf(
             // row_num 是相对于可见区域的行号（从 0 开始）
             let is_selected = selection_range
                 .as_ref()
-                .map(|range| {
-                    let contains = range.contains(col as u16, row_num);
-                    // 🐛 调试：打印选区匹配情况
-                    if contains {
-                        eprintln!("[Rust Selection] ✅ Cell ({}, {}) is SELECTED", col, row_num);
-                    }
-                    contains
-                })
+                .map(|range| range.contains(col as u16, row_num))
                 .unwrap_or(false);
 
             // 🎯 关键修复：在添加当前字符前,检查样式是否改变
@@ -777,8 +757,6 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                     // 🎨 应用选区高亮
                     if prev_selected {
                         style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
-                        eprintln!("[Rust Render] 🎨 Flushing SELECTED text at row {}: {:?} ({} chars)",
-                            row_num, &current_line, current_line.len());
                     }
 
                     content.add_text(&current_line, style);
@@ -806,8 +784,6 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                 // 🎨 应用选区高亮
                 if is_selected {
                     style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
-                    eprintln!("[Rust Render] 🎨 End-of-row flush SELECTED text at row {}: {:?} ({} chars)",
-                        row_num, &current_line, current_line.len());
                 }
 
                 content.add_text(&current_line, style);
@@ -1714,8 +1690,6 @@ pub extern "C" fn terminal_start_selection(
 
     *handle.selection.lock() = Some(range);
 
-    eprintln!("[Rust Selection] ✅ Created range: ({},{}) -> ({},{})",
-        range.start_col, range.start_row, range.end_col, range.end_row);
     true
 }
 
@@ -1737,10 +1711,8 @@ pub extern "C" fn terminal_update_selection(
         // 更新终点
         range.end_col = col;
         range.end_row = row;
-        eprintln!("[Selection] Updated to ({}, {})", col, row);
         true
     } else {
-        eprintln!("[Selection] No active selection to update");
         false
     }
 }
@@ -1754,7 +1726,6 @@ pub extern "C" fn terminal_clear_selection(handle: *mut TerminalHandle) {
 
     let handle = unsafe { &mut *handle };
     *handle.selection.lock() = None;
-    eprintln!("[Selection] Cleared");
 }
 
 /// Get selected text
@@ -1812,11 +1783,9 @@ pub extern "C" fn terminal_get_selected_text(
             *buffer.add(copy_len) = 0; // null terminator
         }
 
-        eprintln!("[Selection] Extracted text: {} chars", copy_len);
         return copy_len;
     }
 
-    eprintln!("[Selection] No selection");
     0
 }
 
@@ -1990,9 +1959,6 @@ pub extern "C" fn terminal_set_selection(
 
     *handle.selection.lock() = Some(range);
 
-    eprintln!("[Terminal FFI] set_selection: ({},{}) -> ({},{})",
-        start_row, start_col, end_row, end_col);
-
     1
 }
 
@@ -2005,8 +1971,6 @@ pub extern "C" fn terminal_clear_selection_highlight(handle: *mut TerminalHandle
 
     let handle = unsafe { &mut *handle };
     *handle.selection.lock() = None;
-
-    eprintln!("[Terminal FFI] clear_selection_highlight");
 
     1
 }
@@ -2137,11 +2101,9 @@ impl TerminalPool {
 
         // 调整终端尺寸（如果需要）
         let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
-        eprintln!("[TerminalPool] 📐 Resizing terminal {} to {}×{}", terminal_id, cols, rows);
         unsafe { terminal_resize(terminal_ptr, cols, rows) };
 
         // 渲染到 RichText
-        eprintln!("[TerminalPool] 📝 Rendering terminal {} to RichText ID {}", terminal_id, info.rich_text_id);
         if !unsafe {
             terminal_render_to_sugarloaf(
                 terminal_ptr,
@@ -2155,12 +2117,10 @@ impl TerminalPool {
         // 🎯 关键：设置 RichText 的渲染位置
         if let sugarloaf::Object::RichText(ref mut rich_text) = info.rich_text_object {
             rich_text.position = [x, y];
-            eprintln!("[TerminalPool] 🎨 Terminal {} RichText ID {} position: [{}, {}]", terminal_id, rich_text.id, x, y);
         }
 
         // 累积 RichText objects
         self.pending_objects.push(info.rich_text_object.clone());
-        eprintln!("[TerminalPool] 📦 pending_objects count: {}", self.pending_objects.len());
 
         true
     }
@@ -2215,33 +2175,11 @@ impl TerminalPool {
 
     /// 统一提交所有累积的 objects 并清空缓冲区
     fn flush(&mut self) {
-        eprintln!("[TerminalPool] 🚀 flush() called with {} objects", self.pending_objects.len());
-
-        // 打印每个 object 的详细信息
-        for (i, obj) in self.pending_objects.iter().enumerate() {
-            match obj {
-                sugarloaf::Object::RichText(ref rt) => {
-                    eprintln!("[TerminalPool]   Object {}: RichText ID={}, position=[{}, {}]",
-                        i, rt.id, rt.position[0], rt.position[1]);
-                }
-                sugarloaf::Object::Quad(ref quad) => {
-                    eprintln!("[TerminalPool]   Object {}: Quad position=[{}, {}], size=[{}, {}], color={:?}",
-                        i, quad.position[0], quad.position[1], quad.size[0], quad.size[1], quad.color);
-                }
-                _ => {
-                    eprintln!("[TerminalPool]   Object {}: Unknown type", i);
-                }
-            }
-        }
-
         unsafe {
             if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
-                // ❌ 不要调用 clear()，它会清除 RichText 内容
                 // 提交所有累积的 objects
-                eprintln!("[TerminalPool] 📤 Calling set_objects with {} objects", self.pending_objects.len());
                 sugarloaf.set_objects(self.pending_objects.clone());
                 // 🎯 关键：触发实际的 GPU 渲染
-                eprintln!("[TerminalPool] 🖥️ Calling render()");
                 sugarloaf.render();
             }
         }
@@ -2451,5 +2389,116 @@ pub extern "C" fn terminal_pool_free(pool: *mut TerminalPool) {
         unsafe {
             let _ = Box::from_raw(pool);
         }
+    }
+}
+
+// =============================================================================
+// TerminalPool 光标上下文 API (Cursor Context API for Pool)
+// =============================================================================
+
+/// 设置指定终端的选中范围（用于高亮渲染）
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_selection(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    start_row: u16,
+    start_col: u16,
+    end_row: u16,
+    end_col: u16,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+
+    if let Some(info) = pool.terminals.get_mut(&terminal_id) {
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        unsafe {
+            terminal_set_selection(terminal_ptr, start_row, start_col, end_row, end_col)
+        }
+    } else {
+        0
+    }
+}
+
+/// 清除指定终端的选中高亮
+#[no_mangle]
+pub extern "C" fn terminal_pool_clear_selection(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+
+    if let Some(info) = pool.terminals.get_mut(&terminal_id) {
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        unsafe {
+            terminal_clear_selection_highlight(terminal_ptr)
+        }
+    } else {
+        0
+    }
+}
+
+/// 获取指定终端的选中文本
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_text_range(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    start_row: u16,
+    start_col: u16,
+    end_row: u16,
+    end_col: u16,
+    out_buffer: *mut c_char,
+    buffer_size: usize,
+) -> i32 {
+    if pool.is_null() || out_buffer.is_null() || buffer_size == 0 {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+
+    if let Some(info) = pool.terminals.get_mut(&terminal_id) {
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        unsafe {
+            terminal_get_text_range(
+                terminal_ptr,
+                start_row,
+                start_col,
+                end_row,
+                end_col,
+                out_buffer,
+                buffer_size,
+            )
+        }
+    } else {
+        0
+    }
+}
+
+/// 获取指定终端的当前输入行号
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_input_row(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    out_row: *mut u16,
+) -> i32 {
+    if pool.is_null() || out_row.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+
+    if let Some(info) = pool.terminals.get_mut(&terminal_id) {
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        unsafe {
+            terminal_get_input_row(terminal_ptr, out_row)
+        }
+    } else {
+        0
     }
 }

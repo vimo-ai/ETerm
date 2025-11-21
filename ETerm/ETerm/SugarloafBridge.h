@@ -402,7 +402,46 @@ void terminal_pool_flush(TerminalPoolHandle pool);
 void terminal_pool_free(TerminalPoolHandle pool);
 
 // =============================================================================
-// 光标上下文 API (Cursor Context API)
+// TerminalPool 光标上下文 API (Cursor Context API for Pool)
+// =============================================================================
+
+/// 设置指定终端的选中范围（用于高亮渲染）
+int terminal_pool_set_selection(
+    TerminalPoolHandle pool,
+    size_t terminal_id,
+    unsigned short start_row,
+    unsigned short start_col,
+    unsigned short end_row,
+    unsigned short end_col
+);
+
+/// 清除指定终端的选中高亮
+int terminal_pool_clear_selection(
+    TerminalPoolHandle pool,
+    size_t terminal_id
+);
+
+/// 获取指定终端的选中文本
+int terminal_pool_get_text_range(
+    TerminalPoolHandle pool,
+    size_t terminal_id,
+    unsigned short start_row,
+    unsigned short start_col,
+    unsigned short end_row,
+    unsigned short end_col,
+    char* out_buffer,
+    size_t buffer_size
+);
+
+/// 获取指定终端的当前输入行号
+int terminal_pool_get_input_row(
+    TerminalPoolHandle pool,
+    size_t terminal_id,
+    unsigned short* out_row
+);
+
+// =============================================================================
+// 单终端光标上下文 API (Cursor Context API for Single Terminal)
 // =============================================================================
 
 /// 获取指定范围的文本（支持多行、UTF-8、emoji）

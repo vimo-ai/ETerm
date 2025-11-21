@@ -165,20 +165,10 @@ pub extern "C" fn sugarloaf_new(
     let font_metrics = {
         let mut data = font_library.inner.write();
         let metrics = data.get_primary_metrics(font_size);
-        eprintln!("[Sugarloaf Init] 🔍 Raw Metrics from font_library:");
-        if let Some(ref m) = metrics {
-            eprintln!("  cell_width: {}", m.cell_width);
-            eprintln!("  cell_height: {}", m.cell_height);
-            eprintln!("  cell_baseline: {}", m.cell_baseline);
-        }
         metrics
             .map(SugarloafFontMetrics::from_metrics)
             .unwrap_or_else(|| SugarloafFontMetrics::fallback(font_size))
     };
-    eprintln!("[Sugarloaf Init] 📊 Calculated SugarloafFontMetrics:");
-    eprintln!("  cell_width: {}", font_metrics.cell_width);
-    eprintln!("  cell_height: {}", font_metrics.cell_height);
-    eprintln!("  line_height: {}", font_metrics.line_height);
     set_global_font_metrics(font_metrics);
 
     let layout = RootStyle {

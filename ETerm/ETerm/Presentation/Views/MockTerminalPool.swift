@@ -34,21 +34,9 @@ class MockTerminalPool: TerminalPoolProtocol {
     // MARK: - Lifecycle
 
     init() {
-        print("[MockTerminalPool] 🏗️ 初始化终端池")
     }
 
     deinit {
-        if !aliveTerminals.isEmpty {
-            print("[MockTerminalPool] ⚠️ 警告：终端池销毁时还有 \(aliveTerminals.count) 个终端未释放")
-            print("  未释放的终端 ID: \(aliveTerminals.sorted())")
-        } else {
-            print("[MockTerminalPool] ✅ 终端池销毁，所有终端已正确释放")
-        }
-
-        print("[MockTerminalPool] 📊 统计信息：")
-        print("  创建: \(totalCreated) 个")
-        print("  销毁: \(totalDestroyed) 个")
-        print("  泄露: \(aliveTerminals.count) 个")
     }
 
     // MARK: - Terminal Management
@@ -67,9 +55,6 @@ class MockTerminalPool: TerminalPoolProtocol {
         aliveTerminals.insert(terminalId)
         totalCreated += 1
 
-        print("[MockTerminalPool] ➕ 创建终端: ID=\(terminalId), cols=\(cols), rows=\(rows)")
-        print("  当前存活终端: \(aliveTerminals.count) 个")
-
         return terminalId
     }
 
@@ -80,15 +65,11 @@ class MockTerminalPool: TerminalPoolProtocol {
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool {
         guard aliveTerminals.contains(terminalId) else {
-            print("[MockTerminalPool] ❌ 错误：尝试关闭不存在的终端 ID=\(terminalId)")
             return false
         }
 
         aliveTerminals.remove(terminalId)
         totalDestroyed += 1
-
-        print("[MockTerminalPool] ❌ 关闭终端: ID=\(terminalId)")
-        print("  当前存活终端: \(aliveTerminals.count) 个")
 
         return true
     }
@@ -124,14 +105,6 @@ class MockTerminalPool: TerminalPoolProtocol {
 
     /// 打印统计信息
     func printStatistics() {
-        print("[MockTerminalPool] 📊 统计信息：")
-        print("  创建: \(totalCreated) 个")
-        print("  销毁: \(totalDestroyed) 个")
-        print("  存活: \(aliveTerminals.count) 个")
-        print("  泄露检测: \(totalCreated - totalDestroyed == aliveTerminals.count ? "✅ 正常" : "❌ 异常")")
-
-        if !aliveTerminals.isEmpty {
-            print("  存活的终端 ID: \(aliveTerminals.sorted())")
-        }
+        // 调试用统计信息（已禁用）
     }
 }

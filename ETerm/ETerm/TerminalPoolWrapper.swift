@@ -139,6 +139,98 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return terminal_pool_resize(handle, terminalId, cols, rows) != 0
     }
 
+    // MARK: - 光标上下文 API (Cursor Context)
+
+    /// 设置选中范围（用于高亮渲染）
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - startRow: 起始行号
+    ///   - startCol: 起始列号
+    ///   - endRow: 结束行号
+    ///   - endCol: 结束列号
+    /// - Returns: 是否成功
+    func setSelection(
+        terminalId: Int,
+        startRow: UInt16,
+        startCol: UInt16,
+        endRow: UInt16,
+        endCol: UInt16
+    ) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_set_selection(
+            handle,
+            terminalId,
+            startRow,
+            startCol,
+            endRow,
+            endCol
+        ) != 0
+    }
+
+    /// 清除选中高亮
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 是否成功
+    func clearSelection(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_clear_selection(handle, terminalId) != 0
+    }
+
+    /// 获取选中范围的文本
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - startRow: 起始行号
+    ///   - startCol: 起始列号
+    ///   - endRow: 结束行号
+    ///   - endCol: 结束列号
+    /// - Returns: 选中的文本，失败返回 nil
+    func getTextRange(
+        terminalId: Int,
+        startRow: UInt16,
+        startCol: UInt16,
+        endRow: UInt16,
+        endCol: UInt16
+    ) -> String? {
+        guard let handle = handle else { return nil }
+
+        // 分配足够大的缓冲区
+        let maxChars = Int(abs(Int32(endRow) - Int32(startRow)) + 1) * 256
+        let bufferSize = maxChars * 4 + 1  // UTF-8, +1 for null terminator
+
+        var buffer = [CChar](repeating: 0, count: bufferSize)
+
+        guard buffer.withUnsafeMutableBufferPointer({ bufferPtr in
+            terminal_pool_get_text_range(
+                handle,
+                terminalId,
+                startRow,
+                startCol,
+                endRow,
+                endCol,
+                bufferPtr.baseAddress,
+                bufferSize
+            ) != 0
+        }) else {
+            return nil
+        }
+
+        return String(cString: buffer)
+    }
+
+    /// 获取当前输入行号
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 输入行号，如果不在输入模式返回 nil
+    func getInputRow(terminalId: Int) -> UInt16? {
+        guard let handle = handle else { return nil }
+
+        var row: UInt16 = 0
+
+        guard terminal_pool_get_input_row(handle, terminalId, &row) != 0 else {
+            return nil
+        }
+
+        return row
+    }
+
     // MARK: - 渲染
 
     /// 渲染指定终端到指定位置
