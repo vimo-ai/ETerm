@@ -9,13 +9,25 @@ import CoreGraphics
 
 /// 坐标映射器
 ///
-/// 统一处理所有坐标转换，是解决坐标系混乱的关键组件
+/// 统一处理所有坐标转换，是解决坐标系混乱的关键组件。
 ///
-/// 坐标系说明：
-/// 1. **Swift/macOS (NSView)**: 左下角为原点 (0,0)，Y 轴向上
-/// 2. **Rust 渲染**: 左上角为原点 (0,0)，Y 轴向下
-/// 3. **逻辑坐标**: Points (与屏幕分辨率无关)
-/// 4. **物理坐标**: Pixels (实际渲染坐标，考虑 DPI/scale)
+/// # 核心架构原则 (Architecture Principles)
+///
+/// 1. **Swift 主控逻辑 (Logical Points)**:
+///    - Swift 层的业务逻辑、布局计算、鼠标事件处理，**必须全程使用逻辑坐标 (Points)**。
+///    - 严禁在业务逻辑中手动乘除 `scale`，这会导致双重缩放 Bug。
+///
+/// 2. **Rust 负责渲染 (Physical Pixels)**:
+///    - Rust/Sugarloaf 引擎内部会自动处理缩放。
+///    - Swift 只需要把逻辑坐标传给 Rust，Rust 会根据初始化的 scale factor 自动计算物理像素。
+///
+/// 3. **物理像素的使用边界**:
+///    - 物理像素 (Pixels) **仅**用于与底层图形 API 握手（如 `sugarloaf_resize` 初始化显存大小）。
+///    - 在日常的 `render` 调用中，**不要**传递物理像素。
+///
+/// # 坐标系定义
+/// 1. **Swift/macOS (NSView)**: 左下角为原点 (0,0)，Y 轴向上，单位：Points。
+/// 2. **Rust 渲染**: 左上角为原点 (0,0)，Y 轴向下，单位：Points (传入时) -> Pixels (内部渲染时)。
 final class CoordinateMapper {
     let scale: CGFloat  // 公开 scale，供 Grid 计算使用
     private let containerBounds: CGRect
@@ -65,7 +77,9 @@ final class CoordinateMapper {
 
     /// Swift 矩形 → Rust 渲染矩形（物理像素，Y 轴翻转 + scale）
     ///
-    /// 用于：Sugarloaf 渲染，需要物理像素坐标
+    /// ⚠️ **警告 (Warning)**:
+    /// 此方法返回物理像素，**仅限**用于底层配置（如 `sugarloaf_resize` 调整显存大小）。
+    /// **严禁**用于常规渲染位置计算（如 `render`），否则会导致双重缩放！
     func swiftToRustPhysical(rect: CGRect) -> CGRect {
         let rustRect = swiftToRust(rect: rect)
         return CGRect(

@@ -30,8 +30,8 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
         let (firstPanel, secondPanel): (UUID, UUID) = {
             switch direction {
             case .vertical:
-                // 上下分割：新 Panel 在下（first），原 Panel 在上（second）
-                return (newPanelId, targetPanelId)
+                // 上下分割：原 Panel 在上（first），新 Panel 在下（second）
+                return (targetPanelId, newPanelId)
             case .horizontal:
                 // 左右分割：原 Panel 在左（first），新 Panel 在右（second）
                 return (targetPanelId, newPanelId)
