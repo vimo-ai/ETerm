@@ -18,6 +18,9 @@ final class TerminalWindow {
     let windowId: UUID
     private(set) var rootLayout: PanelLayout
     private var panelRegistry: [UUID: EditorPanel]
+    
+    /// 下一个终端编号（全局唯一）
+    private var nextTerminalNumber: Int = 1
 
     // MARK: - Initialization
 
@@ -25,6 +28,30 @@ final class TerminalWindow {
         self.windowId = UUID()
         self.rootLayout = .leaf(panelId: initialPanel.panelId)
         self.panelRegistry = [initialPanel.panelId: initialPanel]
+        
+        // 初始化计数器
+        scanAndInitNextTerminalNumber()
+    }
+    
+    /// 生成下一个 Tab 标题
+    func generateNextTabTitle() -> String {
+        let title = "终端 \(nextTerminalNumber)"
+        nextTerminalNumber += 1
+        return title
+    }
+    
+    /// 扫描现有 Tab 初始化计数器
+    private func scanAndInitNextTerminalNumber() {
+        var maxNumber = 0
+        for panel in allPanels {
+            for tab in panel.tabs {
+                if let title = tab.title.components(separatedBy: " ").last,
+                   let number = Int(title) {
+                    maxNumber = max(maxNumber, number)
+                }
+            }
+        }
+        nextTerminalNumber = maxNumber + 1
     }
 
     // MARK: - Panel Management
@@ -46,9 +73,9 @@ final class TerminalWindow {
             return nil
         }
 
-        // 创建新 Panel（包含一个默认 Tab）
+        // 创建新 Panel（包含一个默认 Tab，使用唯一标题）
         let newPanel = EditorPanel(
-            initialTab: TerminalTab(tabId: UUID(), title: "Terminal")
+            initialTab: TerminalTab(tabId: UUID(), title: generateNextTabTitle())
         )
 
         // 🎯 计算新布局，传入新 Panel 的 ID
@@ -200,6 +227,66 @@ final class TerminalWindow {
     }
 
     // MARK: - Private Helpers
+
+    /// 移除指定 Panel
+    ///
+    /// 当 Panel 中的最后一个 Tab 被移走时调用
+    /// - Returns: 是否成功移除
+    func removePanel(_ panelId: UUID) -> Bool {
+        // 1. 检查 Panel 是否存在
+        guard panelRegistry[panelId] != nil else {
+            return false
+        }
+
+        // 2. 根节点不能移除（至少保留一个 Panel）
+        if case .leaf(let id) = rootLayout, id == panelId {
+            return false
+        }
+
+        // 3. 从布局树中移除
+        guard let newLayout = removePanelFromLayout(layout: rootLayout, panelId: panelId) else {
+            return false
+        }
+
+        // 4. 更新状态
+        rootLayout = newLayout
+        panelRegistry.removeValue(forKey: panelId)
+
+        return true
+    }
+
+    // MARK: - Private Helpers
+
+    /// 从布局树中移除 Panel
+    ///
+    /// - Returns: 更新后的布局，如果该分支被完全移除则返回 nil
+    private func removePanelFromLayout(layout: PanelLayout, panelId: UUID) -> PanelLayout? {
+        switch layout {
+        case .leaf(let id):
+            // 如果是目标 Panel，返回 nil（表示移除）
+            return id == panelId ? nil : layout
+
+        case .split(let direction, let first, let second, let ratio):
+            // 递归处理子节点
+            let newFirst = removePanelFromLayout(layout: first, panelId: panelId)
+            let newSecond = removePanelFromLayout(layout: second, panelId: panelId)
+
+            // 根据子节点的移除情况重组布局
+            if let f = newFirst, let s = newSecond {
+                // 两个子节点都在，保持 Split
+                return .split(direction: direction, first: f, second: s, ratio: ratio)
+            } else if let f = newFirst {
+                // 只剩第一个子节点，提升它（Collapse）
+                return f
+            } else if let s = newSecond {
+                // 只剩第二个子节点，提升它（Collapse）
+                return s
+            } else {
+                // 两个子节点都没了（理论上不应该发生，除非移除了整个分支）
+                return nil
+            }
+        }
+    }
 
     /// 递归更新布局树中的比例
     private func updateRatioInLayout(

@@ -63,12 +63,44 @@ class TerminalWindowCoordinator: ObservableObject {
         self.terminalWindow = initialWindow
         self.terminalPool = terminalPool ?? MockTerminalPool()
 
-        // 为初始的所有 Tab 创建终端
+        // 2. 为初始的所有 Tab 创建终端
         createTerminalsForAllTabs()
 
-        // 设置初始激活的 Panel 为第一个 Panel
+        // 3. 设置初始激活的 Panel 为第一个 Panel
         activePanelId = initialWindow.allPanels.first?.panelId
     }
+    
+    // ... (中间代码保持不变) ...
+
+    /// 创建新的 Tab 并分配终端
+    func createNewTab(in panelId: UUID) -> TerminalTab? {
+        let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
+        guard terminalId >= 0 else {
+            print("[TerminalWindowCoordinator] 创建终端失败")
+            return nil
+        }
+
+        guard let panel = terminalWindow.getPanel(panelId) else {
+            print("[TerminalWindowCoordinator] Panel 不存在: \(panelId)")
+            return nil
+        }
+
+        // 使用 Domain 生成的唯一标题
+        let newTab = TerminalTab(
+            tabId: UUID(),
+            title: terminalWindow.generateNextTabTitle(),
+            rustTerminalId: UInt32(terminalId)
+        )
+
+        panel.addTab(newTab)
+        print("[TerminalWindowCoordinator] 创建新 Tab，终端 ID: \(terminalId)")
+
+        return newTab
+    }
+    
+    // ... (中间代码保持不变) ...
+
+
 
     deinit {
         print("[TerminalWindowCoordinator] 析构，清理所有终端")
@@ -143,31 +175,7 @@ class TerminalWindowCoordinator: ObservableObject {
         }
     }
 
-    /// 创建新的 Tab 并分配终端
-    func createNewTab(in panelId: UUID) -> TerminalTab? {
-        let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
-        guard terminalId >= 0 else {
-            print("[TerminalWindowCoordinator] 创建终端失败")
-            return nil
-        }
 
-        guard let panel = terminalWindow.getPanel(panelId) else {
-            print("[TerminalWindowCoordinator] Panel 不存在: \(panelId)")
-            return nil
-        }
-
-        let tabNumber = panel.tabCount + 1
-        let newTab = TerminalTab(
-            tabId: UUID(),
-            title: "终端 \(tabNumber)",
-            rustTerminalId: UInt32(terminalId)
-        )
-
-        panel.addTab(newTab)
-        print("[TerminalWindowCoordinator] 创建新 Tab，终端 ID: \(terminalId)")
-
-        return newTab
-    }
 
     // MARK: - User Interactions (从 UI 层调用)
 
@@ -326,26 +334,13 @@ class TerminalWindowCoordinator: ObservableObject {
                 return false
             } else {
                 // 跨 Panel 移动
-                if !sourcePanel.closeTab(tabId) {
-                    print("[TerminalWindowCoordinator] ❌ 关闭源 Tab 失败")
-                    return false
-                }
-                targetPanel.addTab(tab)
-                _ = targetPanel.setActiveTab(tabId)
-
-                print("[TerminalWindowCoordinator] ✅ Tab 跨 Panel 移动成功")
+                moveTabAcrossPanels(tab: tab, from: sourcePanel, to: targetPanel)
             }
 
         case .body:
             // 合并到中心（同 .header）
             if sourcePanel.panelId != targetPanel.panelId {
-                if !sourcePanel.closeTab(tabId) {
-                    return false
-                }
-                targetPanel.addTab(tab)
-                _ = targetPanel.setActiveTab(tabId)
-
-                print("[TerminalWindowCoordinator] ✅ Tab 移动到空 Panel 成功")
+                moveTabAcrossPanels(tab: tab, from: sourcePanel, to: targetPanel)
             }
 
         case .left, .right, .top, .bottom:
@@ -384,26 +379,20 @@ class TerminalWindowCoordinator: ObservableObject {
             }
 
             // 4. 将拖拽的 Tab 移动到新 Panel
-            // 4.1 添加到新 Panel（此时新 Panel 有 2 个 Tab：默认 Tab + 拖拽的 Tab）
+            // 4.1 添加到新 Panel
             newPanel.addTab(tab)
             _ = newPanel.setActiveTab(tabId)
 
             // 4.2 删除新 Panel 的默认 Tab
             if let defaultTab = newPanel.tabs.first(where: { $0.tabId != tabId }) {
-                // 关闭默认 Tab 的终端（如果已创建）
                 if let terminalId = defaultTab.rustTerminalId {
                     terminalPool.closeTerminal(Int(terminalId))
                 }
-                // 删除默认 Tab（因为我们刚添加了拖拽的 Tab，现在有 2 个，可以删除）
                 _ = newPanel.closeTab(defaultTab.tabId)
-                print("[TerminalWindowCoordinator] 删除新 Panel 的默认 Tab")
             }
 
-            // 4.3 从源 Panel 移除拖拽的 Tab
-            if !sourcePanel.closeTab(tabId) {
-                print("[TerminalWindowCoordinator] ❌ 关闭源 Tab 失败")
-                return false
-            }
+            // 4.3 从源 Panel 移除拖拽的 Tab（处理最后一个 Tab 的情况）
+            removeTabFromSource(tab: tab, sourcePanel: sourcePanel)
 
             print("[TerminalWindowCoordinator] ✅ Tab 移动到新 Panel 成功")
         }
@@ -414,6 +403,38 @@ class TerminalWindowCoordinator: ObservableObject {
         renderView?.requestRender()
 
         return true
+    }
+
+    // MARK: - Private Helpers for Drag & Drop
+
+    /// 跨 Panel 移动 Tab
+    private func moveTabAcrossPanels(tab: TerminalTab, from sourcePanel: EditorPanel, to targetPanel: EditorPanel) {
+        // 1. 添加到目标 Panel
+        targetPanel.addTab(tab)
+        _ = targetPanel.setActiveTab(tab.tabId)
+
+        // 2. 从源 Panel 移除
+        removeTabFromSource(tab: tab, sourcePanel: sourcePanel)
+
+        print("[TerminalWindowCoordinator] ✅ Tab 跨 Panel 移动成功")
+    }
+
+    /// 从源 Panel 移除 Tab（如果只剩一个 Tab，则移除整个 Panel）
+    private func removeTabFromSource(tab: TerminalTab, sourcePanel: EditorPanel) {
+        if sourcePanel.tabCount > 1 {
+            // 还有其他 Tab，直接关闭
+            if !sourcePanel.closeTab(tab.tabId) {
+                print("[TerminalWindowCoordinator] ❌ 关闭源 Tab 失败")
+            }
+        } else {
+            // 最后一个 Tab，移除整个 Panel
+            print("[TerminalWindowCoordinator] 源 Panel 只剩最后一个 Tab，移除 Panel")
+            if terminalWindow.removePanel(sourcePanel.panelId) {
+                print("[TerminalWindowCoordinator] ✅ 源 Panel 已移除")
+            } else {
+                print("[TerminalWindowCoordinator] ❌ 移除源 Panel 失败")
+            }
+        }
     }
 
     // MARK: - Input Handling
@@ -499,23 +520,34 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         for (terminalId, contentBounds) in tabsToRender {
-            // Swift 坐标 → Rust 物理坐标（用于计算网格）
-            let physicalRect = mapper.swiftToRustPhysical(rect: contentBounds)
-            
-            // Swift 坐标 → Rust 逻辑坐标（用于渲染位置，Sugarloaf 会自动处理 scale）
+            // 1. 坐标转换：Swift 坐标 → Rust 逻辑坐标
+            // 注意：这里只传递逻辑坐标 (Points)，Sugarloaf 内部会自动乘上 scale。
+            // 如果这里传物理像素，会导致双重缩放 (Double Scaling) 问题。
             let logicalRect = mapper.swiftToRust(rect: contentBounds)
 
-            // 计算终端网格尺寸（fontMetrics 返回的是逻辑点，所以用逻辑尺寸计算）
+            // 2. 网格计算
+            // 注意：Sugarloaf 返回的 fontMetrics 是物理像素 (Physical Pixels)
+            // cell_width: 字符宽度 (物理)
+            // cell_height: 字符高度 (物理)
+            // line_height: 行高 (物理，通常 > cell_height)
+
             let cellWidth = CGFloat(metrics.cell_width)
-            let cellHeight = CGFloat(metrics.cell_height)
-            let cols = UInt16(logicalRect.width / cellWidth)
-            let rows = UInt16(logicalRect.height / cellHeight)
+            let lineHeight = CGFloat(metrics.line_height > 0 ? metrics.line_height : metrics.cell_height)
+
+            // 计算列数：使用物理宽度 / 物理字符宽度
+            // 因为 cellWidth 是物理像素，所以必须用 physicalRect.width (或者 logicalRect.width * scale)
+            // 这里我们用 logicalRect * scale 来确保一致性
+            let physicalWidth = logicalRect.width * mapper.scale
+            let cols = UInt16(physicalWidth / cellWidth)
+
+            // 计算行数：使用物理高度 / 物理行高
+            let physicalHeight = logicalRect.height * mapper.scale
+            let rows = UInt16(physicalHeight / lineHeight)
 
             print("[TerminalWindowCoordinator] 渲染终端 \(terminalId)")
             print("  Swift Rect: \(contentBounds)")
-            print("  Physical Rect: \(physicalRect)")
             print("  Logical Rect: \(logicalRect)")
-            print("  Cell: \(cellWidth)×\(cellHeight), Grid: \(cols)×\(rows)")
+            print("  Cell: \(cellWidth)×\(lineHeight), Grid: \(cols)×\(rows)")
 
             let success = terminalPoolWrapper.render(
                 terminalId: Int(terminalId),
