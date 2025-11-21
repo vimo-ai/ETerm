@@ -85,6 +85,104 @@ final class TerminalWindow {
         return rootLayout.allPanelIds()
     }
 
+    // MARK: - Rendering
+
+    /// 获取所有需要渲染的 Tab
+    ///
+    /// 这是渲染流程的入口，遍历所有 Panel，收集激活的 Tab 及其位置信息
+    ///
+    /// - Parameters:
+    ///   - containerBounds: 容器的尺寸
+    ///   - headerHeight: Tab Bar 的高度
+    /// - Returns: 数组 [(terminalId, contentBounds)]
+    func getActiveTabsForRendering(
+        containerBounds: CGRect,
+        headerHeight: CGFloat
+    ) -> [(UInt32, CGRect)] {
+        // 先更新所有 Panel 的 bounds（基于当前的 rootLayout）
+        updatePanelBounds(containerBounds: containerBounds)
+
+        // 收集所有激活的 Tab
+        var result: [(UInt32, CGRect)] = []
+
+        for panel in allPanels {
+            if let (terminalId, contentBounds) = panel.getActiveTabForRendering(headerHeight: headerHeight) {
+                result.append((terminalId, contentBounds))
+            }
+        }
+
+        return result
+    }
+
+    /// 更新所有 Panel 的位置和尺寸
+    ///
+    /// 根据布局树计算每个 Panel 的 bounds，并更新到 Panel 对象
+    private func updatePanelBounds(containerBounds: CGRect) {
+        // 递归遍历布局树，计算每个 Panel 的 bounds
+        calculatePanelBounds(layout: rootLayout, availableBounds: containerBounds)
+    }
+
+    /// 递归计算 Panel 的 bounds
+    private func calculatePanelBounds(layout: PanelLayout, availableBounds: CGRect) {
+        switch layout {
+        case .leaf(let panelId):
+            // 叶子节点：更新 Panel 的 bounds
+            if let panel = panelRegistry[panelId] {
+                panel.updateBounds(availableBounds)
+            }
+
+        case .split(let direction, let first, let second, let ratio):
+            // 分割节点：分配空间给两个子节点
+            let dividerThickness: CGFloat = 1.0
+
+            switch direction {
+            case .horizontal:
+                // 水平分割（左右）
+                let firstWidth = availableBounds.width * ratio - dividerThickness / 2
+                let secondWidth = availableBounds.width * (1 - ratio) - dividerThickness / 2
+
+                let firstBounds = CGRect(
+                    x: availableBounds.minX,
+                    y: availableBounds.minY,
+                    width: firstWidth,
+                    height: availableBounds.height
+                )
+
+                let secondBounds = CGRect(
+                    x: availableBounds.minX + firstWidth + dividerThickness,
+                    y: availableBounds.minY,
+                    width: secondWidth,
+                    height: availableBounds.height
+                )
+
+                calculatePanelBounds(layout: first, availableBounds: firstBounds)
+                calculatePanelBounds(layout: second, availableBounds: secondBounds)
+
+            case .vertical:
+                // 垂直分割（上下）
+                let firstHeight = availableBounds.height * ratio - dividerThickness / 2
+                let secondHeight = availableBounds.height * (1 - ratio) - dividerThickness / 2
+
+                let firstBounds = CGRect(
+                    x: availableBounds.minX,
+                    y: availableBounds.minY + secondHeight + dividerThickness,
+                    width: availableBounds.width,
+                    height: firstHeight
+                )
+
+                let secondBounds = CGRect(
+                    x: availableBounds.minX,
+                    y: availableBounds.minY,
+                    width: availableBounds.width,
+                    height: secondHeight
+                )
+
+                calculatePanelBounds(layout: first, availableBounds: firstBounds)
+                calculatePanelBounds(layout: second, availableBounds: secondBounds)
+            }
+        }
+    }
+
     // MARK: - Layout Query
 
     /// 检查布局是否包含指定 Panel

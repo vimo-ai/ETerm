@@ -55,9 +55,12 @@ final class TerminalTab {
     /// 终端会话（基础设施层，用于调用 Rust FFI）
     var terminalSession: TerminalSession?
 
+    /// Rust 终端 ID（用于渲染）
+    private(set) var rustTerminalId: UInt32?
+
     // MARK: - 初始化
 
-    init(tabId: UUID, title: String = "Terminal") {
+    init(tabId: UUID, title: String = "Terminal", rustTerminalId: UInt32? = nil) {
         self.tabId = tabId
         self.title = title
         self.isActive = false
@@ -66,6 +69,12 @@ final class TerminalTab {
         self.inputState = .empty()
         self.currentInputRow = nil
         self.terminalSession = nil
+        self.rustTerminalId = rustTerminalId
+    }
+
+    /// 设置 Rust 终端 ID
+    func setRustTerminalId(_ terminalId: UInt32?) {
+        self.rustTerminalId = terminalId
     }
 
     /// 设置终端会话（依赖注入）
