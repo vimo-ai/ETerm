@@ -11,6 +11,9 @@ import CoreGraphics
 ///
 /// 管理多个 Tab，类似于 VSCode 的 Editor Panel
 final class EditorPanel {
+    /// 内容区域内边距
+    static let contentPadding: CGFloat = 4.0
+
     let panelId: UUID
     private(set) var tabs: [TerminalTab]
     private(set) var activeTabId: UUID?
@@ -109,12 +112,14 @@ final class EditorPanel {
             return nil
         }
 
-        // 计算内容区域（减去 Tab Bar）
+        let padding = Self.contentPadding
+
+        // 计算内容区域（减去 Tab Bar + padding）
         let contentBounds = CGRect(
-            x: bounds.origin.x,
-            y: bounds.origin.y,
-            width: bounds.width,
-            height: bounds.height - headerHeight
+            x: bounds.origin.x + padding,
+            y: bounds.origin.y + padding,
+            width: bounds.width - padding * 2,
+            height: bounds.height - headerHeight - padding * 2
         )
 
         return (terminalId, contentBounds)
