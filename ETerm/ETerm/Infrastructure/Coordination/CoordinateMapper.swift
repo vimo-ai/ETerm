@@ -243,13 +243,13 @@ final class CoordinateMapper {
         panelHeight: CGFloat,
         cellWidth: CGFloat,
         cellHeight: CGFloat,
-        padding: CGFloat = 10.0
+        padding: CGFloat = 0.0
     ) -> CursorPosition {
         // 1. 转换为 Panel 内的相对坐标
         let relativeX = screenPoint.x - panelOrigin.x - padding
         let relativeY = screenPoint.y - panelOrigin.y - padding
 
-        // 2. Y 轴翻转
+        // 2. Y 轴翻转：Swift 坐标系 Y 向上，终端 row 0 在顶部
         let contentHeight = panelHeight - 2 * padding
         let yFromTop = contentHeight - relativeY
 
