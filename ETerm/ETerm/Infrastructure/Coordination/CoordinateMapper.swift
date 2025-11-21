@@ -48,7 +48,9 @@ final class CoordinateMapper {
         )
     }
 
-    /// Swift 矩形 → Rust 矩形
+    /// Swift 矩形 → Rust 矩形（逻辑像素，仅 Y 轴翻转）
+    ///
+    /// 用于：Grid 计算等需要逻辑像素的场景
     func swiftToRust(rect: CGRect) -> CGRect {
         let rustOrigin = swiftToRust(
             point: CGPoint(x: rect.origin.x, y: rect.origin.y + rect.height)
@@ -58,6 +60,19 @@ final class CoordinateMapper {
             y: rustOrigin.y,
             width: rect.width,
             height: rect.height
+        )
+    }
+
+    /// Swift 矩形 → Rust 渲染矩形（物理像素，Y 轴翻转 + scale）
+    ///
+    /// 用于：Sugarloaf 渲染，需要物理像素坐标
+    func swiftToRustPhysical(rect: CGRect) -> CGRect {
+        let rustRect = swiftToRust(rect: rect)
+        return CGRect(
+            x: rustRect.origin.x * scale,
+            y: rustRect.origin.y * scale,
+            width: rustRect.width * scale,
+            height: rustRect.height * scale
         )
     }
 
@@ -100,6 +115,27 @@ final class CoordinateMapper {
             x: point.x / scale,
             y: point.y / scale
         )
+    }
+
+    /// 逻辑尺寸 → 物理尺寸
+    func logicalToPhysical(size: CGSize) -> CGSize {
+        return CGSize(
+            width: size.width * scale,
+            height: size.height * scale
+        )
+    }
+
+    /// 获取容器的物理像素尺寸（用于 Sugarloaf 初始化和 resize）
+    var physicalContainerSize: CGSize {
+        return CGSize(
+            width: containerBounds.width * scale,
+            height: containerBounds.height * scale
+        )
+    }
+
+    /// 获取容器的逻辑像素尺寸
+    var logicalContainerSize: CGSize {
+        return containerBounds.size
     }
 
     // MARK: - 像素 → 终端网格

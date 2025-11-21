@@ -41,14 +41,16 @@ final class KeyboardCoordinator {
     ///   - panelId: Panel ID
     /// - Returns: 是否已处理该事件
     func handleKeyDown(event: NSEvent, panelId: UUID) -> Bool {
+        let char = event.charactersIgnoringModifiers ?? ""
+
         // Cmd+C: 复制
-        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "c" {
+        if event.modifierFlags.contains(.command) && char == "c" {
             handleCopy(panelId: panelId)
             return true
         }
 
-        // Cmd+V: 粘贴
-        if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "v" {
+        // Cmd+V 或 Ctrl+V: 粘贴
+        if (event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control)) && char == "v" {
             handlePaste(panelId: panelId)
             return true
         }

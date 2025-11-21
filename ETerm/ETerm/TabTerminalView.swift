@@ -22,7 +22,7 @@ import PanelLayoutKit
 /// Panel 渲染视图
 ///
 /// 包含 Metal 渲染层，支持真实的终端渲染
-class PanelRenderView: NSView {
+class PanelRenderView: NSView, RenderViewProtocol {
     private var sugarloaf: SugarloafWrapper?
     private var displayLink: CVDisplayLink?
     private var needsRender = false
@@ -31,7 +31,7 @@ class PanelRenderView: NSView {
     private var shouldStopReading = false
     private var isInitialized = false
 
-    weak var coordinator: TerminalCoordinator?
+    weak var coordinator: TerminalWindowCoordinator?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -154,19 +154,9 @@ class PanelRenderView: NSView {
 
         print("[PanelRenderView] ✅ Initialization complete")
 
-        // 🎯 重要：初始化完成后，触发一次 PanelView 创建
+        // 🎯 触发一次初始渲染
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, let coordinator = self.coordinator else { return }
-            let currentSize = self.bounds.size
-            print("[PanelRenderView] 🔄 Triggering initial panel view update, bounds: \(currentSize)")
-
-            // 更新 containerSize
-            if currentSize.width > 0 && currentSize.height > 0 {
-                coordinator.containerSize = currentSize
-                coordinator.updatePanelViews(in: self)
-            } else {
-                print("[PanelRenderView] ⚠️ Bounds size is zero, skipping panel view update")
-            }
+            self?.requestRender()
         }
     }
 
@@ -223,14 +213,15 @@ class PanelRenderView: NSView {
         print("[CVDisplayLink] ✅ Started")
     }
 
-    fileprivate func requestRender() {
+    func requestRender() {
         renderLock.lock()
         needsRender = true
         renderLock.unlock()
     }
 
     private func performRender() {
-        coordinator?.renderAllPanels()
+        // 从 AR 获取数据并渲染
+        coordinator?.renderAllPanels(containerBounds: bounds)
 
         // 🎯 关键：调用 Sugarloaf 的最终渲染，将内容绘制到 Metal layer
         sugarloaf?.render()
@@ -309,12 +300,12 @@ class PanelRenderView: NSView {
     }
 }
 
-// MARK: - 终端协调器
+// MARK: - UI 层协调器（临时保留，用于 PanelView 管理）
 
-/// 终端协调器
+/// UI 层协调器
 ///
-/// 管理布局树、终端池、以及两者之间的映射关系
-class TerminalCoordinator: ObservableObject {
+/// 临时保留，管理 PanelView 的创建和更新
+class UICoordinator: ObservableObject {
     // MARK: - 数据模型
 
     /// 布局树（主数据源）
@@ -448,14 +439,6 @@ class TerminalCoordinator: ObservableObject {
     func updatePanelViews(in containerView: NSView) {
         print("[TerminalCoordinator] 🔄 Updating panel views, containerSize: \(containerSize)")
 
-        // 清除旧的视图
-        for subview in containerView.subviews {
-            if subview is PanelView {
-                subview.removeFromSuperview()
-            }
-        }
-        panelViews.removeAll()
-
         // 计算布局
         let panelBounds = layoutKit.calculateBounds(
             layout: layoutTree,
@@ -463,46 +446,75 @@ class TerminalCoordinator: ObservableObject {
         )
         print("[TerminalCoordinator] 📐 Calculated \(panelBounds.count) panel bounds")
 
-        // 创建新的 Panel 视图
-        for (panelId, bounds) in panelBounds {
-            print("[TerminalCoordinator] 🎨 Creating PanelView for \(panelId.uuidString.prefix(8)), bounds: \(bounds)")
-            guard let panel = layoutTree.findPanel(byId: panelId) else { continue }
+        // 获取所有 Panel
+        let panels = layoutTree.allPanels()
+        let panelIds = Set(panels.map { $0.id })
 
-            let panelView = PanelView(
-                panel: panel,
-                frame: bounds,
-                layoutKit: layoutKit
-            )
-
-            // 设置回调
-            panelView.onTabClick = { [weak self] tabId in
-                self?.handleTabClick(panelId: panelId, tabId: tabId)
-            }
-
-            panelView.onTabDragStart = { [weak self] tabId in
-                self?.handleTabDragStart(tabId: tabId)
-            }
-
-            panelView.onTabClose = { [weak self] tabId in
-                self?.handleTabClose(tabId: tabId, in: containerView)
-            }
-
-            panelView.onAddTab = { [weak self] in
-                self?.handleAddTab(panelId: panelId, in: containerView)
-            }
-
-            panelView.onDrop = { [weak self] tabId, dropZone, targetPanelId in
-                return self?.handleDrop(tabId: tabId, dropZone: dropZone, targetPanelId: targetPanelId, in: containerView) ?? false
-            }
-
-            containerView.addSubview(panelView)
-            panelViews[panelId] = panelView
+        // 🎯 只删除不再存在的 PanelView（增量更新）
+        let viewsToRemove = panelViews.filter { !panelIds.contains($0.key) }
+        for (id, view) in viewsToRemove {
+            print("[TerminalCoordinator] 🗑️ Removing PanelView for \(id.uuidString.prefix(8))")
+            view.removeFromSuperview()
+            panelViews.removeValue(forKey: id)
         }
 
-        // 🎯 重要：Panel 创建后，主动触发一次渲染
+        // 🎯 更新现有的 PanelView，或创建新的
+        for panel in panels {
+            guard let bounds = panelBounds[panel.id] else {
+                print("[TerminalCoordinator] ❌ 找不到 Panel 的 bounds: \(panel.id.uuidString.prefix(8))")
+                continue
+            }
+
+            if let existingView = panelViews[panel.id] {
+                // ✅ 更新现有 PanelView（保持状态）
+                print("[TerminalCoordinator] 🔄 Updating existing PanelView for \(panel.id.uuidString.prefix(8))")
+                existingView.updatePanel(panel)  // ← 关键：同步激活状态！
+                existingView.frame = bounds
+            } else {
+                // ✅ 创建新 PanelView
+                print("[TerminalCoordinator] 🎨 Creating new PanelView for \(panel.id.uuidString.prefix(8)), bounds: \(bounds)")
+                let panelView = createPanelView(panel: panel, bounds: bounds, in: containerView)
+                containerView.addSubview(panelView)
+                panelViews[panel.id] = panelView
+            }
+        }
+
+        // 🎯 重要：Panel 更新后，主动触发一次渲染
         DispatchQueue.main.async { [weak self] in
             self?.renderAllPanels()
         }
+    }
+
+    /// 创建 PanelView（提取为独立方法）
+    private func createPanelView(panel: PanelNode, bounds: CGRect, in containerView: NSView) -> PanelView {
+        let panelView = PanelView(
+            panel: panel,
+            frame: bounds,
+            layoutKit: layoutKit
+        )
+
+        // 设置回调
+        panelView.onTabClick = { [weak self] tabId in
+            self?.handleTabClick(panelId: panel.id, tabId: tabId)
+        }
+
+        panelView.onTabDragStart = { [weak self] tabId in
+            self?.handleTabDragStart(tabId: tabId)
+        }
+
+        panelView.onTabClose = { [weak self] tabId in
+            self?.handleTabClose(tabId: tabId, in: containerView)
+        }
+
+        panelView.onAddTab = { [weak self] in
+            self?.handleAddTab(panelId: panel.id, in: containerView)
+        }
+
+        panelView.onDrop = { [weak self] tabId, dropZone, targetPanelId in
+            return self?.handleDrop(tabId: tabId, dropZone: dropZone, targetPanelId: targetPanelId, in: containerView) ?? false
+        }
+
+        return panelView
     }
 
     // MARK: - 事件处理
@@ -599,6 +611,7 @@ class TerminalCoordinator: ObservableObject {
         print("[TerminalCoordinator] 🎯 handleDrop called:")
         print("  Tab: \(tabId.uuidString.prefix(8))")
         print("  DropZone: \(dropZone.type)")
+        print("  InsertIndex: \(dropZone.insertIndex?.description ?? "nil")")
         print("  Target Panel: \(targetPanelId.uuidString.prefix(8))")
 
         // 查找被拖拽的 Tab
@@ -748,7 +761,7 @@ class TerminalCoordinator: ObservableObject {
 // MARK: - NSViewRepresentable
 
 struct PanelContainerView: NSViewRepresentable {
-    @ObservedObject var coordinator: TerminalCoordinator
+    @ObservedObject var coordinator: UICoordinator
 
     func makeCoordinator() -> Coordinator {
         Coordinator(terminalCoordinator: coordinator)
@@ -756,9 +769,10 @@ struct PanelContainerView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let renderView = PanelRenderView()
-        renderView.coordinator = coordinator
+        // 暂时注释掉，因为类型不匹配（UICoordinator vs TerminalWindowCoordinator）
+        // renderView.coordinator = coordinator
         context.coordinator.renderView = renderView
-        // 设置 TerminalCoordinator 的 renderView 引用，用于触发渲染
+        // 设置 UICoordinator 的 renderView 引用，用于触发渲染
         context.coordinator.terminalCoordinator.renderView = renderView
         return renderView
     }
@@ -778,10 +792,10 @@ struct PanelContainerView: NSViewRepresentable {
     }
 
     class Coordinator {
-        let terminalCoordinator: TerminalCoordinator
+        let terminalCoordinator: UICoordinator
         weak var renderView: PanelRenderView?
 
-        init(terminalCoordinator: TerminalCoordinator) {
+        init(terminalCoordinator: UICoordinator) {
             self.terminalCoordinator = terminalCoordinator
         }
     }
@@ -791,7 +805,7 @@ struct PanelContainerView: NSViewRepresentable {
 
 /// 终端视图（使用 PanelLayoutKit 新架构）
 struct TabTerminalView: View {
-    @StateObject private var coordinator: TerminalCoordinator
+    @StateObject private var coordinator: UICoordinator
 
     init() {
         // 创建初始布局
@@ -799,7 +813,7 @@ struct TabTerminalView: View {
         let initialPanel = PanelNode(tabs: [initialTab], activeTabIndex: 0)
         let initialLayout = LayoutTree.panel(initialPanel)
 
-        _coordinator = StateObject(wrappedValue: TerminalCoordinator(
+        _coordinator = StateObject(wrappedValue: UICoordinator(
             initialLayoutTree: initialLayout
         ))
     }
