@@ -57,6 +57,14 @@ class TerminalWindowCoordinator: ObservableObject {
 
     private let headerHeight: CGFloat = 30.0
 
+    // MARK: - Render Debounce
+
+    /// 防抖延迟任务
+    private var pendingRenderWorkItem: DispatchWorkItem?
+
+    /// 防抖时间窗口（16ms，约一帧）
+    private let renderDebounceInterval: TimeInterval = 0.016
+
     // MARK: - Initialization
 
     init(initialWindow: TerminalWindow, terminalPool: TerminalPoolProtocol? = nil) {
@@ -108,6 +116,31 @@ class TerminalWindowCoordinator: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Render Scheduling
+
+    /// 调度渲染（带防抖）
+    ///
+    /// 在短时间窗口内的多次调用会被合并为一次实际渲染，
+    /// 用于 UI 变更（Tab 切换、Page 切换等）触发的渲染请求。
+    ///
+    /// - Note: 不影响即时响应（如键盘输入、滚动），这些场景应直接调用 `renderView?.requestRender()`
+    private func scheduleRender() {
+        // 取消之前的延迟任务
+        pendingRenderWorkItem?.cancel()
+        print("[Render] 🔄 Scheduled render (debounced)")
+
+        // 创建新的延迟任务
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            print("[Render] ✅ Executing debounced render")
+            self.renderView?.requestRender()
+        }
+        pendingRenderWorkItem = workItem
+
+        // 延迟执行
+        DispatchQueue.main.asyncAfter(deadline: .now() + renderDebounceInterval, execute: workItem)
     }
 
     // MARK: - Terminal Pool Management
@@ -183,7 +216,7 @@ class TerminalWindowCoordinator: ObservableObject {
             // 触发渲染更新
             objectWillChange.send()
             updateTrigger = UUID()
-            renderView?.requestRender()
+            scheduleRender()
         }
     }
 
@@ -214,7 +247,7 @@ class TerminalWindowCoordinator: ObservableObject {
         if panel.closeTab(tabId) {
             objectWillChange.send()
             updateTrigger = UUID()
-            renderView?.requestRender()
+            scheduleRender()
         }
     }
 
@@ -234,7 +267,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
         objectWillChange.send()
         updateTrigger = UUID()
-        renderView?.requestRender()
+        scheduleRender()
     }
 
     /// 用户分割 Panel
@@ -264,7 +297,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
             objectWillChange.send()
             updateTrigger = UUID()
-            renderView?.requestRender()
+            scheduleRender()
         }
     }
 
@@ -359,7 +392,7 @@ class TerminalWindowCoordinator: ObservableObject {
         // 4. 触发 UI 更新
         objectWillChange.send()
         updateTrigger = UUID()
-        renderView?.requestRender()
+        scheduleRender()
 
         return true
     }
@@ -526,6 +559,8 @@ class TerminalWindowCoordinator: ObservableObject {
     ///
     /// 单向数据流：从 AR 拉取数据，调用 Rust 渲染
     func renderAllPanels(containerBounds: CGRect) {
+        let totalStart = CFAbsoluteTimeGetCurrent()
+
         guard let mapper = coordinateMapper,
               let metrics = fontMetrics else {
             return
@@ -536,10 +571,13 @@ class TerminalWindowCoordinator: ObservableObject {
         updateCoordinateMapper(scale: mapper.scale, containerBounds: containerBounds)
 
         // 从 AR 获取所有需要渲染的 Tab
+        let getTabsStart = CFAbsoluteTimeGetCurrent()
         let tabsToRender = terminalWindow.getActiveTabsForRendering(
             containerBounds: containerBounds,
             headerHeight: headerHeight
         )
+        let getTabsTime = (CFAbsoluteTimeGetCurrent() - getTabsStart) * 1000
+        print("[Render] ⏱️ Get tabs to render (\(tabsToRender.count) tabs): \(String(format: "%.2f", getTabsTime))ms")
 
         // 渲染每个 Tab
         guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
@@ -547,7 +585,11 @@ class TerminalWindowCoordinator: ObservableObject {
             return
         }
 
+        var renderTimes: [(Int, Double)] = []
+
         for (terminalId, contentBounds) in tabsToRender {
+            let terminalStart = CFAbsoluteTimeGetCurrent()
+
             // 1. 坐标转换：Swift 坐标 → Rust 逻辑坐标
             // 注意：这里只传递逻辑坐标 (Points)，Sugarloaf 内部会自动乘上 scale。
             // 如果这里传物理像素，会导致双重缩放 (Double Scaling) 问题。
@@ -582,12 +624,203 @@ class TerminalWindowCoordinator: ObservableObject {
                 rows: rows
             )
 
+            let terminalTime = (CFAbsoluteTimeGetCurrent() - terminalStart) * 1000
+            renderTimes.append((Int(terminalId), terminalTime))
+
             if !success {
                 // 渲染失败，静默处理
             }
         }
 
+        // 打印每个终端的渲染耗时
+        for (terminalId, time) in renderTimes {
+            print("[Render] ⏱️ Terminal \(terminalId) render: \(String(format: "%.2f", time))ms")
+        }
+
         // 统一提交所有 objects
+        let flushStart = CFAbsoluteTimeGetCurrent()
         terminalPoolWrapper.flush()
+        let flushTime = (CFAbsoluteTimeGetCurrent() - flushStart) * 1000
+        print("[Render] ⏱️ Flush: \(String(format: "%.2f", flushTime))ms")
+
+        let totalTime = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+        print("[Render] ⏱️ Total renderAllPanels: \(String(format: "%.2f", totalTime))ms")
+    }
+
+    // MARK: - Page Management
+
+    /// 获取当前激活的 Page
+    var activePage: Page? {
+        return terminalWindow.activePage
+    }
+
+    /// 获取所有 Page
+    var allPages: [Page] {
+        return terminalWindow.pages
+    }
+
+    /// Page 数量
+    var pageCount: Int {
+        return terminalWindow.pageCount
+    }
+
+    /// 创建新 Page
+    ///
+    /// - Parameter title: 页面标题（可选）
+    /// - Returns: 新创建的 Page ID
+    @discardableResult
+    func createPage(title: String? = nil) -> UUID? {
+        let newPage = terminalWindow.createPage(title: title)
+
+        // 为新 Page 的初始 Tab 创建终端
+        for panel in newPage.allPanels {
+            for tab in panel.tabs {
+                if tab.rustTerminalId == nil {
+                    let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
+                    if terminalId >= 0 {
+                        tab.setRustTerminalId(UInt32(terminalId))
+                    }
+                }
+            }
+        }
+
+        // 自动切换到新 Page
+        _ = terminalWindow.switchToPage(newPage.pageId)
+
+        // 更新激活的 Panel
+        activePanelId = newPage.allPanels.first?.panelId
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+
+        return newPage.pageId
+    }
+
+    /// 切换到指定 Page
+    ///
+    /// - Parameter pageId: 目标 Page ID
+    /// - Returns: 是否成功切换
+    @discardableResult
+    func switchToPage(_ pageId: UUID) -> Bool {
+        let totalStart = CFAbsoluteTimeGetCurrent()
+        print("[Page Switch] ⏱️ Start switching to page \(pageId.uuidString.prefix(8))...")
+
+        // Step 1: Domain 层切换
+        let domainStart = CFAbsoluteTimeGetCurrent()
+        guard terminalWindow.switchToPage(pageId) else {
+            print("[Page Switch] ⏱️ Failed: Page not found")
+            return false
+        }
+        let domainTime = (CFAbsoluteTimeGetCurrent() - domainStart) * 1000
+        print("[Page Switch] ⏱️ Domain switch: \(String(format: "%.2f", domainTime))ms")
+
+        // Step 2: 更新激活的 Panel
+        let panelStart = CFAbsoluteTimeGetCurrent()
+        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+        let panelTime = (CFAbsoluteTimeGetCurrent() - panelStart) * 1000
+        print("[Page Switch] ⏱️ Update active panel: \(String(format: "%.2f", panelTime))ms")
+
+        // Step 3: 触发 UI 更新
+        let uiStart = CFAbsoluteTimeGetCurrent()
+        objectWillChange.send()
+        updateTrigger = UUID()
+        let uiTime = (CFAbsoluteTimeGetCurrent() - uiStart) * 1000
+        print("[Page Switch] ⏱️ UI notification: \(String(format: "%.2f", uiTime))ms")
+
+        // Step 4: 请求渲染（防抖）
+        let renderStart = CFAbsoluteTimeGetCurrent()
+        scheduleRender()
+        let renderTime = (CFAbsoluteTimeGetCurrent() - renderStart) * 1000
+        print("[Page Switch] ⏱️ Schedule render (debounced): \(String(format: "%.2f", renderTime))ms")
+
+        let totalTime = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
+        print("[Page Switch] ⏱️ Total: \(String(format: "%.2f", totalTime))ms")
+
+        return true
+    }
+
+    /// 关闭指定 Page
+    ///
+    /// - Parameter pageId: 要关闭的 Page ID
+    /// - Returns: 是否成功关闭
+    @discardableResult
+    func closePage(_ pageId: UUID) -> Bool {
+        // 获取要关闭的 Page，关闭其中所有终端
+        if let page = terminalWindow.pages.first(where: { $0.pageId == pageId }) {
+            for panel in page.allPanels {
+                for tab in panel.tabs {
+                    if let terminalId = tab.rustTerminalId {
+                        terminalPool.closeTerminal(Int(terminalId))
+                    }
+                }
+            }
+        }
+
+        guard terminalWindow.closePage(pageId) else {
+            return false
+        }
+
+        // 更新激活的 Panel
+        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+
+        return true
+    }
+
+    /// 重命名 Page
+    ///
+    /// - Parameters:
+    ///   - pageId: Page ID
+    ///   - newTitle: 新标题
+    /// - Returns: 是否成功
+    @discardableResult
+    func renamePage(_ pageId: UUID, to newTitle: String) -> Bool {
+        guard terminalWindow.renamePage(pageId, to: newTitle) else {
+            return false
+        }
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+
+        return true
+    }
+
+    /// 切换到下一个 Page
+    @discardableResult
+    func switchToNextPage() -> Bool {
+        guard terminalWindow.switchToNextPage() else {
+            return false
+        }
+
+        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+
+        return true
+    }
+
+    /// 切换到上一个 Page
+    @discardableResult
+    func switchToPreviousPage() -> Bool {
+        guard terminalWindow.switchToPreviousPage() else {
+            return false
+        }
+
+        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+
+        return true
     }
 }
