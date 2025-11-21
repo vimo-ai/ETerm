@@ -78,21 +78,33 @@ struct DDDRenderView: NSViewRepresentable {
 // MARK: - Container View（分离 Metal 层和 UI 层）
 
 class DDDContainerView: NSView {
+    /// Page 栏视图（在顶部）
+    private let pageBarView: PageBarView
+
     /// Metal 渲染层（在底部）
     let renderView: DDDPanelRenderView
 
     /// Panel UI 视图列表（在上面）
     private var panelUIViews: [UUID: DomainPanelView] = [:]
 
+    /// Page 栏高度
+    private let pageBarHeight: CGFloat = PageBarView.recommendedHeight()
+
     weak var coordinator: TerminalWindowCoordinator? {
         didSet {
             renderView.coordinator = coordinator
+            setupPageBarCallbacks()
+            updatePageBar()
         }
     }
 
     override init(frame frameRect: NSRect) {
+        pageBarView = PageBarView()
         renderView = DDDPanelRenderView()
         super.init(frame: frameRect)
+
+        // 添加 Page 栏（顶部）
+        addSubview(pageBarView)
 
         // 添加 Metal 层（底部）
         addSubview(renderView)
@@ -115,14 +127,73 @@ class DDDContainerView: NSView {
         )
     }
 
+    /// 设置 Page 栏的回调
+    private func setupPageBarCallbacks() {
+        guard let coordinator = coordinator else { return }
+
+        pageBarView.onPageClick = { [weak coordinator] pageId in
+            _ = coordinator?.switchToPage(pageId)
+        }
+
+        pageBarView.onPageClose = { [weak coordinator] pageId in
+            _ = coordinator?.closePage(pageId)
+        }
+
+        pageBarView.onPageRename = { [weak coordinator] pageId, newTitle in
+            _ = coordinator?.renamePage(pageId, to: newTitle)
+        }
+
+        pageBarView.onAddPage = { [weak coordinator] in
+            _ = coordinator?.createPage()
+        }
+    }
+
+    /// 更新 Page 栏
+    func updatePageBar() {
+        guard let coordinator = coordinator else { return }
+
+        // 设置 Page 列表
+        let pages = coordinator.allPages.map { (id: $0.pageId, title: $0.title) }
+        pageBarView.setPages(pages)
+
+        // 设置激活的 Page
+        if let activePageId = coordinator.activePage?.pageId {
+            pageBarView.setActivePage(activePageId)
+        }
+    }
+
     override func layout() {
         super.layout()
 
-        // Metal 层填满整个容器
-        renderView.frame = bounds
+        // Page 栏在顶部
+        pageBarView.frame = CGRect(
+            x: 0,
+            y: bounds.height - pageBarHeight,
+            width: bounds.width,
+            height: pageBarHeight
+        )
+
+        // Metal 层在 Page 栏下方，填满剩余空间
+        let contentBounds = CGRect(
+            x: 0,
+            y: 0,
+            width: bounds.width,
+            height: bounds.height - pageBarHeight
+        )
+        renderView.frame = contentBounds
 
         // 更新 Panel UI 视图
         updatePanelViews()
+    }
+
+    /// 获取内容区域的 bounds（不包含 Page 栏）
+    var contentBounds: CGRect {
+        return CGRect(
+            x: 0,
+            y: 0,
+            width: bounds.width,
+            height: bounds.height - pageBarHeight
+        )
     }
 
     @objc func updatePanelViews() {
@@ -130,9 +201,12 @@ class DDDContainerView: NSView {
             return
         }
 
-        // 🎯 关键：先触发 bounds 更新
+        // 更新 Page 栏
+        updatePageBar()
+
+        // 🎯 关键：使用内容区域的 bounds（不包含 Page 栏）
         let _ = coordinator.terminalWindow.getActiveTabsForRendering(
-            containerBounds: bounds,
+            containerBounds: contentBounds,
             headerHeight: 30.0
         )
 
@@ -533,6 +607,22 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         guard isDraggingSelection else {
             super.mouseUp(with: event)
             return
+        }
+
+        // 检查选中内容是否全为空白，如果是则清除选区
+        if let activeTab = selectionTab,
+           let terminalId = activeTab.rustTerminalId,
+           let selection = activeTab.textSelection,
+           let coordinator = coordinator {
+            if let text = coordinator.getSelectedText(terminalId: terminalId, selection: selection) {
+                // 检查是否全为空白字符
+                let isAllWhitespace = text.allSatisfy { $0.isWhitespace }
+                if isAllWhitespace {
+                    // 清除选区
+                    activeTab.clearSelection()
+                    _ = coordinator.clearSelection(terminalId: terminalId)
+                }
+            }
         }
 
         // 重置选中状态
