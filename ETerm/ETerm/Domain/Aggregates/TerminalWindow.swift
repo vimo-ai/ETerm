@@ -223,6 +223,48 @@ final class TerminalWindow {
         return newPanel.panelId
     }
 
+    /// 分割 Panel 并使用已有的 Tab（用于拖拽场景）
+    ///
+    /// 与 `splitPanel` 不同，此方法不会创建默认 Tab，而是直接使用传入的 Tab。
+    /// 适用于拖拽 Tab 到边缘创建新 Panel 的场景。
+    ///
+    /// - Parameters:
+    ///   - panelId: 要分割的 Panel ID
+    ///   - existingTab: 已有的 Tab（将被移动到新 Panel）
+    ///   - direction: 分割方向
+    ///   - layoutCalculator: 布局计算器
+    /// - Returns: 新创建的 Panel ID，如果失败返回 nil
+    func splitPanelWithExistingTab(
+        panelId: UUID,
+        existingTab: TerminalTab,
+        direction: SplitDirection,
+        layoutCalculator: LayoutCalculator
+    ) -> UUID? {
+        guard let page = activePage else {
+            return nil
+        }
+
+        // 检查 Panel 是否存在
+        guard page.getPanel(panelId) != nil else {
+            return nil
+        }
+
+        // 创建新 Panel，直接使用已有的 Tab（不消耗编号）
+        let newPanel = EditorPanel(initialTab: existingTab)
+
+        // 在 Page 中执行分割
+        guard page.splitPanel(
+            panelId: panelId,
+            newPanel: newPanel,
+            direction: direction,
+            layoutCalculator: layoutCalculator
+        ) else {
+            return nil
+        }
+
+        return newPanel.panelId
+    }
+
     /// 获取指定 Panel（在当前 Page 中）
     func getPanel(_ panelId: UUID) -> EditorPanel? {
         return activePage?.getPanel(panelId)

@@ -357,36 +357,32 @@ class TerminalWindowCoordinator: ObservableObject {
                 }
             }()
 
-            // 2. 分割目标 Panel
+            // 2. 先从源 Panel 移除 Tab（如果是最后一个 Tab，会移除整个 Panel）
+            let sourcePanelWillBeRemoved = sourcePanel.tabCount == 1
+            if !sourcePanelWillBeRemoved {
+                // 源 Panel 还有其他 Tab，先移除拖拽的 Tab
+                _ = sourcePanel.closeTab(tabId)
+            }
+
+            // 3. 使用已有 Tab 分割目标 Panel（不消耗编号）
             let layoutCalculator = BinaryTreeLayoutCalculator()
-            guard let newPanelId = terminalWindow.splitPanel(
+            guard let _ = terminalWindow.splitPanelWithExistingTab(
                 panelId: targetPanelId,
+                existingTab: tab,
                 direction: splitDirection,
                 layoutCalculator: layoutCalculator
             ) else {
-                return false
-            }
-
-            // 3. 获取新 Panel
-            guard let newPanel = terminalWindow.getPanel(newPanelId) else {
-                return false
-            }
-
-            // 4. 将拖拽的 Tab 移动到新 Panel
-            // 4.1 添加到新 Panel
-            newPanel.addTab(tab)
-            _ = newPanel.setActiveTab(tabId)
-
-            // 4.2 删除新 Panel 的默认 Tab
-            if let defaultTab = newPanel.tabs.first(where: { $0.tabId != tabId }) {
-                if let terminalId = defaultTab.rustTerminalId {
-                    terminalPool.closeTerminal(Int(terminalId))
+                // 分割失败，恢复 Tab 到源 Panel
+                if !sourcePanelWillBeRemoved {
+                    sourcePanel.addTab(tab)
                 }
-                _ = newPanel.closeTab(defaultTab.tabId)
+                return false
             }
 
-            // 4.3 从源 Panel 移除拖拽的 Tab（处理最后一个 Tab 的情况）
-            removeTabFromSource(tab: tab, sourcePanel: sourcePanel)
+            // 4. 如果源 Panel 只剩这一个 Tab，现在移除整个源 Panel
+            if sourcePanelWillBeRemoved {
+                _ = terminalWindow.removePanel(sourcePanel.panelId)
+            }
         }
 
         // 4. 触发 UI 更新
