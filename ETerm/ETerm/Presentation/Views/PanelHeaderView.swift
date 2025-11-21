@@ -31,6 +31,12 @@ final class PanelHeaderView: NSView {
     /// Tab 容器（用于横向排列 Tab）
     private let tabContainer: NSView
 
+    /// 分割按钮
+    private let splitButton: NSButton
+
+    /// 分割菜单
+    private let splitMenu: NSMenu
+
     /// 添加按钮
     private let addButton: NSButton
 
@@ -51,10 +57,18 @@ final class PanelHeaderView: NSView {
     /// 添加 Tab 回调
     var onAddTab: (() -> Void)?
 
+    /// 水平分割回调
+    var onSplitHorizontal: (() -> Void)?
+
+    /// 垂直分割回调
+    var onSplitVertical: (() -> Void)?
+
     // MARK: - 初始化
 
     override init(frame frameRect: NSRect) {
         self.tabContainer = NSView()
+        self.splitButton = NSButton()
+        self.splitMenu = NSMenu()
         self.addButton = NSButton()
 
         super.init(frame: frameRect)
@@ -133,6 +147,25 @@ final class PanelHeaderView: NSView {
         tabContainer.wantsLayer = true
         addSubview(tabContainer)
 
+        // 配置分割菜单
+        let horizontalItem = NSMenuItem(title: "水平分割", action: #selector(handleSplitHorizontal), keyEquivalent: "")
+        horizontalItem.target = self
+        splitMenu.addItem(horizontalItem)
+
+        let verticalItem = NSMenuItem(title: "垂直分割", action: #selector(handleSplitVertical), keyEquivalent: "")
+        verticalItem.target = self
+        splitMenu.addItem(verticalItem)
+
+        // 配置分割按钮
+        splitButton.bezelStyle = .inline
+        splitButton.isBordered = false
+        splitButton.title = ""
+        splitButton.image = NSImage(systemSymbolName: "square.split.2x1", accessibilityDescription: "Split Panel")
+        splitButton.imagePosition = .imageOnly
+        splitButton.target = self
+        splitButton.action = #selector(handleSplitButtonClick)
+        addSubview(splitButton)
+
         // 配置添加按钮
         addButton.bezelStyle = .inline
         addButton.isBordered = false
@@ -163,20 +196,32 @@ final class PanelHeaderView: NSView {
     override func layout() {
         super.layout()
 
-        // Tab 容器占据大部分空间
+        // 分割按钮和添加按钮的宽度
+        let buttonWidth = Self.addButtonWidth
+        let totalButtonsWidth = buttonWidth * 2 + 4  // 两个按钮 + 间距
+
+        // Tab 容器占据剩余空间
         tabContainer.frame = CGRect(
             x: 0,
             y: 0,
-            width: bounds.width - Self.addButtonWidth,
+            width: bounds.width - totalButtonsWidth,
             height: bounds.height
         )
 
-        // 添加按钮在右侧
+        // 分割按钮在右侧
+        splitButton.frame = CGRect(
+            x: bounds.width - totalButtonsWidth,
+            y: (bounds.height - buttonWidth) / 2,
+            width: buttonWidth,
+            height: buttonWidth
+        )
+
+        // 添加按钮在最右侧
         addButton.frame = CGRect(
-            x: bounds.width - Self.addButtonWidth,
-            y: (bounds.height - Self.addButtonWidth) / 2,
-            width: Self.addButtonWidth,
-            height: Self.addButtonWidth
+            x: bounds.width - buttonWidth,
+            y: (bounds.height - buttonWidth) / 2,
+            width: buttonWidth,
+            height: buttonWidth
         )
 
         // 重新布局 Tab
@@ -184,6 +229,21 @@ final class PanelHeaderView: NSView {
     }
 
     // MARK: - Event Handlers
+
+    @objc private func handleSplitButtonClick() {
+        // 显示菜单
+        if let event = NSApp.currentEvent {
+            NSMenu.popUpContextMenu(splitMenu, with: event, for: splitButton)
+        }
+    }
+
+    @objc private func handleSplitHorizontal() {
+        onSplitHorizontal?()
+    }
+
+    @objc private func handleSplitVertical() {
+        onSplitVertical?()
+    }
 
     @objc private func handleAddTab() {
         onAddTab?()

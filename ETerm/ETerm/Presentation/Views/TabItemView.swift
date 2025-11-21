@@ -35,6 +35,9 @@ final class TabItemView: NSView {
     /// 是否正在拖拽
     private var isDragging: Bool = false
 
+    /// 是否真正发生了拖动（鼠标移动）
+    private var didActuallyDrag: Bool = false
+
     // MARK: - 回调
 
     /// 点击回调
@@ -158,27 +161,53 @@ final class TabItemView: NSView {
             return
         }
 
-        // 🚧 临时禁用拖拽，只保留点击功能
-        // TODO: 后续迁移完整的拖拽逻辑（需要 DragCoordinator）
-        // 当前直接触发点击
-        onTap?()
+        // 重置拖拽标志
+        isDragging = false
+        didActuallyDrag = false
 
-        /* 原本的拖拽逻辑（暂时注释）
+        // 不立即启动拖拽，等待 mouseDragged 确认真正拖动
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        super.mouseDragged(with: event)
+
+        // 如果已经在拖拽中，不重复启动
+        if isDragging {
+            return
+        }
+
+        // 检查点击位置是否在关闭按钮上（不应该拖拽关闭按钮）
+        let location = convert(event.locationInWindow, from: nil)
+        if closeButton.frame.contains(location) {
+            return
+        }
+
+        // 标记真正发生了拖动
+        didActuallyDrag = true
+        isDragging = true
+
+        // 现在才启动拖拽会话
         let pasteboardItem = NSPasteboardItem()
         pasteboardItem.setDataProvider(self, forTypes: [.string])
 
         let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
         draggingItem.setDraggingFrame(bounds, contents: createSnapshot())
 
-        isDragging = true
         onDragStart?()
 
         beginDraggingSession(with: [draggingItem], event: event, source: self)
-        */
     }
 
     override func mouseUp(with event: NSEvent) {
-        // 拖拽功能临时禁用，mouseUp 不需要处理
+        // 只有在没有真正拖动时才触发点击
+        if !didActuallyDrag {
+            onTap?()
+        }
+
+        // 重置拖拽状态
+        isDragging = false
+        didActuallyDrag = false
+
         super.mouseUp(with: event)
     }
 

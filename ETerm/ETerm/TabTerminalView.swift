@@ -479,12 +479,20 @@ class TerminalCoordinator: ObservableObject {
                 self?.handleTabClick(panelId: panelId, tabId: tabId)
             }
 
+            panelView.onTabDragStart = { [weak self] tabId in
+                self?.handleTabDragStart(tabId: tabId)
+            }
+
             panelView.onTabClose = { [weak self] tabId in
                 self?.handleTabClose(tabId: tabId, in: containerView)
             }
 
             panelView.onAddTab = { [weak self] in
                 self?.handleAddTab(panelId: panelId, in: containerView)
+            }
+
+            panelView.onDrop = { [weak self] tabId, dropZone, targetPanelId in
+                return self?.handleDrop(tabId: tabId, dropZone: dropZone, targetPanelId: targetPanelId, in: containerView) ?? false
             }
 
             containerView.addSubview(panelView)
@@ -580,6 +588,51 @@ class TerminalCoordinator: ObservableObject {
             self.layoutTree = newLayoutTree
             self.updatePanelViews(in: containerView)
         }
+    }
+
+    private func handleTabDragStart(tabId: UUID) {
+        print("[TerminalCoordinator] 🔄 Tab drag started: \(tabId.uuidString.prefix(8))")
+        // 可以在这里显示拖动状态（如果需要）
+    }
+
+    private func handleDrop(tabId: UUID, dropZone: DropZone, targetPanelId: UUID, in containerView: NSView) -> Bool {
+        print("[TerminalCoordinator] 🎯 handleDrop called:")
+        print("  Tab: \(tabId.uuidString.prefix(8))")
+        print("  DropZone: \(dropZone.type)")
+        print("  Target Panel: \(targetPanelId.uuidString.prefix(8))")
+
+        // 查找被拖拽的 Tab
+        guard let sourcePanel = layoutTree.findPanel(containingTab: tabId),
+              let tab = sourcePanel.tabs.first(where: { $0.id == tabId }) else {
+            print("[TerminalCoordinator] ❌ 找不到被拖拽的 Tab")
+            return false
+        }
+
+        print("[TerminalCoordinator] 📦 Source Panel: \(sourcePanel.id.uuidString.prefix(8)), tabs=[\(sourcePanel.tabs.map { $0.title }.joined(separator: ", "))]")
+
+        // 调用 PanelLayoutKit 的 handleDrop 执行布局重构
+        let newLayoutTree = layoutKit.handleDrop(
+            layout: layoutTree,
+            tab: tab,
+            dropZone: dropZone,
+            targetPanelId: targetPanelId
+        )
+
+        print("[TerminalCoordinator] ✅ Drop 成功后的 LayoutTree:")
+        print("  allPanels:", newLayoutTree.allPanels().map {
+            let tabInfo = $0.tabs.map { "(\($0.title), ID:\($0.id.uuidString.prefix(8)))" }.joined(separator: ", ")
+            return "Panel(\($0.id.uuidString.prefix(8)), tabs=[\(tabInfo)])"
+        })
+
+        // 更新布局树
+        layoutTree = newLayoutTree
+
+        // 重新创建 PanelViews
+        DispatchQueue.main.async { [weak self] in
+            self?.updatePanelViews(in: containerView)
+        }
+
+        return true
     }
 
     // MARK: - 渲染

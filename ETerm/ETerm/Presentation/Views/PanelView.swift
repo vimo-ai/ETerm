@@ -97,6 +97,9 @@ final class PanelView: NSView {
     ///
     /// - Parameter panel: 新的 Panel 节点
     func updatePanel(_ panel: PanelNode) {
+        print("[PanelView] 🔄 updatePanel called: panelId=\(panel.id.uuidString.prefix(8))")
+        print("  Tabs: \(panel.tabs.map { "\($0.title)(ID:\($0.id.uuidString.prefix(8)))" }.joined(separator: ", "))")
+        print("  ActiveTab: \(panel.activeTab?.title ?? "nil") (ID:\(panel.activeTab?.id.uuidString.prefix(8) ?? "nil"))")
         self.panel = panel
         updateTabs()
     }
@@ -145,14 +148,19 @@ final class PanelView: NSView {
 
     /// 设置激活的 Tab
     ///
-    /// - Parameter tabId: Tab ID
-    func setActiveTab(_ tabId: UUID) {
+    /// - Parameters:
+    ///   - tabId: Tab ID
+    ///   - notifyExternal: 是否通知外部（触发 onTabClick 回调）。
+    ///                     用户点击时为 true，内部同步状态时为 false。
+    func setActiveTab(_ tabId: UUID, notifyExternal: Bool = true) {
         activeTabId = tabId
         headerView.setActiveTab(tabId)
         updateAccessibilityLabel()
 
-        // 通知外部（可以用于触发 Rust 渲染）
-        onTabClick?(tabId)
+        // 只有用户主动点击时才通知外部
+        if notifyExternal {
+            onTabClick?(tabId)
+        }
     }
 
     // MARK: - Private Methods
@@ -203,9 +211,9 @@ final class PanelView: NSView {
         let tabs = panel.tabs.map { (id: $0.id, title: $0.title) }
         headerView.setTabs(tabs)
 
-        // 更新激活的 Tab
+        // 更新激活的 Tab（内部同步，不触发回调）
         if let activeTab = panel.activeTab {
-            setActiveTab(activeTab.id)
+            setActiveTab(activeTab.id, notifyExternal: false)
         }
     }
 
