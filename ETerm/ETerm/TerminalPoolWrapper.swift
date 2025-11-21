@@ -171,4 +171,12 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
             cols, rows
         ) != 0
     }
+
+    /// 统一提交所有累积的 objects
+    ///
+    /// 在所有 render() 调用完成后，调用此方法统一提交所有终端的渲染内容
+    func flush() {
+        guard let handle = handle else { return }
+        terminal_pool_flush(handle)
+    }
 }

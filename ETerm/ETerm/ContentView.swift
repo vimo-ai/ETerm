@@ -11,8 +11,8 @@ import Combine
 struct ContentView: View {
     var body: some View {
         TabView {
-            // 终端 Tab - 使用 PanelLayoutKit 新架构
-            TabTerminalView()
+            // 终端 Tab - 使用 DDD 架构
+            DDDTerminalView()
                 .frame(minWidth: 800, minHeight: 600)
                 .tabItem {
                     Label("终端", systemImage: "terminal")

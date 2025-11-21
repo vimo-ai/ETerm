@@ -394,6 +394,10 @@ int terminal_pool_resize(
 /// 获取终端数量
 size_t terminal_pool_count(TerminalPoolHandle pool);
 
+/// 统一提交所有累积的 objects
+/// 在所有 render() 调用完成后，调用此函数统一提交所有终端的渲染内容
+void terminal_pool_flush(TerminalPoolHandle pool);
+
 /// 释放终端池
 void terminal_pool_free(TerminalPoolHandle pool);
 

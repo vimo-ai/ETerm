@@ -690,14 +690,21 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
     use sugarloaf::FragmentStyle;
 
-    // 渲染所有可见行
-    for (row_idx, row) in rows.iter().enumerate() {
+    // 🎯 使用终端的实际列数，而不是 grid 行的长度
+    let terminal_cols = handle_ref.cols as usize;
+    let terminal_rows = handle_ref.rows as usize;
+    eprintln!("[Rust Render] 📊 RichText {}: terminal size = {}×{}, visible_rows = {}",
+        rich_text_id, terminal_cols, terminal_rows, rows.len());
+
+    // 渲染所有可见行（限制为 terminal_rows）
+    for (row_idx, row) in rows.iter().enumerate().take(terminal_rows) {
         // 🎯 关键修复：第一行之后才调用 new_line()
         if row_idx > 0 {
             content.new_line();
         }
 
-        let cols = row.len();
+        // 🎯 使用 terminal_cols 限制渲染列数，而不是 row.len()
+        let cols = row.len().min(terminal_cols);
         // 🎯 关键：row_idx 是可见行的索引（0, 1, 2...）
         // 对于选区判断，我们使用相对于可见区域的行号
         let row_num = row_idx as i32;
@@ -2015,6 +2022,7 @@ pub struct TerminalPool {
     sugarloaf_handle: *mut SugarloafHandle,
     render_callback: Option<RenderCallback>,
     callback_context: *mut c_void,
+    pending_objects: Vec<sugarloaf::Object>,  // 累积待提交的 objects
 }
 
 /// 单个终端的信息
@@ -2033,6 +2041,7 @@ impl TerminalPool {
             sugarloaf_handle,
             render_callback: None,
             callback_context: ptr::null_mut(),
+            pending_objects: Vec::new(),  // 初始化 pending_objects
         }
     }
 
@@ -2128,9 +2137,11 @@ impl TerminalPool {
 
         // 调整终端尺寸（如果需要）
         let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        eprintln!("[TerminalPool] 📐 Resizing terminal {} to {}×{}", terminal_id, cols, rows);
         unsafe { terminal_resize(terminal_ptr, cols, rows) };
 
         // 渲染到 RichText
+        eprintln!("[TerminalPool] 📝 Rendering terminal {} to RichText ID {}", terminal_id, info.rich_text_id);
         if !unsafe {
             terminal_render_to_sugarloaf(
                 terminal_ptr,
@@ -2144,17 +2155,12 @@ impl TerminalPool {
         // 🎯 关键：设置 RichText 的渲染位置
         if let sugarloaf::Object::RichText(ref mut rich_text) = info.rich_text_object {
             rich_text.position = [x, y];
+            eprintln!("[TerminalPool] 🎨 Terminal {} RichText ID {} position: [{}, {}]", terminal_id, rich_text.id, x, y);
         }
 
-        // 🎯 只提交当前 terminal 的 RichText（避免内容叠加）
-        // 注意：Swift 端会为每个激活的 Tab 调用 render()，所以只提交一个即可
-        unsafe {
-            if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
-                // 只提交当前渲染的 terminal
-                let objects = vec![info.rich_text_object.clone()];
-                sugarloaf.set_objects(objects);
-            }
-        }
+        // 累积 RichText objects
+        self.pending_objects.push(info.rich_text_object.clone());
+        eprintln!("[TerminalPool] 📦 pending_objects count: {}", self.pending_objects.len());
 
         true
     }
@@ -2205,6 +2211,42 @@ impl TerminalPool {
     /// 获取所有终端 ID
     fn get_all_ids(&self) -> Vec<usize> {
         self.terminals.keys().copied().collect()
+    }
+
+    /// 统一提交所有累积的 objects 并清空缓冲区
+    fn flush(&mut self) {
+        eprintln!("[TerminalPool] 🚀 flush() called with {} objects", self.pending_objects.len());
+
+        // 打印每个 object 的详细信息
+        for (i, obj) in self.pending_objects.iter().enumerate() {
+            match obj {
+                sugarloaf::Object::RichText(ref rt) => {
+                    eprintln!("[TerminalPool]   Object {}: RichText ID={}, position=[{}, {}]",
+                        i, rt.id, rt.position[0], rt.position[1]);
+                }
+                sugarloaf::Object::Quad(ref quad) => {
+                    eprintln!("[TerminalPool]   Object {}: Quad position=[{}, {}], size=[{}, {}], color={:?}",
+                        i, quad.position[0], quad.position[1], quad.size[0], quad.size[1], quad.color);
+                }
+                _ => {
+                    eprintln!("[TerminalPool]   Object {}: Unknown type", i);
+                }
+            }
+        }
+
+        unsafe {
+            if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
+                // ❌ 不要调用 clear()，它会清除 RichText 内容
+                // 提交所有累积的 objects
+                eprintln!("[TerminalPool] 📤 Calling set_objects with {} objects", self.pending_objects.len());
+                sugarloaf.set_objects(self.pending_objects.clone());
+                // 🎯 关键：触发实际的 GPU 渲染
+                eprintln!("[TerminalPool] 🖥️ Calling render()");
+                sugarloaf.render();
+            }
+        }
+        // 清空缓冲区
+        self.pending_objects.clear();
     }
 }
 
@@ -2389,6 +2431,17 @@ pub extern "C" fn terminal_pool_count(pool: *mut TerminalPool) -> usize {
 
     let pool = unsafe { &*pool };
     pool.count()
+}
+
+/// 统一提交所有累积的 objects
+#[no_mangle]
+pub extern "C" fn terminal_pool_flush(pool: *mut TerminalPool) {
+    if pool.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *pool };
+    pool.flush();
 }
 
 /// 释放终端池
