@@ -87,6 +87,12 @@ class DDDContainerView: NSView {
     /// Panel UI 视图列表（在上面）
     private var panelUIViews: [UUID: DomainPanelView] = [:]
 
+    /// 分割线视图列表
+    private var dividerViews: [DividerView] = []
+
+    /// 分割线可拖拽区域宽度
+    private let dividerHitAreaWidth: CGFloat = 6.0
+
     /// Page 栏高度
     private let pageBarHeight: CGFloat = PageBarView.recommendedHeight()
 
@@ -233,6 +239,118 @@ class DDDContainerView: NSView {
                 addSubview(view)
                 panelUIViews[panel.panelId] = view
             }
+        }
+
+        // 更新分割线
+        updateDividers()
+    }
+
+    /// 更新分割线视图
+    private func updateDividers() {
+        guard let coordinator = coordinator else { return }
+
+        // 移除旧的分割线
+        dividerViews.forEach { $0.removeFromSuperview() }
+        dividerViews.removeAll()
+
+        // 从布局树计算分割线位置
+        let dividers = calculateDividers(
+            layout: coordinator.terminalWindow.rootLayout,
+            bounds: contentBounds
+        )
+
+        // 创建分割线视图
+        for (frame, direction) in dividers {
+            let view = DividerView(frame: frame)
+            view.direction = direction
+            // 分割线在 renderView 之上，但在 panelUIViews 之下
+            addSubview(view, positioned: .above, relativeTo: renderView)
+            dividerViews.append(view)
+        }
+    }
+
+    /// 递归计算分割线位置
+    ///
+    /// - Parameters:
+    ///   - layout: 布局树
+    ///   - bounds: 可用区域
+    /// - Returns: 分割线信息数组 [(frame, direction)]
+    private func calculateDividers(
+        layout: PanelLayout,
+        bounds: CGRect
+    ) -> [(frame: CGRect, direction: SplitDirection)] {
+        switch layout {
+        case .leaf:
+            return []
+
+        case .split(let direction, let first, let second, let ratio):
+            var result: [(CGRect, SplitDirection)] = []
+            let dividerThickness: CGFloat = 1.0  // 与 Page 中的一致
+
+            switch direction {
+            case .horizontal:
+                // 水平分割（左右）- 垂直分割线
+                let firstWidth = bounds.width * ratio - dividerThickness / 2
+                let dividerX = bounds.minX + firstWidth
+
+                // 分割线 frame（可拖拽区域稍宽）
+                let frame = CGRect(
+                    x: dividerX - dividerHitAreaWidth / 2 + dividerThickness / 2,
+                    y: bounds.minY,
+                    width: dividerHitAreaWidth,
+                    height: bounds.height
+                )
+                result.append((frame, direction))
+
+                // 递归处理子布局
+                let firstBounds = CGRect(
+                    x: bounds.minX,
+                    y: bounds.minY,
+                    width: firstWidth,
+                    height: bounds.height
+                )
+                let secondBounds = CGRect(
+                    x: bounds.minX + firstWidth + dividerThickness,
+                    y: bounds.minY,
+                    width: bounds.width * (1 - ratio) - dividerThickness / 2,
+                    height: bounds.height
+                )
+                result += calculateDividers(layout: first, bounds: firstBounds)
+                result += calculateDividers(layout: second, bounds: secondBounds)
+
+            case .vertical:
+                // 垂直分割（上下）- 水平分割线
+                let firstHeight = bounds.height * ratio - dividerThickness / 2
+                let secondHeight = bounds.height * (1 - ratio) - dividerThickness / 2
+                let dividerY = bounds.minY + secondHeight
+
+                // 分割线 frame
+                let frame = CGRect(
+                    x: bounds.minX,
+                    y: dividerY - dividerHitAreaWidth / 2 + dividerThickness / 2,
+                    width: bounds.width,
+                    height: dividerHitAreaWidth
+                )
+                result.append((frame, direction))
+
+                // 递归处理子布局
+                let firstBounds = CGRect(
+                    x: bounds.minX,
+                    y: bounds.minY + secondHeight + dividerThickness,
+                    width: bounds.width,
+                    height: firstHeight
+                )
+                let secondBounds = CGRect(
+                    x: bounds.minX,
+                    y: bounds.minY,
+                    width: bounds.width,
+                    height: secondHeight
+                )
+                result += calculateDividers(layout: first, bounds: firstBounds)
+                result += calculateDividers(layout: second, bounds: secondBounds)
+            }
+
+            return result
         }
     }
 
