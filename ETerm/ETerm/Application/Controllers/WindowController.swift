@@ -359,4 +359,87 @@ final class WindowController {
         let swiftPoint = coordinateMapper.rustToSwift(point: screenPoint)
         return findPanel(at: swiftPoint)
     }
+
+    // MARK: - Page Management
+
+    /// 获取当前激活的 Page
+    var activePage: Page? {
+        return window.activePage
+    }
+
+    /// 获取所有 Page
+    var allPages: [Page] {
+        return window.pages
+    }
+
+    /// Page 数量
+    var pageCount: Int {
+        return window.pageCount
+    }
+
+    /// 创建新 Page
+    ///
+    /// - Parameter title: 页面标题（可选）
+    /// - Returns: 新创建的 Page
+    @discardableResult
+    func createPage(title: String? = nil) -> Page {
+        let newPage = window.createPage(title: title)
+
+        // 为新 Page 的初始 Panel 注册 Rust ID
+        if let initialPanelId = newPage.allPanelIds.first {
+            _ = registerPanel(initialPanelId)
+        }
+
+        return newPage
+    }
+
+    /// 切换到指定 Page
+    ///
+    /// - Parameter pageId: 目标 Page ID
+    /// - Returns: 是否成功切换
+    @discardableResult
+    func switchToPage(_ pageId: UUID) -> Bool {
+        return window.switchToPage(pageId)
+    }
+
+    /// 切换到下一个 Page
+    @discardableResult
+    func switchToNextPage() -> Bool {
+        return window.switchToNextPage()
+    }
+
+    /// 切换到上一个 Page
+    @discardableResult
+    func switchToPreviousPage() -> Bool {
+        return window.switchToPreviousPage()
+    }
+
+    /// 关闭指定 Page
+    ///
+    /// - Parameter pageId: 要关闭的 Page ID
+    /// - Returns: 是否成功关闭
+    @discardableResult
+    func closePage(_ pageId: UUID) -> Bool {
+        return window.closePage(pageId)
+    }
+
+    /// 关闭当前 Page
+    @discardableResult
+    func closeCurrentPage() -> Bool {
+        guard let activePageId = window.activePageId else {
+            return false
+        }
+        return window.closePage(activePageId)
+    }
+
+    /// 重命名 Page
+    ///
+    /// - Parameters:
+    ///   - pageId: Page ID
+    ///   - newTitle: 新标题
+    /// - Returns: 是否成功
+    @discardableResult
+    func renamePage(_ pageId: UUID, to newTitle: String) -> Bool {
+        return window.renamePage(pageId, to: newTitle)
+    }
 }
