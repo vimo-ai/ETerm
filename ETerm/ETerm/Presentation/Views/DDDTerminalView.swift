@@ -490,16 +490,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         // 转换为网格坐标
         let gridPos = screenToGrid(location: location, panelId: panelId)
 
-        // 调试日志
-        print("[TextSelection] === 坐标调试 ===")
-        print("  鼠标 window: \(event.locationInWindow)")
-        print("  鼠标 view: \(location)")
-        print("  view.bounds: \(bounds)")
-        if let metrics = coordinator.fontMetrics {
-            print("  fontMetrics: cellW=\(metrics.cell_width), cellH=\(metrics.cell_height), lineH=\(metrics.line_height)")
-        }
-        print("  计算得到 grid: (\(gridPos.col), \(gridPos.row))")
-
         // 更新 Domain 层状态
         activeTab.startSelection(at: gridPos)
 
@@ -545,16 +535,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             return
         }
 
-        // 获取选中的文本（调试用）
-        if let activeTab = selectionTab,
-           let terminalId = activeTab.rustTerminalId,
-           let selection = activeTab.textSelection,
-           let coordinator = coordinator {
-            if let text = coordinator.getSelectedText(terminalId: terminalId, selection: selection) {
-                print("[TextSelection] 📋 Selected text: \"\(text)\"")
-            }
-        }
-
         // 重置选中状态
         isDraggingSelection = false
         // 注意：不清除 selectionPanelId 和 selectionTab，保持选中状态用于 Cmd+C 复制
@@ -592,11 +572,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             cellWidth = 9.6
             cellHeight = 20.0
         }
-
-        // 调试：打印 contentBounds 和 cellSize
-        print("  contentBounds: origin=\(contentBounds.origin), size=\(contentBounds.size)")
-        print("  cellSize (逻辑点): \(cellWidth) × \(cellHeight)")
-        print("  scale: \(mapper.scale)")
 
         // 使用 CoordinateMapper 转换
         let gridPos = mapper.screenToGrid(
