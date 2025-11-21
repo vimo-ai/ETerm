@@ -132,6 +132,7 @@ extension SugarloafWrapper {
         var metrics = SugarloafFontMetrics(cell_width: 0, cell_height: 0, line_height: 0)
         if sugarloaf_get_font_metrics(handle, &metrics) {
             fontMetrics = metrics
+            print("[SugarloafWrapper] Font Metrics: cell=\(metrics.cell_width)x\(metrics.cell_height), line_height=\(metrics.line_height)")
         }
     }
 }
