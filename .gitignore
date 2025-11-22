@@ -1,6 +1,7 @@
 # Xcode
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
+**/xcuserdata/
 DerivedData/
 *.xccheckout
 *.moved-aside
@@ -28,3 +29,7 @@ Cargo.lock
 # Claude/AI tool configs
 .vlaude/
 **/.vlaude/
+
+# Auto-generated docs
+DDD_REFACTORING_SUMMARY.md
+TESTING_GUIDE.md
