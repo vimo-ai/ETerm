@@ -570,8 +570,16 @@ impl Screen<'_> {
                 mods & !ModifiersState::ALT
             };
 
-            // Build key sequence for all keys including Tab/Enter/Backspace
-            let bytes = build_key_sequence(key, mods, mode);
+            let bytes = match key.logical_key.as_ref() {
+                Key::Named(NamedKey::Enter)
+                | Key::Named(NamedKey::Tab)
+                | Key::Named(NamedKey::Backspace)
+                    if !mode.contains(Mode::REPORT_ALL_KEYS_AS_ESC) =>
+                {
+                    return
+                }
+                _ => build_key_sequence(key, mods, mode),
+            };
 
             self.ctx_mut().current_mut().messenger.send_write(bytes);
 

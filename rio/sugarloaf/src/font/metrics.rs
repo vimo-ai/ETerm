@@ -8,7 +8,7 @@ use crate::font_introspector::Metrics as FontIntrospectorMetrics;
 pub struct Metrics {
     /// Recommended cell width for monospace grid
     pub cell_width: u32,
-    /// Recommended cell height for monospace grid
+    /// Recommended cell height for monospace grid  
     pub cell_height: u32,
     /// Distance from bottom of cell to text baseline
     pub cell_baseline: u32,
@@ -28,8 +28,6 @@ pub struct Metrics {
     pub box_thickness: u32,
     /// Height for cursor rendering
     pub cursor_height: u32,
-    /// Actual width of space character (for accurate grid positioning)
-    pub space_width: f32,
 }
 
 /// Font face metrics extracted from font, for consistent font metrics
@@ -68,9 +66,6 @@ pub struct FaceMetrics {
     ///
     /// NOTE: IC = Ideograph Character
     pub ic_width: Option<f64>,
-    /// Actual width of space character ' ' (U+0020)
-    /// Used for accurate grid positioning in terminal
-    pub space_width: Option<f64>,
 }
 
 impl FaceMetrics {
@@ -105,9 +100,6 @@ impl FaceMetrics {
             ex_height: Some(metrics.x_height as f64),
             // Measure actual CJK character width from the font
             ic_width: Self::measure_cjk_character_width(font_ref),
-            // Use average_width as space width (OS/2 xAvgCharWidth, already scaled)
-            // For monospace fonts, this equals the character cell width
-            space_width: Some(metrics.average_width as f64),
         }
     }
 
@@ -218,9 +210,6 @@ impl Metrics {
         // Cursor height matches cell height
         let cursor_height = cell_height;
 
-        // Use space_width if available, otherwise fallback to cell_width
-        let space_width = face.space_width.unwrap_or(cell_width) as f32;
-
         Self {
             cell_width: cell_width as u32,
             cell_height: cell_height as u32,
@@ -233,7 +222,6 @@ impl Metrics {
             overline_thickness: overline_thickness as u32,
             box_thickness: box_thickness as u32,
             cursor_height: cursor_height as u32,
-            space_width,
         }
     }
 
@@ -252,7 +240,6 @@ impl Metrics {
         metrics.cell_height = primary_metrics.cell_height;
         metrics.cell_baseline = primary_metrics.cell_baseline;
         metrics.cursor_height = primary_metrics.cursor_height;
-        metrics.space_width = primary_metrics.space_width;
 
         // Keep this font's specific positioning (underline, strikethrough, etc.)
         // This allows each font to have proper positioning within consistent cells

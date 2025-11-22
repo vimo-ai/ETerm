@@ -283,7 +283,18 @@ impl FontLibraryData {
         font_id: &usize,
         font_size: f32,
     ) -> Option<(f32, f32, f32)> {
-        let primary_metrics = self.get_primary_metrics(font_size)?;
+        let size_key = (font_size * 100.0) as u32;
+
+        // First, ensure we have primary font metrics
+        let primary_metrics =
+            if let Some(cached) = self.primary_metrics_cache.get(&size_key) {
+                *cached
+            } else {
+                let primary_font = self.inner.get_mut(&FONT_ID_REGULAR)?;
+                let primary_metrics = primary_font.get_metrics(font_size, None)?;
+                self.primary_metrics_cache.insert(size_key, primary_metrics);
+                primary_metrics
+            };
 
         match font_id {
             &FONT_ID_REGULAR => {
@@ -510,21 +521,6 @@ impl FontLibraryData {
         self.insert(FontData::from_slice(FONT_CASCADIAMONO_REGULAR, false).unwrap());
 
         vec![]
-    }
-}
-
-impl FontLibraryData {
-    /// Returns cached or freshly computed metrics for the primary font.
-    pub fn get_primary_metrics(&mut self, font_size: f32) -> Option<Metrics> {
-        let size_key = (font_size * 100.0) as u32;
-        if let Some(cached) = self.primary_metrics_cache.get(&size_key) {
-            return Some(*cached);
-        }
-
-        let primary_font = self.inner.get_mut(&FONT_ID_REGULAR)?;
-        let primary_metrics = primary_font.get_metrics(font_size, None)?;
-        self.primary_metrics_cache.insert(size_key, primary_metrics);
-        Some(primary_metrics)
     }
 }
 

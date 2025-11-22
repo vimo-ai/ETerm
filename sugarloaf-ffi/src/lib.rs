@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 use sugarloaf::{
-    font::{FontLibrary, fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle}, metrics::Metrics},
+    font::{FontLibrary, fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle}},
     layout::RootStyle, FragmentStyle, Sugarloaf, SugarloafRenderer,
     SugarloafWindow, SugarloafWindowSize, Object,
 };
@@ -24,22 +24,7 @@ pub struct SugarloafFontMetrics {
 }
 
 impl SugarloafFontMetrics {
-    /// 从 Metrics 创建 SugarloafFontMetrics
-    ///
-    /// 注意：metrics 应该是基于 scaled_font_size (font_size * scale) 计算的
-    /// 这样才能和 Sugarloaf 渲染时使用的 metrics 一致
-    ///
-    /// 返回值是物理像素，Swift 端需要除以 scale 转换为逻辑像素
-    fn from_metrics(metrics: Metrics) -> Self {
-        // 🎯 使用 space_width（空格字符的实际宽度）作为终端网格的列宽
-        // Sugarloaf 渲染时用的就是空格字符的 advance width
-        Self {
-            cell_width: metrics.space_width,
-            cell_height: metrics.cell_height as f32,
-            line_height: metrics.cell_height as f32,
-        }
-    }
-
+    /// 临时 fallback 值，创建 RichText 后会被 get_rich_text_dimensions 替换
     fn fallback(scaled_font_size: f32) -> Self {
         let cell_width = scaled_font_size * 0.6;
         let cell_height = scaled_font_size * 1.2;
@@ -85,20 +70,6 @@ impl SugarloafHandle {
 
     fn render(&mut self) {
         self.instance.render();
-    }
-
-    /// 更新字体 metrics（字体大小变化后调用）
-    fn update_font_metrics(&mut self) {
-        // 使用 scaled_font_size 获取 metrics，和 Sugarloaf 渲染时一致
-        let scaled_font_size = self.current_font_size * self.scale;
-        let metrics = {
-            let mut data = self._font_library.inner.write();
-            data.get_primary_metrics(scaled_font_size)
-                .map(SugarloafFontMetrics::from_metrics)
-                .unwrap_or_else(|| SugarloafFontMetrics::fallback(scaled_font_size))
-        };
-        self.font_metrics = metrics;
-        set_global_font_metrics(metrics);
     }
 
     /// 🎯 从 Sugarloaf 实际渲染获取精确的 dimensions
@@ -206,24 +177,9 @@ pub extern "C" fn sugarloaf_new(
 
     let (font_library, _font_errors) = FontLibrary::new(font_spec);
 
-    // 🎯 关键：使用 scaled_font_size 获取 metrics，和 Sugarloaf 渲染时一致
+    // 🎯 初始使用 fallback 值，真实值在创建 RichText 后通过 get_rich_text_dimensions 获取
     let scaled_font_size = font_size * scale;
-    let font_metrics = {
-        let mut data = font_library.inner.write();
-        let metrics = data.get_primary_metrics(scaled_font_size);
-
-        // 🔬 验证日志
-        if let Some(ref m) = metrics {
-            eprintln!("🔬 [FontMetrics] scaled_font_size={} (font_size={} × scale={})",
-                     scaled_font_size, font_size, scale);
-            eprintln!("🔬 [FontMetrics] cell_width={}, cell_height/line_height={}",
-                     m.cell_width, m.cell_height);
-        }
-
-        metrics
-            .map(SugarloafFontMetrics::from_metrics)
-            .unwrap_or_else(|| SugarloafFontMetrics::fallback(scaled_font_size))
-    };
+    let font_metrics = SugarloafFontMetrics::fallback(scaled_font_size);
     set_global_font_metrics(font_metrics);
 
     let layout = RootStyle {
