@@ -39,6 +39,9 @@ final class PageItemView: NSView {
     /// 是否正在编辑标题
     private var isEditing: Bool = false
 
+    /// 是否已经成功获得焦点（用于过滤误触发的 textDidEndEditing）
+    private var hasFocused: Bool = false
+
     /// 是否显示关闭按钮
     private var showCloseButton: Bool = true
 
@@ -76,6 +79,8 @@ final class PageItemView: NSView {
         self.editField.isBordered = true
         self.editField.bezelStyle = .roundedBezel
         self.editField.isHidden = true
+        self.editField.backgroundColor = .red  // 调试用：红色背景
+        self.editField.drawsBackground = true
 
         // 创建关闭按钮
         self.closeButton = NSButton()
@@ -161,14 +166,32 @@ final class PageItemView: NSView {
         editField.stringValue = titleLabel.stringValue
         editField.isHidden = false
         titleLabel.isHidden = true
-        editField.selectText(nil)
-        window?.makeFirstResponder(editField)
+
+        print("[PageItemView] startEditing - editField.frame: \(editField.frame)")
+        print("[PageItemView] startEditing - titleLabel.frame: \(titleLabel.frame)")
+        print("[PageItemView] startEditing - self.bounds: \(bounds)")
+        print("[PageItemView] startEditing - window: \(String(describing: window))")
+        print("[PageItemView] startEditing - editField.superview: \(String(describing: editField.superview))")
+
+        // 延迟一帧再获取焦点，等待视图层级稳定
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isEditing else { return }
+            self.editField.selectText(nil)
+            let success = self.window?.makeFirstResponder(self.editField) ?? false
+            print("[PageItemView] startEditing (async) - makeFirstResponder success: \(success)")
+            if success {
+                self.hasFocused = true
+            }
+        }
     }
 
     /// 结束编辑标题
     private func endEditing(save: Bool) {
+        print("[PageItemView] endEditing called, save=\(save), isEditing=\(isEditing), hasFocused=\(hasFocused)")
+
         guard isEditing else { return }
         isEditing = false
+        hasFocused = false
 
         if save {
             let newTitle = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -318,6 +341,14 @@ final class PageItemView: NSView {
 
 extension PageItemView: NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) {
+        print("[PageItemView] controlTextDidEndEditing - isEditing=\(isEditing), hasFocused=\(hasFocused)")
+
+        // 只有在成功获得焦点后才处理结束编辑
+        // 过滤掉"刚显示还没获得焦点就触发的 textDidEndEditing"
+        guard hasFocused else {
+            print("[PageItemView] controlTextDidEndEditing ignored - hasFocused=false")
+            return
+        }
         endEditing(save: true)
     }
 
