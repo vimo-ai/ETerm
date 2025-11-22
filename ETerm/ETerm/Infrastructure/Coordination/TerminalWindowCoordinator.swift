@@ -148,12 +148,12 @@ class TerminalWindowCoordinator: ObservableObject {
     private func scheduleRender() {
         // 取消之前的延迟任务
         pendingRenderWorkItem?.cancel()
-        print("[Render] 🔄 Scheduled render (debounced)")
+//        print("[Render] 🔄 Scheduled render (debounced)")
 
         // 创建新的延迟任务
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-            print("[Render] ✅ Executing debounced render")
+//            print("[Render] ✅ Executing debounced render")
             self.renderView?.requestRender()
         }
         pendingRenderWorkItem = workItem
@@ -679,7 +679,7 @@ class TerminalWindowCoordinator: ObservableObject {
             headerHeight: headerHeight
         )
         let getTabsTime = (CFAbsoluteTimeGetCurrent() - getTabsStart) * 1000
-        print("[Render] ⏱️ Get tabs to render (\(tabsToRender.count) tabs): \(String(format: "%.2f", getTabsTime))ms")
+//        print("[Render] ⏱️ Get tabs to render (\(tabsToRender.count) tabs): \(String(format: "%.2f", getTabsTime))ms")
 
         // 渲染每个 Tab
         guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
@@ -736,17 +736,17 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 打印每个终端的渲染耗时
         for (terminalId, time) in renderTimes {
-            print("[Render] ⏱️ Terminal \(terminalId) render: \(String(format: "%.2f", time))ms")
+//            print("[Render] ⏱️ Terminal \(terminalId) render: \(String(format: "%.2f", time))ms")
         }
 
         // 统一提交所有 objects
         let flushStart = CFAbsoluteTimeGetCurrent()
         terminalPoolWrapper.flush()
         let flushTime = (CFAbsoluteTimeGetCurrent() - flushStart) * 1000
-        print("[Render] ⏱️ Flush: \(String(format: "%.2f", flushTime))ms")
+//        print("[Render] ⏱️ Flush: \(String(format: "%.2f", flushTime))ms")
 
         let totalTime = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
-        print("[Render] ⏱️ Total renderAllPanels: \(String(format: "%.2f", totalTime))ms")
+//        print("[Render] ⏱️ Total renderAllPanels: \(String(format: "%.2f", totalTime))ms")
     }
 
     // MARK: - Page Management
