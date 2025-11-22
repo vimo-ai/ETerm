@@ -675,7 +675,9 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
     let rows = terminal.visible_rows();
     let _debug_overlay = false;
-    let _cursor = terminal.cursor();
+    let cursor = terminal.cursor();
+    let cursor_row = cursor.pos.row.0 as usize;
+    let cursor_col = cursor.pos.col.0 as usize;
 
     // 🎯 获取选区范围（用于高亮）
     let selection_range = handle_ref.selection.lock().clone();
@@ -684,7 +686,7 @@ pub extern "C" fn terminal_render_to_sugarloaf(
     let content = sugarloaf_ref.instance.content();
     content.sel(rich_text_id).clear();
 
-    use sugarloaf::FragmentStyle;
+    use sugarloaf::{FragmentStyle, SugarCursor};
 
     // 🎯 使用终端的实际列数，而不是 grid 行的长度
     let terminal_cols = handle_ref.cols as usize;
@@ -705,7 +707,8 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
         // 跟踪当前颜色和选区状态，以便批量渲染相同样式的字符
         let mut current_line = String::new();
-        let mut current_style: Option<((u8, u8, u8), f32, bool)> = None;  // 添加 is_selected
+        // (fg_color, glyph_width, is_selected, is_cursor)
+        let mut current_style: Option<((u8, u8, u8), f32, bool, bool)> = None;
 
         for col in 0..cols {
             let cell = &row.inner[col];
@@ -729,19 +732,23 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                 .map(|range| range.contains(col as u16, row_num))
                 .unwrap_or(false);
 
+            // 🎯 检查当前位置是否是光标位置
+            let is_cursor = row_idx == cursor_row && col == cursor_col;
+
             // 🎯 关键修复：在添加当前字符前,检查样式是否改变
             // 如果改变了,先 flush 之前累积的文本
-            let style_changed = if let Some((prev_fg, prev_width, prev_selected)) = current_style {
+            let style_changed = if let Some((prev_fg, prev_width, prev_selected, prev_cursor)) = current_style {
                 prev_fg != fg_color
                     || (prev_width - glyph_width).abs() > f32::EPSILON
                     || prev_selected != is_selected  // 选区状态改变
+                    || prev_cursor != is_cursor      // 光标状态改变
             } else {
                 false
             };
 
             if style_changed && !current_line.is_empty() {
                 // Flush 之前的文本（使用之前的样式）
-                if let Some((prev_fg, prev_width, prev_selected)) = current_style {
+                if let Some((prev_fg, prev_width, prev_selected, prev_cursor)) = current_style {
                     let (r, g, b) = prev_fg;
                     let mut style = FragmentStyle {
                         color: [
@@ -759,17 +766,22 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                         style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
                     }
 
+                    // 🎯 应用光标样式
+                    if prev_cursor {
+                        style.cursor = Some(SugarCursor::Block([1.0, 1.0, 1.0, 1.0])); // 白色方块光标
+                    }
+
                     content.add_text(&current_line, style);
                     current_line.clear();
                 }
             }
 
             current_line.push(cell.c);
-            current_style = Some((fg_color, glyph_width, is_selected));  // 🎯 保存选区状态
+            current_style = Some((fg_color, glyph_width, is_selected, is_cursor));  // 🎯 保存选区和光标状态
         }
 
         if !current_line.is_empty() {
-            if let Some(((r, g, b), width, is_selected)) = current_style {
+            if let Some(((r, g, b), width, is_selected, is_cursor)) = current_style {
                 let mut style = FragmentStyle {
                     color: [
                         r as f32 / 255.0,
@@ -784,6 +796,11 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                 // 🎨 应用选区高亮
                 if is_selected {
                     style.background_color = Some([0.3, 0.5, 0.8, 0.6]);  // 蓝色半透明背景
+                }
+
+                // 🎯 应用光标样式
+                if is_cursor {
+                    style.cursor = Some(SugarCursor::Block([1.0, 1.0, 1.0, 1.0])); // 白色方块光标
                 }
 
                 content.add_text(&current_line, style);
