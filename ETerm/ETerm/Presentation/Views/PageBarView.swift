@@ -75,31 +75,49 @@ final class PageBarView: NSView {
     ///
     /// - Parameter pages: Page 数据列表（按顺序）
     func setPages(_ pages: [(id: UUID, title: String)]) {
-        // 移除旧的 PageItemView
-        pageItemViews.forEach { $0.removeFromSuperview() }
-        pageItemViews.removeAll()
+        let newIds = Set(pages.map { $0.id })
+        let existingIds = Set(pageItemViews.map { $0.pageId })
 
-        // 计算是否显示关闭按钮（只有一个 Page 时不显示）
+        // 1. 删除不再存在的 Page
+        let toRemove = pageItemViews.filter { !newIds.contains($0.pageId) }
+        toRemove.forEach { $0.removeFromSuperview() }
+        pageItemViews.removeAll { !newIds.contains($0.pageId) }
+
+        // 2. 计算是否显示关闭按钮
         let showCloseButton = pages.count > 1
 
-        // 创建新的 PageItemView（保持顺序）
+        // 3. 更新已存在的，创建新的
         for page in pages {
-            let pageView = PageItemView(pageId: page.id, title: page.title)
-            pageView.setShowCloseButton(showCloseButton)
-            pageView.onTap = { [weak self] in
-                self?.onPageClick?(page.id)
+            if let existingView = pageItemViews.first(where: { $0.pageId == page.id }) {
+                // 已存在：只更新标题和关闭按钮状态
+                existingView.setTitle(page.title)
+                existingView.setShowCloseButton(showCloseButton)
+            } else {
+                // 新的：创建 View
+                let pageView = PageItemView(pageId: page.id, title: page.title)
+                pageView.setShowCloseButton(showCloseButton)
+                pageView.onTap = { [weak self] in
+                    self?.onPageClick?(page.id)
+                }
+                pageView.onClose = { [weak self] in
+                    self?.onPageClose?(page.id)
+                }
+                pageView.onRename = { [weak self] newTitle in
+                    self?.onPageRename?(page.id, newTitle)
+                }
+                pageContainer.addSubview(pageView)
+                pageItemViews.append(pageView)
             }
-            pageView.onClose = { [weak self] in
-                self?.onPageClose?(page.id)
-            }
-            pageView.onRename = { [weak self] newTitle in
-                self?.onPageRename?(page.id, newTitle)
-            }
-            pageContainer.addSubview(pageView)
-            pageItemViews.append(pageView)
         }
 
-        // 更新激活状态
+        // 4. 按 pages 顺序重新排序 pageItemViews
+        pageItemViews.sort { view1, view2 in
+            let idx1 = pages.firstIndex(where: { $0.id == view1.pageId }) ?? Int.max
+            let idx2 = pages.firstIndex(where: { $0.id == view2.pageId }) ?? Int.max
+            return idx1 < idx2
+        }
+
+        // 5. 更新激活状态
         if let activeId = activePageId {
             setActivePage(activeId)
         }
