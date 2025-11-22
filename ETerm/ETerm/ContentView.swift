@@ -58,10 +58,10 @@ struct ContentView: View {
 
         // 设置窗口透明
         window.isOpaque = false
-        window.backgroundColor = .clear
+//        window.backgroundColor = .clear
 
         // 设置毛玻璃效果
-        window.titlebarAppearsTransparent = true
+        // window.titlebarAppearsTransparent = true
     }
 
     /// 监听窗口跨屏幕移动事件
