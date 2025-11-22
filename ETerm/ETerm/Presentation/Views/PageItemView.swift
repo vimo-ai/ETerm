@@ -263,10 +263,14 @@ final class PageItemView: NSView {
             return
         }
 
+        print("[PageItemView] mouseUp clickCount=\(event.clickCount) pageId=\(pageId.uuidString.prefix(8))")
+
         // 根据点击次数处理：双击编辑，单击切换
         if event.clickCount == 2 {
+            print("[PageItemView] → startEditing()")
             startEditing()
         } else if event.clickCount == 1 {
+            print("[PageItemView] → onTap()")
             onTap?()
         }
 
