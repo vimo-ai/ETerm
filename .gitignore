@@ -24,3 +24,7 @@ Cargo.lock
 *.dylib
 *.so
 *.a
+
+# Claude/AI tool configs
+.vlaude/
+**/.vlaude/
