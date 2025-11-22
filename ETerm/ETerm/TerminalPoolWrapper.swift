@@ -157,6 +157,17 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         endCol: UInt16
     ) -> Bool {
         guard let handle = handle else { return false }
+
+        // 防御性检查：验证坐标有效性
+        let maxRow: UInt16 = 10000
+        let maxCol: UInt16 = 500
+
+        guard startRow <= maxRow, endRow <= maxRow,
+              startCol <= maxCol, endCol <= maxCol else {
+            print("[TerminalPoolWrapper] ⚠️ setSelection: 坐标超出范围 - startRow:\(startRow) startCol:\(startCol) endRow:\(endRow) endCol:\(endCol)")
+            return false
+        }
+
         return terminal_pool_set_selection(
             handle,
             terminalId,
@@ -191,6 +202,17 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         endCol: UInt16
     ) -> String? {
         guard let handle = handle else { return nil }
+
+        // 防御性检查：验证坐标有效性
+        // 行号和列号应该在合理范围内（假设最大 10000 行，500 列）
+        let maxRow: UInt16 = 10000
+        let maxCol: UInt16 = 500
+
+        guard startRow <= maxRow, endRow <= maxRow,
+              startCol <= maxCol, endCol <= maxCol else {
+            print("[TerminalPoolWrapper] ⚠️ getTextRange: 坐标超出范围 - startRow:\(startRow) startCol:\(startCol) endRow:\(endRow) endCol:\(endCol)")
+            return nil
+        }
 
         // 分配足够大的缓冲区
         let maxChars = Int(abs(Int32(endRow) - Int32(startRow)) + 1) * 256
