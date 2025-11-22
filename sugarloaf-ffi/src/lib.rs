@@ -24,22 +24,29 @@ pub struct SugarloafFontMetrics {
 }
 
 impl SugarloafFontMetrics {
+    /// 从 Metrics 创建 SugarloafFontMetrics
+    ///
+    /// 注意：metrics 应该是基于 scaled_font_size (font_size * scale) 计算的
+    /// 这样才能和 Sugarloaf 渲染时使用的 metrics 一致
+    ///
+    /// 返回值是物理像素，Swift 端需要除以 scale 转换为逻辑像素
     fn from_metrics(metrics: Metrics) -> Self {
-        // 🎯 二分法: (1.875 + 2.0) / 2 = 1.9375
+        // 🎯 使用 space_width（空格字符的实际宽度）作为终端网格的列宽
+        // Sugarloaf 渲染时用的就是空格字符的 advance width
         Self {
-            cell_width: metrics.cell_width as f32,
+            cell_width: metrics.space_width,
             cell_height: metrics.cell_height as f32,
-            line_height: metrics.cell_height as f32 * 1.9375,
+            line_height: metrics.cell_height as f32,
         }
     }
 
-    fn fallback(font_size: f32) -> Self {
-        let cell_width = font_size * 0.6;
-        let cell_height = font_size * 1.2;
+    fn fallback(scaled_font_size: f32) -> Self {
+        let cell_width = scaled_font_size * 0.6;
+        let cell_height = scaled_font_size * 1.2;
         Self {
             cell_width,
             cell_height,
-            line_height: cell_height * 1.9375,
+            line_height: cell_height,
         }
     }
 }
@@ -61,6 +68,10 @@ pub struct SugarloafHandle {
     current_rt_id: Option<usize>,
     _font_library: FontLibrary,
     font_metrics: SugarloafFontMetrics,
+    /// 当前字体大小（用于追踪字体大小变化后更新 metrics）
+    current_font_size: f32,
+    /// 显示器缩放因子 (用于计算物理像素)
+    scale: f32,
 }
 
 impl SugarloafHandle {
@@ -74,6 +85,39 @@ impl SugarloafHandle {
 
     fn render(&mut self) {
         self.instance.render();
+    }
+
+    /// 更新字体 metrics（字体大小变化后调用）
+    fn update_font_metrics(&mut self) {
+        // 使用 scaled_font_size 获取 metrics，和 Sugarloaf 渲染时一致
+        let scaled_font_size = self.current_font_size * self.scale;
+        let metrics = {
+            let mut data = self._font_library.inner.write();
+            data.get_primary_metrics(scaled_font_size)
+                .map(SugarloafFontMetrics::from_metrics)
+                .unwrap_or_else(|| SugarloafFontMetrics::fallback(scaled_font_size))
+        };
+        self.font_metrics = metrics;
+        set_global_font_metrics(metrics);
+    }
+
+    /// 🎯 从 Sugarloaf 实际渲染获取精确的 dimensions
+    /// 这是 Rio 使用的方式，通过渲染一个空格字符来获取精确的 cell 尺寸
+    fn update_font_metrics_from_dimensions(&mut self, rt_id: usize) {
+        let dimensions = self.instance.get_rich_text_dimensions(&rt_id);
+
+        // dimensions.width 和 height 是物理像素
+        let metrics = SugarloafFontMetrics {
+            cell_width: dimensions.width,
+            cell_height: dimensions.height,
+            line_height: dimensions.height,
+        };
+
+        eprintln!("🎯 [FontMetrics from Sugarloaf] rt_id={}, width={}, height={}, scale={}",
+                 rt_id, dimensions.width, dimensions.height, dimensions.scale);
+
+        self.font_metrics = metrics;
+        set_global_font_metrics(metrics);
     }
 }
 
@@ -162,12 +206,23 @@ pub extern "C" fn sugarloaf_new(
 
     let (font_library, _font_errors) = FontLibrary::new(font_spec);
 
+    // 🎯 关键：使用 scaled_font_size 获取 metrics，和 Sugarloaf 渲染时一致
+    let scaled_font_size = font_size * scale;
     let font_metrics = {
         let mut data = font_library.inner.write();
-        let metrics = data.get_primary_metrics(font_size);
+        let metrics = data.get_primary_metrics(scaled_font_size);
+
+        // 🔬 验证日志
+        if let Some(ref m) = metrics {
+            eprintln!("🔬 [FontMetrics] scaled_font_size={} (font_size={} × scale={})",
+                     scaled_font_size, font_size, scale);
+            eprintln!("🔬 [FontMetrics] cell_width={}, cell_height/line_height={}",
+                     m.cell_width, m.cell_height);
+        }
+
         metrics
             .map(SugarloafFontMetrics::from_metrics)
-            .unwrap_or_else(|| SugarloafFontMetrics::fallback(font_size))
+            .unwrap_or_else(|| SugarloafFontMetrics::fallback(scaled_font_size))
     };
     set_global_font_metrics(font_metrics);
 
@@ -197,6 +252,8 @@ pub extern "C" fn sugarloaf_new(
         current_rt_id: None,
         _font_library: font_library,
         font_metrics,
+        current_font_size: font_size,
+        scale,
     });
     Box::into_raw(handle)
 }
@@ -211,6 +268,11 @@ pub extern "C" fn sugarloaf_create_rich_text(handle: *mut SugarloafHandle) -> us
     let handle = unsafe { &mut *handle };
     let rt_id = handle.instance.create_rich_text();
     handle.current_rt_id = Some(rt_id);
+
+    // 🎯 关键：从 Sugarloaf 获取实际渲染使用的 dimensions
+    // 这是 Rio 的做法，保证 Swift 侧计算的网格位置与渲染完全一致
+    handle.update_font_metrics_from_dimensions(rt_id);
+
     rt_id
 }
 
@@ -560,6 +622,45 @@ pub extern "C" fn sugarloaf_rescale(
     eprintln!("[Sugarloaf FFI] 🔄 Rescaling Sugarloaf to scale {}", scale);
     handle.instance.rescale(scale);
     eprintln!("[Sugarloaf FFI] ✅ Rescale completed");
+}
+
+/// 字体大小操作类型
+/// 0 = Reset (重置为默认)
+/// 1 = Decrease (减小)
+/// 2 = Increase (增大)
+#[no_mangle]
+pub extern "C" fn sugarloaf_change_font_size(
+    handle: *mut SugarloafHandle,
+    rich_text_id: usize,
+    operation: u8,
+) {
+    if handle.is_null() {
+        eprintln!("[Sugarloaf FFI] change_font_size() called with null handle!");
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let op_name = match operation {
+        0 => "Reset",
+        1 => "Decrease",
+        2 => "Increase",
+        _ => "Unknown",
+    };
+    eprintln!("[Sugarloaf FFI] 🔤 Changing font size: {} for rich_text_id={}", op_name, rich_text_id);
+    handle.instance.set_rich_text_font_size_based_on_action(&rich_text_id, operation);
+
+    // 更新追踪的字体大小
+    match operation {
+        0 => handle.current_font_size = 12.0, // Reset 到默认值
+        1 => handle.current_font_size = (handle.current_font_size - 1.0).max(6.0), // Decrease
+        2 => handle.current_font_size = (handle.current_font_size + 1.0).min(100.0), // Increase
+        _ => {}
+    }
+
+    // 🎯 从 Sugarloaf 获取实际渲染使用的 dimensions（字体大小变化后需要重新获取）
+    handle.update_font_metrics_from_dimensions(rich_text_id);
+
+    eprintln!("[Sugarloaf FFI] ✅ Font size change completed, new size: {}", handle.current_font_size);
 }
 
 /// Free Sugarloaf instance

@@ -895,8 +895,9 @@ impl TabManager {
         let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
 
         // 计算初始尺寸（基于 cols 和 rows）
+        // 注意：fallback 使用 scaled_font_size=28 (font_size=14 × scale=2.0)
         let font_metrics = crate::global_font_metrics().unwrap_or_else(|| {
-            crate::SugarloafFontMetrics::fallback(14.0)
+            crate::SugarloafFontMetrics::fallback(28.0)
         });
 
         let width = (self.cols as f32) * font_metrics.cell_width;
@@ -2103,7 +2104,7 @@ impl TerminalPool {
         x: f32,
         y: f32,
         width: f32,
-        height: f32,
+        _height: f32,
         cols: u16,
         rows: u16,
     ) -> bool {
@@ -2138,6 +2139,57 @@ impl TerminalPool {
 
         // 累积 RichText objects
         self.pending_objects.push(info.rich_text_object.clone());
+
+        // 🔬 调试：画行线和列线
+        unsafe {
+            if let Some(sugarloaf) = self.sugarloaf_handle.as_ref() {
+                // font_metrics 是物理像素，除以 scale 得到逻辑像素
+                let scale = sugarloaf.scale;
+                let logical_line_height = sugarloaf.font_metrics.line_height / scale;
+                let logical_cell_width = sugarloaf.font_metrics.cell_width / scale;
+                let line_thickness = 1.0; // 1 逻辑像素粗的线
+
+                eprintln!("🔬 [DrawGrid] cell_width(物理)={}, line_height(物理)={}, scale={}",
+                    sugarloaf.font_metrics.cell_width, sugarloaf.font_metrics.line_height, scale);
+                eprintln!("🔬 [DrawGrid] cell_width(逻辑)={}, line_height(逻辑)={}",
+                    logical_cell_width, logical_line_height);
+
+                // 画行线（水平红线）
+                for row in 0..=rows {
+                    let line_y = y + row as f32 * logical_line_height;
+                    let line_quad = sugarloaf::components::quad::Quad {
+                        color: [1.0, 0.0, 0.0, 0.5], // 半透明红色
+                        position: [x, line_y],
+                        size: [width, line_thickness],
+                        border_color: [0.0, 0.0, 0.0, 0.0],
+                        border_radius: [0.0, 0.0, 0.0, 0.0],
+                        border_width: 0.0,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur_radius: 0.0,
+                    };
+                    self.pending_objects.push(sugarloaf::Object::Quad(line_quad));
+                }
+
+                // 画列线（垂直蓝线）
+                let grid_height = rows as f32 * logical_line_height;
+                for col in 0..=cols {
+                    let line_x = x + col as f32 * logical_cell_width;
+                    let col_quad = sugarloaf::components::quad::Quad {
+                        color: [0.0, 0.0, 1.0, 0.5], // 半透明蓝色
+                        position: [line_x, y],
+                        size: [line_thickness, grid_height],
+                        border_color: [0.0, 0.0, 0.0, 0.0],
+                        border_radius: [0.0, 0.0, 0.0, 0.0],
+                        border_width: 0.0,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur_radius: 0.0,
+                    };
+                    self.pending_objects.push(sugarloaf::Object::Quad(col_quad));
+                }
+            }
+        }
 
         true
     }
@@ -2202,6 +2254,41 @@ impl TerminalPool {
         }
         // 清空缓冲区
         self.pending_objects.clear();
+    }
+
+    /// 调整所有终端的字体大小
+    /// operation: 0 = Reset, 1 = Decrease, 2 = Increase
+    fn change_all_font_sizes(&mut self, operation: u8) {
+        unsafe {
+            if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
+                // 遍历所有终端，调整每个的字体大小
+                for info in self.terminals.values() {
+                    sugarloaf.instance.set_rich_text_font_size_based_on_action(
+                        &info.rich_text_id,
+                        operation,
+                    );
+                }
+
+                // 更新追踪的字体大小
+                match operation {
+                    0 => sugarloaf.current_font_size = 12.0, // Reset 到默认值
+                    1 => sugarloaf.current_font_size = (sugarloaf.current_font_size - 1.0).max(6.0),
+                    2 => sugarloaf.current_font_size = (sugarloaf.current_font_size + 1.0).min(100.0),
+                    _ => {}
+                }
+
+                // 🎯 从 Sugarloaf 获取实际渲染使用的 dimensions
+                // 使用任意一个终端的 rich_text_id（字体是全局的，所有终端共享）
+                if let Some(first_info) = self.terminals.values().next() {
+                    sugarloaf.update_font_metrics_from_dimensions(first_info.rich_text_id);
+                }
+
+                eprintln!(
+                    "[TerminalPool] 🔤 Font size changed to {}, metrics updated",
+                    sugarloaf.current_font_size
+                );
+            }
+        }
     }
 }
 
@@ -2518,4 +2605,19 @@ pub extern "C" fn terminal_pool_get_input_row(
     } else {
         0
     }
+}
+
+/// 调整所有终端的字体大小
+/// operation: 0 = Reset, 1 = Decrease, 2 = Increase
+#[no_mangle]
+pub extern "C" fn terminal_pool_change_font_size(
+    pool: *mut TerminalPool,
+    operation: u8,
+) {
+    if pool.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *pool };
+    pool.change_all_font_sizes(operation);
 }

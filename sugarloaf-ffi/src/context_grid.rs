@@ -622,8 +622,9 @@ impl ContextGrid {
                       pane_id, old_width, old_height, new_width, new_height);
 
             // 🎯 重新计算终端网格尺寸（基于新的 pane 尺寸）
+            // 注意：fallback 使用 scaled_font_size=28 (font_size=14 × scale=2.0)
             let font_metrics = crate::global_font_metrics().unwrap_or_else(|| {
-                crate::SugarloafFontMetrics::fallback(14.0)
+                crate::SugarloafFontMetrics::fallback(28.0)
             });
 
             // new_width 和 new_height 本身就是逻辑坐标，直接使用
@@ -873,20 +874,22 @@ impl ContextGrid {
 
     // ✅ 保留：辅助方法（用于终端尺寸计算）
     fn calculate_cols(&self, width_pixels: f32) -> u16 {
+        // 注意：fallback 使用 scaled_font_size=28 (font_size=14 × scale=2.0)
         let metrics = crate::global_font_metrics().unwrap_or_else(|| {
-            crate::SugarloafFontMetrics::fallback(14.0)
+            crate::SugarloafFontMetrics::fallback(28.0)
         });
-        // metrics.cell_width 是像素值，width_pixels 也是像素值
+        // metrics.cell_width 是物理像素值，width_pixels 也是物理像素值
         let cols = (width_pixels / metrics.cell_width).max(2.0) as u16;
         cols
     }
 
     /// 根据像素高度计算终端行数
     fn calculate_rows(&self, height_pixels: f32) -> u16 {
+        // 注意：fallback 使用 scaled_font_size=28 (font_size=14 × scale=2.0)
         let metrics = crate::global_font_metrics().unwrap_or_else(|| {
-            crate::SugarloafFontMetrics::fallback(14.0)
+            crate::SugarloafFontMetrics::fallback(28.0)
         });
-        // metrics.line_height 是像素值，height_pixels 也是像素值
+        // metrics.line_height 是物理像素值，height_pixels 也是物理像素值
         let rows = (height_pixels / metrics.line_height).max(1.0) as u16;
         rows
     }
