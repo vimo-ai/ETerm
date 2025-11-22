@@ -582,6 +582,22 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         renderLock.unlock()
     }
 
+    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
+        // 通过 TerminalPoolWrapper 调整所有终端的字体大小
+        if let terminalPool = coordinator?.getTerminalPool() {
+            terminalPool.changeFontSize(operation: operation)
+
+            // 字体大小变化后刷新并更新 fontMetrics
+            sugarloaf?.refreshFontMetrics()
+            if let metrics = sugarloaf?.fontMetrics {
+                coordinator?.updateFontMetrics(metrics)
+            }
+
+            // 触发重新渲染
+            requestRender()
+        }
+    }
+
     private func performRender() {
         // 从 AR 获取数据并渲染
         // flush() 内部已经调用了 render()，不需要再调用
@@ -619,6 +635,9 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             .cmd("]"),           // 前进 → 下一个 Tab
             .cmdShift("["),      // → 上一个 Page
             .cmdShift("]"),      // → 下一个 Page
+            .cmd("="),           // 系统缩放 → 增大字体
+            .cmd("-"),           // 系统缩放 → 减小字体
+            .cmd("0"),           // 系统缩放 → 重置字体
         ]
 
         // 检查是否需要拦截
@@ -816,9 +835,12 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             // fontMetrics 是物理像素，需要转换为逻辑点
             cellWidth = CGFloat(metrics.cell_width) / mapper.scale
             cellHeight = CGFloat(metrics.line_height) / mapper.scale
+            print("🔬🔬 [GridPos] metrics存在: cell_width=\(metrics.cell_width), line_height=\(metrics.line_height), scale=\(mapper.scale)")
+            print("🔬🔬 [GridPos] 转换后: cellWidth=\(cellWidth), cellHeight=\(cellHeight)")
         } else {
             cellWidth = 9.6
             cellHeight = 20.0
+            print("🔬🔬 [GridPos] metrics为nil, 使用硬编码: cellWidth=9.6, cellHeight=20.0")
         }
 
         // 使用 CoordinateMapper 转换

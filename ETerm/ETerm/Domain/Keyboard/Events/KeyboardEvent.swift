@@ -43,6 +43,13 @@ enum KeyboardEvent: Equatable {
     case clearSelection
 
     // ─────────────────────────────────────────
+    // 字体大小
+    // ─────────────────────────────────────────
+    case increaseFontSize
+    case decreaseFontSize
+    case resetFontSize
+
+    // ─────────────────────────────────────────
     // 终端输入
     // ─────────────────────────────────────────
     case terminalInput(String)

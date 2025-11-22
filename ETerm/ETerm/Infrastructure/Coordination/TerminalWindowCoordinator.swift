@@ -24,6 +24,9 @@ import PanelLayoutKit
 /// 渲染视图协议 - 统一不同的 RenderView 实现
 protocol RenderViewProtocol: AnyObject {
     func requestRender()
+
+    /// 调整字体大小
+    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation)
 }
 
 /// 智能关闭结果
@@ -163,6 +166,18 @@ class TerminalWindowCoordinator: ObservableObject {
     }
 
     // MARK: - Terminal Pool Management
+
+    /// 获取终端池（用于字体大小调整等操作）
+    func getTerminalPool() -> TerminalPoolWrapper? {
+        return terminalPool as? TerminalPoolWrapper
+    }
+
+    /// 调整字体大小
+    ///
+    /// - Parameter operation: 字体大小操作（增大、减小、重置）
+    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
+        renderView?.changeFontSize(operation: operation)
+    }
 
     /// 设置终端池（由 PanelRenderView 初始化后调用）
     func setTerminalPool(_ pool: TerminalPoolProtocol) {

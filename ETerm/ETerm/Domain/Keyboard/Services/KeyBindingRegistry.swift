@@ -75,6 +75,13 @@ final class KeyBindingRegistry {
 
         // Escape 清除选中（仅在 selection 模式）
         register(.escape, event: .clearSelection, modes: [.selection])
+
+        // ─────────────────────────────────────────
+        // 字体大小 (Cmd+= 放大, Cmd+- 缩小, Cmd+0 重置)
+        // ─────────────────────────────────────────
+        register(.cmd("="), event: .increaseFontSize)
+        register(.cmd("-"), event: .decreaseFontSize)
+        register(.cmd("0"), event: .resetFontSize)
     }
 
     // MARK: - 注册

@@ -110,6 +110,21 @@ class SugarloafWrapper {
         sugarloaf_rescale(handle, scale)
     }
 
+    /// 字体大小操作
+    enum FontSizeOperation: UInt8 {
+        case reset = 0
+        case decrease = 1
+        case increase = 2
+    }
+
+    /// 调整字体大小
+    func changeFontSize(richTextId: Int, operation: FontSizeOperation) {
+        guard let handle = handle else { return }
+        sugarloaf_change_font_size(handle, richTextId, operation.rawValue)
+        // 更新 fontMetrics
+        refreshFontMetrics()
+    }
+
     /// 调用纯 Rust 的富文本 demo
     func renderRustDemo() {
         guard let handle = handle else {
@@ -127,7 +142,8 @@ class SugarloafWrapper {
 }
 
 extension SugarloafWrapper {
-    private func refreshFontMetrics() {
+    /// 刷新字体度量（字体大小变化后调用）
+    func refreshFontMetrics() {
         guard let handle = handle else { return }
         var metrics = SugarloafFontMetrics(cell_width: 0, cell_height: 0, line_height: 0)
         if sugarloaf_get_font_metrics(handle, &metrics) {

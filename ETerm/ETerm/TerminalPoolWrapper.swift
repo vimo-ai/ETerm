@@ -293,4 +293,14 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         guard let handle = handle else { return }
         terminal_pool_flush(handle)
     }
+
+    // MARK: - 字体大小调整
+
+    /// 调整所有终端的字体大小
+    ///
+    /// - Parameter operation: 字体大小操作类型
+    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
+        guard let handle = handle else { return }
+        terminal_pool_change_font_size(handle, operation.rawValue)
+    }
 }

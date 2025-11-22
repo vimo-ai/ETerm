@@ -61,6 +61,14 @@ void sugarloaf_resize(SugarloafHandle handle, float width, float height);
 // Rescale Sugarloaf (for DPI changes)
 void sugarloaf_rescale(SugarloafHandle handle, float scale);
 
+// Font size operations
+// operation: 0 = Reset, 1 = Decrease, 2 = Increase
+void sugarloaf_change_font_size(
+    SugarloafHandle handle,
+    size_t rich_text_id,
+    unsigned char operation
+);
+
 // Cleanup
 void sugarloaf_free(SugarloafHandle handle);
 
@@ -438,6 +446,13 @@ int terminal_pool_get_input_row(
     TerminalPoolHandle pool,
     size_t terminal_id,
     unsigned short* out_row
+);
+
+/// 调整所有终端的字体大小
+/// operation: 0 = Reset, 1 = Decrease, 2 = Increase
+void terminal_pool_change_font_size(
+    TerminalPoolHandle pool,
+    unsigned char operation
 );
 
 // =============================================================================

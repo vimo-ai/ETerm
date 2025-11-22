@@ -40,6 +40,18 @@ final class GlobalShortcutHandler: KeyboardEventHandler {
         case .closePage:
             return coordinator?.closeCurrentPage() == true ? .consumed : .ignored
 
+        case .increaseFontSize:
+            coordinator?.changeFontSize(operation: .increase)
+            return .consumed
+
+        case .decreaseFontSize:
+            coordinator?.changeFontSize(operation: .decrease)
+            return .consumed
+
+        case .resetFontSize:
+            coordinator?.changeFontSize(operation: .reset)
+            return .consumed
+
         default:
             return .ignored
         }
