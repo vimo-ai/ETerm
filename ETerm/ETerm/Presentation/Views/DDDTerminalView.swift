@@ -596,7 +596,65 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         return true
     }
 
+    // MARK: - 拦截系统快捷键
+
+    /// 拦截菜单快捷键（在 keyDown 之前调用）
+    ///
+    /// 用于拦截 Cmd+W、Cmd+T 等会被系统菜单处理的快捷键
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let keyboardSystem = coordinator?.keyboardSystem else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        let keyStroke = KeyStroke.from(event)
+
+        // 需要拦截的系统快捷键（会被系统菜单处理）
+        let interceptedShortcuts: [KeyStroke] = [
+            .cmd("w"),           // 关闭窗口 → 关闭 Tab
+            .cmd("t"),           // 新建窗口 → 新建 Tab
+            .cmd("n"),           // 新建窗口 → 可能需要处理
+            .cmdShift("w"),      // 关闭所有 → 关闭 Page
+            .cmdShift("t"),      // 重新打开 → 新建 Page
+            .cmd("["),           // 后退 → 上一个 Tab
+            .cmd("]"),           // 前进 → 下一个 Tab
+            .cmdShift("["),      // → 上一个 Page
+            .cmdShift("]"),      // → 下一个 Page
+        ]
+
+        // 检查是否需要拦截
+        let shouldIntercept = interceptedShortcuts.contains { $0.matches(keyStroke) }
+
+        if shouldIntercept {
+            let result = keyboardSystem.handleKeyDown(event)
+            switch result {
+            case .handled:
+                return true  // 告诉系统我们已经处理了
+            case .passToIME:
+                return false  // 交给系统处理
+            }
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
+        // 使用键盘系统处理
+        if let keyboardSystem = coordinator?.keyboardSystem {
+            let result = keyboardSystem.handleKeyDown(event)
+
+            switch result {
+            case .handled:
+                // 已处理，不做任何事
+                return
+
+            case .passToIME:
+                // 交给输入法处理
+                interpretKeyEvents([event])
+                return
+            }
+        }
+
+        // 降级处理：如果没有键盘系统，使用原有逻辑
         guard let coordinator = coordinator,
               let characters = event.characters else {
             super.keyDown(with: event)
@@ -605,24 +663,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
 
         guard let activeTerminalId = coordinator.getActiveTerminalId() else {
             super.keyDown(with: event)
-            return
-        }
-
-        let char = event.charactersIgnoringModifiers ?? ""
-        let modifiers = event.modifierFlags
-
-        // 粘贴快捷键（Cmd+V 或 Ctrl+V）
-        if (modifiers.contains(.command) || modifiers.contains(.control)) && char == "v" {
-            let pasteboard = NSPasteboard.general
-            if let text = pasteboard.string(forType: .string) {
-                coordinator.writeInput(terminalId: activeTerminalId, data: text)
-            }
-            return
-        }
-
-        // 复制快捷键（Cmd+C）- Ctrl+C 作为中断信号
-        if modifiers.contains(.command) && char == "c" {
-            // TODO: 实现复制逻辑（需要文本选择功能）
             return
         }
 
@@ -826,6 +866,81 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         shouldStopReading = true
         if let displayLink = displayLink {
             CVDisplayLinkStop(displayLink)
+        }
+    }
+}
+
+// MARK: - NSTextInputClient
+
+extension DDDPanelRenderView: NSTextInputClient {
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        let text: String
+        if let str = string as? String {
+            text = str
+        } else if let attrStr = string as? NSAttributedString {
+            text = attrStr.string
+        } else {
+            text = ""
+        }
+
+        // 通知 IME 协调器
+        coordinator?.keyboardSystem?.imeCoordinator.setMarkedText(text)
+    }
+
+    func unmarkText() {
+        coordinator?.keyboardSystem?.imeCoordinator.cancelComposition()
+    }
+
+    func selectedRange() -> NSRange {
+        return NSRange(location: NSNotFound, length: 0)
+    }
+
+    func markedRange() -> NSRange {
+        if let imeCoordinator = coordinator?.keyboardSystem?.imeCoordinator,
+           imeCoordinator.isComposing {
+            return NSRange(location: 0, length: imeCoordinator.markedText.count)
+        }
+        return NSRange(location: NSNotFound, length: 0)
+    }
+
+    func hasMarkedText() -> Bool {
+        return coordinator?.keyboardSystem?.imeCoordinator.isComposing ?? false
+    }
+
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+        return nil
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        return []
+    }
+
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        // 返回光标位置，供输入法候选框定位
+        return window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
+    }
+
+    func characterIndex(for point: NSPoint) -> Int {
+        return 0
+    }
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        let text: String
+        if let str = string as? String {
+            text = str
+        } else if let attrStr = string as? NSAttributedString {
+            text = attrStr.string
+        } else {
+            return
+        }
+
+        // 通过 IME Coordinator 提交
+        let committedText = coordinator?.keyboardSystem?.imeCoordinator.commitText(text) ?? text
+
+        // 发送到终端
+        if let terminalId = coordinator?.getActiveTerminalId() {
+            coordinator?.writeInput(terminalId: terminalId, data: committedText)
         }
     }
 }

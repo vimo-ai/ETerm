@@ -26,6 +26,22 @@ protocol RenderViewProtocol: AnyObject {
     func requestRender()
 }
 
+/// 智能关闭结果
+///
+/// 用于 Cmd+W 智能关闭逻辑的返回值
+enum SmartCloseResult {
+    /// 关闭了一个 Tab
+    case closedTab
+    /// 关闭了一个 Panel
+    case closedPanel
+    /// 关闭了一个 Page
+    case closedPage
+    /// 需要退出应用（只剩最后一个）
+    case shouldQuitApp
+    /// 无可关闭的内容
+    case nothingToClose
+}
+
 /// 终端窗口协调器（DDD 架构）
 class TerminalWindowCoordinator: ObservableObject {
     // MARK: - Domain Aggregates
@@ -52,6 +68,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 渲染视图引用
     weak var renderView: RenderViewProtocol?
+
+    /// 键盘系统
+    private(set) var keyboardSystem: KeyboardSystem?
 
     // MARK: - Constants
 
@@ -162,6 +181,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 重新创建所有终端
         createTerminalsForAllTabs()
+
+        // 初始化键盘系统
+        self.keyboardSystem = KeyboardSystem(coordinator: self)
     }
 
     /// 设置坐标映射器（初始化时使用）
@@ -245,6 +267,90 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 调用 AR 的方法关闭 Tab
         if panel.closeTab(tabId) {
+            objectWillChange.send()
+            updateTrigger = UUID()
+            scheduleRender()
+        }
+    }
+
+    /// 智能关闭（Cmd+W）
+    ///
+    /// 关闭逻辑：
+    /// 1. 如果当前 Panel 有多个 Tab → 关闭当前 Tab
+    /// 2. 如果当前 Page 有多个 Panel → 关闭当前 Panel
+    /// 3. 如果当前 Window 有多个 Page → 关闭当前 Page
+    /// 4. 如果只剩最后一个 Page 的最后一个 Panel 的最后一个 Tab → 返回 .shouldQuitApp
+    ///
+    /// - Returns: 关闭结果
+    func handleSmartClose() -> SmartCloseResult {
+        guard let panelId = activePanelId,
+              let panel = terminalWindow.getPanel(panelId),
+              let activeTabId = panel.activeTabId else {
+            return .nothingToClose
+        }
+
+        // 1. 如果当前 Panel 有多个 Tab → 关闭当前 Tab
+        if panel.tabCount > 1 {
+            handleTabClose(panelId: panelId, tabId: activeTabId)
+            return .closedTab
+        }
+
+        // 2. 如果当前 Page 有多个 Panel → 关闭当前 Panel
+        if terminalWindow.panelCount > 1 {
+            // 关闭 Panel 中的所有终端
+            for tab in panel.tabs {
+                if let terminalId = tab.rustTerminalId {
+                    terminalPool.closeTerminal(Int(terminalId))
+                }
+            }
+
+            // 移除 Panel
+            if terminalWindow.removePanel(panelId) {
+                // 切换到另一个 Panel
+                if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
+                    activePanelId = newActivePanelId
+                }
+
+                objectWillChange.send()
+                updateTrigger = UUID()
+                scheduleRender()
+                return .closedPanel
+            }
+            return .nothingToClose
+        }
+
+        // 3. 如果当前 Window 有多个 Page → 关闭当前 Page
+        if terminalWindow.pageCount > 1 {
+            if closeCurrentPage() {
+                return .closedPage
+            }
+            return .nothingToClose
+        }
+
+        // 4. 只剩最后一个了，需要确认是否退出应用
+        return .shouldQuitApp
+    }
+
+    /// 关闭 Panel
+    func handleClosePanel(panelId: UUID) {
+        guard let panel = terminalWindow.getPanel(panelId) else {
+            return
+        }
+
+        // 关闭 Panel 中的所有终端
+        for tab in panel.tabs {
+            if let terminalId = tab.rustTerminalId {
+                terminalPool.closeTerminal(Int(terminalId))
+            }
+        }
+
+        // 移除 Panel
+        if terminalWindow.removePanel(panelId) {
+            // 切换到另一个 Panel
+            if activePanelId == panelId {
+                activePanelId = terminalWindow.allPanels.first?.panelId
+            }
+
             objectWillChange.send()
             updateTrigger = UUID()
             scheduleRender()
@@ -735,6 +841,17 @@ class TerminalWindowCoordinator: ObservableObject {
         print("[Page Switch] ⏱️ Total: \(String(format: "%.2f", totalTime))ms")
 
         return true
+    }
+
+    /// 关闭当前 Page（供快捷键调用）
+    ///
+    /// - Returns: 是否成功关闭
+    @discardableResult
+    func closeCurrentPage() -> Bool {
+        guard let activePageId = terminalWindow.activePage?.pageId else {
+            return false
+        }
+        return closePage(activePageId)
     }
 
     /// 关闭指定 Page
