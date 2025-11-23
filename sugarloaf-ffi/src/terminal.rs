@@ -679,8 +679,33 @@ pub extern "C" fn terminal_render_to_sugarloaf(
     let cursor_row = cursor.pos.row.0 as usize;
     let cursor_col = cursor.pos.col.0 as usize;
 
+    // 🔍 调试日志：诊断光标位置问题
+    use rio_backend::crosswords::Mode;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let ms = ts.as_millis() % 100000; // 只显示后5位毫秒
+    let is_alt_screen = terminal.mode().contains(Mode::ALT_SCREEN);
+    let display_offset = terminal.display_offset();
+    // 使用 handle 指针地址作为 terminal_id 来区分不同终端
+    let terminal_id = handle as usize;
+    println!(
+        "[CURSOR DEBUG] cursor=({},{}) @{}ms",
+        cursor_row, cursor_col, ms
+    );
+
     // 🎯 获取选区范围（用于高亮）
     let selection_range = handle_ref.selection.lock().clone();
+
+    // 🔍 调试日志：渲染时的选区状态（只在有选区时打印一次）
+    if let Some(ref range) = selection_range {
+        println!(
+            "🎨 [RENDER SELECTION] terminal={:x} selection=({},{}) -> ({},{}) terminal_size={}x{}",
+            terminal_id,
+            range.start_row, range.start_col,
+            range.end_row, range.end_col,
+            handle_ref.cols, handle_ref.rows
+        );
+    }
 
     // 获取 content builder - 使用链式调用
     let content = sugarloaf_ref.instance.content();
@@ -1099,23 +1124,6 @@ impl TabManager {
         }
     }
 
-    // ===== Split 相关方法（已废弃，Swift 负责 Split 逻辑）=====
-
-    // ❌ 删除：split_active_pane_right（Swift 负责 Split）
-    /*
-    fn split_active_pane_right(&mut self) -> Option<usize> {
-        ...
-    }
-
-    fn split_active_pane_down(&mut self) -> Option<usize> {
-        ...
-    }
-
-    fn close_pane(&mut self, pane_id: usize) -> bool {
-        ...
-    }
-    */
-
     /// 切换激活的 pane
     fn set_active_pane(&mut self, pane_id: usize) -> bool {
         if let Some(tab_info) = self.get_active_tab_mut() {
@@ -1134,23 +1142,6 @@ impl TabManager {
         }
         0
     }
-
-    // ❌ 删除：这些方法依赖已删除的 ContextGrid 方法
-    /*
-    fn get_pane_at_position(&self, x: f32, y: f32) -> Option<usize> { ... }
-    fn get_pane_info(&self, pane_id: usize) -> Option<(f32, f32, f32, f32)> { ... }
-    fn get_dividers(&self) -> Vec<crate::context_grid::DividerInfo> { ... }
-    fn resize_divider(&mut self, pane_id_1: usize, pane_id_2: usize, delta: f32) -> bool { ... }
-    */
-
-    // ===== 新的 Panel 配置 API（为 Swift DDD 架构提供支持）=====
-
-    // ❌ 删除：create_panel 依赖 split_right（Swift 负责创建 Panel）
-    /*
-    pub fn create_panel(&mut self, cols: u16, rows: u16) -> usize {
-        ...
-    }
-    */
 
     /// 🧪 测试函数：在四个角创建测试 pane
     /// 用于验证坐标系和渲染位置
@@ -1521,22 +1512,6 @@ pub extern "C" fn tab_manager_free(manager: *mut TabManager) {
     }
 }
 
-// ============================================================================
-// Split Pane FFI（已废弃，Swift 负责 Split 逻辑）
-// ============================================================================
-
-// ❌ 删除：这些 FFI 函数依赖已删除的方法
-/*
-#[no_mangle]
-pub extern "C" fn tab_manager_split_right(manager: *mut TabManager) -> i32 { ... }
-
-#[no_mangle]
-pub extern "C" fn tab_manager_split_down(manager: *mut TabManager) -> i32 { ... }
-
-#[no_mangle]
-pub extern "C" fn tab_manager_close_pane(manager: *mut TabManager, pane_id: usize) -> bool { ... }
-*/
-
 /// 切换激活的 pane
 #[no_mangle]
 pub extern "C" fn tab_manager_set_active_pane(manager: *mut TabManager, pane_id: usize) -> bool {
@@ -1558,30 +1533,6 @@ pub extern "C" fn tab_manager_get_pane_count(manager: *mut TabManager) -> usize 
     let manager = unsafe { &*manager };
     manager.get_pane_count()
 }
-
-// ❌ 删除：这些 FFI 函数依赖已删除的方法
-/*
-#[no_mangle]
-pub extern "C" fn tab_manager_get_pane_at_position(...) -> i32 { ... }
-
-#[repr(C)]
-pub struct PaneInfo { ... }
-
-#[no_mangle]
-pub extern "C" fn tab_manager_get_pane_info(...) -> bool { ... }
-*/
-
-// ❌ 删除：分隔线相关 FFI（依赖已删除的方法）
-/*
-#[repr(C)]
-pub struct DividerInfoFFI { ... }
-
-#[no_mangle]
-pub extern "C" fn tab_manager_get_dividers(...) -> usize { ... }
-
-#[no_mangle]
-pub extern "C" fn tab_manager_resize_divider(...) -> bool { ... }
-*/
 
 // ============================================================================
 // Text Selection API
@@ -1975,6 +1926,12 @@ pub extern "C" fn terminal_set_selection(
         end_col,
     };
 
+    // 🔍 调试日志：选区设置
+    println!(
+        "🎯 [SELECTION SET] start=({},{}) end=({},{})",
+        start_row, start_col, end_row, end_col
+    );
+
     *handle.selection.lock() = Some(range);
 
     1
@@ -2139,6 +2096,57 @@ impl TerminalPool {
 
         // 累积 RichText objects
         self.pending_objects.push(info.rich_text_object.clone());
+
+        // 🔬 调试：画行线和列线
+        unsafe {
+            if let Some(sugarloaf) = self.sugarloaf_handle.as_ref() {
+                // font_metrics 是物理像素，除以 scale 得到逻辑像素
+                let scale = sugarloaf.scale;
+                let logical_line_height = sugarloaf.font_metrics.line_height / scale;
+                let logical_cell_width = sugarloaf.font_metrics.cell_width / scale;
+                let line_thickness = 1.0; // 1 逻辑像素粗的线
+
+                eprintln!("🔬 [DrawGrid] cell_width(物理)={}, line_height(物理)={}, scale={}",
+                    sugarloaf.font_metrics.cell_width, sugarloaf.font_metrics.line_height, scale);
+                eprintln!("🔬 [DrawGrid] cell_width(逻辑)={}, line_height(逻辑)={}",
+                    logical_cell_width, logical_line_height);
+
+                // 画行线（水平红线）
+                for row in 0..=rows {
+                    let line_y = y + row as f32 * logical_line_height;
+                    let line_quad = sugarloaf::components::quad::Quad {
+                        color: [1.0, 0.0, 0.0, 0.5], // 半透明红色
+                        position: [x, line_y],
+                        size: [width, line_thickness],
+                        border_color: [0.0, 0.0, 0.0, 0.0],
+                        border_radius: [0.0, 0.0, 0.0, 0.0],
+                        border_width: 0.0,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur_radius: 0.0,
+                    };
+                    self.pending_objects.push(sugarloaf::Object::Quad(line_quad));
+                }
+
+                // 画列线（垂直蓝线）
+                let grid_height = rows as f32 * logical_line_height;
+                for col in 0..=cols {
+                    let line_x = x + col as f32 * logical_cell_width;
+                    let col_quad = sugarloaf::components::quad::Quad {
+                        color: [0.0, 0.0, 1.0, 0.5], // 半透明蓝色
+                        position: [line_x, y],
+                        size: [line_thickness, grid_height],
+                        border_color: [0.0, 0.0, 0.0, 0.0],
+                        border_radius: [0.0, 0.0, 0.0, 0.0],
+                        border_width: 0.0,
+                        shadow_color: [0.0, 0.0, 0.0, 0.0],
+                        shadow_offset: [0.0, 0.0],
+                        shadow_blur_radius: 0.0,
+                    };
+                    self.pending_objects.push(sugarloaf::Object::Quad(col_quad));
+                }
+            }
+        }
 
         true
     }

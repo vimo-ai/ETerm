@@ -1674,6 +1674,12 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn goto(&mut self, line: Line, col: Column) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let ms = ts.as_millis() % 100000; // 只显示后5位毫秒
+        println!("[ANSI] goto: ({},{}) -> ({},{}) @{}ms",
+            self.grid.cursor.pos.row.0, self.grid.cursor.pos.col.0,
+            line.0, col.0, ms);
         trace!("Going to: line={}, col={}", line, col);
         let (y_offset, max_y) = if self.mode.contains(Mode::ORIGIN) {
             (self.scroll_region.start, self.scroll_region.end - 1)
@@ -2554,11 +2560,23 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn save_cursor_position(&mut self) {
+        println!(
+            "[ANSI] save_cursor: ({},{})",
+            self.grid.cursor.pos.row.0,
+            self.grid.cursor.pos.col.0
+        );
         self.grid.saved_cursor = self.grid.cursor.clone();
     }
 
     #[inline]
     fn restore_cursor_position(&mut self) {
+        println!(
+            "[ANSI] restore_cursor: from ({},{}) to ({},{})",
+            self.grid.cursor.pos.row.0,
+            self.grid.cursor.pos.col.0,
+            self.grid.saved_cursor.pos.row.0,
+            self.grid.saved_cursor.pos.col.0
+        );
         trace!("Restoring cursor position");
 
         self.damage_cursor();

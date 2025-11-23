@@ -633,11 +633,6 @@ pub extern "C" fn sugarloaf_free(handle: *mut SugarloafHandle) {
 // 新的 Panel 配置 API
 // ============================================================================
 
-// ❌ 删除：create_panel 已废弃（Swift 负责创建 Panel）
-/*
-#[no_mangle]
-pub extern "C" fn tab_manager_create_panel(...) -> usize { ... }
-*/
 
 /// 🧪 测试函数：在四个角创建测试 pane
 #[no_mangle]
