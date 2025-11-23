@@ -10,7 +10,7 @@ import AppKit
 
 /// Swift wrapper for Sugarloaf C FFI
 class SugarloafWrapper {
-    var handle: SugarloafHandle?  // 公开 handle 供 TerminalWrapper 使用
+    var handle: SugarloafHandle?  // 公开 handle 供 TerminalPool 使用
     private(set) var fontMetrics: SugarloafFontMetrics?
 
     init?(windowHandle: UnsafeMutableRawPointer,

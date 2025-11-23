@@ -45,3 +45,24 @@ protocol TerminalPoolProtocol: AnyObject {
     @discardableResult
     func writeInput(terminalId: Int, data: String) -> Bool
 }
+
+// MARK: - Mock Implementation
+
+/// Mock 终端池（用于测试或初始化时的占位）
+final class MockTerminalPool: TerminalPoolProtocol {
+    func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int {
+        return -1
+    }
+
+    func closeTerminal(_ terminalId: Int) -> Bool {
+        return false
+    }
+
+    func getTerminalCount() -> Int {
+        return 0
+    }
+
+    func writeInput(terminalId: Int, data: String) -> Bool {
+        return false
+    }
+}

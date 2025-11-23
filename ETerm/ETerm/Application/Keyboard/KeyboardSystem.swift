@@ -76,7 +76,9 @@ final class KeyboardSystem {
             }
 
         case .unhandled:
-            return .handled
+            // 未被任何 Handler 处理的按键，交给 IME 系统
+            // 这样普通字符输入可以通过 interpretKeyEvents 进入输入法
+            return .passToIME
         }
     }
 

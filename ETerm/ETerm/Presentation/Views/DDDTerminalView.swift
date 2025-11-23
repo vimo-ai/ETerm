@@ -493,7 +493,7 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             width: Float(physicalSize.width),
             height: Float(physicalSize.height),
             scale: Float(effectiveScale),
-            fontSize: 14.0
+            fontSize: 25.0
         ) else {
             return
         }
@@ -828,6 +828,13 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             return CursorPosition(col: 0, row: 0)
         }
 
+        // 🎯 关键修复：每次点击时从 Rust 获取最新的 fontMetrics
+        // 避免 Swift 缓存的值和 Rust 实际渲染使用的值不一致
+        sugarloaf?.refreshFontMetrics()
+        if let freshMetrics = sugarloaf?.fontMetrics {
+            coordinator.updateFontMetrics(freshMetrics)
+        }
+
         // 从 fontMetrics 获取实际的 cell 尺寸
         let cellWidth: CGFloat
         let cellHeight: CGFloat
@@ -835,12 +842,9 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             // fontMetrics 是物理像素，需要转换为逻辑点
             cellWidth = CGFloat(metrics.cell_width) / mapper.scale
             cellHeight = CGFloat(metrics.line_height) / mapper.scale
-            print("🔬🔬 [GridPos] metrics存在: cell_width=\(metrics.cell_width), line_height=\(metrics.line_height), scale=\(mapper.scale)")
-            print("🔬🔬 [GridPos] 转换后: cellWidth=\(cellWidth), cellHeight=\(cellHeight)")
         } else {
             cellWidth = 9.6
             cellHeight = 20.0
-            print("🔬🔬 [GridPos] metrics为nil, 使用硬编码: cellWidth=9.6, cellHeight=20.0")
         }
 
         // 使用 CoordinateMapper 转换
@@ -851,6 +855,11 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             cellWidth: cellWidth,
             cellHeight: cellHeight
         )
+
+        // 🔍 调试日志：点击坐标转换
+        print("🖱️ [CLICK DEBUG] location=(\(String(format: "%.1f", location.x)), \(String(format: "%.1f", location.y))) -> grid=(\(gridPos.col), \(gridPos.row))")
+        print("🖱️ [CLICK DEBUG] contentBounds: origin=(\(String(format: "%.1f", contentBounds.origin.x)), \(String(format: "%.1f", contentBounds.origin.y))) size=(\(String(format: "%.1f", contentBounds.width))x\(String(format: "%.1f", contentBounds.height)))")
+        print("🖱️ [CLICK DEBUG] cellSize: \(String(format: "%.2f", cellWidth))x\(String(format: "%.2f", cellHeight)), viewBounds: \(String(format: "%.0f", bounds.width))x\(String(format: "%.0f", bounds.height))")
 
         return gridPos
     }
