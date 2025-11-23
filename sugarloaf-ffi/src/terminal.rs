@@ -2140,57 +2140,6 @@ impl TerminalPool {
         // 累积 RichText objects
         self.pending_objects.push(info.rich_text_object.clone());
 
-        // 🔬 调试：画行线和列线
-        unsafe {
-            if let Some(sugarloaf) = self.sugarloaf_handle.as_ref() {
-                // font_metrics 是物理像素，除以 scale 得到逻辑像素
-                let scale = sugarloaf.scale;
-                let logical_line_height = sugarloaf.font_metrics.line_height / scale;
-                let logical_cell_width = sugarloaf.font_metrics.cell_width / scale;
-                let line_thickness = 1.0; // 1 逻辑像素粗的线
-
-                eprintln!("🔬 [DrawGrid] cell_width(物理)={}, line_height(物理)={}, scale={}",
-                    sugarloaf.font_metrics.cell_width, sugarloaf.font_metrics.line_height, scale);
-                eprintln!("🔬 [DrawGrid] cell_width(逻辑)={}, line_height(逻辑)={}",
-                    logical_cell_width, logical_line_height);
-
-                // 画行线（水平红线）
-                for row in 0..=rows {
-                    let line_y = y + row as f32 * logical_line_height;
-                    let line_quad = sugarloaf::components::quad::Quad {
-                        color: [1.0, 0.0, 0.0, 0.5], // 半透明红色
-                        position: [x, line_y],
-                        size: [width, line_thickness],
-                        border_color: [0.0, 0.0, 0.0, 0.0],
-                        border_radius: [0.0, 0.0, 0.0, 0.0],
-                        border_width: 0.0,
-                        shadow_color: [0.0, 0.0, 0.0, 0.0],
-                        shadow_offset: [0.0, 0.0],
-                        shadow_blur_radius: 0.0,
-                    };
-                    self.pending_objects.push(sugarloaf::Object::Quad(line_quad));
-                }
-
-                // 画列线（垂直蓝线）
-                let grid_height = rows as f32 * logical_line_height;
-                for col in 0..=cols {
-                    let line_x = x + col as f32 * logical_cell_width;
-                    let col_quad = sugarloaf::components::quad::Quad {
-                        color: [0.0, 0.0, 1.0, 0.5], // 半透明蓝色
-                        position: [line_x, y],
-                        size: [line_thickness, grid_height],
-                        border_color: [0.0, 0.0, 0.0, 0.0],
-                        border_radius: [0.0, 0.0, 0.0, 0.0],
-                        border_width: 0.0,
-                        shadow_color: [0.0, 0.0, 0.0, 0.0],
-                        shadow_offset: [0.0, 0.0],
-                        shadow_blur_radius: 0.0,
-                    };
-                    self.pending_objects.push(sugarloaf::Object::Quad(col_quad));
-                }
-            }
-        }
-
         true
     }
 
