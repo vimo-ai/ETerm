@@ -14,55 +14,118 @@ import Foundation
 /// 终端池协议
 ///
 /// 定义终端池的核心功能：创建、销毁、查询终端实例。
+/// 支持两种实现：
+/// - TerminalPoolWrapper: 轮询模式（CVDisplayLink 每帧读取 PTY）
+/// - EventDrivenTerminalPoolWrapper: 事件驱动模式（PTY 有数据时回调）
 protocol TerminalPoolProtocol: AnyObject {
+
+    // MARK: - 终端生命周期
+
     /// 创建新终端
-    ///
-    /// - Parameters:
-    ///   - cols: 列数
-    ///   - rows: 行数
-    ///   - shell: Shell 程序路径
-    /// - Returns: 终端 ID，失败返回 -1
     func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int
 
     /// 关闭终端
-    ///
-    /// - Parameter terminalId: 终端 ID
-    /// - Returns: 是否成功
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool
 
     /// 获取终端数量
-    ///
-    /// - Returns: 当前存活的终端数量
     func getTerminalCount() -> Int
 
+    // MARK: - PTY 输入输出
+
     /// 写入输入到指定终端
-    ///
-    /// - Parameters:
-    ///   - terminalId: 终端 ID
-    ///   - data: 输入数据
-    /// - Returns: 是否成功
     @discardableResult
     func writeInput(terminalId: Int, data: String) -> Bool
+
+    /// 读取所有终端的 PTY 输出（轮询模式使用）
+    /// 事件驱动模式下返回 false（PTY 线程自动读取）
+    @discardableResult
+    func readAllOutputs() -> Bool
+
+    /// 滚动指定终端
+    @discardableResult
+    func scroll(terminalId: Int, deltaLines: Int32) -> Bool
+
+    /// 调整终端尺寸
+    @discardableResult
+    func resize(terminalId: Int, cols: UInt16, rows: UInt16) -> Bool
+
+    // MARK: - 渲染
+
+    /// 设置渲染回调
+    /// - Parameter callback: 当 PTY 有新数据时调用
+    func setRenderCallback(_ callback: @escaping () -> Void)
+
+    /// 渲染指定终端到指定位置
+    @discardableResult
+    func render(
+        terminalId: Int,
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+        cols: UInt16,
+        rows: UInt16
+    ) -> Bool
+
+    /// 提交所有累积的渲染内容
+    func flush()
+
+    // MARK: - 光标和选区
+
+    /// 获取光标位置
+    func getCursorPosition(terminalId: Int) -> CursorPosition?
+
+    /// 设置选区
+    @discardableResult
+    func setSelection(
+        terminalId: Int,
+        startRow: UInt16,
+        startCol: UInt16,
+        endRow: UInt16,
+        endCol: UInt16
+    ) -> Bool
+
+    /// 清除选区
+    @discardableResult
+    func clearSelection(terminalId: Int) -> Bool
+
+    /// 获取选中范围的文本
+    func getTextRange(
+        terminalId: Int,
+        startRow: UInt16,
+        startCol: UInt16,
+        endRow: UInt16,
+        endCol: UInt16
+    ) -> String?
+
+    /// 获取当前输入行号
+    func getInputRow(terminalId: Int) -> UInt16?
+
+    // MARK: - 字体
+
+    /// 调整字体大小
+    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation)
 }
 
 // MARK: - Mock Implementation
 
 /// Mock 终端池（用于测试或初始化时的占位）
 final class MockTerminalPool: TerminalPoolProtocol {
-    func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int {
-        return -1
-    }
-
-    func closeTerminal(_ terminalId: Int) -> Bool {
-        return false
-    }
-
-    func getTerminalCount() -> Int {
-        return 0
-    }
-
-    func writeInput(terminalId: Int, data: String) -> Bool {
-        return false
-    }
+    func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int { -1 }
+    func closeTerminal(_ terminalId: Int) -> Bool { false }
+    func getTerminalCount() -> Int { 0 }
+    func writeInput(terminalId: Int, data: String) -> Bool { false }
+    func readAllOutputs() -> Bool { false }
+    func scroll(terminalId: Int, deltaLines: Int32) -> Bool { false }
+    func resize(terminalId: Int, cols: UInt16, rows: UInt16) -> Bool { false }
+    func setRenderCallback(_ callback: @escaping () -> Void) {}
+    func render(terminalId: Int, x: Float, y: Float, width: Float, height: Float, cols: UInt16, rows: UInt16) -> Bool { false }
+    func flush() {}
+    func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
+    func setSelection(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> Bool { false }
+    func clearSelection(terminalId: Int) -> Bool { false }
+    func getTextRange(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> String? { nil }
+    func getInputRow(terminalId: Int) -> UInt16? { nil }
+    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {}
 }

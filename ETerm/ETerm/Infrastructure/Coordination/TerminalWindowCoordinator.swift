@@ -104,7 +104,8 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 创建新的 Tab 并分配终端
     func createNewTab(in panelId: UUID) -> TerminalTab? {
-        let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
+        // 使用较大的默认尺寸 (120x40) 以减少初始 Reflow 的影响
+        let terminalId = terminalPool.createTerminal(cols: 120, rows: 40, shell: "/bin/zsh")
         guard terminalId >= 0 else {
             return nil
         }
@@ -168,8 +169,8 @@ class TerminalWindowCoordinator: ObservableObject {
     // MARK: - Terminal Pool Management
 
     /// 获取终端池（用于字体大小调整等操作）
-    func getTerminalPool() -> TerminalPoolWrapper? {
-        return terminalPool as? TerminalPoolWrapper
+    func getTerminalPool() -> TerminalPoolProtocol? {
+        return terminalPool
     }
 
     /// 调整字体大小
@@ -579,11 +580,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 处理滚动
     func handleScroll(terminalId: UInt32, deltaLines: Int32) {
-        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
-            return
-        }
-
-        _ = terminalPoolWrapper.scroll(terminalId: Int(terminalId), deltaLines: deltaLines)
+        _ = terminalPool.scroll(terminalId: Int(terminalId), deltaLines: deltaLines)
         renderView?.requestRender()
     }
 
@@ -596,13 +593,9 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - selection: 选中范围
     /// - Returns: 是否成功
     func setSelection(terminalId: UInt32, selection: TextSelection) -> Bool {
-        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
-            return false
-        }
-
         let (start, end) = selection.normalized()
 
-        let success = terminalPoolWrapper.setSelection(
+        let success = terminalPool.setSelection(
             terminalId: Int(terminalId),
             startRow: start.row,
             startCol: start.col,
@@ -623,11 +616,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 是否成功
     func clearSelection(terminalId: UInt32) -> Bool {
-        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
-            return false
-        }
-
-        let success = terminalPoolWrapper.clearSelection(terminalId: Int(terminalId))
+        let success = terminalPool.clearSelection(terminalId: Int(terminalId))
 
         if success {
             renderView?.requestRender()
@@ -643,13 +632,9 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - selection: 选中范围
     /// - Returns: 选中的文本，失败返回 nil
     func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
-        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
-            return nil
-        }
-
         let (start, end) = selection.normalized()
 
-        return terminalPoolWrapper.getTextRange(
+        return terminalPool.getTextRange(
             terminalId: Int(terminalId),
             startRow: start.row,
             startCol: start.col,
@@ -663,11 +648,15 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 输入行号，如果不在输入模式返回 nil
     func getInputRow(terminalId: UInt32) -> UInt16? {
-        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
-            return nil
-        }
+        return terminalPool.getInputRow(terminalId: Int(terminalId))
+    }
 
-        return terminalPoolWrapper.getInputRow(terminalId: Int(terminalId))
+    /// 获取指定终端的光标位置
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 光标位置，失败返回 nil
+    func getCursorPosition(terminalId: UInt32) -> CursorPosition? {
+        return terminalPool.getCursorPosition(terminalId: Int(terminalId))
     }
 
     // MARK: - Rendering (核心方法)
@@ -696,11 +685,9 @@ class TerminalWindowCoordinator: ObservableObject {
         let getTabsTime = (CFAbsoluteTimeGetCurrent() - getTabsStart) * 1000
 //        print("[Render] ⏱️ Get tabs to render (\(tabsToRender.count) tabs): \(String(format: "%.2f", getTabsTime))ms")
 
-        // 渲染每个 Tab
-        guard let terminalPoolWrapper = terminalPool as? TerminalPoolWrapper else {
-            // MockTerminalPool，跳过渲染
-            return
-        }
+        // 渲染每个 Tab（支持 TerminalPoolWrapper 和 EventDrivenTerminalPoolWrapper）
+        // 🎯 PTY 读取现在在 CVDisplayLink 回调中统一处理
+        // 不再在这里调用 readAllOutputs()，避免重复读取
 
         var renderTimes: [(Int, Double)] = []
 
@@ -731,7 +718,7 @@ class TerminalWindowCoordinator: ObservableObject {
             let physicalHeight = logicalRect.height * mapper.scale
             let rows = UInt16(physicalHeight / lineHeight)
 
-            let success = terminalPoolWrapper.render(
+            let success = terminalPool.render(
                 terminalId: Int(terminalId),
                 x: Float(logicalRect.origin.x),
                 y: Float(logicalRect.origin.y),
@@ -756,7 +743,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 统一提交所有 objects
         let flushStart = CFAbsoluteTimeGetCurrent()
-        terminalPoolWrapper.flush()
+        terminalPool.flush()
         let flushTime = (CFAbsoluteTimeGetCurrent() - flushStart) * 1000
 //        print("[Render] ⏱️ Flush: \(String(format: "%.2f", flushTime))ms")
 

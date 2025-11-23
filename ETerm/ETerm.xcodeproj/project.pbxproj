@@ -441,6 +441,12 @@
 					"$(PROJECT_DIR)/ETerm",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-force_load",
+					"$(PROJECT_DIR)/ETerm/libsugarloaf_ffi.a",
+					"-framework",
+					Carbon,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.vimo.claude.ETerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -489,6 +495,12 @@
 					"$(PROJECT_DIR)/ETerm",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-force_load",
+					"$(PROJECT_DIR)/ETerm/libsugarloaf_ffi.a",
+					"-framework",
+					Carbon,
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.vimo.claude.ETerm;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;

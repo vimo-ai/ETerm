@@ -939,7 +939,13 @@ impl Renderer {
             let hint_matches = context.renderable_content.hint_matches.as_deref();
 
             // Update cursor state from snapshot
+            let cursor_row = terminal_snapshot.cursor.pos.row.0;
+            let cursor_col = terminal_snapshot.cursor.pos.col.0;
             context.renderable_content.cursor.state = terminal_snapshot.cursor;
+            let visible_rows_len = terminal_snapshot.visible_rows.len();
+            println!("[RENDER] cursor at ({}, {}), visible_rows={}, is_cursor_visible={}",
+                cursor_row, cursor_col, visible_rows_len,
+                context.renderable_content.cursor.state.is_visible());
 
             let mut specific_lines: Option<BTreeSet<LineDamage>> = None;
 
@@ -1033,6 +1039,9 @@ impl Renderer {
                     for (i, row) in terminal_snapshot.visible_rows.iter().enumerate() {
                         let has_cursor = is_cursor_visible
                             && context.renderable_content.cursor.state.pos.row == i;
+                        if has_cursor {
+                            println!("[RENDER] has_cursor=true at line i={}, cursor.row={}", i, context.renderable_content.cursor.state.pos.row.0);
+                        }
                         self.create_line(
                             content,
                             row,

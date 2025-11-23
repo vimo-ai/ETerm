@@ -253,6 +253,22 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return row
     }
 
+    /// 获取光标位置
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 光标位置，失败返回 nil
+    func getCursorPosition(terminalId: Int) -> CursorPosition? {
+        guard let handle = handle else { return nil }
+
+        var col: UInt16 = 0
+        var row: UInt16 = 0
+
+        guard terminal_pool_get_cursor(handle, terminalId, &col, &row) != 0 else {
+            return nil
+        }
+
+        return CursorPosition(col: col, row: row)
+    }
+
     // MARK: - 渲染
 
     /// 渲染指定终端到指定位置

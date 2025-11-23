@@ -5,8 +5,7 @@ pub fn external_fallbacks() -> Vec<String> {
         String::from("Menlo"),
         String::from("Geneva"),
         String::from("Arial Unicode MS"),
-        // String::from("Noto Emoji"),
-        // String::from("Noto Color Emoji"),
+        String::from("Apple Color Emoji"),  // 支持 emoji 显示
     ]
 }
 

@@ -1,7 +1,9 @@
 use std::ffi::{c_char, c_void, CStr};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::ptr;
 use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::borrow::Cow;
 use parking_lot::Mutex;
 
 use rio_backend::ansi::CursorShape;
@@ -11,8 +13,10 @@ use rio_backend::event::{EventListener, WindowId};
 use rio_backend::performer::handler::Processor;
 use rio_backend::config::colors::{AnsiColor, NamedColor};
 use teletypewriter::{create_pty_with_fork, WinsizeBuilder, ProcessReadWrite};
+use corcovado::channel;
 
-use crate::{global_font_metrics, SugarloafFontMetrics, SugarloafHandle};
+use crate::{global_font_metrics, SugarloafFontMetrics, SugarloafHandle, FairMutex};
+use crate::pty_machine::{PtyMachine, Msg, VoidListener, WakeupCallback};
 
 /// 单个终端单元格的数据（用于 FFI）
 #[repr(C)]
@@ -71,25 +75,39 @@ impl SelectionRange {
 }
 
 /// 终端句柄
+///
+/// 支持两种模式：
+/// 1. 轮询模式：使用 `terminal_read_output` 主动读取（兼容旧代码）
+/// 2. 事件驱动模式：使用 `terminal_start_event_loop` 启动独立线程
 pub struct TerminalHandle {
+    /// PTY 句柄（轮询模式使用）
     pty: Arc<Mutex<teletypewriter::Pty>>,
-    terminal: Arc<Mutex<Crosswords<VoidListener>>>,
+    /// 终端状态（使用 FairMutex 保证渲染和 PTY 处理的公平性）
+    terminal: Arc<FairMutex<Crosswords<VoidListener>>>,
+    /// ANSI 解析器（轮询模式使用）
     parser: Arc<Mutex<Processor>>,
+    /// 事件收集器（用于收集 CPR 等响应事件）
+    event_collector: VoidListener,
+    /// 列数
     cols: u16,
+    /// 行数
     rows: u16,
+    /// 字体度量
     font_metrics: SugarloafFontMetrics,
-    selection: Arc<Mutex<Option<SelectionRange>>>,  // 🎯 添加选区状态
+    /// 文本选区
+    selection: Arc<Mutex<Option<SelectionRange>>>,
+
+    // === 事件驱动模式相关 ===
+    /// PTY 消息发送通道（事件驱动模式使用）
+    pty_sender: Option<channel::Sender<Msg>>,
+    /// 事件循环线程句柄
+    event_loop_handle: Option<JoinHandle<(PtyMachine, crate::pty_machine::State)>>,
+    /// 终端 ID（用于调试日志）
+    terminal_id: usize,
 }
 
-/// 简单的事件监听器实现 (不发送任何事件)
-#[derive(Clone)]
-struct VoidListener;
-
-impl EventListener for VoidListener {
-    fn event(&self) -> (Option<rio_backend::event::RioEvent>, bool) {
-        (None, false)
-    }
-}
+/// 全局终端 ID 计数器
+static NEXT_TERMINAL_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
 const DEFAULT_HISTORY_LINES: usize = 1_000;
 
@@ -200,7 +218,8 @@ pub extern "C" fn terminal_create(
     let _ = pty.set_winsize(initial_winsize);
 
     // 创建终端状态（Crosswords）
-    let listener = VoidListener;
+    // 使用 EventCollector（VoidListener 是别名）收集 CPR 等响应事件
+    let event_collector = VoidListener::new();
 
     // CrosswordsSize 需要所有字段 (u32 类型)
     let dimensions = CrosswordsSize {
@@ -216,10 +235,11 @@ pub extern "C" fn terminal_create(
     let window_id = unsafe { std::mem::zeroed::<WindowId>() };
     let route_id = 0;
 
+    // clone 传给 Crosswords，原始实例保存到 TerminalHandle
     let terminal = Crosswords::new(
         dimensions,
         CursorShape::Block,
-        listener,
+        event_collector.clone(),
         window_id,
         route_id,
     );
@@ -229,20 +249,32 @@ pub extern "C" fn terminal_create(
     // 创建 ANSI 解析器
     let parser = Processor::default();
 
+    // 分配终端 ID
+    let terminal_id = NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
     let handle = Box::new(TerminalHandle {
         pty: Arc::new(Mutex::new(pty)),
-        terminal: Arc::new(Mutex::new(terminal)),
+        terminal: Arc::new(FairMutex::new(terminal)),  // 使用 FairMutex
         parser: Arc::new(Mutex::new(parser)),
+        event_collector,  // 保存事件收集器用于处理 CPR 等响应
         cols,
         rows,
         font_metrics,
-        selection: Arc::new(Mutex::new(None)),  // 🎯 初始化选区为空
+        selection: Arc::new(Mutex::new(None)),
+        // 事件驱动模式相关字段初始化为 None
+        pty_sender: None,
+        event_loop_handle: None,
+        terminal_id,
     });
 
     Box::into_raw(handle)
 }
 
-/// 从 PTY 读取输出（非阻塞）
+/// 从 PTY 读取输出（非阻塞，循环读取直到没有更多数据）
+///
+/// 参考 Rio 的实现：
+/// 1. 使用 FairMutex 的 lease 机制预约锁，阻止渲染线程在处理期间获取 terminal
+/// 2. 累积所有可用数据后一次性处理，避免中间状态被渲染捕获
 #[no_mangle]
 pub extern "C" fn terminal_read_output(handle: *mut TerminalHandle) -> bool {
     if handle.is_null() {
@@ -251,34 +283,89 @@ pub extern "C" fn terminal_read_output(handle: *mut TerminalHandle) -> bool {
 
     let handle = unsafe { &mut *handle };
 
-    // 读取 PTY 输出
-    let mut buf = [0u8; 4096];
-    let mut pty = handle.pty.lock();
+    // 🎯 关键：预约 terminal 锁，阻止渲染线程获取
+    // 这样渲染只会在 PTY 读取完成后进行
+    let _terminal_lease = handle.terminal.lease();
 
-    // 使用 ProcessReadWrite trait 的 reader() 方法
-    match pty.reader().read(&mut buf) {
-        Ok(0) => {
-            false
-        }
-        Ok(n) => {
-            let data = &buf[..n];
+    // 使用较大的缓冲区，累积所有可用数据
+    const READ_BUFFER_SIZE: usize = 0x10_0000; // 1MB，和 Rio 一致
+    let mut buf = vec![0u8; READ_BUFFER_SIZE];
+    let mut unprocessed = 0;
 
-            drop(pty);
+    // 循环读取 PTY，直到 WouldBlock
+    {
+        let mut pty = handle.pty.lock();
+        loop {
+            match pty.reader().read(&mut buf[unprocessed..]) {
+                Ok(0) => {
+                    // EOF，没有更多数据
+                    if unprocessed == 0 {
+                        return false;
+                    }
+                    break;
+                }
+                Ok(got) => {
+                    unprocessed += got;
+                    // 如果缓冲区快满了，先处理
+                    if unprocessed >= READ_BUFFER_SIZE - 4096 {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // 没有更多数据可读
+                    if unprocessed == 0 {
+                        return false;
+                    }
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    // 被中断，继续读取
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("[Terminal FFI] Error reading from PTY: {:?}", e);
+                    if unprocessed == 0 {
+                        return false;
+                    }
+                    break;
+                }
+            }
+        }
+    } // pty lock released here
 
-            let mut terminal = handle.terminal.lock();
-            let mut parser = handle.parser.lock();
-            parser.advance(&mut *terminal, data);
+    // 一次性处理所有累积的数据
+    if unprocessed > 0 {
+        // 使用 lock_unfair 因为我们已经持有 lease
+        let mut terminal = handle.terminal.lock_unfair();
+        let mut parser = handle.parser.lock();
+        parser.advance(&mut *terminal, &buf[..unprocessed]);
+        drop(terminal);
+        drop(parser);
 
-            true
+        // 🎯 关键：处理 EventCollector 中的事件（如 CPR 响应）
+        // Crosswords 通过 event_proxy.send_event() 发送事件，我们需要取出并写回 PTY
+        let events = handle.event_collector.drain_events();
+        if !events.is_empty() {
+            eprintln!("[terminal_read_output] [CPR DEBUG] Processing {} events from EventCollector", events.len());
+            let mut pty = handle.pty.lock();
+            for event in events {
+                match event {
+                    rio_backend::event::RioEvent::PtyWrite(text) => {
+                        eprintln!("[terminal_read_output] [CPR DEBUG] Writing to PTY: {:?}", text);
+                        let _ = pty.writer().write_all(text.as_bytes());
+                    }
+                    _ => {
+                        eprintln!("[terminal_read_output] [CPR DEBUG] Unhandled event: {:?}", event);
+                    }
+                }
+            }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-            false
-        }
-        Err(e) => {
-            eprintln!("[Terminal FFI] Error reading from PTY: {:?}", e);
-            false
-        }
+
+        true
+    } else {
+        false
     }
+    // _terminal_lease 在这里释放，渲染线程可以获取锁了
 }
 
 /// 向 PTY 写入数据（键盘输入）
@@ -671,7 +758,11 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
     let handle_ref = unsafe { &mut *handle };
     let sugarloaf_ref = unsafe { &mut *sugarloaf };
-    let terminal = handle_ref.terminal.lock();
+
+    // 🎯 关键：先获取 lease 阻止 PTY 线程处理新数据
+    // 这确保在整个渲染过程中光标位置不会被改变
+    let _render_lease = handle_ref.terminal.lease();
+    let terminal = handle_ref.terminal.lock_unfair();
 
     let rows = terminal.visible_rows();
     let _debug_overlay = false;
@@ -688,9 +779,18 @@ pub extern "C" fn terminal_render_to_sugarloaf(
     let display_offset = terminal.display_offset();
     // 使用 handle 指针地址作为 terminal_id 来区分不同终端
     let terminal_id = handle as usize;
+
+    // 🔍 增强调试：打印终端尺寸、Origin Mode 和 scroll_region
+    let screen_lines = terminal.screen_lines();
+    let columns = terminal.columns();
+    let visible_rows_count = rows.len();
+    let origin_mode = terminal.mode().contains(Mode::ORIGIN);
+    let scroll_region = terminal.scroll_region();
     println!(
-        "[CURSOR DEBUG] cursor=({},{}) @{}ms",
-        cursor_row, cursor_col, ms
+        "[CURSOR DEBUG] cursor=({},{}) origin={} scroll_region={}..{} screen={}x{} @{}ms",
+        cursor_row, cursor_col, origin_mode,
+        scroll_region.start.0, scroll_region.end.0,
+        screen_lines, columns, ms
     );
 
     // 🎯 获取选区范围（用于高亮）
@@ -758,7 +858,8 @@ pub extern "C" fn terminal_render_to_sugarloaf(
                 .unwrap_or(false);
 
             // 🎯 检查当前位置是否是光标位置
-            let is_cursor = row_idx == cursor_row && col == cursor_col;
+            // 关键：需要同时检查 cursor.is_visible()，因为应用（如 Claude CLI）可能隐藏光标
+            let is_cursor = cursor.is_visible() && row_idx == cursor_row && col == cursor_col;
 
             // 🎯 关键修复：在添加当前字符前,检查样式是否改变
             // 如果改变了,先 flush 之前累积的文本
@@ -793,7 +894,7 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
                     // 🎯 应用光标样式
                     if prev_cursor {
-                        style.cursor = Some(SugarCursor::Block([1.0, 1.0, 1.0, 1.0])); // 白色方块光标
+                        style.cursor = Some(SugarCursor::Block([0.7, 0.1, 0.1, 0.7])); // 深红色半透明光标
                     }
 
                     content.add_text(&current_line, style);
@@ -825,7 +926,7 @@ pub extern "C" fn terminal_render_to_sugarloaf(
 
                 // 🎯 应用光标样式
                 if is_cursor {
-                    style.cursor = Some(SugarCursor::Block([1.0, 1.0, 1.0, 1.0])); // 白色方块光标
+                    style.cursor = Some(SugarCursor::Block([0.7, 0.1, 0.1, 0.7])); // 深红色半透明光标
                 }
 
                 content.add_text(&current_line, style);
@@ -1790,13 +1891,21 @@ pub extern "C" fn terminal_get_text_range(
         (end_row, end_col, start_row, start_col)
     };
 
+    // 🎯 边界检查：确保行列索引不越界
+    let max_col = handle.cols.saturating_sub(1);
+    let max_row = handle.rows.saturating_sub(1);
+    let start_col = start_col.min(max_col);
+    let end_col = end_col.min(max_col);
+    let start_row = start_row.min(max_row);
+    let end_row = end_row.min(max_row);
+
     // 提取文本
     let mut text = String::new();
     use rio_backend::crosswords::pos::{Pos, Line, Column};
 
     for row in start_row..=end_row {
         let line_start_col = if row == start_row { start_col } else { 0 };
-        let line_end_col = if row == end_row { end_col } else { handle.cols - 1 };
+        let line_end_col = if row == end_row { end_col } else { max_col };
 
         for col in line_start_col..=line_end_col {
             let pos = Pos {
@@ -2564,6 +2673,30 @@ pub extern "C" fn terminal_pool_get_input_row(
     }
 }
 
+/// 获取指定终端的光标位置
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_cursor(
+    pool: *mut TerminalPool,
+    terminal_id: usize,
+    out_col: *mut u16,
+    out_row: *mut u16,
+) -> i32 {
+    if pool.is_null() || out_col.is_null() || out_row.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    
+    if let Some(info) = pool.terminals.get_mut(&terminal_id) {
+        let terminal_ptr = &mut *info.terminal as *mut TerminalHandle;
+        if unsafe { terminal_get_cursor(terminal_ptr, out_row, out_col) } {
+            return 1;
+        }
+    }
+    
+    0
+}
+
 /// 调整所有终端的字体大小
 /// operation: 0 = Reset, 1 = Decrease, 2 = Increase
 #[no_mangle]
@@ -2577,4 +2710,737 @@ pub extern "C" fn terminal_pool_change_font_size(
 
     let pool = unsafe { &mut *pool };
     pool.change_all_font_sizes(operation);
+}
+
+// =============================================================================
+// 事件驱动 PTY 架构 API
+// =============================================================================
+//
+// 这是 Rio 风格的事件驱动架构，核心思想：
+// 1. 每个终端一个独立的 PTY 事件线程
+// 2. PTY 有数据时才读取，不用定时器轮询
+// 3. 数据处理完成后通过回调通知 Swift 渲染
+// 4. Swift 删除 CVDisplayLink 轮询，改为事件驱动渲染
+
+/// 事件驱动终端池
+pub struct EventDrivenTerminalPool {
+    terminals: HashMap<usize, EventDrivenTerminalInfo>,
+    next_id: usize,
+    sugarloaf_handle: *mut SugarloafHandle,
+    wakeup_callback: Option<WakeupCallback>,
+    callback_context: *mut c_void,
+    pending_objects: Vec<sugarloaf::Object>,
+}
+
+/// 事件驱动终端信息
+struct EventDrivenTerminalInfo {
+    terminal: Arc<FairMutex<Crosswords<crate::pty_machine::EventCollector>>>,
+    selection: Arc<Mutex<Option<SelectionRange>>>,
+    pty_sender: channel::Sender<Msg>,
+    _event_loop_handle: JoinHandle<(PtyMachine, crate::pty_machine::State)>,
+    rich_text_id: usize,
+    rich_text_object: sugarloaf::Object,
+    cols: u16,
+    rows: u16,
+    // Cursor blinking state
+    is_blinking_cursor_visible: bool,
+    last_blink_toggle: Option<std::time::Instant>,
+    last_typing: Option<std::time::Instant>,
+}
+
+unsafe impl Send for EventDrivenTerminalPool {}
+unsafe impl Sync for EventDrivenTerminalPool {}
+
+impl EventDrivenTerminalPool {
+    fn new(sugarloaf_handle: *mut SugarloafHandle) -> Self {
+        Self {
+            terminals: HashMap::new(),
+            next_id: 1,
+            sugarloaf_handle,
+            wakeup_callback: None,
+            callback_context: std::ptr::null_mut(),
+            pending_objects: Vec::new(),
+        }
+    }
+
+    fn set_wakeup_callback(&mut self, callback: WakeupCallback, context: *mut c_void) {
+        self.wakeup_callback = Some(callback);
+        self.callback_context = context;
+    }
+
+    fn create_terminal(&mut self, cols: u16, rows: u16, shell: &str) -> Option<usize> {
+        if self.sugarloaf_handle.is_null() {
+            return None;
+        }
+
+        let terminal_id = self.next_id;
+        self.next_id += 1;
+
+        // 环境变量设置
+        let terminfo = match (
+            teletypewriter::terminfo_exists("xterm-rio"),
+            teletypewriter::terminfo_exists("rio"),
+        ) {
+            (true, _) => "xterm-rio",
+            (false, true) => "rio",
+            (false, false) => "xterm-256color",
+        };
+        std::env::set_var("TERM", terminfo);
+        std::env::set_var("TERM_PROGRAM", "ETerm");
+        std::env::set_var("COLORTERM", "truecolor");
+
+        #[cfg(target_os = "macos")]
+        {
+            if std::env::var("LC_CTYPE").is_err() {
+                std::env::set_var("LC_CTYPE", "UTF-8");
+            }
+            if std::env::var("LC_ALL").is_err() {
+                std::env::set_var("LC_ALL", "en_US.UTF-8");
+            }
+        }
+
+        if let Ok(home_dir) = std::env::var("HOME") {
+            let _ = std::env::set_current_dir(&home_dir);
+        }
+
+        let font_metrics = resolve_font_metrics();
+        let (winsize_width, winsize_height, total_width, total_height, square_width, square_height) =
+            pixel_dimensions(cols, rows, &font_metrics);
+
+        let mut pty = match create_pty_with_fork(&std::borrow::Cow::Borrowed(shell), cols, rows) {
+            Ok(pty) => pty,
+            Err(e) => {
+                eprintln!("[EventDrivenPool] Failed to create PTY: {:?}", e);
+                return None;
+            }
+        };
+
+        let _ = pty.set_winsize(WinsizeBuilder {
+            cols,
+            rows,
+            width: winsize_width,
+            height: winsize_height,
+        });
+
+        let dimensions = CrosswordsSize {
+            columns: cols as usize,
+            screen_lines: rows as usize,
+            width: total_width,
+            height: total_height,
+            square_width,
+            square_height,
+        };
+
+        let window_id = unsafe { std::mem::zeroed::<WindowId>() };
+        let route_id = terminal_id;
+
+        // 🎯 关键：创建 EventCollector 用于收集 Crosswords 产生的事件（如 CPR 响应）
+        let event_collector = crate::pty_machine::EventCollector::new();
+
+        let mut terminal = Crosswords::new(dimensions, CursorShape::Block, event_collector.clone(), window_id, route_id);
+        terminal.grid.update_history(DEFAULT_HISTORY_LINES);
+        let terminal = Arc::new(FairMutex::new(terminal));
+
+        // 传递 event_collector 给 PtyMachine，用于在事件循环中处理事件
+        let mut machine = match PtyMachine::new(pty, terminal.clone(), event_collector, terminal_id) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("[EventDrivenPool] Failed to create PtyMachine: {:?}", e);
+                return None;
+            }
+        };
+
+        if let Some(callback) = self.wakeup_callback {
+            machine.set_wakeup_callback(callback, self.callback_context);
+        }
+
+        let pty_sender = machine.channel();
+        let event_loop_handle = machine.spawn();
+
+        let rich_text_id = crate::sugarloaf_create_rich_text(self.sugarloaf_handle);
+        let rich_text_object = sugarloaf::Object::RichText(sugarloaf::RichText {
+            id: rich_text_id,
+            position: [0.0, 0.0],
+            lines: None,
+        });
+
+        let info = EventDrivenTerminalInfo {
+            terminal,
+            selection: Arc::new(Mutex::new(None)),
+            pty_sender,
+            _event_loop_handle: event_loop_handle,
+            rich_text_id,
+            rich_text_object,
+            cols,
+            rows,
+            is_blinking_cursor_visible: true,
+            last_blink_toggle: None,
+            last_typing: None,
+        };
+
+        self.terminals.insert(terminal_id, info);
+        eprintln!("[EventDrivenPool] Created terminal {} with event loop", terminal_id);
+        Some(terminal_id)
+    }
+
+    fn close_terminal(&mut self, terminal_id: usize) -> bool {
+        if let Some(info) = self.terminals.remove(&terminal_id) {
+            let _ = info.pty_sender.send(Msg::Shutdown);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn write_input(&mut self, terminal_id: usize, data: &[u8]) -> bool {
+        if let Some(info) = self.terminals.get_mut(&terminal_id) {
+            info.last_typing = Some(std::time::Instant::now());
+            info.pty_sender.send(Msg::Input(Cow::Owned(data.to_vec()))).is_ok()
+        } else {
+            false
+        }
+    }
+
+    fn resize(&mut self, terminal_id: usize, cols: u16, rows: u16) -> bool {
+        if let Some(info) = self.terminals.get_mut(&terminal_id) {
+            info.cols = cols;
+            info.rows = rows;
+
+            let font_metrics = resolve_font_metrics();
+            let (winsize_width, winsize_height, total_width, total_height, square_width, square_height) =
+                pixel_dimensions(cols, rows, &font_metrics);
+
+            let winsize = WinsizeBuilder { cols, rows, width: winsize_width, height: winsize_height };
+            if info.pty_sender.send(Msg::Resize(winsize)).is_err() {
+                return false;
+            }
+
+            let mut terminal = info.terminal.lock();
+            terminal.resize(CrosswordsSize {
+                columns: cols as usize,
+                screen_lines: rows as usize,
+                width: total_width,
+                height: total_height,
+                square_width,
+                square_height,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    fn render(&mut self, terminal_id: usize, x: f32, y: f32, cols: u16, rows: u16) -> bool {
+        if self.sugarloaf_handle.is_null() {
+            return false;
+        }
+
+        // 先检查并 resize
+        if let Some(info) = self.terminals.get(&terminal_id) {
+            if info.cols != cols || info.rows != rows {
+                drop(info);
+                self.resize(terminal_id, cols, rows);
+            }
+        }
+
+        let info = match self.terminals.get_mut(&terminal_id) {
+            Some(info) => info,
+            None => return false,
+        };
+
+        // 渲染
+        {
+            let terminal = info.terminal.lock();
+            let cursor = terminal.cursor();
+            let cursor_row = cursor.pos.row.0 as usize;
+            let cursor_col = cursor.pos.col.0 as usize;
+            let selection_range = info.selection.lock().clone();
+            let blinking_cursor = terminal.blinking_cursor;
+            let rows_data = terminal.visible_rows();
+            drop(terminal); // Release lock early
+
+            // --- Cursor Visibility Logic (Ported from Rio) ---
+            let mut is_cursor_visible = cursor.is_visible();
+            
+            if blinking_cursor {
+                let has_selection = selection_range.is_some();
+                if !has_selection {
+                    let mut should_blink = true;
+                    if let Some(last_typing_time) = info.last_typing {
+                        if last_typing_time.elapsed() < std::time::Duration::from_secs(1) {
+                            should_blink = false;
+                        }
+                    }
+
+                    if should_blink {
+                        let now = std::time::Instant::now();
+                        let should_toggle = if let Some(last_blink) = info.last_blink_toggle {
+                            now.duration_since(last_blink).as_millis() >= 500 // 500ms blink interval
+                        } else {
+                            info.is_blinking_cursor_visible = true;
+                            info.last_blink_toggle = Some(now);
+                            false
+                        };
+
+                        if should_toggle {
+                            info.is_blinking_cursor_visible = !info.is_blinking_cursor_visible;
+                            info.last_blink_toggle = Some(now);
+                        }
+                    } else {
+                        info.is_blinking_cursor_visible = true;
+                        info.last_blink_toggle = None;
+                    }
+                } else {
+                    info.is_blinking_cursor_visible = true;
+                    info.last_blink_toggle = None;
+                }
+                is_cursor_visible = info.is_blinking_cursor_visible;
+            }
+
+            // Always show cursor if it's explicitly visible and we are not in a special hidden state
+            // Note: Rio has `!is_active` check here, but ETerm windows are generally considered active for now
+            if cursor.is_visible() {
+                 // Keep is_cursor_visible as is (from blinking logic), but ensure we don't accidentally hide it 
+                 // if blinking is disabled but cursor is visible.
+                 if !blinking_cursor {
+                     is_cursor_visible = true;
+                 }
+            } else {
+                // If cursor is explicitly hidden (e.g. \e[?25l), it should remain hidden
+                is_cursor_visible = false;
+            }
+            
+            // -------------------------------------------------
+
+            unsafe {
+                if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
+                    use sugarloaf::{FragmentStyle, SugarCursor};
+
+                    let content = sugarloaf.instance.content();
+                    content.sel(info.rich_text_id).clear();
+
+                    let terminal_cols = info.cols as usize;
+                    let terminal_rows = info.rows as usize;
+
+                    for (row_idx, row) in rows_data.iter().enumerate().take(terminal_rows) {
+                        if row_idx > 0 {
+                            content.new_line();
+                        }
+
+                        let cols_count = row.len().min(terminal_cols);
+                        let row_num = row_idx as i32;
+                        let mut current_line = String::new();
+                        // (fg_color, bg_color, width, is_selected, is_cursor, is_inverse)
+                        let mut current_style: Option<((u8, u8, u8), Option<(u8, u8, u8)>, f32, bool, bool, bool)> = None;
+
+                        for col in 0..cols_count {
+                            use rio_backend::crosswords::square::Flags;
+                            use rio_backend::config::colors::{AnsiColor, NamedColor};
+                            let cell = &row.inner[col];
+                            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                                continue;
+                            }
+
+                            let is_inverse = cell.flags.contains(Flags::INVERSE);
+                            if is_inverse {
+                                eprintln!("[INVERSE DEBUG] row={}, col={}, char='{}', fg={:?}, bg={:?}",
+                                    row_idx, col, cell.c, cell.fg, cell.bg);
+                            }
+                            let mut fg_color = ansi_color_to_rgb(&cell.fg);
+                            // 背景色：如果是 NamedColor::Background 则为 None（使用默认背景）
+                            let mut bg_color: Option<(u8, u8, u8)> = match &cell.bg {
+                                AnsiColor::Named(NamedColor::Background) => None,
+                                other => Some(ansi_color_to_rgb(other)),
+                            };
+                            // INVERSE 处理：交换前景色和背景色
+                            if is_inverse {
+                                let orig_fg = fg_color;
+                                fg_color = bg_color.unwrap_or((0, 0, 0)); // 默认背景为黑色
+                                bg_color = Some(orig_fg);
+                            }
+                            let glyph_width = if cell.flags.contains(Flags::WIDE_CHAR) { 2.0 } else { 1.0 };
+                            let is_selected = selection_range.as_ref().map(|r| r.contains(col as u16, row_num)).unwrap_or(false);
+                            // 关键：使用计算后的 is_cursor_visible
+                            let is_cursor = is_cursor_visible && row_idx == cursor_row && col == cursor_col;
+
+                            let style_changed = current_style.map(|(pf, pb, pw, ps, pc, pi)|
+                                pf != fg_color || pb != bg_color || (pw - glyph_width).abs() > f32::EPSILON || ps != is_selected || pc != is_cursor || pi != is_inverse
+                            ).unwrap_or(false);
+
+                            if style_changed && !current_line.is_empty() {
+                                if let Some(((r, g, b), cell_bg, w, sel, cur, _inv)) = current_style {
+                                    let mut style = FragmentStyle {
+                                        color: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
+                                        width: w,
+                                        ..FragmentStyle::default()
+                                    };
+                                    // 背景色优先级：光标 > 选区 > cell.bg（含 INVERSE）
+                                    if cur {
+                                        style.cursor = Some(SugarCursor::Block([0.7, 0.1, 0.1, 0.7]));
+                                    } else if sel {
+                                        style.background_color = Some([0.3, 0.5, 0.8, 0.6]);
+                                    } else if let Some((br, bg, bb)) = cell_bg {
+                                        style.background_color = Some([br as f32 / 255.0, bg as f32 / 255.0, bb as f32 / 255.0, 1.0]);
+                                    }
+                                    content.add_text(&current_line, style);
+                                    current_line.clear();
+                                }
+                            }
+
+                            current_line.push(cell.c);
+                            current_style = Some((fg_color, bg_color, glyph_width, is_selected, is_cursor, is_inverse));
+                        }
+
+                        if !current_line.is_empty() {
+                            if let Some(((r, g, b), cell_bg, w, sel, cur, _inv)) = current_style {
+                                let mut style = FragmentStyle {
+                                    color: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
+                                    width: w,
+                                    ..FragmentStyle::default()
+                                };
+                                // 背景色优先级：光标 > 选区 > cell.bg（含 INVERSE）
+                                if cur {
+                                    style.cursor = Some(SugarCursor::Block([0.7, 0.1, 0.1, 0.7]));
+                                } else if sel {
+                                    style.background_color = Some([0.3, 0.5, 0.8, 0.6]);
+                                } else if let Some((br, bg, bb)) = cell_bg {
+                                    style.background_color = Some([br as f32 / 255.0, bg as f32 / 255.0, bb as f32 / 255.0, 1.0]);
+                                }
+                                content.add_text(&current_line, style);
+                            }
+                        } else {
+                            content.add_text(" ", FragmentStyle::default());
+                        }
+                    }
+                    content.build();
+                }
+            }
+        }
+
+        if let sugarloaf::Object::RichText(ref mut rt) = info.rich_text_object {
+            rt.position = [x, y];
+        }
+        self.pending_objects.push(info.rich_text_object.clone());
+        true
+    }
+
+    fn flush(&mut self) {
+        unsafe {
+            if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
+                sugarloaf.set_objects(self.pending_objects.clone());
+                sugarloaf.render();
+            }
+        }
+        self.pending_objects.clear();
+    }
+
+    fn scroll(&self, terminal_id: usize, delta_lines: i32) -> bool {
+        if let Some(info) = self.terminals.get(&terminal_id) {
+            let mut terminal = info.terminal.lock();
+            terminal.scroll_display(Scroll::Delta(delta_lines));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn set_selection(&self, terminal_id: usize, start_row: u16, start_col: u16, end_row: u16, end_col: u16) -> bool {
+        if let Some(info) = self.terminals.get(&terminal_id) {
+            *info.selection.lock() = Some(SelectionRange { start_row, start_col, end_row, end_col });
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear_selection(&self, terminal_id: usize) -> bool {
+        if let Some(info) = self.terminals.get(&terminal_id) {
+            *info.selection.lock() = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn get_cursor(&self, terminal_id: usize) -> Option<(u16, u16)> {
+        self.terminals.get(&terminal_id).map(|info| {
+            let terminal = info.terminal.lock();
+            let cursor = terminal.cursor();
+            (cursor.pos.col.0 as u16, cursor.pos.row.0 as u16)
+        })
+    }
+
+    fn count(&self) -> usize {
+        self.terminals.len()
+    }
+
+    /// 调整所有终端的字体大小
+    /// operation: 0 = Reset, 1 = Decrease, 2 = Increase
+    fn change_font_size(&mut self, operation: u8) {
+        unsafe {
+            if let Some(sugarloaf) = self.sugarloaf_handle.as_mut() {
+                // 遍历所有终端，调整每个的字体大小
+                for info in self.terminals.values() {
+                    sugarloaf.instance.set_rich_text_font_size_based_on_action(
+                        &info.rich_text_id,
+                        operation,
+                    );
+                }
+
+                // 更新追踪的字体大小
+                match operation {
+                    0 => sugarloaf.current_font_size = 12.0, // Reset 到默认值
+                    1 => sugarloaf.current_font_size = (sugarloaf.current_font_size - 1.0).max(6.0),
+                    2 => sugarloaf.current_font_size = (sugarloaf.current_font_size + 1.0).min(100.0),
+                    _ => {}
+                }
+
+                // 从 Sugarloaf 获取实际渲染使用的 dimensions
+                if let Some(first_info) = self.terminals.values().next() {
+                    sugarloaf.update_font_metrics_from_dimensions(first_info.rich_text_id);
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// 事件驱动终端池 FFI
+// =============================================================================
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_new(sugarloaf: *mut SugarloafHandle) -> *mut EventDrivenTerminalPool {
+    if sugarloaf.is_null() { return ptr::null_mut(); }
+    Box::into_raw(Box::new(EventDrivenTerminalPool::new(sugarloaf)))
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_set_wakeup_callback(
+    pool: *mut EventDrivenTerminalPool, callback: WakeupCallback, context: *mut c_void,
+) {
+    if pool.is_null() { return; }
+    unsafe { &mut *pool }.set_wakeup_callback(callback, context);
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_create_terminal(
+    pool: *mut EventDrivenTerminalPool, cols: u16, rows: u16, shell: *const c_char,
+) -> isize {
+    if pool.is_null() || shell.is_null() { return -1; }
+    let pool = unsafe { &mut *pool };
+    let shell_str = match unsafe { CStr::from_ptr(shell) }.to_str() { Ok(s) => s, Err(_) => return -1 };
+    pool.create_terminal(cols, rows, shell_str).map(|id| id as isize).unwrap_or(-1)
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_close_terminal(pool: *mut EventDrivenTerminalPool, terminal_id: usize) -> i32 {
+    if pool.is_null() { return 0; }
+    if unsafe { &mut *pool }.close_terminal(terminal_id) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_write_input(pool: *mut EventDrivenTerminalPool, terminal_id: usize, data: *const c_char) -> i32 {
+    if pool.is_null() || data.is_null() { return 0; }
+    if unsafe { &mut *pool }.write_input(terminal_id, unsafe { CStr::from_ptr(data) }.to_bytes()) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_resize(pool: *mut EventDrivenTerminalPool, terminal_id: usize, cols: u16, rows: u16) -> i32 {
+    if pool.is_null() { return 0; }
+    if unsafe { &mut *pool }.resize(terminal_id, cols, rows) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_render(pool: *mut EventDrivenTerminalPool, terminal_id: usize, x: f32, y: f32, cols: u16, rows: u16) -> i32 {
+    if pool.is_null() { return 0; }
+    if unsafe { &mut *pool }.render(terminal_id, x, y, cols, rows) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_flush(pool: *mut EventDrivenTerminalPool) {
+    if pool.is_null() { return; }
+    unsafe { &mut *pool }.flush();
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_change_font_size(pool: *mut EventDrivenTerminalPool, operation: u8) {
+    if pool.is_null() { return; }
+    unsafe { &mut *pool }.change_font_size(operation);
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_scroll(pool: *mut EventDrivenTerminalPool, terminal_id: usize, delta_lines: i32) -> i32 {
+    if pool.is_null() { return 0; }
+    if unsafe { &*pool }.scroll(terminal_id, delta_lines) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_set_selection(pool: *mut EventDrivenTerminalPool, terminal_id: usize, start_row: u16, start_col: u16, end_row: u16, end_col: u16) -> i32 {
+    if pool.is_null() { return 0; }
+    if unsafe { &*pool }.set_selection(terminal_id, start_row, start_col, end_row, end_col) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_clear_selection(pool: *mut EventDrivenTerminalPool, terminal_id: usize) -> i32 {
+    if pool.is_null() { return 0; }
+    if unsafe { &*pool }.clear_selection(terminal_id) { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_get_cursor(pool: *mut EventDrivenTerminalPool, terminal_id: usize, out_col: *mut u16, out_row: *mut u16) -> i32 {
+    if pool.is_null() || out_col.is_null() || out_row.is_null() { return 0; }
+    if let Some((col, row)) = unsafe { &*pool }.get_cursor(terminal_id) {
+        unsafe { *out_col = col; *out_row = row; }
+        1
+    } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_count(pool: *mut EventDrivenTerminalPool) -> usize {
+    if pool.is_null() { return 0; }
+    unsafe { &*pool }.count()
+}
+
+#[no_mangle]
+pub extern "C" fn event_driven_pool_free(pool: *mut EventDrivenTerminalPool) {
+    if !pool.is_null() { unsafe { let _ = Box::from_raw(pool); } }
+}
+
+// =============================================================================
+// Focus Reporting API
+// =============================================================================
+//
+// 参考 Rio: rio/frontends/rioterm/src/screen/mod.rs:2322-2331
+//
+// pub fn on_focus_change(&mut self, is_focused: bool) {
+//     if self.get_mode().contains(Mode::FOCUS_IN_OUT) {
+//         let chr = if is_focused { "I" } else { "O" };
+//         let msg = format!("\x1b[{chr}");
+//         self.ctx_mut().current_mut().messenger.send_write(msg.into_bytes());
+//     }
+// }
+
+/// 检查指定终端是否启用了 Focus In/Out Reporting 模式 (DECSET 1004)
+///
+/// 返回:
+/// - 1: 已启用
+/// - 0: 未启用或终端不存在
+#[no_mangle]
+pub extern "C" fn event_driven_pool_is_focus_mode_enabled(
+    pool: *mut EventDrivenTerminalPool,
+    terminal_id: usize,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &*pool };
+    if let Some(info) = pool.terminals.get(&terminal_id) {
+        let terminal = info.terminal.lock();
+        use rio_backend::crosswords::Mode;
+        if terminal.mode().contains(Mode::FOCUS_IN_OUT) {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+/// 发送 Focus 事件到指定终端
+///
+/// 参考 Rio 的实现，当窗口获得/失去焦点时：
+/// - 获得焦点: 发送 "\x1b[I"
+/// - 失去焦点: 发送 "\x1b[O"
+///
+/// 参数:
+/// - pool: 终端池句柄
+/// - terminal_id: 终端 ID
+/// - is_focused: true = 获得焦点, false = 失去焦点
+///
+/// 返回:
+/// - 1: 成功发送
+/// - 0: 终端不存在或未启用 Focus Reporting
+#[no_mangle]
+pub extern "C" fn event_driven_pool_send_focus_event(
+    pool: *mut EventDrivenTerminalPool,
+    terminal_id: usize,
+    is_focused: bool,
+) -> i32 {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    if let Some(info) = pool.terminals.get_mut(&terminal_id) {
+        // 检查是否启用了 Focus In/Out 模式
+        let is_enabled = {
+            let terminal = info.terminal.lock();
+            use rio_backend::crosswords::Mode;
+            terminal.mode().contains(Mode::FOCUS_IN_OUT)
+        };
+
+        if is_enabled {
+            // 发送 focus 事件
+            let chr = if is_focused { "I" } else { "O" };
+            let msg = format!("\x1b[{chr}");
+            // eprintln!(
+            //     "[EventDrivenPool] Sending focus event to terminal {}: {:?} (focused={})",
+            //     terminal_id, msg, is_focused
+            // );
+
+            // 通过 PTY sender 发送
+            if info.pty_sender.send(Msg::Input(Cow::Owned(msg.into_bytes()))).is_ok() {
+                return 1;
+            }
+        } else {
+            // eprintln!(
+            //     "[EventDrivenPool] Focus mode not enabled for terminal {}",
+            //     terminal_id
+            // );
+        }
+    }
+
+    0
+}
+
+/// 向所有启用了 Focus Reporting 的终端发送 Focus 事件
+///
+/// 返回: 成功发送的终端数量
+#[no_mangle]
+pub extern "C" fn event_driven_pool_send_focus_event_to_all(
+    pool: *mut EventDrivenTerminalPool,
+    is_focused: bool,
+) -> usize {
+    if pool.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &mut *pool };
+    let mut count = 0;
+
+    for (terminal_id, info) in pool.terminals.iter_mut() {
+        // 检查是否启用了 Focus In/Out 模式
+        let is_enabled = {
+            let terminal = info.terminal.lock();
+            use rio_backend::crosswords::Mode;
+            terminal.mode().contains(Mode::FOCUS_IN_OUT)
+        };
+
+        if is_enabled {
+            let chr = if is_focused { "I" } else { "O" };
+            let msg = format!("\x1b[{chr}");
+            eprintln!(
+                "[EventDrivenPool] Sending focus event to terminal {}: {:?}",
+                terminal_id, msg
+            );
+
+            if info.pty_sender.send(Msg::Input(Cow::Owned(msg.into_bytes()))).is_ok() {
+                count += 1;
+            }
+        }
+    }
+
+    count
 }

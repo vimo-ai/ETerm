@@ -20,3 +20,6 @@ teletypewriter = { path = "../rio/teletypewriter" }
 rio-backend = { path = "../rio/rio-backend" }
 parking_lot = "0.12.4"
 libc = "0.2.174"
+
+# 事件驱动 PTY (mio fork)
+corcovado = { path = "../rio/corcovado" }

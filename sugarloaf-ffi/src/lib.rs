@@ -7,13 +7,37 @@ use sugarloaf::{
 };
 use parking_lot::RwLock;
 
-// 终端模块
+// 同步原语（FairMutex）
+mod sync;
+pub use sync::*;
+
+// PTY 事件驱动处理器（旧版，保留兼容）
+mod pty_machine;
+pub use pty_machine::*;
+
+// 终端模块（旧版，保留兼容）
 mod terminal;
 pub use terminal::*;
 
 // Context Grid 模块（Split 布局管理）
 mod context_grid;
 pub use context_grid::*;
+
+// ============================================================================
+// 新的 Rio 风格实现
+// ============================================================================
+
+// Rio 事件系统
+mod rio_event;
+pub use rio_event::{EventCallback, EventQueue, FFIEvent, FFIEventListener, RioEvent, StringEventCallback};
+
+// Rio Machine（照抄 Rio 的 PTY 事件循环）
+mod rio_machine;
+pub use rio_machine::Machine;
+
+// Rio Terminal（新的终端封装）
+mod rio_terminal;
+pub use rio_terminal::*;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -84,12 +108,22 @@ impl SugarloafHandle {
             line_height: dimensions.height,
         };
 
-        eprintln!("🎯 [FontMetrics from Sugarloaf] rt_id={}, width={}, height={}, scale={}",
-                 rt_id, dimensions.width, dimensions.height, dimensions.scale);
-
         self.font_metrics = metrics;
         set_global_font_metrics(metrics);
     }
+}
+
+/// 辅助宏：在 FFI 边界捕获 panic
+macro_rules! catch_panic {
+    ($default:expr, $body:expr) => {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(result) => result,
+            Err(e) => {
+                eprintln!("[sugarloaf FFI] Caught panic: {:?}", e);
+                $default
+            }
+        }
+    };
 }
 
 /// Initialize Sugarloaf
@@ -102,116 +136,118 @@ pub extern "C" fn sugarloaf_new(
     scale: f32,
     font_size: f32,
 ) -> *mut SugarloafHandle {
-    // 验证输入
-    if window_handle.is_null() {
-        return ptr::null_mut();
-    }
-
-    if width <= 0.0 || height <= 0.0 {
-        return ptr::null_mut();
-    }
-
-    // 创建 raw window handle (这里需要根据平台处理)
-    #[cfg(target_os = "macos")]
-    let raw_window_handle = {
-        use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
-        match std::ptr::NonNull::new(window_handle) {
-            Some(nn_ptr) => {
-                let handle = AppKitWindowHandle::new(nn_ptr);
-                RawWindowHandle::AppKit(handle)
-            }
-            None => {
-                eprintln!("[Sugarloaf FFI] Error: Failed to create NonNull pointer");
-                return ptr::null_mut();
-            }
+    catch_panic!(ptr::null_mut(), {
+        // 验证输入
+        if window_handle.is_null() {
+            return ptr::null_mut();
         }
-    };
 
-    #[cfg(target_os = "macos")]
-    let raw_display_handle = {
-        use raw_window_handle::{AppKitDisplayHandle, RawDisplayHandle};
-        RawDisplayHandle::AppKit(AppKitDisplayHandle::new())
-    };
+        if width <= 0.0 || height <= 0.0 {
+            return ptr::null_mut();
+        }
 
-    let window = SugarloafWindow {
-        handle: raw_window_handle,
-        display: raw_display_handle,
-        size: SugarloafWindowSize { width, height },
-        scale,
-    };
+        // 创建 raw window handle (这里需要根据平台处理)
+        #[cfg(target_os = "macos")]
+        let raw_window_handle = {
+            use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
+            match std::ptr::NonNull::new(window_handle) {
+                Some(nn_ptr) => {
+                    let handle = AppKitWindowHandle::new(nn_ptr);
+                    RawWindowHandle::AppKit(handle)
+                }
+                None => {
+                    eprintln!("[Sugarloaf FFI] Error: Failed to create NonNull pointer");
+                    return ptr::null_mut();
+                }
+            }
+        };
 
-    let renderer = SugarloafRenderer::default();
+        #[cfg(target_os = "macos")]
+        let raw_display_handle = {
+            use raw_window_handle::{AppKitDisplayHandle, RawDisplayHandle};
+            RawDisplayHandle::AppKit(AppKitDisplayHandle::new())
+        };
 
-    // 创建字体配置（添加中文字体支持）
-    // 🔧 指定 Maple Mono NF CN 作为主字体
-    let font_spec = SugarloafFonts {
-        family: Some("Maple Mono NF CN".to_string()),
-        size: font_size,
-        hinting: true,
-        regular: SugarloafFont {
-            family: "MapleMono-NF-CN-Regular".to_string(),
-            weight: Some(400),
-            style: SugarloafFontStyle::Normal,
-            width: None,
-        },
-        bold: SugarloafFont {
-            family: "MapleMono-NF-CN-Bold".to_string(),
-            weight: Some(700),
-            style: SugarloafFontStyle::Normal,
-            width: None,
-        },
-        italic: SugarloafFont {
-            family: "MapleMono-NF-CN-Italic".to_string(),
-            weight: Some(400),
-            style: SugarloafFontStyle::Italic,
-            width: None,
-        },
-        bold_italic: SugarloafFont {
-            family: "MapleMono-NF-CN-BoldItalic".to_string(),
-            weight: Some(700),
-            style: SugarloafFontStyle::Italic,
-            width: None,
-        },
-        ..Default::default()
-    };
+        let window = SugarloafWindow {
+            handle: raw_window_handle,
+            display: raw_display_handle,
+            size: SugarloafWindowSize { width, height },
+            scale,
+        };
 
-    let (font_library, _font_errors) = FontLibrary::new(font_spec);
+        let renderer = SugarloafRenderer::default();
 
-    // 🎯 初始使用 fallback 值，真实值在创建 RichText 后通过 get_rich_text_dimensions 获取
-    let scaled_font_size = font_size * scale;
-    let font_metrics = SugarloafFontMetrics::fallback(scaled_font_size);
-    set_global_font_metrics(font_metrics);
+        // 创建字体配置（添加中文字体支持）
+        // 🔧 指定 Maple Mono NF CN 作为主字体
+        let font_spec = SugarloafFonts {
+            family: Some("Maple Mono NF CN".to_string()),
+            size: font_size,
+            hinting: true,
+            regular: SugarloafFont {
+                family: "MapleMono-NF-CN-Regular".to_string(),
+                weight: Some(400),
+                style: SugarloafFontStyle::Normal,
+                width: None,
+            },
+            bold: SugarloafFont {
+                family: "MapleMono-NF-CN-Bold".to_string(),
+                weight: Some(700),
+                style: SugarloafFontStyle::Normal,
+                width: None,
+            },
+            italic: SugarloafFont {
+                family: "MapleMono-NF-CN-Italic".to_string(),
+                weight: Some(400),
+                style: SugarloafFontStyle::Italic,
+                width: None,
+            },
+            bold_italic: SugarloafFont {
+                family: "MapleMono-NF-CN-BoldItalic".to_string(),
+                weight: Some(700),
+                style: SugarloafFontStyle::Italic,
+                width: None,
+            },
+            ..Default::default()
+        };
 
-    let layout = RootStyle {
-        font_size,
-        line_height: 1.0,  // 和 Rio 保持一致
-        scale_factor: scale,
-    };
+        let (font_library, _font_errors) = FontLibrary::new(font_spec);
 
-    let mut instance = match Sugarloaf::new(window, renderer, &font_library, layout) {
-        Ok(instance) => instance,
-        Err(with_errors) => with_errors.instance,
-    };
+        // 🎯 初始使用 fallback 值，真实值在创建 RichText 后通过 get_rich_text_dimensions 获取
+        let scaled_font_size = font_size * scale;
+        let font_metrics = SugarloafFontMetrics::fallback(scaled_font_size);
+        set_global_font_metrics(font_metrics);
 
-    #[cfg(target_os = "macos")]
-    {
-        instance.set_background_color(Some(wgpu::Color {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,  // 完全透明,让窗口的磨砂效果显示出来
-        }));
-    }
+        let layout = RootStyle {
+            font_size,
+            line_height: 1.0,  // 和 Rio 保持一致
+            scale_factor: scale,
+        };
 
-    let handle = Box::new(SugarloafHandle {
-        instance,
-        current_rt_id: None,
-        _font_library: font_library,
-        font_metrics,
-        current_font_size: font_size,
-        scale,
-    });
-    Box::into_raw(handle)
+        let mut instance = match Sugarloaf::new(window, renderer, &font_library, layout) {
+            Ok(instance) => instance,
+            Err(with_errors) => with_errors.instance,
+        };
+
+        #[cfg(target_os = "macos")]
+        {
+            instance.set_background_color(Some(wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,  // 完全透明,让窗口的磨砂效果显示出来
+            }));
+        }
+
+        let handle = Box::new(SugarloafHandle {
+            instance,
+            current_rt_id: None,
+            _font_library: font_library,
+            font_metrics,
+            current_font_size: font_size,
+            scale,
+        });
+        Box::into_raw(handle)
+    })
 }
 
 /// Create a new rich text state
@@ -293,6 +329,40 @@ pub extern "C" fn sugarloaf_content_add_text(
     fg_b: f32,
     fg_a: f32,
 ) {
+    sugarloaf_content_add_text_with_width(handle, text, fg_r, fg_g, fg_b, fg_a, 1.0);
+}
+
+/// Add text with style and explicit width (for wide characters)
+#[no_mangle]
+pub extern "C" fn sugarloaf_content_add_text_with_width(
+    handle: *mut SugarloafHandle,
+    text: *const c_char,
+    fg_r: f32,
+    fg_g: f32,
+    fg_b: f32,
+    fg_a: f32,
+    width: f32,
+) {
+    sugarloaf_content_add_text_styled(handle, text, fg_r, fg_g, fg_b, fg_a, width, false, 0.0, 0.0, 0.0, 0.0);
+}
+
+/// Add text with full styling options (width, cursor)
+/// cursor_shape: 0 = None, 1 = Block, 2 = Underline, 3 = Beam
+#[no_mangle]
+pub extern "C" fn sugarloaf_content_add_text_styled(
+    handle: *mut SugarloafHandle,
+    text: *const c_char,
+    fg_r: f32,
+    fg_g: f32,
+    fg_b: f32,
+    fg_a: f32,
+    width: f32,
+    has_cursor: bool,
+    cursor_r: f32,
+    cursor_g: f32,
+    cursor_b: f32,
+    cursor_a: f32,
+) {
     if handle.is_null() || text.is_null() {
         return;
     }
@@ -300,11 +370,58 @@ pub extern "C" fn sugarloaf_content_add_text(
     let handle = unsafe { &mut *handle };
     let text_str = unsafe { CStr::from_ptr(text).to_str().unwrap_or("") };
 
-    eprintln!("[Sugarloaf FFI] Adding text: '{}' with color [{}, {}, {}, {}]",
-              text_str, fg_r, fg_g, fg_b, fg_a);
+    let cursor = if has_cursor {
+        Some(sugarloaf::SugarCursor::Block([cursor_r, cursor_g, cursor_b, cursor_a]))
+    } else {
+        None
+    };
 
     let style = FragmentStyle {
         color: [fg_r, fg_g, fg_b, fg_a],
+        width,
+        cursor,
+        ..FragmentStyle::default()
+    };
+
+    handle.instance.content().add_text(text_str, style);
+}
+
+/// Add text with full styling options (width, cursor, background color)
+#[no_mangle]
+pub extern "C" fn sugarloaf_content_add_text_full(
+    handle: *mut SugarloafHandle,
+    text: *const c_char,
+    fg_r: f32, fg_g: f32, fg_b: f32, fg_a: f32,
+    has_bg: bool,
+    bg_r: f32, bg_g: f32, bg_b: f32, bg_a: f32,
+    width: f32,
+    has_cursor: bool,
+    cursor_r: f32, cursor_g: f32, cursor_b: f32, cursor_a: f32,
+) {
+    if handle.is_null() || text.is_null() {
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let text_str = unsafe { CStr::from_ptr(text).to_str().unwrap_or("") };
+
+    let cursor = if has_cursor {
+        Some(sugarloaf::SugarCursor::Block([cursor_r, cursor_g, cursor_b, cursor_a]))
+    } else {
+        None
+    };
+
+    let background_color = if has_bg {
+        Some([bg_r, bg_g, bg_b, bg_a])
+    } else {
+        None
+    };
+
+    let style = FragmentStyle {
+        color: [fg_r, fg_g, fg_b, fg_a],
+        background_color,
+        width,
+        cursor,
         ..FragmentStyle::default()
     };
 
@@ -339,8 +456,6 @@ pub extern "C" fn sugarloaf_commit_rich_text(handle: *mut SugarloafHandle, rt_id
         position: [0.0, 0.0],  // 左上角，与 Rio 终端一致
         lines: None,
     });
-
-    eprintln!("[Sugarloaf FFI] Committing RichText object with id {} at position [0, 0]", rt_id);
 
     // 只设置 RichText，移除测试矩形
     handle.set_objects(vec![rich_text_obj]);
@@ -523,15 +638,13 @@ pub extern "C" fn sugarloaf_render(handle: *mut SugarloafHandle) {
     }
 
     let handle = unsafe { &mut *handle };
-    eprintln!("[Sugarloaf FFI] 🎨 Calling sugarloaf.render()...");
     // 添加panic捕获
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle.instance.render();
     }));
 
-    match result {
-        Ok(_) => eprintln!("[Sugarloaf FFI] ✅ render() completed successfully"),
-        Err(e) => eprintln!("[Sugarloaf FFI] ❌ render() panicked: {:?}", e),
+    if let Err(e) = result {
+        eprintln!("[Sugarloaf FFI] ❌ render() panicked: {:?}", e);
     }
 }
 
@@ -553,9 +666,7 @@ pub extern "C" fn sugarloaf_resize(
     }
 
     let handle = unsafe { &mut *handle };
-    eprintln!("[Sugarloaf FFI] 🔄 Resizing Sugarloaf to {}x{}", width, height);
     handle.instance.resize(width as u32, height as u32);
-    eprintln!("[Sugarloaf FFI] ✅ Resize completed");
 }
 
 /// Rescale Sugarloaf (for DPI changes)
@@ -575,9 +686,7 @@ pub extern "C" fn sugarloaf_rescale(
     }
 
     let handle = unsafe { &mut *handle };
-    eprintln!("[Sugarloaf FFI] 🔄 Rescaling Sugarloaf to scale {}", scale);
     handle.instance.rescale(scale);
-    eprintln!("[Sugarloaf FFI] ✅ Rescale completed");
 }
 
 /// 字体大小操作类型
@@ -596,13 +705,6 @@ pub extern "C" fn sugarloaf_change_font_size(
     }
 
     let handle = unsafe { &mut *handle };
-    let op_name = match operation {
-        0 => "Reset",
-        1 => "Decrease",
-        2 => "Increase",
-        _ => "Unknown",
-    };
-    eprintln!("[Sugarloaf FFI] 🔤 Changing font size: {} for rich_text_id={}", op_name, rich_text_id);
     handle.instance.set_rich_text_font_size_based_on_action(&rich_text_id, operation);
 
     // 更新追踪的字体大小
@@ -615,8 +717,6 @@ pub extern "C" fn sugarloaf_change_font_size(
 
     // 🎯 从 Sugarloaf 获取实际渲染使用的 dimensions（字体大小变化后需要重新获取）
     handle.update_font_metrics_from_dimensions(rich_text_id);
-
-    eprintln!("[Sugarloaf FFI] ✅ Font size change completed, new size: {}", handle.current_font_size);
 }
 
 /// Free Sugarloaf instance

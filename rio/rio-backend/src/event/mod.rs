@@ -253,7 +253,9 @@ pub trait OnResize {
 pub trait EventListener {
     fn event(&self) -> (Option<RioEvent>, bool);
 
-    fn send_event(&self, _event: RioEvent, _id: WindowId) {}
+    fn send_event(&self, _event: RioEvent, _id: WindowId) {
+        eprintln!("[EventListener] DEFAULT send_event called - THIS IS A BUG!");
+    }
 
     fn send_event_with_high_priority(&self, _event: RioEvent, _id: WindowId) {}
 

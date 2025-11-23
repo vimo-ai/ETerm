@@ -91,6 +91,7 @@ final class KeyboardSystem {
 
     private func buildContext() -> KeyboardContext {
         guard let coordinator = coordinator else {
+            print("[KeyboardSystem] buildContext: coordinator is nil")
             return KeyboardContext(
                 mode: currentMode,
                 activePanelId: nil,
@@ -103,13 +104,19 @@ final class KeyboardSystem {
         let activePanelId = coordinator.activePanelId
         let panel = activePanelId.flatMap { coordinator.terminalWindow.getPanel($0) }
         let activeTab = panel?.activeTab
+        let terminalId = activeTab?.rustTerminalId
+
+        // Debug: 打印上下文链路
+        if terminalId == nil {
+            print("[KeyboardSystem] buildContext: activePanelId=\(activePanelId as Any), panel=\(panel != nil), activeTab=\(activeTab != nil), rustTerminalId=\(activeTab?.rustTerminalId as Any)")
+        }
 
         return KeyboardContext(
             mode: currentMode,
             activePanelId: activePanelId,
             activeTabId: activeTab?.tabId,
             hasSelection: activeTab?.hasSelection() ?? false,
-            terminalId: activeTab?.rustTerminalId
+            terminalId: terminalId
         )
     }
 }

@@ -131,6 +131,49 @@ class DDDContainerView: NSView {
             name: NSNotification.Name("TerminalWindowDidChange"),
             object: nil
         )
+
+        // 监听窗口焦点变化（用于 Focus Reporting - DECSET 1004）
+        // 参考 Rio: rio/frontends/rioterm/src/screen/mod.rs:2322-2331
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidResignKey),
+            name: NSWindow.didResignKeyNotification,
+            object: nil
+        )
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        // 确保是我们的窗口
+        guard let window = notification.object as? NSWindow,
+              window == self.window else { return }
+
+        // 向所有启用了 Focus Reporting 的终端发送焦点获得事件
+        if let eventDrivenPool = coordinator?.getTerminalPool() as? EventDrivenTerminalPoolWrapper {
+            let count = eventDrivenPool.sendFocusEventToAll(isFocused: true)
+            if count > 0 {
+                print("[DDDContainerView] Sent focus-in event to \(count) terminals")
+            }
+        }
+    }
+
+    @objc private func windowDidResignKey(_ notification: Notification) {
+        // 确保是我们的窗口
+        guard let window = notification.object as? NSWindow,
+              window == self.window else { return }
+
+        // 向所有启用了 Focus Reporting 的终端发送焦点失去事件
+        if let eventDrivenPool = coordinator?.getTerminalPool() as? EventDrivenTerminalPoolWrapper {
+            let count = eventDrivenPool.sendFocusEventToAll(isFocused: false)
+            if count > 0 {
+                print("[DDDContainerView] Sent focus-out event to \(count) terminals")
+            }
+        }
     }
 
     /// 设置 Page 栏的回调
@@ -366,9 +409,14 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
     private var displayLink: CVDisplayLink?
     private var needsRender = false
     private let renderLock = NSLock()
-    private var ptyReadQueue: DispatchQueue?
-    private var shouldStopReading = false
     private var isInitialized = false
+
+    // MARK: - 事件驱动模式配置
+
+    /// 是否使用事件驱动模式（Rio 风格）
+    /// - true: PTY 有数据时回调触发渲染，不需要 CVDisplayLink 轮询 PTY
+    /// - false: CVDisplayLink 每帧轮询 PTY 数据
+    private let useEventDrivenMode = true
 
     weak var coordinator: TerminalWindowCoordinator?
 
@@ -500,25 +548,52 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
 
         self.sugarloaf = sugarloaf
 
-        // 5. 创建 TerminalPool
-        guard let realTerminalPool = TerminalPoolWrapper(sugarloaf: sugarloaf) else {
-            print("[DDDPanelRenderView] ❌ Failed to create TerminalPoolWrapper")
-            return
+        // 5. 创建 TerminalPool（根据模式选择）
+        let terminalPool: TerminalPoolProtocol
+
+        if useEventDrivenMode {
+            // 事件驱动模式：使用 EventDrivenTerminalPoolWrapper
+            // PTY 有数据时自动读取并触发渲染回调
+            guard let eventDrivenPool = EventDrivenTerminalPoolWrapper(sugarloaf: sugarloaf) else {
+                print("[DDDPanelRenderView] Failed to create EventDrivenTerminalPoolWrapper")
+                return
+            }
+            terminalPool = eventDrivenPool
+            print("[DDDPanelRenderView] Using EVENT-DRIVEN mode (Rio style)")
+        } else {
+            // 轮询模式：使用 TerminalPoolWrapper
+            // CVDisplayLink 每帧轮询 PTY 数据
+            guard let pollingPool = TerminalPoolWrapper(sugarloaf: sugarloaf) else {
+                print("[DDDPanelRenderView] Failed to create TerminalPoolWrapper")
+                return
+            }
+            terminalPool = pollingPool
+            print("[DDDPanelRenderView] Using POLLING mode (CVDisplayLink)")
         }
 
-        // 6. 设置 Coordinator（传入已创建的 mapper）
-        coordinator?.setTerminalPool(realTerminalPool)
+        // 6. 设置渲染回调（必须在 setTerminalPool 之前）
+        // 因为 setTerminalPool 会调用 createTerminalsForAllTabs，
+        // 而 PTY Machine 在创建时需要已经有 wakeup 回调
+        //
+        // 🎯 关键架构（参考 Rio）：
+        // - Rio: PTY 线程 → send_event(Wakeup) → 主线程事件循环同步渲染
+        // - ETerm: PTY 线程 → C 回调 → 主线程同步渲染
+        //
+        // 回调直接触发渲染，不等 CVDisplayLink
+        terminalPool.setRenderCallback { [weak self] in
+            self?.performImmediateRender()
+        }
+
+        // 7. 设置 Coordinator（传入已创建的 mapper）
+        // 这会调用 createTerminalsForAllTabs，创建所有终端
+        coordinator?.setTerminalPool(terminalPool)
         coordinator?.setCoordinateMapper(mapper)
 
         if let metrics = sugarloaf.fontMetrics {
             coordinator?.updateFontMetrics(metrics)
         }
 
-        realTerminalPool.setRenderCallback { [weak self] in
-            self?.requestRender()
-        }
-
-        startPTYReadLoop(terminalPool: realTerminalPool)
+        // 8. 设置 DisplayLink（根据模式选择行为）
         setupDisplayLink()
 
         // 触发初始渲染
@@ -527,26 +602,28 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         }
     }
 
-    private func startPTYReadLoop(terminalPool: TerminalPoolWrapper) {
-        let queue = DispatchQueue(label: "com.eterm.pty-reader", qos: .userInteractive)
-        self.ptyReadQueue = queue
-
-        queue.async { [weak self, weak terminalPool] in
-            guard let self = self else { return }
-
-            while !self.shouldStopReading {
-                terminalPool?.readAllOutputs()
-                usleep(1000)
-            }
-        }
-    }
+    // MARK: - CVDisplayLink 设置
+    //
+    // 🎯 事件驱动模式下 CVDisplayLink 的角色已改变：
+    //
+    // 【旧架构】（有问题）
+    // - PTY 线程读取数据 → async 设置 needsRender → CVDisplayLink 下一帧渲染
+    // - 问题：渲染和数据不同步，导致光标位置错误
+    //
+    // 【新架构】（参考 Rio）
+    // - PTY 线程读取数据 → sync 直接渲染（performImmediateRender）
+    // - CVDisplayLink 仅用于：
+    //   1. 轮询模式下读取 PTY + 渲染
+    //   2. 事件驱动模式下处理非 PTY 触发的渲染请求（如窗口 resize）
+    //
+    // 核心变化：事件驱动模式的主要渲染路径不再依赖 CVDisplayLink
 
     private func setupDisplayLink() {
         var link: CVDisplayLink?
         let status = CVDisplayLinkCreateWithActiveCGDisplays(&link)
 
         guard status == kCVReturnSuccess, let displayLink = link else {
-            print("[CVDisplayLink] ❌ Failed to create: \(status)")
+            print("[CVDisplayLink] Failed to create: \(status)")
             return
         }
 
@@ -556,16 +633,15 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
 
             let view = Unmanaged<DDDPanelRenderView>.fromOpaque(context).takeUnretainedValue()
 
-            view.renderLock.lock()
-            let shouldRender = view.needsRender
-            if shouldRender {
-                view.needsRender = false
-            }
-            view.renderLock.unlock()
-
-            if shouldRender {
-                DispatchQueue.main.async {
-                    view.performRender()
+            DispatchQueue.main.async {
+                if view.useEventDrivenMode {
+                    // 事件驱动模式：处理非 PTY 触发的渲染请求
+                    // 主要渲染已在 performImmediateRender() 中完成
+                    // 这里只处理窗口 resize 等其他触发的渲染需求
+                    view.performEventDrivenRender()
+                } else {
+                    // 轮询模式：每帧读取 PTY + 渲染
+                    view.performRenderWithPTYRead()
                 }
             }
 
@@ -579,6 +655,29 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
     func requestRender() {
         renderLock.lock()
         needsRender = true
+        renderLock.unlock()
+    }
+
+    /// 立即执行渲染（事件驱动模式核心）
+    ///
+    /// 参考 Rio 的 Wakeup 事件处理：
+    /// - PTY 线程读取完数据后调用此方法
+    /// - 直接执行渲染，不等待 CVDisplayLink
+    /// - 确保"读取-渲染"的同步性，避免光标位置错误
+    ///
+    /// 与 requestRender() 的区别：
+    /// - requestRender(): 只设置标志，等 CVDisplayLink 下一帧渲染
+    /// - performImmediateRender(): 立即渲染，确保数据一致性
+    func performImmediateRender() {
+        // 必须在主线程执行（由 EventDrivenTerminalPoolWrapper 保证）
+        assert(Thread.isMainThread, "performImmediateRender must be called on main thread")
+
+        // 直接执行渲染，不检查 needsRender 标志
+        coordinator?.renderAllPanels(containerBounds: bounds)
+
+        // 清除标志，避免 CVDisplayLink 重复渲染
+        renderLock.lock()
+        needsRender = false
         renderLock.unlock()
     }
 
@@ -598,10 +697,66 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         }
     }
 
+    /// 轮询模式：先读取 PTY 数据，再渲染
+    ///
+    /// 每帧都会调用，用于轮询模式
+    private func performRenderWithPTYRead() {
+        guard let terminalPool = coordinator?.getTerminalPool() else { return }
+
+        // 1. 先读取所有 PTY 数据（循环读取直到 WouldBlock）
+        let hasNewData = terminalPool.readAllOutputs()
+
+        // 2. 检查是否需要渲染
+        renderLock.lock()
+        let forceRender = needsRender
+        if forceRender {
+            needsRender = false
+        }
+        renderLock.unlock()
+
+        // 3. 如果有新数据或强制渲染，执行渲染
+        if hasNewData || forceRender {
+            coordinator?.renderAllPanels(containerBounds: bounds)
+        }
+    }
+
+    /// 事件驱动模式：处理非 PTY 触发的渲染请求
+    ///
+    /// ## 新架构说明
+    ///
+    /// 主要渲染路径：
+    /// - PTY 线程读取数据 → C 回调 → performImmediateRender() 同步渲染
+    ///
+    /// CVDisplayLink 路径（本方法）：
+    /// - 处理窗口 resize、字体大小变化等非 PTY 触发的渲染需求
+    /// - 这些操作调用 requestRender() 设置标志
+    /// - CVDisplayLink 下一帧调用本方法执行渲染
+    ///
+    /// 为什么保留 CVDisplayLink？
+    /// - 窗口 resize 等操作需要帧同步渲染
+    /// - 避免在一帧内多次渲染（如快速 resize）
+    private func performEventDrivenRender() {
+        // 检查是否需要渲染
+        renderLock.lock()
+        let shouldRender = needsRender
+        if shouldRender {
+            needsRender = false
+        }
+        renderLock.unlock()
+
+        // 只有需要时才渲染
+        if shouldRender {
+            coordinator?.renderAllPanels(containerBounds: bounds)
+        }
+    }
+
     private func performRender() {
-        // 从 AR 获取数据并渲染
-        // flush() 内部已经调用了 render()，不需要再调用
-        coordinator?.renderAllPanels(containerBounds: bounds)
+        // 兼容旧代码
+        if useEventDrivenMode {
+            performEventDrivenRender()
+        } else {
+            performRenderWithPTYRead()
+        }
     }
 
     override var acceptsFirstResponder: Bool {
@@ -618,6 +773,11 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
     ///
     /// 用于拦截 Cmd+W、Cmd+T 等会被系统菜单处理的快捷键
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Debug
+        if event.modifierFlags.contains(.control) {
+            print("[performKeyEquivalent] Ctrl key: keyCode=\(event.keyCode), chars=\(event.characters ?? "nil")")
+        }
+
         guard let keyboardSystem = coordinator?.keyboardSystem else {
             return super.performKeyEquivalent(with: event)
         }
@@ -657,9 +817,28 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Debug: 打印方向键信息
+        let arrowKeyCodes: Set<UInt16> = [123, 124, 125, 126]
+        if arrowKeyCodes.contains(event.keyCode) {
+            print("[keyDown] Arrow key: keyCode=\(event.keyCode), chars=\(event.characters?.debugDescription ?? "nil")")
+        }
+
+        // Debug: 打印 Ctrl 按键信息
+        if event.modifierFlags.contains(.control) {
+            print("[keyDown] Ctrl key pressed: keyCode=\(event.keyCode), chars=\(event.characters ?? "nil")")
+        }
+
         // 使用键盘系统处理
         if let keyboardSystem = coordinator?.keyboardSystem {
             let result = keyboardSystem.handleKeyDown(event)
+
+            // Debug: 打印方向键处理结果
+            if arrowKeyCodes.contains(event.keyCode) {
+                print("[keyDown] Arrow key result: \(result)")
+            }
+            if event.modifierFlags.contains(.control) {
+                print("[keyDown] KeyboardSystem result: \(result)")
+            }
 
             switch result {
             case .handled:
@@ -671,6 +850,8 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
                 interpretKeyEvents([event])
                 return
             }
+        } else {
+            print("[keyDown] No keyboardSystem available!")
         }
 
         // 降级处理：如果没有键盘系统，使用原有逻辑
@@ -716,7 +897,8 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
 
     override func mouseDown(with event: NSEvent) {
         // 设置 first responder
-        window?.makeFirstResponder(self)
+        let result = window?.makeFirstResponder(self) ?? false
+        print("[mouseDown] makeFirstResponder result: \(result), currentResponder: \(window?.firstResponder as Any)")
 
         // 获取鼠标位置（相对于当前视图）
         let location = convert(event.locationInWindow, from: nil)
@@ -749,6 +931,9 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
         }
 
+        // 触发渲染（事件驱动模式下必须手动触发）
+        requestRender()
+
         // 记录选中状态
         isDraggingSelection = true
         selectionPanelId = panelId
@@ -778,6 +963,9 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         if let selection = activeTab.textSelection {
             _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
         }
+
+        // 触发渲染（事件驱动模式下必须手动触发）
+        requestRender()
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -848,7 +1036,7 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
         }
 
         // 使用 CoordinateMapper 转换
-        let gridPos = mapper.screenToGrid(
+        var gridPos = mapper.screenToGrid(
             screenPoint: location,
             panelOrigin: contentBounds.origin,
             panelHeight: contentBounds.height,
@@ -856,8 +1044,23 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             cellHeight: cellHeight
         )
 
+        // 🎯 边界检查：确保网格坐标不越界
+        // 计算终端的行列数
+        let physicalWidth = contentBounds.width * mapper.scale
+        let physicalHeight = contentBounds.height * mapper.scale
+        let maxCols = UInt16(physicalWidth / CGFloat(coordinator.fontMetrics?.cell_width ?? 15))
+        let maxRows = UInt16(physicalHeight / CGFloat(coordinator.fontMetrics?.line_height ?? 33))
+
+        // 限制在有效范围内（0 到 max-1）
+        if maxCols > 0 && gridPos.col >= maxCols {
+            gridPos = CursorPosition(col: maxCols - 1, row: gridPos.row)
+        }
+        if maxRows > 0 && gridPos.row >= maxRows {
+            gridPos = CursorPosition(col: gridPos.col, row: maxRows - 1)
+        }
+
         // 🔍 调试日志：点击坐标转换
-        print("🖱️ [CLICK DEBUG] location=(\(String(format: "%.1f", location.x)), \(String(format: "%.1f", location.y))) -> grid=(\(gridPos.col), \(gridPos.row))")
+        print("🖱️ [CLICK DEBUG] location=(\(String(format: "%.1f", location.x)), \(String(format: "%.1f", location.y))) -> grid=(\(gridPos.col), \(gridPos.row)) maxGrid=(\(maxCols)x\(maxRows))")
         print("🖱️ [CLICK DEBUG] contentBounds: origin=(\(String(format: "%.1f", contentBounds.origin.x)), \(String(format: "%.1f", contentBounds.origin.y))) size=(\(String(format: "%.1f", contentBounds.width))x\(String(format: "%.1f", contentBounds.height)))")
         print("🖱️ [CLICK DEBUG] cellSize: \(String(format: "%.2f", cellWidth))x\(String(format: "%.2f", cellHeight)), viewBounds: \(String(format: "%.0f", bounds.width))x\(String(format: "%.0f", bounds.height))")
 
@@ -894,7 +1097,6 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
     deinit {
         print("[DDDPanelRenderView] 清理资源")
         NotificationCenter.default.removeObserver(self)
-        shouldStopReading = true
         if let displayLink = displayLink {
             CVDisplayLinkStop(displayLink)
         }
@@ -948,8 +1150,51 @@ extension DDDPanelRenderView: NSTextInputClient {
     }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        // 返回光标位置，供输入法候选框定位
-        return window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
+        // 1. 获取必要的组件
+        guard let coordinator = coordinator,
+              let mapper = coordinator.coordinateMapper,
+              let terminalId = coordinator.getActiveTerminalId(),
+              let panelId = coordinator.activePanelId,
+              let panel = coordinator.terminalWindow.getPanel(panelId) else {
+            return window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
+        }
+
+        // 2. 获取光标位置
+        guard let cursorPosition = coordinator.getCursorPosition(terminalId: terminalId) else {
+            return window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
+        }
+
+        // 3. 获取 Panel 的 contentBounds
+        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
+            containerBounds: bounds,
+            headerHeight: 30.0
+        )
+        guard let contentBounds = tabsToRender.first(where: { $0.0 == terminalId })?.1 else {
+            return window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
+        }
+
+        // 4. 获取字体度量
+        let cellWidth: CGFloat
+        let cellHeight: CGFloat
+        if let metrics = coordinator.fontMetrics {
+            cellWidth = CGFloat(metrics.cell_width) / mapper.scale
+            cellHeight = CGFloat(metrics.line_height) / mapper.scale
+        } else {
+            cellWidth = 9.6
+            cellHeight = 20.0
+        }
+
+        // 5. 计算光标的屏幕矩形 (Swift 坐标系)
+        let cursorRect = mapper.gridToScreen(
+            position: cursorPosition,
+            panelOrigin: contentBounds.origin,
+            panelHeight: contentBounds.height,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight
+        )
+
+        // 6. 转换为屏幕坐标 (Global Screen Coordinates)
+        return window?.convertToScreen(convert(cursorRect, to: nil)) ?? .zero
     }
 
     func characterIndex(for point: NSPoint) -> Int {
