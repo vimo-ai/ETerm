@@ -78,10 +78,12 @@ final class KeyBindingRegistry {
 
         // ─────────────────────────────────────────
         // 字体大小 (Cmd+= 放大, Cmd+- 缩小, Cmd+0 重置)
+        // 在所有模式下都生效
         // ─────────────────────────────────────────
-        register(.cmd("="), event: .increaseFontSize)
-        register(.cmd("-"), event: .decreaseFontSize)
-        register(.cmd("0"), event: .resetFontSize)
+        register(.cmd("="), event: .increaseFontSize, modes: [.normal, .selection])
+        register(.cmd("+"), event: .increaseFontSize, modes: [.normal, .selection])  // Shift+= 产生 +
+        register(.cmd("-"), event: .decreaseFontSize, modes: [.normal, .selection])
+        register(.cmd("0"), event: .resetFontSize, modes: [.normal, .selection])
     }
 
     // MARK: - 注册

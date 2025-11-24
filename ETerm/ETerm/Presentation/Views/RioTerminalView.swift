@@ -482,6 +482,14 @@ class RioMetalView: NSView, RenderViewProtocol {
                 object: window
             )
 
+            // 监听屏幕切换（DPI 变化）
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidChangeScreen),
+                name: NSWindow.didChangeScreenNotification,
+                object: window
+            )
+
             if window.isKeyWindow {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                     self?.initialize()
@@ -489,6 +497,40 @@ class RioMetalView: NSView, RenderViewProtocol {
             }
         } else {
             NotificationCenter.default.removeObserver(self)
+        }
+    }
+
+    /// 窗口切换屏幕时更新 scale（DPI 变化）
+    @objc private func windowDidChangeScreen() {
+        guard let window = window,
+              let sugarloaf = sugarloaf else { return }
+
+        let newScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
+        let currentScale = layer?.contentsScale ?? 2.0
+
+        // 只有 scale 变化时才更新
+        if abs(newScale - currentScale) > 0.01 {
+            print("[RioMetalView] Screen changed, scale: \(currentScale) → \(newScale)")
+
+            // 更新 layer 的 scale
+            layer?.contentsScale = newScale
+
+            // 通知 Sugarloaf 更新 scale
+            sugarloaf_rescale(sugarloaf, Float(newScale))
+
+            // 更新 CoordinateMapper
+            coordinateMapper = CoordinateMapper(scale: newScale, containerBounds: bounds)
+            coordinator?.setCoordinateMapper(coordinateMapper!)
+
+            // 触发 resize（使用新的 scale 计算物理尺寸）
+            let width = Float(bounds.width * newScale)
+            let height = Float(bounds.height * newScale)
+            if width > 0 && height > 0 {
+                sugarloaf_resize(sugarloaf, width, height)
+            }
+
+            // 重新渲染
+            requestRender()
         }
     }
 
@@ -593,8 +635,17 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
-        // 通过 TerminalPool 调整字体大小
-        terminalPool?.changeFontSize(operation: operation)
+        guard let sugarloaf = sugarloaf else { return }
+
+        // 对所有 RichText 调整字体大小
+        for (_, richTextId) in richTextIds {
+            sugarloaf_change_font_size(sugarloaf, richTextId, operation.rawValue)
+        }
+
+        // 更新 fontMetrics
+        updateFontMetricsFromSugarloaf(sugarloaf)
+
+        // 重新渲染
         requestRender()
     }
 
@@ -930,6 +981,7 @@ class RioMetalView: NSView, RenderViewProtocol {
                 .cmdShift("["),
                 .cmdShift("]"),
                 .cmd("="),
+                .cmd("+"),  // Shift+= 产生 +
                 .cmd("-"),
                 .cmd("0"),
                 .cmd("v"),
@@ -1222,7 +1274,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         let deltaY = event.scrollingDeltaY
-        let delta = Int32(-deltaY / 3)
+        let delta = Int32(deltaY / 3)
 
         if delta != 0 {
             _ = pool.scroll(terminalId: Int(terminalId), deltaLines: delta)

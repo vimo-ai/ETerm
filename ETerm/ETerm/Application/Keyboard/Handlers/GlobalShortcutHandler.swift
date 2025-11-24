@@ -19,9 +19,15 @@ final class GlobalShortcutHandler: KeyboardEventHandler {
     }
 
     func handle(_ keyStroke: KeyStroke, context: KeyboardContext) -> EventHandleResult {
+        // Debug: 打印收到的按键
+        print("[GlobalShortcut] keyStroke: char=\(keyStroke.character ?? "nil"), modifiers=\(keyStroke.modifiers), mode=\(context.mode)")
+
         guard let event = bindingRegistry.find(keyStroke: keyStroke, mode: context.mode) else {
+            print("[GlobalShortcut] No binding found")
             return .ignored
         }
+
+        print("[GlobalShortcut] Found event: \(event)")
 
         switch event {
         case .switchToPage(let index):
