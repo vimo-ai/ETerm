@@ -96,6 +96,23 @@ void sugarloaf_content_add_text_full(
 void sugarloaf_content_build(SugarloafHandle handle);
 void sugarloaf_commit_rich_text(SugarloafHandle handle, size_t rt_id);
 
+/// Commit rich text at specified position (logical coordinates)
+/// x, y: position in points (not physical pixels)
+void sugarloaf_commit_rich_text_at(SugarloafHandle handle, size_t rt_id, float x, float y);
+
+// ===== Multi-Terminal Rendering API (Accumulate + Flush) =====
+
+/// Clear pending objects list (call at the start of each frame)
+void sugarloaf_clear_objects(SugarloafHandle handle);
+
+/// Add RichText to pending list (call for each terminal)
+/// rt_id: RichText ID (created via sugarloaf_create_rich_text)
+/// x, y: render position (logical coordinates, Y from top)
+void sugarloaf_add_rich_text(SugarloafHandle handle, size_t rt_id, float x, float y);
+
+/// Flush all accumulated objects and render (call at the end of each frame)
+void sugarloaf_flush_and_render(SugarloafHandle handle);
+
 // Rendering
 void sugarloaf_clear(SugarloafHandle handle);
 void sugarloaf_set_test_objects(SugarloafHandle handle);
@@ -834,6 +851,35 @@ int rio_pool_get_cursor(
     unsigned short* out_col,
     unsigned short* out_row
 );
+
+/// 设置选区
+int rio_pool_set_selection(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id,
+    size_t start_col,
+    int start_row,
+    size_t end_col,
+    int end_row
+);
+
+/// 清除选区
+int rio_pool_clear_selection(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id
+);
+
+/// 获取选中的文本（返回需要用 rio_free_string 释放的字符串）
+char* rio_pool_get_selected_text(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id,
+    size_t start_col,
+    int start_row,
+    size_t end_col,
+    int end_row
+);
+
+/// 释放从 Rust 返回的字符串
+void rio_free_string(char* s);
 
 /// 释放终端池
 void rio_pool_free(RioTerminalPoolHandle pool);

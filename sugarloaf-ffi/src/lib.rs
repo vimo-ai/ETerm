@@ -81,6 +81,8 @@ pub struct SugarloafHandle {
     current_font_size: f32,
     /// 显示器缩放因子 (用于计算物理像素)
     scale: f32,
+    /// 待渲染的 objects 列表（多终端渲染累积）
+    pending_objects: Vec<Object>,
 }
 
 impl SugarloafHandle {
@@ -245,6 +247,7 @@ pub extern "C" fn sugarloaf_new(
             font_metrics,
             current_font_size: font_size,
             scale,
+            pending_objects: Vec::new(),
         });
         Box::into_raw(handle)
     })
@@ -387,6 +390,7 @@ pub extern "C" fn sugarloaf_content_add_text_styled(
 }
 
 /// Add text with full styling options (width, cursor, background color)
+/// Automatically handles font fallback for emoji and other special characters.
 #[no_mangle]
 pub extern "C" fn sugarloaf_content_add_text_full(
     handle: *mut SugarloafHandle,
@@ -417,7 +421,7 @@ pub extern "C" fn sugarloaf_content_add_text_full(
         None
     };
 
-    let style = FragmentStyle {
+    let base_style = FragmentStyle {
         color: [fg_r, fg_g, fg_b, fg_a],
         background_color,
         width,
@@ -425,7 +429,59 @@ pub extern "C" fn sugarloaf_content_add_text_full(
         ..FragmentStyle::default()
     };
 
-    handle.instance.content().add_text(text_str, style);
+    // Check if text contains characters that need font fallback
+    // For single characters, try to find the best font match
+    let content = handle.instance.content();
+
+    if text_str.chars().count() == 1 {
+        // Single character - try font fallback
+        let ch = text_str.chars().next().unwrap();
+
+        // Check if this character might need fallback (emoji or non-ASCII)
+        let needs_fallback = ch as u32 > 0x7F || is_emoji_like(ch);
+
+        if needs_fallback {
+            // Try to find the best font match
+            let font_library = content.font_library();
+            let font_library_data = font_library.inner.read();
+            if let Some((font_id, _is_emoji)) = font_library_data.find_best_font_match(ch, &base_style) {
+                drop(font_library_data);
+                let style = FragmentStyle {
+                    font_id,
+                    ..base_style
+                };
+                content.add_text(text_str, style);
+                return;
+            }
+            drop(font_library_data);
+        }
+    }
+
+    // Default: use base style (font_id = 0)
+    content.add_text(text_str, base_style);
+}
+
+/// Check if a character is emoji-like (needs special font)
+fn is_emoji_like(ch: char) -> bool {
+    let code = ch as u32;
+
+    // Common emoji ranges
+    // Emoticons
+    (0x1F600..=0x1F64F).contains(&code) ||
+    // Miscellaneous Symbols and Pictographs
+    (0x1F300..=0x1F5FF).contains(&code) ||
+    // Transport and Map Symbols
+    (0x1F680..=0x1F6FF).contains(&code) ||
+    // Supplemental Symbols and Pictographs
+    (0x1F900..=0x1F9FF).contains(&code) ||
+    // Symbols and Pictographs Extended-A
+    (0x1FA00..=0x1FA6F).contains(&code) ||
+    // Dingbats
+    (0x2700..=0x27BF).contains(&code) ||
+    // Miscellaneous Symbols
+    (0x2600..=0x26FF).contains(&code) ||
+    // Regional Indicator Symbols
+    (0x1F1E0..=0x1F1FF).contains(&code)
 }
 
 /// Build content
@@ -439,9 +495,23 @@ pub extern "C" fn sugarloaf_content_build(handle: *mut SugarloafHandle) {
     handle.instance.content().build();
 }
 
-/// Commit rich text as an object for rendering
+/// Commit rich text as an object for rendering at (0, 0)
 #[no_mangle]
 pub extern "C" fn sugarloaf_commit_rich_text(handle: *mut SugarloafHandle, rt_id: usize) {
+    sugarloaf_commit_rich_text_at(handle, rt_id, 0.0, 0.0);
+}
+
+/// Commit rich text as an object for rendering at specified position
+///
+/// Position is in logical coordinates (points), not physical pixels.
+/// The Y coordinate is from top-left (0 = top of window).
+#[no_mangle]
+pub extern "C" fn sugarloaf_commit_rich_text_at(
+    handle: *mut SugarloafHandle,
+    rt_id: usize,
+    x: f32,
+    y: f32,
+) {
     if handle.is_null() {
         return;
     }
@@ -450,15 +520,86 @@ pub extern "C" fn sugarloaf_commit_rich_text(handle: *mut SugarloafHandle, rt_id
 
     let handle = unsafe { &mut *handle };
 
-    // 创建 RichText 对象，位置在左上角 (0, 0)
+    // 创建 RichText 对象，使用传入的位置
     let rich_text_obj = Object::RichText(RichText {
         id: rt_id,
-        position: [0.0, 0.0],  // 左上角，与 Rio 终端一致
+        position: [x, y],
         lines: None,
     });
 
     // 只设置 RichText，移除测试矩形
     handle.set_objects(vec![rich_text_obj]);
+}
+
+// ============================================================================
+// 多终端渲染 API（累积 + 统一提交）
+// ============================================================================
+
+/// 清空待渲染的 objects 列表（每帧开始时调用）
+///
+/// 在渲染多个终端之前，调用此函数清空上一帧的累积 objects。
+#[no_mangle]
+pub extern "C" fn sugarloaf_clear_objects(handle: *mut SugarloafHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+    handle.pending_objects.clear();
+}
+
+/// 累积 RichText 到待渲染列表（每个终端调用）
+///
+/// 将指定的 RichText 添加到待渲染列表中，位置由 (x, y) 指定。
+/// 多终端场景下，每个终端调用一次此函数，然后统一调用 sugarloaf_flush_and_render。
+///
+/// # 参数
+/// - rt_id: RichText 的 ID（通过 sugarloaf_create_rich_text 创建）
+/// - x, y: 渲染位置（逻辑坐标，Y 轴从顶部开始）
+#[no_mangle]
+pub extern "C" fn sugarloaf_add_rich_text(
+    handle: *mut SugarloafHandle,
+    rt_id: usize,
+    x: f32,
+    y: f32,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    use sugarloaf::RichText;
+
+    let handle = unsafe { &mut *handle };
+
+    let rich_text_obj = Object::RichText(RichText {
+        id: rt_id,
+        position: [x, y],
+        lines: None,
+    });
+
+    handle.pending_objects.push(rich_text_obj);
+}
+
+/// 统一提交所有 objects 并渲染（每帧结束时调用）
+///
+/// 将 pending_objects 中累积的所有 RichText 一次性提交给 Sugarloaf，
+/// 然后触发 GPU 渲染。渲染完成后清空 pending_objects。
+#[no_mangle]
+pub extern "C" fn sugarloaf_flush_and_render(handle: *mut SugarloafHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+
+    // 提交所有累积的 objects
+    handle.instance.set_objects(handle.pending_objects.clone());
+
+    // 触发 GPU 渲染
+    handle.instance.render();
+
+    // 清空缓冲区
+    handle.pending_objects.clear();
 }
 
 /// Clear the screen

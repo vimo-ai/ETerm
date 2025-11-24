@@ -220,8 +220,6 @@ where
         // For non-synchronized updates, we send a Wakeup event which will coalesce
         // multiple rapid updates into a single render pass.
         if state.parser.sync_bytes_count() < processed && processed > 0 {
-            // 调试：打印处理的字节数
-            eprintln!("[Machine-{}] Processed {} bytes, sending Wakeup", self.route_id, processed);
             // 照抄 Rio: Send a Wakeup event to coalesce renders
             self.event_listener
                 .send_event(RioEvent::Wakeup(self.route_id));
@@ -435,14 +433,9 @@ where
 
                     // 🎯 处理 EventListener 队列中的事件（如 CPR 响应）
                     let queued_events = self.event_listener.queue().drain();
-                    if !queued_events.is_empty() {
-                        eprintln!("[RioMachine-{}] [CPR DEBUG] Drained {} events from queue", self.route_id, queued_events.len());
-                    }
                     for event in queued_events {
-                        eprintln!("[RioMachine-{}] [CPR DEBUG] Processing event: {:?}", self.route_id, event);
                         match event {
                             crate::rio_event::RioEvent::PtyWrite(text) => {
-                                eprintln!("[RioMachine-{}] [CPR DEBUG] Processing PtyWrite: {:?}", self.route_id, text);
                                 state.write_list.push_back(std::borrow::Cow::Owned(text.into_bytes()));
                             }
                             _ => {
