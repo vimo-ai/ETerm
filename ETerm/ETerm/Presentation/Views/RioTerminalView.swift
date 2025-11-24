@@ -20,7 +20,6 @@ import QuartzCore
 
 struct RioTerminalView: View {
     @StateObject private var coordinator: TerminalWindowCoordinator
-    @StateObject private var bubbleState = BubbleState()
 
     init() {
         // 创建初始的 Domain AR
@@ -47,12 +46,8 @@ struct RioTerminalView: View {
             .ignoresSafeArea()
 
             // 渲染层
-            RioRenderView(coordinator: coordinator, bubbleState: bubbleState)
-            
-            // 翻译气泡
-            TranslationBubbleView(state: bubbleState)
+            RioRenderView(coordinator: coordinator)
         }
-        .coordinateSpace(name: "BubbleContainer")
     }
 }
 
@@ -60,20 +55,15 @@ struct RioTerminalView: View {
 
 struct RioRenderView: NSViewRepresentable {
     @ObservedObject var coordinator: TerminalWindowCoordinator
-    @ObservedObject var bubbleState: BubbleState
 
     func makeNSView(context: Context) -> RioContainerView {
         let containerView = RioContainerView()
         containerView.coordinator = coordinator
-        containerView.bubbleState = bubbleState
         coordinator.renderView = containerView.renderView
         return containerView
     }
 
     func updateNSView(_ nsView: RioContainerView, context: Context) {
-        // 更新 bubbleState
-        nsView.bubbleState = bubbleState
-        
         // 读取 updateTrigger 触发更新
         let _ = coordinator.updateTrigger
 
@@ -114,12 +104,6 @@ class RioContainerView: NSView {
             renderView.coordinator = coordinator
             setupPageBarCallbacks()
             updatePageBar()
-        }
-    }
-    
-    var bubbleState: BubbleState? {
-        didSet {
-            renderView.bubbleState = bubbleState
         }
     }
 
@@ -422,9 +406,6 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 坐标映射器
     private var coordinateMapper: CoordinateMapper?
-
-    /// Bubble State
-    weak var bubbleState: BubbleState?
 
     // MARK: - 光标闪烁相关（照抄 Rio）
 
@@ -1129,11 +1110,6 @@ class RioMetalView: NSView, RenderViewProtocol {
         _ = window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
-        
-        // 点击时隐藏气泡
-        DispatchQueue.main.async { [weak self] in
-            self?.bubbleState?.hide()
-        }
 
         guard let coordinator = coordinator else {
             super.mouseDown(with: event)
@@ -1155,7 +1131,13 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 转换为网格坐标
         let gridPos = screenToGrid(location: location, panelId: panelId)
 
-        // 更新 Domain 层状态
+        // 双击选中单词
+        if event.clickCount == 2 {
+            selectWordAt(gridPos: gridPos, activeTab: activeTab, terminalId: terminalId, panelId: panelId, event: event)
+            return
+        }
+
+        // 单击：开始拖拽选择
         activeTab.startSelection(at: gridPos)
 
         // 通知 Rust 层渲染高亮
@@ -1163,13 +1145,102 @@ class RioMetalView: NSView, RenderViewProtocol {
             _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
         }
 
-        // 触发渲染（事件驱动模式下必须手动触发）
+        // 触发渲染
         requestRender()
 
         // 记录选中状态
         isDraggingSelection = true
         selectionPanelId = panelId
         selectionTab = activeTab
+    }
+
+    // MARK: - 双击选中单词
+
+    /// 单词分隔符
+    private static let wordDelimiters: CharacterSet = {
+        var set = CharacterSet.whitespaces
+        set.formUnion(.punctuationCharacters)
+        set.formUnion(CharacterSet(charactersIn: "()[]{}\"'`<>=/\\|@#$%^&*+~"))
+        return set
+    }()
+
+    /// 双击选中单词
+    private func selectWordAt(
+        gridPos: CursorPosition,
+        activeTab: TerminalTab,
+        terminalId: UInt32,
+        panelId: UUID,
+        event: NSEvent
+    ) {
+        guard let pool = terminalPool else { return }
+
+        let row = Int(gridPos.row)
+        let col = Int(gridPos.col)
+
+        // 获取该行的所有单元格
+        let cells = pool.getRowCells(terminalId: Int(terminalId), rowIndex: row, maxCells: 500)
+        guard !cells.isEmpty else { return }
+
+        // 判断字符是否为分隔符
+        func isDelimiter(_ char: UInt32) -> Bool {
+            guard let scalar = UnicodeScalar(char) else { return true }
+            return Self.wordDelimiters.contains(scalar) || char == 0 || char == 32
+        }
+
+        // 当前位置的字符
+        guard col < cells.count else { return }
+        let currentChar = cells[col].character
+
+        // 如果点击的是分隔符，不选中
+        if isDelimiter(currentChar) {
+            return
+        }
+
+        // 向左找单词起点
+        var startCol = col
+        while startCol > 0 && !isDelimiter(cells[startCol - 1].character) {
+            startCol -= 1
+        }
+
+        // 向右找单词终点
+        var endCol = col
+        while endCol < cells.count - 1 && !isDelimiter(cells[endCol + 1].character) {
+            endCol += 1
+        }
+
+        // 设置选区
+        let startPos = CursorPosition(col: UInt16(startCol), row: UInt16(row))
+        let endPos = CursorPosition(col: UInt16(endCol), row: UInt16(row))
+
+        activeTab.startSelection(at: startPos)
+        activeTab.updateSelection(to: endPos)
+
+        // 通知 Rust 层渲染高亮
+        if let selection = activeTab.textSelection {
+            _ = coordinator?.setSelection(terminalId: terminalId, selection: selection)
+        }
+
+        // 触发渲染
+        requestRender()
+
+        // 记录选中状态（双击后不进入拖拽模式，直接完成选中）
+        isDraggingSelection = false
+        selectionPanelId = panelId
+        selectionTab = activeTab
+
+        // 显示翻译气泡
+        if let text = coordinator?.getSelectedText(terminalId: terminalId, selection: activeTab.textSelection!) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                let mouseLoc = self.convert(event.locationInWindow, from: nil)
+                let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
+
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    TranslationPopover.shared.show(text: trimmed, at: rect, in: self)
+                }
+            }
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -1219,19 +1290,14 @@ class RioMetalView: NSView, RenderViewProtocol {
                     activeTab.clearSelection()
                     _ = coordinator.clearSelection(terminalId: terminalId)
                     requestRender()
-
-                    // 隐藏气泡
-                    DispatchQueue.main.async { [weak self] in
-                        self?.bubbleState?.hide()
-                    }
                 } else {
-                    // 有有效文本选中，显示气泡
+                    // 有有效文本选中，显示翻译气泡
                     let mouseLoc = self.convert(event.locationInWindow, from: nil)
-                    // 稍微向上偏移一点，避免遮挡选区
-                    let bubblePos = CGPoint(x: mouseLoc.x, y: bounds.height - mouseLoc.y - 40)
+                    let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
 
                     DispatchQueue.main.async { [weak self] in
-                        self?.bubbleState?.show(text: text, at: bubblePos)
+                        guard let self = self else { return }
+                        TranslationPopover.shared.show(text: text, at: rect, in: self)
                     }
                 }
             }

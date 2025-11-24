@@ -65,6 +65,27 @@ class BubbleState: ObservableObject {
         self.mode = .hint
     }
 
+    /// 更新文本并重新加载（用于已展开状态下的新选词）
+    func updateText(_ text: String) {
+        let newText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 如果文本相同，不重复加载
+        guard newText != originalText else { return }
+
+        self.originalText = newText
+
+        // 如果已展开，直接重新加载内容
+        if mode == .expanded {
+            Task {
+                await loadContent()
+            }
+        } else {
+            // 否则切换到 hint 模式
+            self.content = .idle
+            self.mode = .hint
+        }
+    }
+
     /// 隐藏气泡
     func hide() {
         withAnimation {
