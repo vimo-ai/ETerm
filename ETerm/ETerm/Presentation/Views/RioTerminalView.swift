@@ -392,7 +392,8 @@ class RioMetalView: NSView, RenderViewProtocol {
     weak var coordinator: TerminalWindowCoordinator?
 
     private var sugarloaf: SugarloafHandle?
-    private var richTextId: Int = 0
+    /// 多终端支持：每个终端一个独立的 richTextId
+    private var richTextIds: [Int: Int] = [:]
     private var terminalPool: RioTerminalPoolWrapper?
 
     /// 字体度量（从 Sugarloaf 获取）
@@ -412,6 +413,15 @@ class RioMetalView: NSView, RenderViewProtocol {
     private var isBlinkingCursorVisible: Bool = true
     private var lastTypingTime: Date?
     private let blinkInterval: TimeInterval = 0.5
+
+    // MARK: - 文本选择状态
+
+    /// 是否正在拖拽选择
+    private var isDraggingSelection: Bool = false
+    /// 当前选择所在的 Panel ID
+    private var selectionPanelId: UUID?
+    /// 当前选择所在的 Tab
+    private weak var selectionTab: TerminalTab?
 
     // MARK: - IME 支持
 
@@ -502,7 +512,8 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         guard isInitialized, let sugarloaf = sugarloaf else { return }
 
-        let scale = window?.backingScaleFactor ?? 2.0
+        // 优先使用 window 关联的 screen 的 scale，更可靠
+        let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         let width = Float(bounds.width * scale)
         let height = Float(bounds.height * scale)
 
@@ -522,11 +533,13 @@ class RioMetalView: NSView, RenderViewProtocol {
     private func initializeSugarloaf() {
         guard let window = window else { return }
 
-        let scale = Float(window.backingScaleFactor)
+        // 优先使用 window 关联的 screen 的 scale，更可靠
+        let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
+        let scale = Float(effectiveScale)
         let width = Float(bounds.width) * scale
         let height = Float(bounds.height) * scale
 
-        layer?.contentsScale = window.backingScaleFactor
+        layer?.contentsScale = effectiveScale
 
         let viewPointer = Unmanaged.passUnretained(self).toOpaque()
         let windowHandle = UnsafeMutableRawPointer(mutating: viewPointer)
@@ -545,18 +558,10 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        richTextId = Int(sugarloaf_create_rich_text(sugarloaf))
+        // fontMetrics 会在第一次创建 RichText 后更新为真实值
+        // 这里先不获取，等 renderTerminal 中创建 RichText 后再更新
 
-        var metrics = SugarloafFontMetrics()
-        if sugarloaf_get_font_metrics(sugarloaf, &metrics) {
-            cellWidth = CGFloat(metrics.cell_width)
-            cellHeight = CGFloat(metrics.cell_height)
-            lineHeight = CGFloat(metrics.line_height)
-            coordinator?.updateFontMetrics(metrics)
-        }
-
-        // 创建 CoordinateMapper
-        let effectiveScale = CGFloat(scale)
+        // 创建 CoordinateMapper（使用前面定义的 effectiveScale）
         coordinateMapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
         coordinator?.setCoordinateMapper(coordinateMapper!)
 
@@ -572,8 +577,6 @@ class RioMetalView: NSView, RenderViewProtocol {
         if let pool = terminalPool {
             coordinator?.setTerminalPool(pool)
         }
-
-        print("[RioMetalView] Initialized with coordinator")
 
         // 初始渲染
         requestRender()
@@ -595,7 +598,23 @@ class RioMetalView: NSView, RenderViewProtocol {
         requestRender()
     }
 
+    /// 从 Sugarloaf 更新 fontMetrics
+    private func updateFontMetricsFromSugarloaf(_ sugarloaf: SugarloafHandle) {
+        var metrics = SugarloafFontMetrics()
+        if sugarloaf_get_font_metrics(sugarloaf, &metrics) {
+            cellWidth = CGFloat(metrics.cell_width)
+            cellHeight = CGFloat(metrics.cell_height)
+            lineHeight = CGFloat(metrics.line_height > 0 ? metrics.line_height : metrics.cell_height)
+            coordinator?.updateFontMetrics(metrics)
+        }
+    }
+
     /// 渲染所有 Panel（多终端支持）
+    ///
+    /// 使用累积模式：
+    /// 1. 清空待渲染列表
+    /// 2. 遍历每个终端，构建 RichText 内容并累积到列表
+    /// 3. 统一提交所有 objects 并渲染
     private func render() {
         guard let sugarloaf = sugarloaf,
               let pool = terminalPool,
@@ -610,7 +629,10 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 如果没有终端，跳过渲染
         if tabsToRender.isEmpty { return }
 
-        // 渲染每个终端
+        // 1. 清空待渲染列表（每帧开始）
+        sugarloaf_clear_objects(sugarloaf)
+
+        // 2. 渲染每个终端（累积 RichText 到列表）
         for (terminalId, contentBounds) in tabsToRender {
             renderTerminal(
                 terminalId: Int(terminalId),
@@ -619,13 +641,14 @@ class RioMetalView: NSView, RenderViewProtocol {
                 pool: pool
             )
         }
+
+        // 3. 统一提交所有 objects 并渲染（每帧结束）
+        sugarloaf_flush_and_render(sugarloaf)
     }
 
     /// 渲染单个终端
     ///
-    /// 注意：当前实现使用手动 RichText 构建方式渲染。
-    /// 对于多终端渲染偏移，需要 Rust 侧添加 `sugarloaf_set_render_offset` API。
-    /// 目前单终端情况下可以正常工作。
+    /// 多终端渲染：每个终端有独立的 richTextId，通过累积模式统一渲染。
     private func renderTerminal(
         terminalId: Int,
         contentBounds: CGRect,
@@ -651,7 +674,27 @@ class RioMetalView: NSView, RenderViewProtocol {
             _ = pool.resize(terminalId: terminalId, cols: cols, rows: rows)
         }
 
-        // 选择或创建 RichText
+        // 4. 获取或创建该终端的 richTextId
+        let richTextId: Int
+        if let existingId = richTextIds[terminalId] {
+            richTextId = existingId
+        } else {
+            // 为新终端创建 RichText
+            let newId = Int(sugarloaf_create_rich_text(sugarloaf))
+            richTextIds[terminalId] = newId
+            richTextId = newId
+
+            // 🎯 创建 RichText 后更新 fontMetrics（只需要更新一次）
+            if richTextIds.count == 1 {
+                updateFontMetricsFromSugarloaf(sugarloaf)
+                // 请求重新渲染，下一帧会使用正确的 fontMetrics
+                DispatchQueue.main.async { [weak self] in
+                    self?.requestRender()
+                }
+            }
+        }
+
+        // 选择并清空 RichText
         sugarloaf_content_sel(sugarloaf, richTextId)
         sugarloaf_content_clear(sugarloaf)
 
@@ -678,8 +721,15 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         sugarloaf_content_build(sugarloaf)
-        sugarloaf_commit_rich_text(sugarloaf, richTextId)
-        sugarloaf_render(sugarloaf)
+
+        // 累积 RichText 到待渲染列表（不立即渲染）
+        // 渲染在 render() 方法的 sugarloaf_flush_and_render 中统一执行
+        sugarloaf_add_rich_text(
+            sugarloaf,
+            richTextId,
+            Float(logicalRect.origin.x),
+            Float(logicalRect.origin.y)
+        )
     }
 
     /// 计算光标可见性
@@ -946,10 +996,36 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 处理编辑快捷键
     private func handleEditShortcut(_ keyStroke: KeyStroke, pool: RioTerminalPoolWrapper, terminalId: Int) -> Bool {
+        // Cmd+C 复制选中文本
+        if keyStroke.matches(.cmd("c")) {
+            return handleCopy(terminalId: UInt32(terminalId))
+        }
+
+        // Cmd+V 粘贴
         if keyStroke.matches(.cmd("v")) {
             if let text = NSPasteboard.general.string(forType: .string) {
                 _ = pool.writeInput(terminalId: terminalId, data: text)
             }
+            return true
+        }
+
+        return false
+    }
+
+    /// 处理复制操作
+    private func handleCopy(terminalId: UInt32) -> Bool {
+        guard let activeTab = selectionTab,
+              let selection = activeTab.textSelection,
+              !selection.isEmpty,
+              let coordinator = coordinator else {
+            return false
+        }
+
+        // 从 Rust 获取选中的文本
+        if let text = coordinator.getSelectedText(terminalId: terminalId, selection: selection) {
+            // 复制到剪贴板
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
             return true
         }
 
@@ -980,8 +1056,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - 鼠标事件
 
     override func mouseDown(with event: NSEvent) {
-        let result = window?.makeFirstResponder(self) ?? false
-        print("[mouseDown] makeFirstResponder result: \(result)")
+        _ = window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
 
@@ -991,9 +1066,151 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 根据位置找到对应的 Panel
-        if let panelId = coordinator.findPanel(at: location, containerBounds: bounds) {
-            coordinator.setActivePanel(panelId)
+        guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
+              let panel = coordinator.terminalWindow.getPanel(panelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId else {
+            super.mouseDown(with: event)
+            return
         }
+
+        // 设置激活的 Panel
+        coordinator.setActivePanel(panelId)
+
+        // 转换为网格坐标
+        let gridPos = screenToGrid(location: location, panelId: panelId)
+
+        // 更新 Domain 层状态
+        activeTab.startSelection(at: gridPos)
+
+        // 通知 Rust 层渲染高亮
+        if let selection = activeTab.textSelection {
+            _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
+        }
+
+        // 触发渲染（事件驱动模式下必须手动触发）
+        requestRender()
+
+        // 记录选中状态
+        isDraggingSelection = true
+        selectionPanelId = panelId
+        selectionTab = activeTab
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDraggingSelection,
+              let panelId = selectionPanelId,
+              let activeTab = selectionTab,
+              let terminalId = activeTab.rustTerminalId,
+              let coordinator = coordinator else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        // 获取鼠标位置
+        let location = convert(event.locationInWindow, from: nil)
+
+        // 转换为网格坐标
+        let gridPos = screenToGrid(location: location, panelId: panelId)
+
+        // 更新 Domain 层状态
+        activeTab.updateSelection(to: gridPos)
+
+        // 通知 Rust 层渲染高亮
+        if let selection = activeTab.textSelection {
+            _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
+        }
+
+        // 触发渲染（事件驱动模式下必须手动触发）
+        requestRender()
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isDraggingSelection else {
+            super.mouseUp(with: event)
+            return
+        }
+
+        // 检查选中内容是否全为空白，如果是则清除选区
+        if let activeTab = selectionTab,
+           let terminalId = activeTab.rustTerminalId,
+           let selection = activeTab.textSelection,
+           let coordinator = coordinator {
+            if let text = coordinator.getSelectedText(terminalId: terminalId, selection: selection) {
+                // 检查是否全为空白字符
+                let isAllWhitespace = text.allSatisfy { $0.isWhitespace }
+                if isAllWhitespace {
+                    // 清除选区
+                    activeTab.clearSelection()
+                    _ = coordinator.clearSelection(terminalId: terminalId)
+                    requestRender()
+                }
+            }
+        }
+
+        // 重置选中状态
+        isDraggingSelection = false
+        // 注意：不清除 selectionPanelId 和 selectionTab，保持选中状态用于 Cmd+C 复制
+    }
+
+    // MARK: - 坐标转换
+
+    /// 将屏幕坐标转换为网格坐标
+    private func screenToGrid(location: CGPoint, panelId: UUID) -> CursorPosition {
+        guard let coordinator = coordinator,
+              let mapper = coordinateMapper else {
+            return CursorPosition(col: 0, row: 0)
+        }
+
+        // 获取 Panel 的 bounds
+        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
+            containerBounds: bounds,
+            headerHeight: 30.0  // 与 coordinator 中的 headerHeight 一致
+        )
+
+        // 获取 Panel 对应的 contentBounds
+        guard let panel = coordinator.terminalWindow.getPanel(panelId),
+              let contentBounds = tabsToRender.first(where: { $0.0 == panel.activeTab?.rustTerminalId })?.1 else {
+            return CursorPosition(col: 0, row: 0)
+        }
+
+        // 从 fontMetrics 获取实际的 cell 尺寸
+        let cellWidthVal: CGFloat
+        let cellHeightVal: CGFloat
+        if let metrics = coordinator.fontMetrics {
+            // fontMetrics 是物理像素，需要转换为逻辑点
+            cellWidthVal = CGFloat(metrics.cell_width) / mapper.scale
+            cellHeightVal = CGFloat(metrics.line_height) / mapper.scale
+        } else {
+            cellWidthVal = 9.6
+            cellHeightVal = 20.0
+        }
+
+        // 使用 CoordinateMapper 转换
+        var gridPos = mapper.screenToGrid(
+            screenPoint: location,
+            panelOrigin: contentBounds.origin,
+            panelHeight: contentBounds.height,
+            cellWidth: cellWidthVal,
+            cellHeight: cellHeightVal
+        )
+
+        // 边界检查：确保网格坐标不越界
+        // 计算终端的行列数
+        let physicalWidth = contentBounds.width * mapper.scale
+        let physicalHeight = contentBounds.height * mapper.scale
+        let maxCols = UInt16(physicalWidth / CGFloat(coordinator.fontMetrics?.cell_width ?? 15))
+        let maxRows = UInt16(physicalHeight / CGFloat(coordinator.fontMetrics?.line_height ?? 33))
+
+        // 限制在有效范围内（0 到 max-1）
+        if maxCols > 0 && gridPos.col >= maxCols {
+            gridPos = CursorPosition(col: maxCols - 1, row: gridPos.row)
+        }
+        if maxRows > 0 && gridPos.row >= maxRows {
+            gridPos = CursorPosition(col: gridPos.col, row: maxRows - 1)
+        }
+
+        return gridPos
     }
 
     override func scrollWheel(with event: NSEvent) {

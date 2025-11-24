@@ -302,18 +302,39 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func setSelection(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> Bool {
-        // TODO: 实现选区
-        return false
+        guard let pool = poolHandle else { return false }
+        return rio_pool_set_selection(
+            pool,
+            terminalId,
+            Int(startCol),
+            Int32(startRow),
+            Int(endCol),
+            Int32(endRow)
+        ) != 0
     }
 
     func clearSelection(terminalId: Int) -> Bool {
-        // TODO: 实现清除选区
-        return false
+        guard let pool = poolHandle else { return false }
+        return rio_pool_clear_selection(pool, terminalId) != 0
     }
 
     func getTextRange(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> String? {
-        // TODO: 实现获取文本范围
-        return nil
+        guard let pool = poolHandle else { return nil }
+
+        let cStr = rio_pool_get_selected_text(
+            pool,
+            terminalId,
+            Int(startCol),
+            Int32(startRow),
+            Int(endCol),
+            Int32(endRow)
+        )
+
+        guard let cStr = cStr else { return nil }
+
+        let result = String(cString: cStr)
+        rio_free_string(cStr)
+        return result
     }
 
     func getInputRow(terminalId: Int) -> UInt16? {

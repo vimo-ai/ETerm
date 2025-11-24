@@ -380,14 +380,6 @@ impl RioTerminal {
         let row = &visible_rows[row_index];
         let mut cells = Vec::with_capacity(row.len());
 
-        // 调试：打印前几个字符
-        if row_index == 0 {
-            let preview: String = row.inner.iter().take(20).map(|s| s.c).collect();
-            if preview.trim() != "" {
-                eprintln!("[get_row_cells] row 0 preview: {:?}", preview);
-            }
-        }
-
         for square in row.inner.iter() {
             let (fg_r, fg_g, fg_b) = Self::ansi_color_to_rgb(&square.fg, &terminal);
             let (bg_r, bg_g, bg_b) = Self::ansi_color_to_rgb(&square.bg, &terminal);
@@ -512,6 +504,59 @@ impl RioTerminal {
 
     pub fn id(&self) -> usize {
         self.id
+    }
+
+    /// 设置选区
+    ///
+    /// 参数使用屏幕坐标（0-indexed），start 和 end 可以是任意顺序
+    pub fn set_selection(&self, start_col: usize, start_row: i32, end_col: usize, end_row: i32) {
+        use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
+        use rio_backend::selection::{Selection, SelectionType};
+
+        let mut terminal = self.terminal.lock();
+
+        // 创建选区起点和终点
+        let start = Pos::new(Line(start_row), Column(start_col));
+        let end = Pos::new(Line(end_row), Column(end_col));
+
+        // 创建选区（Simple 类型，支持任意方向）
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+
+        terminal.selection = Some(selection);
+    }
+
+    /// 清除选区
+    pub fn clear_selection(&self) {
+        let mut terminal = self.terminal.lock();
+        terminal.selection = None;
+    }
+
+    /// 获取选中的文本
+    pub fn get_selected_text(&self, start_col: usize, start_row: i32, end_col: usize, end_row: i32) -> Option<String> {
+        use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
+        use rio_backend::selection::{Selection, SelectionType};
+
+        let mut terminal = self.terminal.lock();
+
+        // 创建临时选区来获取文本范围
+        let start = Pos::new(Line(start_row), Column(start_col));
+        let end = Pos::new(Line(end_row), Column(end_col));
+
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+
+        // 临时设置选区
+        let old_selection = terminal.selection.take();
+        terminal.selection = Some(selection);
+
+        // 获取选中的文本
+        let text = terminal.selection_to_string();
+
+        // 恢复原来的选区
+        terminal.selection = old_selection;
+
+        text
     }
 }
 
@@ -877,4 +922,91 @@ pub extern "C" fn rio_pool_get_cursor(
             0
         }
     })
+}
+
+/// 设置选区
+#[no_mangle]
+pub extern "C" fn rio_pool_set_selection(
+    pool: *mut RioTerminalPool,
+    terminal_id: usize,
+    start_col: usize,
+    start_row: i32,
+    end_col: usize,
+    end_row: i32,
+) -> i32 {
+    catch_panic!(0, {
+        if pool.is_null() {
+            return 0;
+        }
+
+        let pool = unsafe { &*pool };
+        if let Some(terminal) = pool.get(terminal_id) {
+            terminal.set_selection(start_col, start_row, end_col, end_row);
+            1
+        } else {
+            0
+        }
+    })
+}
+
+/// 清除选区
+#[no_mangle]
+pub extern "C" fn rio_pool_clear_selection(pool: *mut RioTerminalPool, terminal_id: usize) -> i32 {
+    catch_panic!(0, {
+        if pool.is_null() {
+            return 0;
+        }
+
+        let pool = unsafe { &*pool };
+        if let Some(terminal) = pool.get(terminal_id) {
+            terminal.clear_selection();
+            1
+        } else {
+            0
+        }
+    })
+}
+
+/// 获取选中的文本
+///
+/// 返回的字符串需要调用者使用 `rio_free_string` 释放
+#[no_mangle]
+pub extern "C" fn rio_pool_get_selected_text(
+    pool: *mut RioTerminalPool,
+    terminal_id: usize,
+    start_col: usize,
+    start_row: i32,
+    end_col: usize,
+    end_row: i32,
+) -> *mut c_char {
+    catch_panic!(ptr::null_mut(), {
+        if pool.is_null() {
+            return ptr::null_mut();
+        }
+
+        let pool = unsafe { &*pool };
+        if let Some(terminal) = pool.get(terminal_id) {
+            if let Some(text) = terminal.get_selected_text(start_col, start_row, end_col, end_row) {
+                // 转换为 C 字符串
+                match std::ffi::CString::new(text) {
+                    Ok(c_str) => c_str.into_raw(),
+                    Err(_) => ptr::null_mut(),
+                }
+            } else {
+                ptr::null_mut()
+            }
+        } else {
+            ptr::null_mut()
+        }
+    })
+}
+
+/// 释放从 Rust 返回的字符串
+#[no_mangle]
+pub extern "C" fn rio_free_string(s: *mut c_char) {
+    if !s.is_null() {
+        unsafe {
+            let _ = std::ffi::CString::from_raw(s);
+        }
+    }
 }
