@@ -11,18 +11,11 @@ import Combine
 struct ContentView: View {
     var body: some View {
         TabView {
-            // 终端 Tab - 使用新的 Rio 风格实现
+            // 终端 Tab - 使用 Rio 风格事件驱动实现
             RioTerminalView()
                 .frame(minWidth: 800, minHeight: 600)
                 .tabItem {
                     Label("终端", systemImage: "terminal")
-                }
-
-            // 旧版终端（DDD 架构）- 保留用于对比
-            DDDTerminalView()
-                .frame(minWidth: 800, minHeight: 600)
-                .tabItem {
-                    Label("旧终端", systemImage: "terminal.fill")
                 }
 
             // 三个学习模块
