@@ -20,6 +20,7 @@ import QuartzCore
 
 struct RioTerminalView: View {
     @StateObject private var coordinator: TerminalWindowCoordinator
+    @StateObject private var bubbleState = BubbleState()
 
     init() {
         // 创建初始的 Domain AR
@@ -46,8 +47,12 @@ struct RioTerminalView: View {
             .ignoresSafeArea()
 
             // 渲染层
-            RioRenderView(coordinator: coordinator)
+            RioRenderView(coordinator: coordinator, bubbleState: bubbleState)
+            
+            // 翻译气泡
+            TranslationBubbleView(state: bubbleState)
         }
+        .coordinateSpace(name: "BubbleContainer")
     }
 }
 
@@ -55,15 +60,20 @@ struct RioTerminalView: View {
 
 struct RioRenderView: NSViewRepresentable {
     @ObservedObject var coordinator: TerminalWindowCoordinator
+    @ObservedObject var bubbleState: BubbleState
 
     func makeNSView(context: Context) -> RioContainerView {
         let containerView = RioContainerView()
         containerView.coordinator = coordinator
+        containerView.bubbleState = bubbleState
         coordinator.renderView = containerView.renderView
         return containerView
     }
 
     func updateNSView(_ nsView: RioContainerView, context: Context) {
+        // 更新 bubbleState
+        nsView.bubbleState = bubbleState
+        
         // 读取 updateTrigger 触发更新
         let _ = coordinator.updateTrigger
 
@@ -104,6 +114,12 @@ class RioContainerView: NSView {
             renderView.coordinator = coordinator
             setupPageBarCallbacks()
             updatePageBar()
+        }
+    }
+    
+    var bubbleState: BubbleState? {
+        didSet {
+            renderView.bubbleState = bubbleState
         }
     }
 
@@ -406,6 +422,9 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 坐标映射器
     private var coordinateMapper: CoordinateMapper?
+
+    /// Bubble State
+    weak var bubbleState: BubbleState?
 
     // MARK: - 光标闪烁相关（照抄 Rio）
 
@@ -1110,6 +1129,11 @@ class RioMetalView: NSView, RenderViewProtocol {
         _ = window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
+        
+        // 点击时隐藏气泡
+        DispatchQueue.main.async { [weak self] in
+            self?.bubbleState?.hide()
+        }
 
         guard let coordinator = coordinator else {
             super.mouseDown(with: event)
@@ -1195,6 +1219,20 @@ class RioMetalView: NSView, RenderViewProtocol {
                     activeTab.clearSelection()
                     _ = coordinator.clearSelection(terminalId: terminalId)
                     requestRender()
+
+                    // 隐藏气泡
+                    DispatchQueue.main.async { [weak self] in
+                        self?.bubbleState?.hide()
+                    }
+                } else {
+                    // 有有效文本选中，显示气泡
+                    let mouseLoc = self.convert(event.locationInWindow, from: nil)
+                    // 稍微向上偏移一点，避免遮挡选区
+                    let bubblePos = CGPoint(x: mouseLoc.x, y: bounds.height - mouseLoc.y - 40)
+
+                    DispatchQueue.main.async { [weak self] in
+                        self?.bubbleState?.show(text: text, at: bubblePos)
+                    }
                 }
             }
         }
