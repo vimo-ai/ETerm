@@ -1706,7 +1706,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn move_forward(&mut self, cols: Column) {
-        let old_col = self.grid.cursor.pos.col.0;
         let last_column =
             std::cmp::min(self.grid.cursor.pos.col + cols, self.grid.last_column());
 
@@ -1719,7 +1718,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn move_backward(&mut self, cols: Column) {
-        let old_col = self.grid.cursor.pos.col.0;
         let column = self.grid.cursor.pos.col.saturating_sub(cols.0);
 
         let cursor_line = self.grid.cursor.pos.row.0 as usize;
