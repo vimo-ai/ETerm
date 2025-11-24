@@ -11,18 +11,6 @@ use parking_lot::RwLock;
 mod sync;
 pub use sync::*;
 
-// PTY 事件驱动处理器（旧版，保留兼容）
-mod pty_machine;
-pub use pty_machine::*;
-
-// 终端模块（旧版，保留兼容）
-mod terminal;
-pub use terminal::*;
-
-// Context Grid 模块（Split 布局管理）
-mod context_grid;
-pub use context_grid::*;
-
 // ============================================================================
 // 新的 Rio 风格实现
 // ============================================================================
@@ -870,47 +858,3 @@ pub extern "C" fn sugarloaf_free(handle: *mut SugarloafHandle) {
     }
 }
 
-// ============================================================================
-// 新的 Panel 配置 API
-// ============================================================================
-
-
-/// 🧪 测试函数：在四个角创建测试 pane
-#[no_mangle]
-pub extern "C" fn tab_manager_test_corner_panes(
-    manager: *mut terminal::TabManager,
-    container_width: f32,
-    container_height: f32,
-) {
-    if manager.is_null() {
-        eprintln!("[FFI] ❌ tab_manager_test_corner_panes: manager is null");
-        return;
-    }
-
-    let manager = unsafe { &mut *manager };
-    manager.test_corner_panes(container_width, container_height);
-}
-
-#[no_mangle]
-pub extern "C" fn tab_manager_update_panel_config(
-    manager: *mut terminal::TabManager,
-    panel_id: usize,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    cols: u16,
-    rows: u16,
-) -> i32 {
-    if manager.is_null() {
-        eprintln!("[FFI] ❌ tab_manager_update_panel_config: manager is null");
-        return 0;
-    }
-
-    let manager = unsafe { &mut *manager };
-    if manager.update_panel_config(panel_id, x, y, width, height, cols, rows) {
-        1
-    } else {
-        0
-    }
-}

@@ -52,9 +52,6 @@ final class TerminalTab {
     /// 当前输入行号（从 Rust 同步，nil 表示不在输入模式）
     private(set) var currentInputRow: UInt16?
 
-    /// 终端会话（基础设施层，用于调用 Rust FFI）
-    var terminalSession: TerminalSession?
-
     /// Rust 终端 ID（用于渲染）
     private(set) var rustTerminalId: UInt32?
 
@@ -68,18 +65,12 @@ final class TerminalTab {
         self.textSelection = nil
         self.inputState = .empty()
         self.currentInputRow = nil
-        self.terminalSession = nil
         self.rustTerminalId = rustTerminalId
     }
 
     /// 设置 Rust 终端 ID
     func setRustTerminalId(_ terminalId: UInt32?) {
         self.rustTerminalId = terminalId
-    }
-
-    /// 设置终端会话（依赖注入）
-    func setTerminalSession(_ session: TerminalSession) {
-        self.terminalSession = session
     }
 
     // MARK: - Tab 管理
@@ -235,17 +226,18 @@ final class TerminalTab {
 
     /// 获取选中的文本
     ///
-    /// 注意：这个方法会调用基础设施层（Rust FFI）
+    /// 注意：此方法需要通过 TerminalPoolProtocol 获取文本
+    /// 返回 nil 表示需要从外部获取
     ///
     /// - Returns: 选中的文本，如果没有选中则返回 nil
     func getSelectedText() -> String? {
         guard let selection = textSelection,
-              !selection.isEmpty,
-              let session = terminalSession else {
+              !selection.isEmpty else {
             return nil
         }
-
-        return session.getSelectedText(selection: selection)
+        // 文本获取现在由 TerminalPoolProtocol 处理
+        // 返回 nil 让调用者从 pool 获取
+        return nil
     }
 
     // MARK: - 输入管理
@@ -257,6 +249,8 @@ final class TerminalTab {
     /// 2. 如果有选中但在历史区 → 直接插入，不删除选中
     /// 3. 没有选中 → 直接插入
     ///
+    /// 注意：实际的文本写入现在由 TerminalPoolProtocol 处理
+    ///
     /// - Parameter text: 要插入的文本
     func insertText(_ text: String) {
         // 规则1：检查选中
@@ -265,8 +259,8 @@ final class TerminalTab {
             deleteSelection()
         }
 
-        // 插入文本（调用基础设施层）
-        terminalSession?.writeInput(text)
+        // 文本写入现在由 TerminalPoolProtocol 处理
+        // 此方法只处理选中状态
 
         // 清除选中（如果在输入行）
         if isSelectionInInputLine() {
@@ -274,24 +268,27 @@ final class TerminalTab {
         }
     }
 
-    /// 删除选中的文本（直接删除，调用 Rust FFI）
+    /// 删除选中的文本
     ///
     /// 业务规则：
     /// - 只能删除输入行的选中
     /// - 历史区的选中不能删除
-    func deleteSelection() {
-        guard let selection = textSelection,
-              let session = terminalSession else {
-            return
+    ///
+    /// 注意：实际的删除操作现在由 TerminalPoolProtocol 处理
+    @discardableResult
+    func deleteSelection() -> Bool {
+        guard textSelection != nil else {
+            return false
         }
 
         // 只删除输入行的选中
         guard isSelectionInInputLine() else {
-            return
+            return false
         }
 
-        // 调用基础设施层删除
-        session.deleteSelection(selection)
+        // 实际删除由 TerminalPoolProtocol 处理
+        // 此方法只返回是否应该删除
+        return true
     }
 
     // MARK: - IME 管理
