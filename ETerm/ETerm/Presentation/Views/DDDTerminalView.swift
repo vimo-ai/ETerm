@@ -541,7 +541,7 @@ class DDDPanelRenderView: NSView, RenderViewProtocol {
             width: Float(physicalSize.width),
             height: Float(physicalSize.height),
             scale: Float(effectiveScale),
-            fontSize: 25.0
+            fontSize: 14.0
         ) else {
             return
         }
