@@ -357,19 +357,14 @@ impl rio_backend::event::EventListener for FFIEventListener {
     }
 
     fn send_event(&self, event: rio_backend::event::RioEvent, _id: rio_backend::event::WindowId) {
-        eprintln!("[FFIEventListener] send_event called: {:?}", event);
         // 将 rio_backend 的事件转换为我们的事件
         let our_event = convert_rio_event(event.clone());
-        eprintln!("[FFIEventListener] Converted to our_event: {:?}", our_event);
 
         // 对于 PtyWrite 事件，入队而不是直接发送给 Swift
         // 因为 PtyWrite 需要在 Rust 侧（RioMachine 事件循环）处理，写回 PTY
         match &our_event {
             RioEvent::PtyWrite(_) => {
-                eprintln!("[FFIEventListener] PtyWrite event -> enqueue for Rust processing");
                 self.queue.enqueue(our_event);
-                let queue_len = self.queue.inner.lock().unwrap().events.len();
-                eprintln!("[FFIEventListener] After enqueue, queue length: {}", queue_len);
             }
             _ => {
                 // 其他事件直接发送给 Swift

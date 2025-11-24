@@ -510,7 +510,6 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 只有 scale 变化时才更新
         if abs(newScale - currentScale) > 0.01 {
-            print("[RioMetalView] Screen changed, scale: \(currentScale) → \(newScale)")
 
             // 更新 layer 的 scale
             layer?.contentsScale = newScale

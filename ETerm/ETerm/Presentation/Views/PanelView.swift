@@ -97,9 +97,6 @@ final class PanelView: NSView {
     ///
     /// - Parameter panel: 新的 Panel 节点
     func updatePanel(_ panel: PanelNode) {
-        print("[PanelView] 🔄 updatePanel called: panelId=\(panel.id.uuidString.prefix(8))")
-        print("  Tabs: \(panel.tabs.map { "\($0.title)(ID:\($0.id.uuidString.prefix(8)))" }.joined(separator: ", "))")
-        print("  ActiveTab: \(panel.activeTab?.title ?? "nil") (ID:\(panel.activeTab?.id.uuidString.prefix(8) ?? "nil"))")
         self.panel = panel
         updateTabs()
     }
@@ -302,8 +299,6 @@ extension PanelView {
             return onDrop(tabId, dropZone, panel.id)
         }
 
-        // 如果没有设置回调，只打印日志
-        print("[PanelView] performDragOperation: tabId=\(tabId), dropZone=\(dropZone.type), targetPanel=\(panel.id)")
         return true
     }
 }

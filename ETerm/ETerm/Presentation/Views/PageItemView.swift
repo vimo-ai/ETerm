@@ -167,19 +167,11 @@ final class PageItemView: NSView {
         editField.isHidden = false
         titleLabel.isHidden = true
 
-        print("[PageItemView] startEditing - editField.frame: \(editField.frame)")
-        print("[PageItemView] startEditing - titleLabel.frame: \(titleLabel.frame)")
-        print("[PageItemView] startEditing - self.bounds: \(bounds)")
-        print("[PageItemView] startEditing - window: \(String(describing: window))")
-        print("[PageItemView] startEditing - editField.superview: \(String(describing: editField.superview))")
-
         // 延迟一帧再获取焦点，等待视图层级稳定
         DispatchQueue.main.async { [weak self] in
             guard let self = self, self.isEditing else { return }
             self.editField.selectText(nil)
-            let success = self.window?.makeFirstResponder(self.editField) ?? false
-            print("[PageItemView] startEditing (async) - makeFirstResponder success: \(success)")
-            if success {
+            if self.window?.makeFirstResponder(self.editField) == true {
                 self.hasFocused = true
             }
         }
@@ -187,7 +179,6 @@ final class PageItemView: NSView {
 
     /// 结束编辑标题
     private func endEditing(save: Bool) {
-        print("[PageItemView] endEditing called, save=\(save), isEditing=\(isEditing), hasFocused=\(hasFocused)")
 
         guard isEditing else { return }
         isEditing = false
@@ -286,14 +277,10 @@ final class PageItemView: NSView {
             return
         }
 
-        print("[PageItemView] mouseUp clickCount=\(event.clickCount) pageId=\(pageId.uuidString.prefix(8))")
-
         // 根据点击次数处理：双击编辑，单击切换
         if event.clickCount == 2 {
-            print("[PageItemView] → startEditing()")
             startEditing()
         } else if event.clickCount == 1 {
-            print("[PageItemView] → onTap()")
             onTap?()
         }
 
@@ -341,14 +328,9 @@ final class PageItemView: NSView {
 
 extension PageItemView: NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) {
-        print("[PageItemView] controlTextDidEndEditing - isEditing=\(isEditing), hasFocused=\(hasFocused)")
-
         // 只有在成功获得焦点后才处理结束编辑
         // 过滤掉"刚显示还没获得焦点就触发的 textDidEndEditing"
-        guard hasFocused else {
-            print("[PageItemView] controlTextDidEndEditing ignored - hasFocused=false")
-            return
-        }
+        guard hasFocused else { return }
         endEditing(save: true)
     }
 

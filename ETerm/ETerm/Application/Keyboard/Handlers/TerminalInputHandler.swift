@@ -43,10 +43,6 @@ final class TerminalInputHandler: KeyboardEventHandler {
     func handle(_ keyStroke: KeyStroke, context: KeyboardContext) -> EventHandleResult {
         guard let terminalId = context.terminalId,
               let coordinator = coordinator else {
-            // Debug: 打印为什么没有处理
-            if keyStroke.modifiers.contains(.control) {
-                print("[TerminalInput] Ctrl key ignored: terminalId=\(context.terminalId as Any), coordinator=\(coordinator != nil)")
-            }
             return .ignored
         }
 
@@ -57,7 +53,6 @@ final class TerminalInputHandler: KeyboardEventHandler {
             // 特殊键或 Ctrl 组合键：直接发送到终端
             let sequence = keyStroke.toTerminalSequence()
             if !sequence.isEmpty {
-                print("[TerminalInput] Sending to terminal \(terminalId): \(sequence.debugDescription)")
                 coordinator.writeInput(terminalId: terminalId, data: sequence)
             }
             return .consumed

@@ -98,8 +98,8 @@ final class DomainPanelView: NSView {
             self?.handleAddTab()
         }
 
-        headerView.onTabDragStart = { tabId in
-            print("[DomainPanelView] Tab drag start: \(tabId)")
+        headerView.onTabDragStart = { _ in
+            // Tab drag started
         }
 
         headerView.onSplitHorizontal = { [weak self] in

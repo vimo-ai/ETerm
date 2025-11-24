@@ -372,12 +372,6 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
 
         let count = rio_pool_get_row_cells(pool, terminalId, rowIndex, cellsPtr, maxCells)
 
-        // 调试：打印返回的数量和第一个字符
-        if rowIndex == 0 && count > 0 {
-            let firstChar = cellsPtr[0].character
-            print("[Swift getRowCells] terminalId=\(terminalId), count=\(count), firstChar=\(firstChar) '\(UnicodeScalar(firstChar).map { String(Character($0)) } ?? "?")'")
-        }
-
         // 转换为 Swift 数组
         return Array(UnsafeBufferPointer(start: cellsPtr, count: Int(count)))
     }

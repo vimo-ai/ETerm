@@ -1520,8 +1520,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
             NamedPrivateMode::AlternateScroll => self.mode.insert(Mode::ALTERNATE_SCROLL),
             NamedPrivateMode::LineWrap => self.mode.insert(Mode::LINE_WRAP),
             NamedPrivateMode::Origin => {
-                println!("[ANSI] Origin Mode ON (DECOM) - scroll_region: {}..{}",
-                    self.scroll_region.start.0, self.scroll_region.end.0);
                 self.mode.insert(Mode::ORIGIN);
             }
             NamedPrivateMode::ColumnMode => self.deccolm(),
@@ -1596,7 +1594,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
             NamedPrivateMode::AlternateScroll => self.mode.remove(Mode::ALTERNATE_SCROLL),
             NamedPrivateMode::LineWrap => self.mode.remove(Mode::LINE_WRAP),
             NamedPrivateMode::Origin => {
-                println!("[ANSI] Origin Mode OFF (DECOM)");
                 self.mode.remove(Mode::ORIGIN);
             }
             NamedPrivateMode::ColumnMode => self.deccolm(),
@@ -1687,12 +1684,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn goto(&mut self, line: Line, col: Column) {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let ms = ts.as_millis() % 100000; // 只显示后5位毫秒
-        println!("[ANSI] goto: ({},{}) -> ({},{}) @{}ms",
-            self.grid.cursor.pos.row.0, self.grid.cursor.pos.col.0,
-            line.0, col.0, ms);
         trace!("Going to: line={}, col={}", line, col);
         let (y_offset, max_y) = if self.mode.contains(Mode::ORIGIN) {
             (self.scroll_region.start, self.scroll_region.end - 1)
@@ -1724,7 +1715,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
         self.grid.cursor.pos.col = last_column;
         self.grid.cursor.should_wrap = false;
-        println!("[ANSI] move_forward: col {} -> {} (row {})", old_col, last_column.0, cursor_line);
     }
 
     #[inline]
@@ -1737,7 +1727,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
         self.grid.cursor.pos.col = Column(column);
         self.grid.cursor.should_wrap = false;
-        println!("[ANSI] move_backward: col {} -> {} (row {})", old_col, column, cursor_line);
     }
 
     #[inline]
@@ -2443,16 +2432,13 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn linefeed(&mut self) {
-        let old_row = self.grid.cursor.pos.row.0;
         let next = self.grid.cursor.pos.row + 1;
         if next == self.scroll_region.end {
             self.scroll_up_relative(self.scroll_region.start, 1);
-            println!("[ANSI] linefeed: row {} -> scroll (region end)", old_row);
         } else if next < self.grid.screen_lines() {
             self.damage_cursor();
             self.grid.cursor.pos.row += 1;
             self.damage_cursor();
-            println!("[ANSI] linefeed: row {} -> {}", old_row, self.grid.cursor.pos.row.0);
         }
     }
 
@@ -2555,13 +2541,10 @@ impl<U: EventListener> Handler for Crosswords<U> {
     #[inline]
     fn carriage_return(&mut self) {
         trace!("Carriage return");
-        let old_col = self.grid.cursor.pos.col.0;
-        let new_col = 0;
         let row = self.grid.cursor.pos.row.0 as usize;
         self.damage.damage_line(row);
-        self.grid.cursor.pos.col = Column(new_col);
+        self.grid.cursor.pos.col = Column(0);
         self.grid.cursor.should_wrap = false;
-        println!("[ANSI] carriage_return: col {} -> 0 (row {})", old_col, row);
     }
 
     #[inline]
@@ -2591,25 +2574,12 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn save_cursor_position(&mut self) {
-        println!(
-            "[ANSI] save_cursor: ({},{})",
-            self.grid.cursor.pos.row.0,
-            self.grid.cursor.pos.col.0
-        );
         self.grid.saved_cursor = self.grid.cursor.clone();
     }
 
     #[inline]
     fn restore_cursor_position(&mut self) {
-        println!(
-            "[ANSI] restore_cursor: from ({},{}) to ({},{})",
-            self.grid.cursor.pos.row.0,
-            self.grid.cursor.pos.col.0,
-            self.grid.saved_cursor.pos.row.0,
-            self.grid.saved_cursor.pos.col.0
-        );
         trace!("Restoring cursor position");
-
         self.damage_cursor();
         self.grid.cursor = self.grid.saved_cursor.clone();
         self.damage_cursor();
@@ -2657,10 +2627,6 @@ impl<U: EventListener> Handler for Crosswords<U> {
         let end = Line(bottom as i32);
 
         debug!("Setting scrolling region: ({};{})", start, end);
-
-        // 🔍 调试：打印滚动区域设置
-        println!("[ANSI] set_scrolling_region: top={} bottom={:?} -> start={} end={} screen_lines={}",
-            top, Some(bottom), start.0, end.0, self.grid.screen_lines());
 
         let screen_lines = Line(self.grid.screen_lines() as i32);
         self.scroll_region.start = std::cmp::min(start, screen_lines);

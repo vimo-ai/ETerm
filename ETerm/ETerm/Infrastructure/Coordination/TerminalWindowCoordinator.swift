@@ -808,39 +808,20 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Returns: 是否成功切换
     @discardableResult
     func switchToPage(_ pageId: UUID) -> Bool {
-        let totalStart = CFAbsoluteTimeGetCurrent()
-        print("[Page Switch] ⏱️ Start switching to page \(pageId.uuidString.prefix(8))...")
-
         // Step 1: Domain 层切换
-        let domainStart = CFAbsoluteTimeGetCurrent()
         guard terminalWindow.switchToPage(pageId) else {
-            print("[Page Switch] ⏱️ Failed: Page not found")
             return false
         }
-        let domainTime = (CFAbsoluteTimeGetCurrent() - domainStart) * 1000
-        print("[Page Switch] ⏱️ Domain switch: \(String(format: "%.2f", domainTime))ms")
 
         // Step 2: 更新激活的 Panel
-        let panelStart = CFAbsoluteTimeGetCurrent()
         activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
-        let panelTime = (CFAbsoluteTimeGetCurrent() - panelStart) * 1000
-        print("[Page Switch] ⏱️ Update active panel: \(String(format: "%.2f", panelTime))ms")
 
         // Step 3: 触发 UI 更新
-        let uiStart = CFAbsoluteTimeGetCurrent()
         objectWillChange.send()
         updateTrigger = UUID()
-        let uiTime = (CFAbsoluteTimeGetCurrent() - uiStart) * 1000
-        print("[Page Switch] ⏱️ UI notification: \(String(format: "%.2f", uiTime))ms")
 
         // Step 4: 请求渲染（防抖）
-        let renderStart = CFAbsoluteTimeGetCurrent()
         scheduleRender()
-        let renderTime = (CFAbsoluteTimeGetCurrent() - renderStart) * 1000
-        print("[Page Switch] ⏱️ Schedule render (debounced): \(String(format: "%.2f", renderTime))ms")
-
-        let totalTime = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
-        print("[Page Switch] ⏱️ Total: \(String(format: "%.2f", totalTime))ms")
 
         return true
     }
