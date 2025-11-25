@@ -58,6 +58,17 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 当前激活的 Panel ID（用于键盘输入）
     private(set) var activePanelId: UUID?
 
+    // MARK: - Inline AI Composer State
+
+    /// 是否显示 AI 辅助输入框
+    @Published var showInlineComposer: Bool = false
+
+    /// AI 辅助输入框的位置（屏幕坐标）
+    @Published var composerPosition: CGPoint = .zero
+
+    /// AI 辅助输入框的输入区高度（不含结果区）
+    @Published var composerInputHeight: CGFloat = 0
+
     // MARK: - Infrastructure
 
     /// 终端池（基础设施）
@@ -93,10 +104,10 @@ class TerminalWindowCoordinator: ObservableObject {
         self.terminalWindow = initialWindow
         self.terminalPool = terminalPool ?? MockTerminalPool()
 
-        // 2. 为初始的所有 Tab 创建终端
-        createTerminalsForAllTabs()
+        // 不在这里创建终端，等 setTerminalPool 时再创建
+        // （因为初始化时可能还在用 MockTerminalPool）
 
-        // 3. 设置初始激活的 Panel 为第一个 Panel
+        // 设置初始激活的 Panel 为第一个 Panel
         activePanelId = initialWindow.allPanels.first?.panelId
     }
     
@@ -287,6 +298,18 @@ class TerminalWindowCoordinator: ObservableObject {
             updateTrigger = UUID()
             scheduleRender()
         }
+    }
+
+    /// 用户重命名 Tab
+    func handleTabRename(panelId: UUID, tabId: UUID, newTitle: String) {
+        guard let panel = terminalWindow.getPanel(panelId),
+              let tab = panel.tabs.first(where: { $0.tabId == tabId }) else {
+            return
+        }
+
+        tab.setTitle(newTitle)
+        objectWillChange.send()
+        updateTrigger = UUID()
     }
 
     /// 智能关闭（Cmd+W）
