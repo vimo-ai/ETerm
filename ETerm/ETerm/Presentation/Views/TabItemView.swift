@@ -12,6 +12,7 @@
 //
 
 import AppKit
+import SwiftUI
 import Foundation
 
 /// 单个 Tab 的视图
@@ -23,14 +24,14 @@ final class TabItemView: NSView {
     /// Tab ID
     let tabId: UUID
 
-    /// 标题标签
-    private let titleLabel: NSTextField
-
-    /// 关闭按钮
-    private let closeButton: NSButton
+    /// 标题
+    private var title: String
 
     /// 是否激活
     private var isActive: Bool = false
+
+    /// SwiftUI 水墨标签视图
+    private var hostingView: NSHostingView<ShuimoTabView>?
 
     /// 是否正在拖拽
     private var isDragging: Bool = false
@@ -49,26 +50,33 @@ final class TabItemView: NSView {
     /// 关闭回调
     var onClose: (() -> Void)?
 
+    /// 重命名回调
+    var onRename: ((String) -> Void)?
+
+    // MARK: - 编辑相关
+
+    /// 编辑框
+    private lazy var editField: NSTextField = {
+        let field = NSTextField()
+        field.font = .systemFont(ofSize: 26 * 0.4)
+        field.isBordered = true
+        field.bezelStyle = .roundedBezel
+        field.isHidden = true
+        field.delegate = self
+        return field
+    }()
+
+    /// 是否正在编辑
+    private var isEditing: Bool = false
+
+    /// 是否已获得焦点
+    private var hasFocused: Bool = false
+
     // MARK: - 初始化
 
     init(tabId: UUID, title: String) {
         self.tabId = tabId
-
-        // 创建标题标签
-        self.titleLabel = NSTextField(labelWithString: title)
-        self.titleLabel.isEditable = false
-        self.titleLabel.isBordered = false
-        self.titleLabel.backgroundColor = .clear
-        self.titleLabel.textColor = .secondaryLabelColor
-        self.titleLabel.font = .systemFont(ofSize: 12)
-
-        // 创建关闭按钮
-        self.closeButton = NSButton()
-        self.closeButton.bezelStyle = .inline
-        self.closeButton.isBordered = false
-        self.closeButton.title = ""
-        self.closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")
-        self.closeButton.imagePosition = .imageOnly
+        self.title = title
 
         super.init(frame: .zero)
 
@@ -85,82 +93,120 @@ final class TabItemView: NSView {
     /// 设置激活状态
     func setActive(_ active: Bool) {
         isActive = active
-        updateAppearance()
+        updateShuimoView()
     }
 
     /// 更新标题
-    func setTitle(_ title: String) {
-        titleLabel.stringValue = title
+    func setTitle(_ newTitle: String) {
+        title = newTitle
+        updateShuimoView()
     }
 
     // MARK: - Private Methods
 
     private func setupUI() {
         wantsLayer = true
-        layer?.cornerRadius = 4
 
-        // 添加子视图
-        addSubview(titleLabel)
-        addSubview(closeButton)
+        // 创建水墨标签视图
+        updateShuimoView()
 
-        // 设置关闭按钮的点击事件
-        closeButton.target = self
-        closeButton.action = #selector(handleClose)
-
-        // 初始外观
-        updateAppearance()
+        // 添加编辑框
+        addSubview(editField)
     }
 
     private func setupGestures() {
         // 拖拽通过 mouseDown 启动，不需要手势识别器
     }
 
-    private func updateAppearance() {
-        if isActive {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor
-            titleLabel.textColor = .labelColor
-        } else {
-            layer?.backgroundColor = NSColor.clear.cgColor
-            titleLabel.textColor = .secondaryLabelColor
+    private func updateShuimoView() {
+        // 移除旧的 hostingView
+        hostingView?.removeFromSuperview()
+
+        // 创建新的 SwiftUI 视图
+        let shuimoTab = ShuimoTabView(title, isActive: isActive, height: 26) { [weak self] in
+            self?.onClose?()
         }
+
+        let hosting = NSHostingView(rootView: shuimoTab)
+        hosting.frame = bounds
+        hosting.autoresizingMask = [.width, .height]
+        addSubview(hosting)
+        hostingView = hosting
+
+        // 确保编辑框在最上层
+        if editField.superview != nil {
+            editField.removeFromSuperview()
+            addSubview(editField)
+        }
+    }
+
+    /// 开始编辑标题
+    private func startEditing() {
+        isEditing = true
+        editField.stringValue = title
+        editField.isHidden = false
+        hostingView?.isHidden = true
+
+        // 布局编辑框
+        let padding: CGFloat = 8
+        editField.frame = CGRect(
+            x: padding,
+            y: (bounds.height - 20) / 2,
+            width: bounds.width - padding * 2,
+            height: 20
+        )
+
+        // 延迟获取焦点
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isEditing else { return }
+            self.editField.selectText(nil)
+            if self.window?.makeFirstResponder(self.editField) == true {
+                self.hasFocused = true
+            }
+        }
+    }
+
+    /// 结束编辑标题
+    private func endEditing(save: Bool) {
+        guard isEditing else { return }
+        isEditing = false
+        hasFocused = false
+
+        if save {
+            let newTitle = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !newTitle.isEmpty && newTitle != title {
+                title = newTitle
+                updateShuimoView()
+                // 通知父视图重新布局（tabContainer -> PanelHeaderView）
+                superview?.superview?.needsLayout = true
+                onRename?(newTitle)
+            }
+        }
+
+        editField.isHidden = true
+        hostingView?.isHidden = false
     }
 
     // MARK: - Layout
 
+    override var fittingSize: NSSize {
+        return hostingView?.fittingSize ?? .zero
+    }
+
+    override var intrinsicContentSize: NSSize {
+        return hostingView?.intrinsicContentSize ?? NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
     override func layout() {
         super.layout()
 
-        let padding: CGFloat = 8
-        let closeButtonSize: CGFloat = 16
-
-        // 关闭按钮在右侧
-        closeButton.frame = CGRect(
-            x: bounds.width - closeButtonSize - padding,
-            y: (bounds.height - closeButtonSize) / 2,
-            width: closeButtonSize,
-            height: closeButtonSize
-        )
-
-        // 标题占据剩余空间
-        titleLabel.frame = CGRect(
-            x: padding,
-            y: (bounds.height - titleLabel.intrinsicContentSize.height) / 2,
-            width: bounds.width - closeButtonSize - padding * 3,
-            height: titleLabel.intrinsicContentSize.height
-        )
+        // 更新 hostingView 的 frame
+        hostingView?.frame = bounds
     }
 
     // MARK: - Event Handlers
 
     override func mouseDown(with event: NSEvent) {
-        // 检查点击位置是否在关闭按钮上
-        let location = convert(event.locationInWindow, from: nil)
-        if closeButton.frame.contains(location) {
-            // 点击了关闭按钮，交给按钮处理
-            super.mouseDown(with: event)
-            return
-        }
-
         // 重置拖拽标志
         isDragging = false
         didActuallyDrag = false
@@ -173,12 +219,6 @@ final class TabItemView: NSView {
 
         // 如果已经在拖拽中，不重复启动
         if isDragging {
-            return
-        }
-
-        // 检查点击位置是否在关闭按钮上（不应该拖拽关闭按钮）
-        let location = convert(event.locationInWindow, from: nil)
-        if closeButton.frame.contains(location) {
             return
         }
 
@@ -199,9 +239,21 @@ final class TabItemView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        // 只有在没有真正拖动时才触发点击
+        // 如果正在编辑，不处理
+        guard !isEditing else {
+            super.mouseUp(with: event)
+            return
+        }
+
+        // 只有在没有真正拖动时才处理点击
         if !didActuallyDrag {
-            onTap?()
+            if event.clickCount == 2 {
+                // 双击：开始编辑
+                startEditing()
+            } else if event.clickCount == 1 {
+                // 单击：切换 Tab
+                onTap?()
+            }
         }
 
         // 重置拖拽状态
@@ -220,41 +272,6 @@ final class TabItemView: NSView {
         return NSImage(data: pdfData) ?? NSImage()
     }
 
-    @objc private func handleClose() {
-        onClose?()
-    }
-
-    // MARK: - Mouse Tracking
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-
-        // 移除旧的 tracking area
-        trackingAreas.forEach { removeTrackingArea($0) }
-
-        // 添加新的 tracking area
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .mouseEnteredAndExited],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        if !isActive {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.1).cgColor
-        }
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        if !isActive {
-            layer?.backgroundColor = NSColor.clear.cgColor
-        }
-    }
 }
 
 // MARK: - NSDraggingSource
@@ -280,5 +297,27 @@ extension TabItemView: NSPasteboardItemDataProvider {
                     provideDataForType type: NSPasteboard.PasteboardType) {
         // 提供拖拽数据（Tab ID）
         item.setString(tabId.uuidString, forType: .string)
+    }
+}
+
+// MARK: - NSTextFieldDelegate
+
+extension TabItemView: NSTextFieldDelegate {
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard hasFocused else { return }
+        endEditing(save: true)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(insertNewline(_:)) {
+            // Enter 键：保存
+            endEditing(save: true)
+            return true
+        } else if commandSelector == #selector(cancelOperation(_:)) {
+            // Escape 键：取消
+            endEditing(save: false)
+            return true
+        }
+        return false
     }
 }
