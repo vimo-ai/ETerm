@@ -501,8 +501,10 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        print("🔵 [RioMetalView] viewDidMoveToWindow called, window: \(window != nil)")
 
         if let window = window {
+            print("🔵 [RioMetalView] window.isKeyWindow: \(window.isKeyWindow)")
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(windowDidBecomeKey),
@@ -518,10 +520,10 @@ class RioMetalView: NSView, RenderViewProtocol {
                 object: window
             )
 
-            if window.isKeyWindow {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                    self?.initialize()
-                }
+            // 不管 isKeyWindow 状态，都尝试初始化
+            // 使用延迟确保视图布局完成
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.initialize()
             }
         } else {
             NotificationCenter.default.removeObserver(self)
@@ -566,16 +568,28 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     @objc private func windowDidBecomeKey() {
+        print("🔵 [RioMetalView] windowDidBecomeKey called")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.initialize()
         }
     }
 
     private func initialize() {
-        guard !isInitialized else { return }
-        guard window != nil else { return }
-        guard bounds.width > 0 && bounds.height > 0 else { return }
+        print("🔵 [RioMetalView] initialize() called, isInitialized: \(isInitialized), window: \(window != nil), bounds: \(bounds)")
+        guard !isInitialized else {
+            print("🔵 [RioMetalView] Already initialized, skipping")
+            return
+        }
+        guard window != nil else {
+            print("🔴 [RioMetalView] No window, skipping")
+            return
+        }
+        guard bounds.width > 0 && bounds.height > 0 else {
+            print("🔴 [RioMetalView] Invalid bounds, skipping")
+            return
+        }
 
+        print("🟢 [RioMetalView] Starting initialization...")
         isInitialized = true
         initializeSugarloaf()
     }
@@ -604,19 +618,25 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - Sugarloaf Initialization
 
     private func initializeSugarloaf() {
-        guard let window = window else { return }
+        print("🔵 [RioMetalView] initializeSugarloaf() called")
+        guard let window = window else {
+            print("🔴 [RioMetalView] No window in initializeSugarloaf")
+            return
+        }
 
         // 优先使用 window 关联的 screen 的 scale，更可靠
         let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
         let scale = Float(effectiveScale)
         let width = Float(bounds.width) * scale
         let height = Float(bounds.height) * scale
+        print("🔵 [RioMetalView] scale: \(scale), width: \(width), height: \(height)")
 
         layer?.contentsScale = effectiveScale
 
         let viewPointer = Unmanaged.passUnretained(self).toOpaque()
         let windowHandle = UnsafeMutableRawPointer(mutating: viewPointer)
 
+        print("🔵 [RioMetalView] Calling sugarloaf_new...")
         sugarloaf = sugarloaf_new(
             windowHandle,
             windowHandle,
@@ -627,9 +647,10 @@ class RioMetalView: NSView, RenderViewProtocol {
         )
 
         guard let sugarloaf = sugarloaf else {
-            print("[RioMetalView] Failed to create Sugarloaf")
+            print("🔴 [RioMetalView] Failed to create Sugarloaf")
             return
         }
+        print("🟢 [RioMetalView] Sugarloaf created successfully")
 
         // fontMetrics 会在第一次创建 RichText 后更新为真实值
         // 这里先不获取，等 renderTerminal 中创建 RichText 后再更新
@@ -639,7 +660,9 @@ class RioMetalView: NSView, RenderViewProtocol {
         coordinator?.setCoordinateMapper(coordinateMapper!)
 
         // 创建终端池
+        print("🔵 [RioMetalView] Creating RioTerminalPoolWrapper...")
         terminalPool = RioTerminalPoolWrapper(sugarloafHandle: sugarloaf)
+        print("🟢 [RioMetalView] RioTerminalPoolWrapper created")
 
         // 设置渲染回调
         terminalPool?.onNeedsRender = { [weak self] in
@@ -648,11 +671,17 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 设置终端池到 coordinator
         if let pool = terminalPool {
+            print("🔵 [RioMetalView] Setting terminalPool to coordinator...")
             coordinator?.setTerminalPool(pool)
+            print("🟢 [RioMetalView] terminalPool set to coordinator")
+        } else {
+            print("🔴 [RioMetalView] terminalPool is nil!")
         }
 
         // 初始渲染
+        print("🔵 [RioMetalView] Requesting initial render...")
         requestRender()
+        print("🟢 [RioMetalView] initializeSugarloaf() completed")
     }
 
     // MARK: - RenderViewProtocol
@@ -1015,6 +1044,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 拦截系统快捷键
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        print("🔵 [RioMetalView] performKeyEquivalent called, keyCode: \(event.keyCode), characters: \(event.characters ?? "nil")")
         // 如果有 KeyboardSystem，使用它处理
         if let keyboardSystem = coordinator?.keyboardSystem {
             let keyStroke = KeyStroke.from(event)
@@ -1070,6 +1100,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     override func keyDown(with event: NSEvent) {
+        print("🔵 [RioMetalView] keyDown called, keyCode: \(event.keyCode), characters: \(event.characters ?? "nil")")
         lastTypingTime = Date()
         isBlinkingCursorVisible = true
         lastBlinkToggle = nil
@@ -1187,7 +1218,9 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - 鼠标事件
 
     override func mouseDown(with event: NSEvent) {
-        _ = window?.makeFirstResponder(self)
+        print("🔵 [RioMetalView] mouseDown called")
+        let result = window?.makeFirstResponder(self)
+        print("🔵 [RioMetalView] makeFirstResponder result: \(String(describing: result))")
 
         let location = convert(event.locationInWindow, from: nil)
 

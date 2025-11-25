@@ -307,12 +307,21 @@ class OllamaService {
 
         var fullReasoning = ""
         var toolCallData: [String: Any]?
+        var lineCount = 0
+
+        print("🔷 [analyzeDispatcher] Starting to read stream...")
 
         for try await line in bytes.lines {
+            lineCount += 1
+            print("🔷 [analyzeDispatcher] Line \(lineCount): \(line.prefix(200))")
+
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                print("⚠️ [analyzeDispatcher] Failed to parse line as JSON")
                 continue
             }
+
+            print("🔷 [analyzeDispatcher] JSON keys: \(json.keys)")
 
             // 提取 reasoning（流式显示）
             if let message = json["message"] as? [String: Any],
@@ -328,23 +337,55 @@ class OllamaService {
                let toolCalls = message["tool_calls"] as? [[String: Any]],
                let firstCall = toolCalls.first,
                let function = firstCall["function"] as? [String: Any] {
+                print("🔷 [analyzeDispatcher] Found tool_calls! function: \(function)")
                 toolCallData = function
             }
 
             // 检查是否完成
             if let done = json["done"] as? Bool, done {
+                print("🔷 [analyzeDispatcher] Stream done")
                 break
             }
         }
 
+        print("🔷 [analyzeDispatcher] Total lines: \(lineCount)")
+        print("🔷 [analyzeDispatcher] toolCallData: \(String(describing: toolCallData))")
+
         // 解析 tool call 参数
-        guard let toolCall = toolCallData,
-              let argumentsData = (toolCall["arguments"] as? String)?.data(using: .utf8) else {
+        guard let toolCall = toolCallData else {
+            print("❌ [analyzeDispatcher] No toolCallData found")
             throw OllamaError.invalidResponse
         }
 
-        let plan = try JSONDecoder().decode(AnalysisPlan.self, from: argumentsData)
-        return plan
+        // 尝试多种方式获取 arguments
+        var argumentsData: Data?
+
+        if let argsString = toolCall["arguments"] as? String {
+            print("🔷 [analyzeDispatcher] arguments is string: \(argsString)")
+            argumentsData = argsString.data(using: .utf8)
+        } else if let argsDict = toolCall["arguments"] as? [String: Any] {
+            print("🔷 [analyzeDispatcher] arguments is dict: \(argsDict)")
+            argumentsData = try? JSONSerialization.data(withJSONObject: argsDict)
+        } else {
+            print("❌ [analyzeDispatcher] arguments not found or unknown type: \(type(of: toolCall["arguments"]))")
+        }
+
+        guard let data = argumentsData else {
+            print("❌ [analyzeDispatcher] Failed to get argumentsData")
+            throw OllamaError.invalidResponse
+        }
+
+        do {
+            let plan = try JSONDecoder().decode(AnalysisPlan.self, from: data)
+            print("✅ [analyzeDispatcher] Successfully decoded plan: \(plan)")
+            return plan
+        } catch {
+            print("❌ [analyzeDispatcher] Failed to decode plan: \(error)")
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("❌ [analyzeDispatcher] Raw arguments: \(jsonString)")
+            }
+            throw OllamaError.invalidResponse
+        }
     }
 
     /// Stage 2: 执行具体分析 - 并行调用多个 tools
@@ -608,24 +649,83 @@ class OllamaService {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        // 调试日志：打印请求体
+        if let requestJson = String(data: request.httpBody ?? Data(), encoding: .utf8) {
+            print("🔷 [callTool] Request body:\n\(requestJson.prefix(500))...")
+        }
+
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            print("❌ [callTool] Response is not HTTPURLResponse")
             throw OllamaError.requestFailed
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let message = json["message"] as? [String: Any],
-              let toolCalls = message["tool_calls"] as? [[String: Any]],
-              let firstCall = toolCalls.first,
-              let function = firstCall["function"] as? [String: Any],
-              let argumentsString = function["arguments"] as? String,
-              let argumentsData = argumentsString.data(using: .utf8),
-              let arguments = try JSONSerialization.jsonObject(with: argumentsData) as? [String: Any] else {
+        print("🔷 [callTool] HTTP Status: \(httpResponse.statusCode)")
+
+        // 打印原始响应
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("🔷 [callTool] Raw response:\n\(responseString)")
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            print("❌ [callTool] HTTP error: \(httpResponse.statusCode)")
+            throw OllamaError.requestFailed
+        }
+
+        // 逐步解析并打印调试信息
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            print("❌ [callTool] Failed to parse JSON")
+            throw OllamaError.invalidResponse
+        }
+        print("🔷 [callTool] JSON keys: \(json.keys)")
+
+        guard let message = json["message"] as? [String: Any] else {
+            print("❌ [callTool] No 'message' in response. Full JSON: \(json)")
+            throw OllamaError.invalidResponse
+        }
+        print("🔷 [callTool] Message keys: \(message.keys)")
+
+        guard let toolCalls = message["tool_calls"] as? [[String: Any]] else {
+            print("❌ [callTool] No 'tool_calls' in message. Message content: \(message)")
+            // 如果没有 tool_calls 但有 content，可能是模型直接回复了
+            if let content = message["content"] as? String {
+                print("🔷 [callTool] Model returned content instead of tool_call: \(content)")
+            }
+            throw OllamaError.invalidResponse
+        }
+        print("🔷 [callTool] Tool calls count: \(toolCalls.count)")
+
+        guard let firstCall = toolCalls.first else {
+            print("❌ [callTool] tool_calls array is empty")
+            throw OllamaError.invalidResponse
+        }
+        print("🔷 [callTool] First call keys: \(firstCall.keys)")
+
+        guard let function = firstCall["function"] as? [String: Any] else {
+            print("❌ [callTool] No 'function' in tool call. firstCall: \(firstCall)")
+            throw OllamaError.invalidResponse
+        }
+        print("🔷 [callTool] Function keys: \(function.keys)")
+
+        guard let argumentsString = function["arguments"] as? String else {
+            print("❌ [callTool] No 'arguments' string in function. function: \(function)")
+            // 尝试直接作为字典获取
+            if let argumentsDict = function["arguments"] as? [String: Any] {
+                print("🔷 [callTool] Arguments is already a dict: \(argumentsDict)")
+                return argumentsDict
+            }
+            throw OllamaError.invalidResponse
+        }
+        print("🔷 [callTool] Arguments string: \(argumentsString)")
+
+        guard let argumentsData = argumentsString.data(using: .utf8),
+              let arguments = try? JSONSerialization.jsonObject(with: argumentsData) as? [String: Any] else {
+            print("❌ [callTool] Failed to parse arguments string as JSON")
             throw OllamaError.invalidResponse
         }
 
+        print("✅ [callTool] Successfully parsed arguments: \(arguments.keys)")
         return arguments
     }
 }
