@@ -341,7 +341,7 @@ impl FontLibraryData {
             .map(PathBuf::from)
             .for_each(|p| db.load_fonts_dir(p));
 
-        match find_font(&db, spec.regular, false, false) {
+        match find_font(&db, spec.regular.clone(), false, false) {
             FindResult::Found(data) => {
                 self.insert(data);
             }
@@ -349,13 +349,12 @@ impl FontLibraryData {
                 if !spec.is_default_family() {
                     fonts_not_fount.push(spec.to_owned());
                 }
-
                 // The first font should always have a fallback
                 self.insert(load_fallback_from_memory(&spec));
             }
         }
 
-        match find_font(&db, spec.italic, false, false) {
+        match find_font(&db, spec.italic.clone(), false, false) {
             FindResult::Found(data) => {
                 self.insert(data);
             }
@@ -368,7 +367,7 @@ impl FontLibraryData {
             }
         }
 
-        match find_font(&db, spec.bold, false, false) {
+        match find_font(&db, spec.bold.clone(), false, false) {
             FindResult::Found(data) => {
                 self.insert(data);
             }
@@ -381,7 +380,7 @@ impl FontLibraryData {
             }
         }
 
-        match find_font(&db, spec.bold_italic, true, false) {
+        match find_font(&db, spec.bold_italic.clone(), true, false) {
             FindResult::Found(data) => {
                 self.insert(data);
             }
@@ -398,10 +397,10 @@ impl FontLibraryData {
             match find_font(
                 &db,
                 SugarloafFont {
-                    family: fallback,
+                    family: fallback.clone(),
                     ..SugarloafFont::default()
                 },
-                true,
+                false,  // evictable=false，确保 fallback 字体数据不被丢弃
                 false,
             ) {
                 FindResult::Found(data) => {
@@ -414,20 +413,23 @@ impl FontLibraryData {
             }
         }
 
-        if let Some(emoji_font) = spec.emoji {
-            match find_font(&db, emoji_font, true, true) {
+        // 提权 Nerd Font Symbols，放在 emoji 字体之前
+        // 原因：Nerd Font 包含大量终端符号的单色版本，应优先于彩色 emoji 字体
+        self.insert(FontData::from_slice(FONT_SYMBOLS_NERD_FONT_MONO, false).unwrap());
+
+        if let Some(emoji_font) = spec.emoji.clone() {
+            // PATCH: emoji 字体设置 evictable=false，确保数据被保留
+            // 否则 Binary source 的字体数据会被丢弃，且 path 是字体名称无法重新加载
+            match find_font(&db, emoji_font.clone(), false, true) {
                 FindResult::Found(data) => {
                     self.insert(data);
                 }
                 FindResult::NotFound(spec) => {
-                    self.insert(FontData::from_slice(FONT_TWEMOJI_EMOJI, true).unwrap());
                     if !spec.is_default_family() {
                         fonts_not_fount.push(spec);
                     }
                 }
             }
-        } else {
-            self.insert(FontData::from_slice(FONT_TWEMOJI_EMOJI, true).unwrap());
         }
 
         for extra_font in spec.extras {
@@ -450,8 +452,6 @@ impl FontLibraryData {
                 }
             }
         }
-
-        self.insert(FontData::from_slice(FONT_SYMBOLS_NERD_FONT_MONO, false).unwrap());
 
         // TODO: Currently, it will naively just extend fonts from symbol_map
         // without even look if the font has been loaded before.

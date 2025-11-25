@@ -138,6 +138,32 @@ TabClick → Coordinator.handleTabClick()
   - 原因：选区范围计算的边界问题
   - 状态：待修复
 
+## Rio 源码 Patches
+
+为支持 Apple Color Emoji，我们对 Rio 源码做了以下修改：
+
+### 1. Emoji 字体 evictable 修复
+
+**文件**: `rio/sugarloaf/src/font/mod.rs`
+
+**问题**: 通过 `spec.emoji` 配置的自定义 emoji 字体使用 `evictable=true` 加载，导致字体数据被丢弃。当从 Binary source（如系统字体）加载时，`path` 被设置为字体名称而非实际路径，导致后续无法重新加载字体数据。
+
+**修复**: 将 emoji 字体的 `evictable` 参数从 `true` 改为 `false`：
+```rust
+// Before: match find_font(&db, emoji_font, true, true)
+match find_font(&db, emoji_font, false, true)
+```
+
+**待提交 PR**: https://github.com/raphamorim/rio/issues/XXX
+
+### 2. 移除 fallback 中的 Apple Color Emoji
+
+**文件**: `rio/sugarloaf/src/font/fallbacks/mod.rs`
+
+**原因**: 如果 Apple Color Emoji 同时在 fallback 列表和 `spec.emoji` 中，会被加载两次。fallback 版本 `is_emoji=false`，会在字体匹配时优先命中，导致 emoji 渲染失败。
+
+**修复**: 从 macOS fallback 列表中移除 `Apple Color Emoji`，由 `spec.emoji` 配置控制。
+
 ## 相关文档
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - DDD 架构详细设计

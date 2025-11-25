@@ -1,11 +1,16 @@
 #[cfg(target_os = "macos")]
 pub fn external_fallbacks() -> Vec<String> {
+    // 优化 fallback 顺序，避免彩色符号字体覆盖 ANSI 颜色
+    // 1. 等宽字体优先（保持终端排版）
+    // 2. 单色符号字体（避免彩色背景问题）
+    // 3. 移除可能有彩色符号的字体（.SF NS, Arial Unicode MS）
     vec![
-        String::from(".SF NS"),
-        String::from("Menlo"),
-        String::from("Geneva"),
-        String::from("Arial Unicode MS"),
-        String::from("Apple Color Emoji"),  // 支持 emoji 显示
+        String::from("SF Mono"),        // 等宽单色
+        String::from("Menlo"),          // 等宽单色
+        String::from("Apple Symbols"),  // 符号单色
+        String::from("STIX Two Math"),  // 数学/技术符号（包含 ⏺ 等）
+        String::from("Geneva"),         // 通用单色
+        // Apple Color Emoji 不在这里添加，由 spec.emoji 配置控制
     ]
 }
 

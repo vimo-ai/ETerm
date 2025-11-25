@@ -140,7 +140,6 @@ impl Compositor {
         let rect = rect.into();
         let underline = self.create_underline_from_decoration(style, &rect);
 
-        let subpx_bias = (0.125, 0.);
         let color = style.color;
 
         if let Some(builtin_character) = style.drawable_char {
@@ -214,18 +213,19 @@ impl Compositor {
                 let entry = session.get(glyph.id);
                 if let Some(entry) = entry {
                     if let Some(img) = session.get_image(entry.image) {
-                        let gx = (glyph.x + subpx_bias.0).floor() + entry.left as f32;
-                        let gy = (glyph.y + subpx_bias.1).floor() - entry.top as f32;
+                        // 使用 round() 实现像素边界对齐，避免 GPU 插值导致的模糊
+                        let gx = glyph.x.round() + entry.left as f32;
+                        let gy = glyph.y.round() - entry.top as f32;
                         let glyph_rect =
                             Rect::new(gx, gy, entry.width as f32, entry.height as f32);
                         let coords = [img.min.0, img.min.1, img.max.0, img.max.1];
 
                         if entry.is_bitmap {
-                            let bitmap_color = [1.0, 1.0, 1.0, 1.0];
+                            // 暂时使用文字颜色（理想情况下应区分 emoji 和 subpixel）
                             self.batches.add_image_rect(
                                 &glyph_rect,
                                 depth,
-                                &bitmap_color,
+                                &color,  // 使用文字颜色而非白色
                                 &coords,
                                 entry.image.has_alpha(),
                             );

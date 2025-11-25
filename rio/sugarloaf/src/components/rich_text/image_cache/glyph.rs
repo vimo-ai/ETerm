@@ -158,9 +158,10 @@ impl GlyphCacheSession<'_> {
                 // .normalized_coords(coords)
                 .build();
 
+            // 使用 skrifa 光栅化
             // let embolden = if IS_MACOS { 0.25 } else { 0. };
             if Render::new(SOURCES)
-                .format(Format::Alpha)
+                .format(Format::Alpha)  // 改回灰度抗锯齿
                 // .offset(Vector::new(subpx[0].to_f32(), subpx[1].to_f32()))
                 .embolden(if should_embolden { 0.5 } else { 0.0 })
                 .transform(if should_italicize {
@@ -208,7 +209,7 @@ impl GlyphCacheSession<'_> {
                         )
                     }
                     Content::SubpixelMask => {
-                        // Subpixel format (should not happen with Format::Alpha)
+                        // Subpixel format - RGBA 数据，RGB 是子像素覆盖率，A 通常为 0
                         (
                             ImageData::Borrowed(&self.scaled_image.data),
                             super::ContentType::Color,
@@ -252,6 +253,7 @@ impl GlyphCacheSession<'_> {
                     width: w,
                     height: h,
                     image,
+                    // Color 内容走 color 路径，Alpha 走 mask 路径
                     is_bitmap: self.scaled_image.content == Content::Color,
                 };
 

@@ -175,7 +175,7 @@ pub extern "C" fn sugarloaf_new(
             hinting: true,
             regular: SugarloafFont {
                 family: "MapleMono-NF-CN-Regular".to_string(),
-                weight: Some(400),
+                weight: Some(600),
                 style: SugarloafFontStyle::Normal,
                 width: None,
             },
@@ -187,7 +187,7 @@ pub extern "C" fn sugarloaf_new(
             },
             italic: SugarloafFont {
                 family: "MapleMono-NF-CN-Italic".to_string(),
-                weight: Some(400),
+                weight: Some(600),
                 style: SugarloafFontStyle::Italic,
                 width: None,
             },
@@ -197,6 +197,13 @@ pub extern "C" fn sugarloaf_new(
                 style: SugarloafFontStyle::Italic,
                 width: None,
             },
+            // 🍎 启用 Apple Color Emoji（macOS 原生 emoji 支持）
+            emoji: Some(SugarloafFont {
+                family: "Apple Color Emoji".to_string(),
+                weight: None,
+                style: SugarloafFontStyle::Normal,
+                width: None,
+            }),
             ..Default::default()
         };
 
@@ -816,6 +823,15 @@ pub extern "C" fn sugarloaf_rescale(
 
     let handle = unsafe { &mut *handle };
     handle.instance.rescale(scale);
+
+    // 关键修复：更新 handle.scale
+    handle.scale = scale;
+
+    // 关键修复：rescale 后重新计算 fontMetrics
+    // 因为 fontMetrics 是物理像素，scale 变化后值会不同
+    if let Some(rt_id) = handle.current_rt_id {
+        handle.update_font_metrics_from_dimensions(rt_id);
+    }
 }
 
 /// 字体大小操作类型

@@ -43,7 +43,30 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     if input.color_layer > 0 {
         let tex_sample = textureSampleLevel(color_texture, font_sampler, vec2<f32>(input.f_uv), 0.0);
-        out = vec4<f16>(tex_sample);
+        // 检测子像素渲染（A=0 且 RGB 有值）
+        if tex_sample.a == 0.0 && (tex_sample.r > 0.0 || tex_sample.g > 0.0 || tex_sample.b > 0.0) {
+            // 子像素渲染：更平滑的处理
+            let coverage = tex_sample.rgb;
+
+            // 使用加权平均作为 alpha（中间通道权重更高）
+            let alpha = coverage.r * 0.3 + coverage.g * 0.4 + coverage.b * 0.3;
+
+            // 完全使用灰度抗锯齿，不使用子像素
+            let mixed_coverage = mix(
+                vec3<f32>(alpha),  // 灰度版本
+                coverage,          // 子像素版本
+                0.0                // 0% 子像素，100% 灰度
+            );
+
+            // 转换类型并相乘
+            out = vec4<f16>(
+                vec3<f16>(vec3<f32>(input.f_color.rgb) * mixed_coverage),
+                f16(alpha)
+            );
+        } else {
+            // 普通彩色图像（emoji等）
+            out = vec4<f16>(tex_sample);
+        }
     }
 
     if input.mask_layer > 0 {

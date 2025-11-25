@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(cat:*)",
+      "Bash(cargo build:*)",
+      "Bash(codesign:*)",
+      "Bash(bash:*)",
+      "Bash(./scripts/update_sugarloaf.sh:*)",
+      "Bash(git add:*)",
+      "Bash(find:*)",
+      "Bash(./english/scripts/update_sugarloaf.sh:*)",
+      "Bash(swift build:*)",
+      "Bash(swift test:*)",
+      "mcp__mcp-router__mcp_router__call",
+      "mcp__mcp-router__mcp_router__list_tools",
+      "WebSearch",
+      "WebFetch(domain:www.kodeco.com)",
+      "WebFetch(domain:www.appcoda.com)",
+      "WebFetch(domain:gist.github.com)",
+      "Bash(xcodebuild:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfix: improve Tab drag behavior and add Panel split UI\n\n- Fix TabItemView drag detection to distinguish click from actual drag\n- Add `notifyExternal` parameter to PanelView.setActiveTab to prevent\n  redundant callbacks during internal state sync\n- Add split button and menu to PanelHeaderView for future panel splitting\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git commit:*)",
+      "Bash(nm:*)",
+      "Bash(mkdir:*)",
+      "Bash(timeout 5 script:*)",
+      "Bash(xxd:*)",
+      "Bash(/Users/higuaifan/.claude/local/claude -p \"say hi\")",
+      "Bash(xargs ls:*)",
+      "Bash(git reset:*)",
+      "Bash(git rm:*)",
+      "WebFetch(domain:stackoverflow.com)",
+      "WebFetch(domain:docs.rs)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
