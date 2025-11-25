@@ -107,7 +107,7 @@ final class PanelShortcutHandler: KeyboardEventHandler {
     /// 1. 如果当前 Panel 有多个 Tab → 关闭当前 Tab
     /// 2. 如果当前 Page 有多个 Panel → 关闭当前 Panel
     /// 3. 如果当前 Window 有多个 Page → 关闭当前 Page
-    /// 4. 如果只剩最后一个 → 弹出确认对话框
+    /// 4. 如果只剩最后一个 → 关闭当前窗口（如果是最后一个窗口则弹出确认）
     private func handleSmartClose() -> EventHandleResult {
         guard let coordinator = coordinator else {
             return .ignored
@@ -119,8 +119,8 @@ final class PanelShortcutHandler: KeyboardEventHandler {
         case .closedTab, .closedPanel, .closedPage:
             return .consumed
 
-        case .shouldQuitApp:
-            showQuitConfirmation()
+        case .shouldCloseWindow:
+            handleCloseWindow()
             return .consumed
 
         case .nothingToClose:
@@ -128,19 +128,37 @@ final class PanelShortcutHandler: KeyboardEventHandler {
         }
     }
 
-    /// 显示退出确认对话框
-    private func showQuitConfirmation() {
+    /// 处理关闭窗口
+    private func handleCloseWindow() {
         DispatchQueue.main.async {
-            let alert = NSAlert()
-            alert.messageText = "确定要退出 ETerm 吗？"
-            alert.informativeText = "这是最后一个终端会话，关闭后将退出应用程序。"
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "退出")
-            alert.addButton(withTitle: "取消")
+            let isLastWindow = WindowManager.shared.windowCount <= 1
+            self.showCloseWindowConfirmation(isLastWindow: isLastWindow)
+        }
+    }
 
-            let response = alert.runModal()
-            if response == .alertFirstButtonReturn {
+    /// 显示关闭窗口确认对话框
+    private func showCloseWindowConfirmation(isLastWindow: Bool) {
+        let alert = NSAlert()
+
+        if isLastWindow {
+            alert.messageText = "确定要退出 ETerm 吗？"
+            alert.informativeText = "这是最后一个窗口，关闭后将退出应用程序。"
+            alert.addButton(withTitle: "退出")
+        } else {
+            alert.messageText = "确定要关闭此窗口吗？"
+            alert.informativeText = "窗口中的所有终端会话将被关闭。"
+            alert.addButton(withTitle: "关闭")
+        }
+
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "取消")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            if isLastWindow {
                 NSApplication.shared.terminate(nil)
+            } else {
+                NSApplication.shared.keyWindow?.close()
             }
         }
     }

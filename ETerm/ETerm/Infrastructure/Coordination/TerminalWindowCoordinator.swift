@@ -39,8 +39,8 @@ enum SmartCloseResult {
     case closedPanel
     /// 关闭了一个 Page
     case closedPage
-    /// 需要退出应用（只剩最后一个）
-    case shouldQuitApp
+    /// 需要关闭当前窗口（只剩最后一个 Tab/Panel/Page）
+    case shouldCloseWindow
     /// 无可关闭的内容
     case nothingToClose
 }
@@ -193,6 +193,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 设置终端池（由 PanelRenderView 初始化后调用）
     func setTerminalPool(_ pool: TerminalPoolProtocol) {
+        // print("🔵 [Coordinator] setTerminalPool called")
         // 关闭旧终端池的所有终端，并清空 rustTerminalId
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
@@ -205,12 +206,14 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 切换到新终端池
         self.terminalPool = pool
+        // print("🔵 [Coordinator] terminalPool switched")
 
         // 重新创建所有终端
         createTerminalsForAllTabs()
 
         // 初始化键盘系统
         self.keyboardSystem = KeyboardSystem(coordinator: self)
+        // print("🟢 [Coordinator] setTerminalPool completed, keyboardSystem initialized")
     }
 
     /// 设置坐标映射器（初始化时使用）
@@ -232,17 +235,27 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 为所有 Tab 创建终端
     private func createTerminalsForAllTabs() {
+        // print("🔵 [Coordinator] createTerminalsForAllTabs called, panels: \(terminalWindow.allPanels.count)")
         for panel in terminalWindow.allPanels {
+            // print("🔵 [Coordinator] Panel \(panel.panelId), tabs: \(panel.tabs.count)")
             for tab in panel.tabs {
                 // 如果 Tab 还没有终端，创建一个
                 if tab.rustTerminalId == nil {
+                    // print("🔵 [Coordinator] Creating terminal for tab \(tab.tabId)...")
                     let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
+                    // print("🔵 [Coordinator] terminalPool.createTerminal returned: \(terminalId)")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
+                        // print("🟢 [Coordinator] Terminal created with ID: \(terminalId)")
+                    } else {
+                        // print("🔴 [Coordinator] Failed to create terminal!")
                     }
+                } else {
+                    // print("🔵 [Coordinator] Tab \(tab.tabId) already has terminal \(tab.rustTerminalId!)")
                 }
             }
         }
+        // print("🟢 [Coordinator] createTerminalsForAllTabs completed")
     }
 
 
@@ -318,7 +331,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 1. 如果当前 Panel 有多个 Tab → 关闭当前 Tab
     /// 2. 如果当前 Page 有多个 Panel → 关闭当前 Panel
     /// 3. 如果当前 Window 有多个 Page → 关闭当前 Page
-    /// 4. 如果只剩最后一个 Page 的最后一个 Panel 的最后一个 Tab → 返回 .shouldQuitApp
+    /// 4. 如果只剩最后一个 Page 的最后一个 Panel 的最后一个 Tab → 返回 .shouldCloseWindow
     ///
     /// - Returns: 关闭结果
     func handleSmartClose() -> SmartCloseResult {
@@ -366,8 +379,8 @@ class TerminalWindowCoordinator: ObservableObject {
             return .nothingToClose
         }
 
-        // 4. 只剩最后一个了，需要确认是否退出应用
-        return .shouldQuitApp
+        // 4. 只剩最后一个了，需要关闭当前窗口
+        return .shouldCloseWindow
     }
 
     /// 关闭 Panel
