@@ -26,9 +26,9 @@ class BubbleState: ObservableObject {
     enum Content {
         case idle
         case loading
-        case dictionary(DictionaryWord)                          // 单词：完整词典数据
-        case translation(String)                                  // 短语/句子：翻译结果
-        case analysis(translation: String, grammar: String)       // 句子分析（翻译 + 语法）
+        case dictionary(DictionaryWord, translations: [(String, String?)])  // 单词：词典数据 + 中文翻译
+        case translation(String)                                            // 短语/句子：翻译结果
+        case analysis(translation: String, grammar: String)                 // 句子分析（翻译 + 语法）
         case error(String)
     }
 
@@ -51,7 +51,7 @@ class BubbleState: ObservableObject {
 
     /// 获取发音 URL（仅词典模式）
     var audioURL: String? {
-        guard case .dictionary(let word) = content else { return nil }
+        guard case .dictionary(let word, _) = content else { return nil }
         return word.phonetics?.first(where: { $0.audio != nil && !$0.audio!.isEmpty })?.audio
     }
 
@@ -115,7 +115,13 @@ class BubbleState: ObservableObject {
                 // 单词 → 优先词典，失败降级翻译
                 do {
                     let word = try await DictionaryService.shared.lookup(text)
-                    content = .dictionary(word)
+                    // 先显示英文词典内容
+                    content = .dictionary(word, translations: [])
+
+                    // 异步加载中文翻译
+                    Task {
+                        await loadTranslations(for: word)
+                    }
                 } catch DictionaryError.wordNotFound {
                     // 词典查不到（专有名词等），降级翻译
                     let result = try await OllamaService.shared.translate(text)
@@ -153,26 +159,58 @@ class BubbleState: ObservableObject {
         DictionaryService.shared.playPronunciation(audioURL: url)
     }
 
+    /// 加载词典翻译（私有方法）
+    private func loadTranslations(for word: DictionaryWord) async {
+        // 收集所有需要翻译的释义和例句
+        var definitionsToTranslate: [(String, String?)] = []
+        for meaning in word.meanings {
+            for definition in meaning.definitions.prefix(3) {
+                definitionsToTranslate.append((definition.definition, definition.example))
+            }
+        }
+
+        do {
+            let translations = try await OllamaService.shared.translateDictionaryContent(definitions: definitionsToTranslate)
+
+            // 更新内容（保持当前 word，添加翻译）
+            content = .dictionary(word, translations: translations)
+        } catch {
+            // 翻译失败时，保持英文内容不变
+            print("翻译失败: \(error.localizedDescription)")
+        }
+    }
+
     /// 复制内容到剪贴板
     func copyContent() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
 
         switch content {
-        case .dictionary(let word):
-            // 格式化词典内容
+        case .dictionary(let word, let translations):
+            // 格式化词典内容（包含中文翻译）
             var text = "\(word.word)\n"
             if let phonetic = word.phonetic ?? word.phonetics?.first?.text {
                 text += "\(phonetic)\n"
             }
             text += "\n"
+
+            var flatIndex = 0
             for meaning in word.meanings {
                 text += "\(meaning.partOfSpeech):\n"
                 for (index, def) in meaning.definitions.prefix(3).enumerated() {
                     text += "\(index + 1). \(def.definition)\n"
+                    // 添加中文翻译
+                    if flatIndex < translations.count {
+                        text += "   译: \(translations[flatIndex].0)\n"
+                    }
                     if let example = def.example {
                         text += "   例: \(example)\n"
+                        // 添加例句翻译
+                        if flatIndex < translations.count, let translatedExample = translations[flatIndex].1 {
+                            text += "   译: \(translatedExample)\n"
+                        }
                     }
+                    flatIndex += 1
                 }
                 text += "\n"
             }

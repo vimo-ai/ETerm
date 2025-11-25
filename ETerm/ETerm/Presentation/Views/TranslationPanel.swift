@@ -172,7 +172,7 @@ final class TranslationWindow: NSPanel {
         self.bubbleState = state
 
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 350),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
             styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -197,8 +197,8 @@ final class TranslationWindow: NSPanel {
         // 关闭时隐藏而不是释放
         isReleasedWhenClosed = false
 
-        // 最小尺寸
-        minSize = NSSize(width: 300, height: 200)
+        // 最小尺寸（适应双栏布局）
+        minSize = NSSize(width: 500, height: 300)
     }
 
     private func setupContent() {
@@ -312,8 +312,8 @@ struct TranslationContentView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 30)
 
-        case .dictionary(let word):
-            DictionaryView(word: word)
+        case .dictionary(let word, let translations):
+            DictionaryView(word: word, translations: translations)
 
         case .translation(let text):
             ScrollView {
@@ -390,58 +390,160 @@ struct TagView: View {
     }
 }
 
-// MARK: - Dictionary View
+// MARK: - Dictionary View（左右分栏）
 
 struct DictionaryView: View {
     let word: DictionaryWord
+    let translations: [(String, String?)]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                // 音标
-                if let phonetic = word.phonetic ?? word.phonetics?.first?.text {
-                    Text(phonetic)
-                        .font(.system(.callout, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            // 音标
+            if let phonetic = word.phonetic ?? word.phonetics?.first?.text {
+                Text(phonetic)
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
 
-                // 词义
-                ForEach(Array(word.meanings.enumerated()), id: \.offset) { index, meaning in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(meaning.partOfSpeech)
+            Divider()
+
+            // 左右分栏内容
+            HStack(alignment: .top, spacing: 0) {
+                // 左栏: 英文
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("English")
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundColor(.blue)
 
-                        ForEach(Array(meaning.definitions.prefix(3).enumerated()), id: \.offset) { defIndex, definition in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(alignment: .top, spacing: 6) {
-                                    Text("\(defIndex + 1).")
+                        ForEach(Array(word.meanings.enumerated()), id: \.offset) { meaningIndex, meaning in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(meaning.partOfSpeech)
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.secondary)
+
+                                ForEach(Array(meaning.definitions.prefix(3).enumerated()), id: \.offset) { defIndex, definition in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(alignment: .top, spacing: 4) {
+                                            Text("\(defIndex + 1).")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            Text(definition.definition)
+                                                .font(.callout)
+                                                .textSelection(.enabled)
+                                        }
+
+                                        if let example = definition.example {
+                                            Text("e.g. \(example)")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                                .italic()
+                                                .padding(.leading, 14)
+                                                .textSelection(.enabled)
+                                        }
+                                    }
+                                }
+                            }
+
+                            if meaningIndex < word.meanings.count - 1 {
+                                Divider()
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 8)
+                }
+
+                Divider()
+
+                // 右栏: 中文
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("中文")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.green)
+
+                        if translations.isEmpty {
+                            HStack {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                Text("翻译中...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        } else {
+                            ForEach(Array(word.meanings.enumerated()), id: \.offset) { meaningIndex, meaning in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(translatePartOfSpeech(meaning.partOfSpeech))
                                         .font(.caption)
+                                        .fontWeight(.semibold)
                                         .foregroundColor(.secondary)
-                                    Text(definition.definition)
-                                        .font(.callout)
-                                        .textSelection(.enabled)
+
+                                    ForEach(Array(meaning.definitions.prefix(3).enumerated()), id: \.offset) { defIndex, _ in
+                                        let flatIndex = getFlatIndex(meaningIndex: meaningIndex, defIndex: defIndex)
+                                        if flatIndex < translations.count {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                HStack(alignment: .top, spacing: 4) {
+                                                    Text("\(defIndex + 1).")
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                    Text(translations[flatIndex].0)
+                                                        .font(.callout)
+                                                        .foregroundColor(.green)
+                                                        .textSelection(.enabled)
+                                                }
+
+                                                if let translatedExample = translations[flatIndex].1 {
+                                                    Text("例: \(translatedExample)")
+                                                        .font(.caption)
+                                                        .foregroundColor(.green.opacity(0.8))
+                                                        .italic()
+                                                        .padding(.leading, 14)
+                                                        .textSelection(.enabled)
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
-                                if let example = definition.example {
-                                    Text("→ \(example)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .italic()
-                                        .padding(.leading, 16)
-                                        .textSelection(.enabled)
+                                if meaningIndex < word.meanings.count - 1 {
+                                    Divider()
                                 }
                             }
                         }
                     }
-
-                    if index < word.meanings.count - 1 {
-                        Divider()
-                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 8)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // 计算扁平化索引
+    private func getFlatIndex(meaningIndex: Int, defIndex: Int) -> Int {
+        var index = 0
+        for i in 0..<meaningIndex {
+            index += min(word.meanings[i].definitions.count, 3)
+        }
+        index += defIndex
+        return index
+    }
+
+    // 翻译词性
+    private func translatePartOfSpeech(_ pos: String) -> String {
+        switch pos.lowercased() {
+        case "noun": return "名词"
+        case "verb": return "动词"
+        case "adjective": return "形容词"
+        case "adverb": return "副词"
+        case "pronoun": return "代词"
+        case "preposition": return "介词"
+        case "conjunction": return "连词"
+        case "interjection": return "感叹词"
+        default: return pos
         }
     }
 }
