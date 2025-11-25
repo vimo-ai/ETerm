@@ -44,6 +44,11 @@ final class WindowManager: NSObject {
         let hostingView = NSHostingView(rootView: contentView)
         window.contentView = hostingView
 
+        // 重新配置圆角（因为替换了 contentView）
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = 10
+        hostingView.layer?.masksToBounds = true
+
         // 设置最小尺寸
         window.minSize = NSSize(width: 400, height: 300)
 
