@@ -10,47 +10,20 @@ import Combine
 
 struct ContentView: View {
     var body: some View {
-        TabView {
-            // 终端 Tab - 使用 Rio 风格事件驱动实现
-            RioTerminalView()
-                .frame(minWidth: 800, minHeight: 600)
-                .tabItem {
-                    Label("终端", systemImage: "terminal")
+        RioTerminalView()
+            .frame(minWidth: 800, minHeight: 600)
+            .ignoresSafeArea()  // 延伸到标题栏
+            .background(
+                ZStack {
+                    TransparentWindowBackground()
+                    Color.black.opacity(0.3)
                 }
-
-            // 三个学习模块
-            WordLearningView()
-                .tabItem {
-                    Label("单词学习", systemImage: "book")
-                }
-
-            SentenceUnderstandingView()
-                .tabItem {
-                    Label("句子理解", systemImage: "text.quote")
-                }
-
-            WritingAssistantView()
-                .tabItem {
-                    Label("写作助手", systemImage: "pencil")
-                }
-
-
-        }
-        .frame(minWidth: 1000, minHeight: 800)
-        .background(
-            ZStack {
-                TransparentWindowBackground()
-                Color.black.opacity(0.3)  // 叠加半透明黑色,可以调整 0.0-1.0
+                .ignoresSafeArea()
+            )
+            .preferredColorScheme(.dark)
+            .onAppear {
+                setupTransparentWindow()
             }
-        )
-        .preferredColorScheme(.dark)
-        .onAppear {
-            setupTransparentWindow()
-            setupScreenChangeNotification()
-        }
-        .onDisappear {
-            removeScreenChangeNotification()
-        }
     }
 
     private func setupTransparentWindow() {
@@ -58,20 +31,19 @@ struct ContentView: View {
 
         // 设置窗口透明
         window.isOpaque = false
-//        window.backgroundColor = .clear
+        window.backgroundColor = .clear
 
-        // 设置毛玻璃效果
-        // window.titlebarAppearsTransparent = true
-    }
+        // 使用 borderless 窗口（完全去掉 title bar）
+        // 保留 resizable, miniaturizable, closable 功能
+        window.styleMask = [.borderless, .resizable, .miniaturizable, .closable]
 
-    /// 监听窗口跨屏幕移动事件
-    private func setupScreenChangeNotification() {
-        // 新架构中 scale 由 PanelRenderView 自动处理，不需要手动监听
-    }
+        // 不用全局拖动，由 PageBarHostingView 处理顶部拖动
+        window.isMovableByWindowBackground = false
 
-    /// 移除屏幕变化监听
-    private func removeScreenChangeNotification() {
-        // 新架构中不需要手动移除
+        // 添加圆角效果
+        window.contentView?.wantsLayer = true
+        window.contentView?.layer?.cornerRadius = 10
+        window.contentView?.layer?.masksToBounds = true
     }
 }
 

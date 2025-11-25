@@ -34,19 +34,31 @@ struct RioTerminalView: View {
 
     var body: some View {
         ZStack {
-            // 背景层
-            GeometryReader { geometry in
-                Image("night")
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-                    .opacity(0.3)
+            // 背景层 - 宣纸水墨风格（整体透明度 0.5，可调节）
+            RicePaperView(showMountain: true, overallOpacity: 0.5) {
+                EmptyView()
             }
             .ignoresSafeArea()
+            .allowsHitTesting(false)  // 不拦截事件，让事件穿透到下面的渲染层
 
             // 渲染层
             RioRenderView(coordinator: coordinator)
+
+            // Inline Writing Assistant Overlay (Cmd+K)
+            if coordinator.showInlineComposer {
+                VStack {
+                    Spacer()
+
+                    InlineComposerView(
+                        onCancel: {
+                            coordinator.showInlineComposer = false
+                        },
+                        coordinator: coordinator
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 20)
+                }
+            }
         }
     }
 }
@@ -67,6 +79,13 @@ struct RioRenderView: NSViewRepresentable {
         // 读取 updateTrigger 触发更新
         let _ = coordinator.updateTrigger
 
+        // 读取对话框状态，触发 layout 更新
+        let _ = coordinator.showInlineComposer
+        let _ = coordinator.composerInputHeight
+
+        // 触发 layout 重新计算（当对话框状态变化时）
+        nsView.needsLayout = true
+
         // 触发 Panel 视图更新
         nsView.updatePanelViews()
 
@@ -81,8 +100,8 @@ struct RioRenderView: NSViewRepresentable {
 // MARK: - Container View（分离 Metal 层和 UI 层）
 
 class RioContainerView: NSView {
-    /// Page 栏视图（在顶部）
-    private let pageBarView: PageBarView
+    /// Page 栏视图（SwiftUI 桥接）
+    private let pageBarView: PageBarHostingView
 
     /// Metal 渲染层（在底部）
     let renderView: RioMetalView
@@ -97,7 +116,7 @@ class RioContainerView: NSView {
     private let dividerHitAreaWidth: CGFloat = 6.0
 
     /// Page 栏高度
-    private let pageBarHeight: CGFloat = PageBarView.recommendedHeight()
+    private let pageBarHeight: CGFloat = PageBarHostingView.recommendedHeight()
 
     weak var coordinator: TerminalWindowCoordinator? {
         didSet {
@@ -108,15 +127,15 @@ class RioContainerView: NSView {
     }
 
     override init(frame frameRect: NSRect) {
-        pageBarView = PageBarView()
+        pageBarView = PageBarHostingView()
         renderView = RioMetalView()
         super.init(frame: frameRect)
 
-        // 添加 Page 栏（顶部）
-        addSubview(pageBarView)
-
-        // 添加 Metal 层（底部）
+        // 添加 Metal 层（底层）
         addSubview(renderView)
+
+        // 添加 PageBar（顶层，最后添加确保在最上面）
+        addSubview(pageBarView)
 
         // 监听 AR 变化，更新 UI
         setupObservers()
@@ -208,7 +227,7 @@ class RioContainerView: NSView {
     override func layout() {
         super.layout()
 
-        // Page 栏在顶部
+        // PageBar 在顶部
         pageBarView.frame = CGRect(
             x: 0,
             y: bounds.height - pageBarHeight,
@@ -216,12 +235,21 @@ class RioContainerView: NSView {
             height: pageBarHeight
         )
 
-        // Metal 层在 Page 栏下方，填满剩余空间
+        // 计算底部预留空间（为对话框留出空间）
+        let bottomReservedSpace: CGFloat
+        if let coordinator = coordinator, coordinator.showInlineComposer {
+            // composerInputHeight + 对话框 bottom padding (20) + 阴影余量 (10)
+            bottomReservedSpace = coordinator.composerInputHeight + 30
+        } else {
+            bottomReservedSpace = 0
+        }
+
+        // Metal 层填满 PageBar 下方区域
         let contentBounds = CGRect(
             x: 0,
-            y: 0,
+            y: bottomReservedSpace,
             width: bounds.width,
-            height: bounds.height - pageBarHeight
+            height: bounds.height - pageBarHeight - bottomReservedSpace
         )
         renderView.frame = contentBounds
 
@@ -229,7 +257,7 @@ class RioContainerView: NSView {
         updatePanelViews()
     }
 
-    /// 获取内容区域的 bounds（不包含 Page 栏）
+    /// 获取内容区域的 bounds（减去 PageBar 高度）
     var contentBounds: CGRect {
         return CGRect(
             x: 0,
@@ -516,6 +544,10 @@ class RioMetalView: NSView, RenderViewProtocol {
 
             // 通知 Sugarloaf 更新 scale
             sugarloaf_rescale(sugarloaf, Float(newScale))
+
+            // 关键修复：rescale 后必须重新获取 fontMetrics
+            // 因为 fontMetrics 是物理像素，scale 变化后值会不同
+            updateFontMetricsFromSugarloaf(sugarloaf)
 
             // 更新 CoordinateMapper
             coordinateMapper = CoordinateMapper(scale: newScale, containerBounds: bounds)
@@ -962,14 +994,42 @@ class RioMetalView: NSView, RenderViewProtocol {
         return true
     }
 
+    /// 检查当前焦点是否在终端内
+    ///
+    /// 用于判断编辑类快捷键（Cmd+V, Cmd+C）是否应该被终端拦截。
+    /// 如果焦点在对话框等其他 view 中，则不应该拦截。
+    private func isFirstResponderInTerminal() -> Bool {
+        guard let firstResponder = window?.firstResponder else { return false }
+
+        // 遍历 responder chain，检查是否包含 self (RioMetalView)
+        var responder: NSResponder? = firstResponder
+        while let current = responder {
+            if current == self {
+                return true  // 焦点在终端内
+            }
+            responder = current.nextResponder
+        }
+
+        return false  // 焦点在其他地方（如对话框）
+    }
+
     /// 拦截系统快捷键
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // 如果有 KeyboardSystem，使用它处理
         if let keyboardSystem = coordinator?.keyboardSystem {
             let keyStroke = KeyStroke.from(event)
 
+            // 对于编辑类快捷键，检查焦点是否在终端内
+            // 如果焦点在对话框等其他 view，则不拦截，让事件传递给有焦点的 view
+            if keyStroke.matches(.cmd("v")) || keyStroke.matches(.cmd("c")) {
+                if !isFirstResponderInTerminal() {
+                    return false  // 焦点不在终端，不拦截
+                }
+            }
+
             // 需要拦截的系统快捷键
             let interceptedShortcuts: [KeyStroke] = [
+                .cmd("k"),  // Inline AI Composer
                 .cmd("w"),
                 .cmd("t"),
                 .cmd("n"),
@@ -990,6 +1050,12 @@ class RioMetalView: NSView, RenderViewProtocol {
             let shouldIntercept = interceptedShortcuts.contains { $0.matches(keyStroke) }
 
             if shouldIntercept {
+                // Cmd+K 直接处理，不经过键盘系统
+                if keyStroke.matches(.cmd("k")) {
+                    showInlineComposer()
+                    return true
+                }
+
                 let result = keyboardSystem.handleKeyDown(event)
                 switch result {
                 case .handled:
@@ -1102,6 +1168,20 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     override func flagsChanged(with event: NSEvent) {
         // 处理修饰键
+    }
+
+    // MARK: - Inline AI Composer
+
+    /// 显示 AI 命令输入框
+    private func showInlineComposer() {
+        guard let coordinator = coordinator else { return }
+
+        // 计算输入框位置（在视图中心偏上）
+        let centerX = bounds.midX
+        let centerY = bounds.midY + 50  // 稍微偏上一点
+
+        coordinator.composerPosition = CGPoint(x: centerX, y: centerY)
+        coordinator.showInlineComposer = true
     }
 
     // MARK: - 鼠标事件
