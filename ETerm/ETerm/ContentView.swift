@@ -11,8 +11,8 @@ import Combine
 struct ContentView: View {
     var body: some View {
         RioTerminalView()
-            .frame(minWidth: 800, minHeight: 600)
-            .ignoresSafeArea()  // 延伸到标题栏
+            .frame(minWidth: 400, minHeight: 300)
+            .ignoresSafeArea()
             .background(
                 ZStack {
                     TransparentWindowBackground()
@@ -21,30 +21,8 @@ struct ContentView: View {
                 .ignoresSafeArea()
             )
             .preferredColorScheme(.dark)
-            .onAppear {
-                setupTransparentWindow()
-            }
     }
-
-    private func setupTransparentWindow() {
-        guard let window = NSApplication.shared.windows.first else { return }
-
-        // 设置窗口透明
-        window.isOpaque = false
-        window.backgroundColor = .clear
-
-        // 使用 borderless 窗口（完全去掉 title bar）
-        // 保留 resizable, miniaturizable, closable 功能
-        window.styleMask = [.borderless, .resizable, .miniaturizable, .closable]
-
-        // 不用全局拖动，由 PageBarHostingView 处理顶部拖动
-        window.isMovableByWindowBackground = false
-
-        // 添加圆角效果
-        window.contentView?.wantsLayer = true
-        window.contentView?.layer?.cornerRadius = 10
-        window.contentView?.layer?.masksToBounds = true
-    }
+    // 窗口配置已移至 KeyableWindow 和 WindowManager
 }
 
 // 翻译管理器（单例）
