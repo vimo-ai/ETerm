@@ -177,6 +177,30 @@ final class TerminalWindow {
         return true
     }
 
+    /// 重新排序 Pages
+    ///
+    /// - Parameter pageIds: 新的 Page ID 顺序
+    /// - Returns: 是否成功
+    @discardableResult
+    func reorderPages(_ pageIds: [UUID]) -> Bool {
+        // 验证 pageIds 是否与当前 pages 匹配
+        guard Set(pageIds) == Set(pages.map { $0.pageId }),
+              pageIds.count == pages.count else {
+            return false
+        }
+
+        // 根据新顺序重新排列 pages
+        var reorderedPages: [Page] = []
+        for pageId in pageIds {
+            if let page = pages.first(where: { $0.pageId == pageId }) {
+                reorderedPages.append(page)
+            }
+        }
+
+        pages = reorderedPages
+        return true
+    }
+
     /// 获取 Page 数量
     var pageCount: Int {
         return pages.count

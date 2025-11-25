@@ -190,21 +190,31 @@ struct PageTabView: View {
 
 /// AppKit 桥接类，用于在 NSView 层级中使用 SwiftUI PageBarView
 final class PageBarHostingView: NSView {
-    private var hostingView: NSHostingView<PageBarView>?
+    private var hostingView: NSHostingView<PageBarControlsView>?
 
     // 数据状态
     private var pages: [PageItem] = []
     private var activePageId: UUID?
+
+    // Page 标签容器
+    private let pageContainer = NSView()
+    private var pageItemViews: [PageItemView] = []
+
+    // 拖拽相关
+    private var draggingPageId: UUID?
 
     // 回调
     var onPageClick: ((UUID) -> Void)?
     var onPageClose: ((UUID) -> Void)?
     var onPageRename: ((UUID, String) -> Void)?
     var onAddPage: (() -> Void)?
+    var onPageReorder: (([UUID]) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHostingView()
+        setupPageContainer()
+        setupDragDestination()
     }
 
     required init?(coder: NSCoder) {
@@ -212,64 +222,89 @@ final class PageBarHostingView: NSView {
     }
 
     private func setupHostingView() {
-        let swiftUIView = PageBarView(
-            pages: Binding(
-                get: { self.pages },
-                set: { self.pages = $0 }
-            ),
-            activePageId: Binding(
-                get: { self.activePageId },
-                set: { self.activePageId = $0 }
-            ),
-            onPageClick: onPageClick,
-            onPageClose: onPageClose,
-            onPageRename: onPageRename,
-            onAddPage: onAddPage
-        )
-
-        let hosting = NSHostingView(rootView: swiftUIView)
+        // 只使用 SwiftUI 渲染红绿灯和添加按钮，Page 标签用 AppKit
+        let controlsView = PageBarControlsView(onAddPage: onAddPage)
+        let hosting = NSHostingView(rootView: controlsView)
         hosting.translatesAutoresizingMaskIntoConstraints = true
         addSubview(hosting)
-
         hostingView = hosting
     }
 
-    private func refreshHostingView() {
-        guard let hostingView = hostingView else { return }
+    private func setupPageContainer() {
+        pageContainer.wantsLayer = true
+        addSubview(pageContainer)
+    }
 
-        let swiftUIView = PageBarView(
-            pages: Binding(
-                get: { self.pages },
-                set: { self.pages = $0 }
-            ),
-            activePageId: Binding(
-                get: { self.activePageId },
-                set: { self.activePageId = $0 }
-            ),
-            onPageClick: onPageClick,
-            onPageClose: onPageClose,
-            onPageRename: onPageRename,
-            onAddPage: onAddPage
-        )
+    private func setupDragDestination() {
+        registerForDraggedTypes([.string])
+    }
 
-        hostingView.rootView = swiftUIView
+    private func rebuildPageItemViews() {
+        // 移除旧的 Page 视图
+        pageItemViews.forEach { $0.removeFromSuperview() }
+        pageItemViews.removeAll()
+
+        // 创建新的 Page 视图
+        for page in pages {
+            let pageView = PageItemView(pageId: page.id, title: page.title)
+            pageView.setActive(page.id == activePageId)
+            pageView.setShowCloseButton(pages.count > 1)
+
+            pageView.onTap = { [weak self] in
+                self?.onPageClick?(page.id)
+            }
+
+            pageView.onClose = { [weak self] in
+                self?.onPageClose?(page.id)
+            }
+
+            pageView.onRename = { [weak self] newTitle in
+                self?.onPageRename?(page.id, newTitle)
+            }
+
+            pageView.onDragStart = { [weak self] in
+                self?.draggingPageId = page.id
+            }
+
+            pageContainer.addSubview(pageView)
+            pageItemViews.append(pageView)
+        }
+
+        layoutPageItems()
+    }
+
+    private func layoutPageItems() {
+        let leftPadding: CGFloat = 88  // 红绿灯按钮宽度 + 间距
+        let spacing: CGFloat = 2
+        var x: CGFloat = leftPadding
+
+        for pageView in pageItemViews {
+            let size = pageView.fittingSize
+            pageView.frame = CGRect(x: x, y: 3, width: size.width, height: size.height)
+            x += size.width + spacing
+        }
     }
 
     override func layout() {
         super.layout()
         hostingView?.frame = bounds
+        pageContainer.frame = bounds
+        layoutPageItems()
     }
 
     /// 设置 Page 列表（兼容旧接口）
     func setPages(_ newPages: [(id: UUID, title: String)]) {
         pages = newPages.map { PageItem(id: $0.id, title: $0.title) }
-        refreshHostingView()
+        rebuildPageItemViews()
     }
 
     /// 设置激活的 Page（兼容旧接口）
     func setActivePage(_ pageId: UUID) {
         activePageId = pageId
-        refreshHostingView()
+        // 更新激活状态
+        for pageView in pageItemViews {
+            pageView.setActive(pageView.pageId == pageId)
+        }
     }
 
     /// 推荐高度
@@ -286,6 +321,124 @@ final class PageBarHostingView: NSView {
     override func mouseDown(with event: NSEvent) {
         // 在 PageBar 区域拖动窗口
         window?.performDrag(with: event)
+    }
+}
+
+// MARK: - NSDraggingDestination
+
+extension PageBarHostingView {
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 检查是否是 Page 拖拽
+        guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
+              pasteboardString.hasPrefix("page:") else {
+            return []
+        }
+        return .move
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
+              pasteboardString.hasPrefix("page:") else {
+            return []
+        }
+
+        // 计算鼠标位置并高亮插入位置（可选，暂时省略）
+        return .move
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
+              pasteboardString.hasPrefix("page:"),
+              let draggingId = draggingPageId else {
+            return false
+        }
+
+        // 计算插入位置
+        let location = convert(sender.draggingLocation, from: nil)
+        guard let targetIndex = indexForInsertionAt(location: location) else {
+            return false
+        }
+
+        // 获取当前拖拽的 Page 索引
+        guard let sourceIndex = pages.firstIndex(where: { $0.id == draggingId }) else {
+            return false
+        }
+
+        // 如果位置相同，不处理
+        if sourceIndex == targetIndex || sourceIndex + 1 == targetIndex {
+            return false
+        }
+
+        // 重新排列
+        var newPages = pages
+        let movedPage = newPages.remove(at: sourceIndex)
+        let insertIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
+        newPages.insert(movedPage, at: insertIndex)
+
+        pages = newPages
+        rebuildPageItemViews()
+
+        // 通知外部重排序
+        let pageIds = pages.map { $0.id }
+        onPageReorder?(pageIds)
+
+        return true
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        draggingPageId = nil
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        draggingPageId = nil
+    }
+
+    /// 根据位置计算插入索引
+    private func indexForInsertionAt(location: NSPoint) -> Int? {
+        let leftPadding: CGFloat = 88
+        let spacing: CGFloat = 2
+
+        if location.x < leftPadding {
+            return 0
+        }
+
+        var x: CGFloat = leftPadding
+        for (index, pageView) in pageItemViews.enumerated() {
+            let midpoint = x + pageView.fittingSize.width / 2
+            if location.x < midpoint {
+                return index
+            }
+            x += pageView.fittingSize.width + spacing
+        }
+
+        return pageItemViews.count
+    }
+}
+
+// MARK: - PageBarControlsView (SwiftUI)
+
+/// 只包含红绿灯和添加按钮的控制栏
+struct PageBarControlsView: View {
+    var onAddPage: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // 红绿灯按钮
+            TrafficLightButtons()
+                .padding(.leading, 12)
+
+            Spacer()
+
+            // 添加按钮
+            Button(action: { onAddPage?() }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 8)
+        }
+        .frame(height: 28)
     }
 }
 

@@ -104,6 +104,10 @@ final class DomainPanelView: NSView {
         headerView.onSplitHorizontal = { [weak self] in
             self?.handleSplitHorizontal()
         }
+
+        headerView.onTabReorder = { [weak self] tabIds in
+            self?.handleTabReorder(tabIds)
+        }
     }
 
     // MARK: - Update
@@ -183,6 +187,13 @@ final class DomainPanelView: NSView {
         coordinator.handleSplitPanel(panelId: panel.panelId, direction: .horizontal)
     }
 
+    private func handleTabReorder(_ tabIds: [UUID]) {
+        guard let panel = panel,
+              let coordinator = coordinator else { return }
+
+        coordinator.handleTabReorder(panelId: panel.panelId, tabIds: tabIds)
+    }
+
     // MARK: - Drop Zone Calculation
 
     /// 计算 Drop Zone
@@ -247,8 +258,17 @@ extension DomainPanelView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let tabIdString = sender.draggingPasteboard.string(forType: .string),
-              let tabId = UUID(uuidString: tabIdString) else {
+        // 先清除高亮，无论成功与否
+        clearHighlight()
+
+        // 解析拖拽数据（格式：tab:uuid）
+        guard let dataString = sender.draggingPasteboard.string(forType: .string),
+              dataString.hasPrefix("tab:") else {
+            return false
+        }
+
+        let tabIdString = String(dataString.dropFirst(4))  // 去掉 "tab:" 前缀
+        guard let tabId = UUID(uuidString: tabIdString) else {
             return false
         }
 
@@ -256,8 +276,6 @@ extension DomainPanelView {
         guard let dropZone = calculateDropZone(mousePosition: locationInView) else {
             return false
         }
-
-        clearHighlight()
 
         // 调用 Coordinator 处理 Drop
         guard let panel = panel,

@@ -113,11 +113,18 @@ struct TabItemSwiftUIView: View {
 
 /// AppKit 桥接类，用于在 NSView 层级中使用 SwiftUI PanelHeaderView
 final class PanelHeaderHostingView: NSView {
-    private var hostingView: NSHostingView<PanelHeaderView>?
+    private var hostingView: NSHostingView<PanelHeaderControlsView>?
 
     // 数据状态
     private var tabs: [TabItem] = []
     private var activeTabId: UUID?
+
+    // Tab 标签容器
+    private let tabContainer = NSView()
+    private var tabItemViews: [TabItemView] = []
+
+    // 拖拽相关
+    private var draggingTabId: UUID?
 
     // 回调
     var onTabClick: ((UUID) -> Void)?
@@ -125,10 +132,13 @@ final class PanelHeaderHostingView: NSView {
     var onTabRename: ((UUID, String) -> Void)?
     var onAddTab: (() -> Void)?
     var onSplitHorizontal: (() -> Void)?
+    var onTabReorder: (([UUID]) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHostingView()
+        setupTabContainer()
+        setupDragDestination()
     }
 
     required init?(coder: NSCoder) {
@@ -136,80 +146,230 @@ final class PanelHeaderHostingView: NSView {
     }
 
     private func setupHostingView() {
-        let swiftUIView = PanelHeaderView(
-            tabs: Binding(
-                get: { self.tabs },
-                set: { self.tabs = $0 }
-            ),
-            activeTabId: Binding(
-                get: { self.activeTabId },
-                set: { self.activeTabId = $0 }
-            ),
-            onTabClick: onTabClick,
-            onTabClose: onTabClose,
-            onTabRename: onTabRename,
+        // 只使用 SwiftUI 渲染右侧按钮，Tab 标签用 AppKit
+        let controlsView = PanelHeaderControlsView(
             onAddTab: onAddTab,
             onSplitHorizontal: onSplitHorizontal
         )
-
-        let hosting = NSHostingView(rootView: swiftUIView)
-        hosting.translatesAutoresizingMaskIntoConstraints = false
+        let hosting = NSHostingView(rootView: controlsView)
+        hosting.translatesAutoresizingMaskIntoConstraints = true
         addSubview(hosting)
-
-        NSLayoutConstraint.activate([
-            hosting.topAnchor.constraint(equalTo: topAnchor),
-            hosting.leadingAnchor.constraint(equalTo: leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: trailingAnchor),
-            hosting.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-
         hostingView = hosting
     }
 
-    private func refreshHostingView() {
-        guard let hostingView = hostingView else { return }
+    private func setupTabContainer() {
+        tabContainer.wantsLayer = true
+        addSubview(tabContainer)
+    }
 
-        let swiftUIView = PanelHeaderView(
-            tabs: Binding(
-                get: { self.tabs },
-                set: { self.tabs = $0 }
-            ),
-            activeTabId: Binding(
-                get: { self.activeTabId },
-                set: { self.activeTabId = $0 }
-            ),
-            onTabClick: onTabClick,
-            onTabClose: onTabClose,
-            onTabRename: onTabRename,
-            onAddTab: onAddTab,
-            onSplitHorizontal: onSplitHorizontal
-        )
+    private func setupDragDestination() {
+        registerForDraggedTypes([.string])
+    }
 
-        hostingView.rootView = swiftUIView
+    private func rebuildTabItemViews() {
+        // 移除旧的 Tab 视图
+        tabItemViews.forEach { $0.removeFromSuperview() }
+        tabItemViews.removeAll()
+
+        // 创建新的 Tab 视图
+        for tab in tabs {
+            let tabView = TabItemView(tabId: tab.id, title: tab.title)
+            tabView.setActive(tab.id == activeTabId)
+
+            tabView.onTap = { [weak self] in
+                self?.onTabClick?(tab.id)
+            }
+
+            tabView.onClose = { [weak self] in
+                self?.onTabClose?(tab.id)
+            }
+
+            tabView.onRename = { [weak self] newTitle in
+                self?.onTabRename?(tab.id, newTitle)
+            }
+
+            tabView.onDragStart = { [weak self] in
+                self?.draggingTabId = tab.id
+            }
+
+            tabContainer.addSubview(tabView)
+            tabItemViews.append(tabView)
+        }
+
+        layoutTabItems()
+    }
+
+    private func layoutTabItems() {
+        let leftPadding: CGFloat = 4
+        let spacing: CGFloat = 4
+        var x: CGFloat = leftPadding
+
+        for tabView in tabItemViews {
+            let size = tabView.fittingSize
+            tabView.frame = CGRect(x: x, y: 3, width: size.width, height: size.height)
+            x += size.width + spacing
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        hostingView?.frame = bounds
+        tabContainer.frame = bounds
+        layoutTabItems()
     }
 
     /// 设置 Tab 列表（兼容旧接口）
     func setTabs(_ newTabs: [(id: UUID, title: String)]) {
         tabs = newTabs.map { TabItem(id: $0.id, title: $0.title) }
-        refreshHostingView()
+        rebuildTabItemViews()
     }
 
     /// 设置激活的 Tab（兼容旧接口）
     func setActiveTab(_ tabId: UUID) {
         activeTabId = tabId
-        refreshHostingView()
+        // 更新激活状态
+        for tabView in tabItemViews {
+            tabView.setActive(tabView.tabId == tabId)
+        }
     }
 
-    /// 获取所有 Tab 的边界（用于拖拽计算，暂时返回空）
+    /// 获取所有 Tab 的边界（用于拖拽计算）
     func getTabBounds() -> [UUID: CGRect] {
-        // SwiftUI 版本暂不支持精确的 Tab 边界获取
-        // 如果需要拖拽功能，后续可以用 PreferenceKey 实现
-        return [:]
+        var bounds: [UUID: CGRect] = [:]
+        for tabView in tabItemViews {
+            bounds[tabView.tabId] = tabView.frame
+        }
+        return bounds
     }
 
     /// 推荐高度
     static func recommendedHeight() -> CGFloat {
         return PanelHeaderView.recommendedHeight()
+    }
+}
+
+// MARK: - NSDraggingDestination
+
+extension PanelHeaderHostingView {
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 检查是否是 Tab 拖拽
+        guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
+              pasteboardString.hasPrefix("tab:") else {
+            return []
+        }
+        return .move
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
+              pasteboardString.hasPrefix("tab:") else {
+            return []
+        }
+
+        // 计算鼠标位置并高亮插入位置（可选，暂时省略）
+        return .move
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
+              pasteboardString.hasPrefix("tab:"),
+              let draggingId = draggingTabId else {
+            return false
+        }
+
+        // 计算插入位置
+        let location = convert(sender.draggingLocation, from: nil)
+        guard let targetIndex = indexForInsertionAt(location: location) else {
+            return false
+        }
+
+        // 获取当前拖拽的 Tab 索引
+        guard let sourceIndex = tabs.firstIndex(where: { $0.id == draggingId }) else {
+            return false
+        }
+
+        // 如果位置相同，不处理
+        if sourceIndex == targetIndex || sourceIndex + 1 == targetIndex {
+            return false
+        }
+
+        // 重新排列
+        var newTabs = tabs
+        let movedTab = newTabs.remove(at: sourceIndex)
+        let insertIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
+        newTabs.insert(movedTab, at: insertIndex)
+
+        tabs = newTabs
+        rebuildTabItemViews()
+
+        // 通知外部重排序
+        let tabIds = tabs.map { $0.id }
+        onTabReorder?(tabIds)
+
+        return true
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        draggingTabId = nil
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        draggingTabId = nil
+    }
+
+    /// 根据位置计算插入索引
+    private func indexForInsertionAt(location: NSPoint) -> Int? {
+        let leftPadding: CGFloat = 4
+        let spacing: CGFloat = 4
+
+        if location.x < leftPadding {
+            return 0
+        }
+
+        var x: CGFloat = leftPadding
+        for (index, tabView) in tabItemViews.enumerated() {
+            let midpoint = x + tabView.fittingSize.width / 2
+            if location.x < midpoint {
+                return index
+            }
+            x += tabView.fittingSize.width + spacing
+        }
+
+        return tabItemViews.count
+    }
+}
+
+// MARK: - PanelHeaderControlsView (SwiftUI)
+
+/// 只包含右侧按钮的控制栏
+struct PanelHeaderControlsView: View {
+    var onAddTab: (() -> Void)?
+    var onSplitHorizontal: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer()
+
+            // 水平分割按钮
+            Button(action: { onSplitHorizontal?() }) {
+                Image(systemName: "square.split.2x1")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 24, height: 24)
+
+            // 添加按钮
+            Button(action: { onAddTab?() }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 24, height: 24)
+        }
+        .padding(.horizontal, 4)
+        .frame(height: 32)
     }
 }
 

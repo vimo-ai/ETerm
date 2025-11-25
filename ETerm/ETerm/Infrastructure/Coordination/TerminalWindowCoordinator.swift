@@ -325,6 +325,18 @@ class TerminalWindowCoordinator: ObservableObject {
         updateTrigger = UUID()
     }
 
+    /// 用户重新排序 Tabs
+    func handleTabReorder(panelId: UUID, tabIds: [UUID]) {
+        guard let panel = terminalWindow.getPanel(panelId) else {
+            return
+        }
+
+        if panel.reorderTabs(tabIds) {
+            objectWillChange.send()
+            updateTrigger = UUID()
+        }
+    }
+
     /// 智能关闭（Cmd+W）
     ///
     /// 关闭逻辑：
@@ -914,6 +926,23 @@ class TerminalWindowCoordinator: ObservableObject {
     @discardableResult
     func renamePage(_ pageId: UUID, to newTitle: String) -> Bool {
         guard terminalWindow.renamePage(pageId, to: newTitle) else {
+            return false
+        }
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+
+        return true
+    }
+
+    /// 重新排序 Pages
+    ///
+    /// - Parameter pageIds: 新的 Page ID 顺序
+    /// - Returns: 是否成功
+    @discardableResult
+    func reorderPages(_ pageIds: [UUID]) -> Bool {
+        guard terminalWindow.reorderPages(pageIds) else {
             return false
         }
 

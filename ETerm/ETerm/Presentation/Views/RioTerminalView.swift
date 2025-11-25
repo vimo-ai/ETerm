@@ -208,6 +208,10 @@ class RioContainerView: NSView {
         pageBarView.onAddPage = { [weak coordinator] in
             _ = coordinator?.createPage()
         }
+
+        pageBarView.onPageReorder = { [weak coordinator] pageIds in
+            _ = coordinator?.reorderPages(pageIds)
+        }
     }
 
     /// 更新 Page 栏

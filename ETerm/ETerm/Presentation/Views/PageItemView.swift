@@ -36,10 +36,19 @@ final class PageItemView: NSView {
     /// SwiftUI 水墨标签视图
     private var hostingView: NSView?
 
+    /// 是否正在拖拽
+    private var isDragging: Bool = false
+
+    /// 是否真正发生了拖动（鼠标移动）
+    private var didActuallyDrag: Bool = false
+
     // MARK: - 回调
 
     /// 点击回调
     var onTap: (() -> Void)?
+
+    /// 开始拖拽回调
+    var onDragStart: (() -> Void)?
 
     /// 关闭回调
     var onClose: (() -> Void)?
@@ -105,8 +114,6 @@ final class PageItemView: NSView {
 
     private func setupUI() {
         wantsLayer = true
-        // 调试：绿色背景
-        layer?.backgroundColor = NSColor.green.withAlphaComponent(0.5).cgColor
 
         // 创建水墨标签视图
         updateShuimoView()
@@ -207,15 +214,40 @@ final class PageItemView: NSView {
     override func layout() {
         super.layout()
         hostingView?.frame = bounds
-        print("📦 PageItemView.layout()")
-        print("   bounds: \(bounds)")
-        print("   hostingView.frame: \(hostingView?.frame ?? .zero)")
     }
 
     // MARK: - Event Handlers
 
     override func mouseDown(with event: NSEvent) {
-        // 不做处理，等待 mouseUp
+        // 重置拖拽标志
+        isDragging = false
+        didActuallyDrag = false
+
+        // 不立即启动拖拽，等待 mouseDragged 确认真正拖动
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        super.mouseDragged(with: event)
+
+        // 如果已经在拖拽中，不重复启动
+        if isDragging {
+            return
+        }
+
+        // 标记真正发生了拖动
+        didActuallyDrag = true
+        isDragging = true
+
+        // 现在才启动拖拽会话
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setDataProvider(self, forTypes: [.string])
+
+        let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
+        draggingItem.setDraggingFrame(bounds, contents: createSnapshot())
+
+        onDragStart?()
+
+        beginDraggingSession(with: [draggingItem], event: event, source: self)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -225,14 +257,31 @@ final class PageItemView: NSView {
             return
         }
 
-        // 根据点击次数处理
-        if event.clickCount == 2 {
-            startEditing()
-        } else if event.clickCount == 1 {
-            onTap?()
+        // 只有在没有真正拖动时才处理点击
+        if !didActuallyDrag {
+            if event.clickCount == 2 {
+                // 双击：开始编辑
+                startEditing()
+            } else if event.clickCount == 1 {
+                // 单击：切换 Page
+                onTap?()
+            }
         }
 
+        // 重置拖拽状态
+        isDragging = false
+        didActuallyDrag = false
+
         super.mouseUp(with: event)
+    }
+
+    // MARK: - 拖拽预览
+
+    /// 创建拖拽预览图像
+    private func createSnapshot() -> NSImage {
+        // 使用 PDF 数据创建快照
+        let pdfData = dataWithPDF(inside: bounds)
+        return NSImage(data: pdfData) ?? NSImage()
     }
 
     // MARK: - Mouse Tracking
@@ -249,6 +298,32 @@ final class PageItemView: NSView {
             userInfo: nil
         )
         addTrackingArea(trackingArea)
+    }
+}
+
+// MARK: - NSDraggingSource
+
+extension PageItemView: NSDraggingSource {
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        return .move
+    }
+
+    func draggingSession(_ session: NSDraggingSession,
+                         endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) {
+        // 拖拽结束（由目标处理布局更新）
+    }
+}
+
+// MARK: - NSPasteboardItemDataProvider
+
+extension PageItemView: NSPasteboardItemDataProvider {
+    func pasteboard(_ pasteboard: NSPasteboard?,
+                    item: NSPasteboardItem,
+                    provideDataForType type: NSPasteboard.PasteboardType) {
+        // 提供拖拽数据（Page ID）- 使用不同的标识符以区分 Tab 和 Page
+        item.setString("page:\(pageId.uuidString)", forType: .string)
     }
 }
 

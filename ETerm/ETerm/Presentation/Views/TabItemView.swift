@@ -295,8 +295,8 @@ extension TabItemView: NSPasteboardItemDataProvider {
     func pasteboard(_ pasteboard: NSPasteboard?,
                     item: NSPasteboardItem,
                     provideDataForType type: NSPasteboard.PasteboardType) {
-        // 提供拖拽数据（Tab ID）
-        item.setString(tabId.uuidString, forType: .string)
+        // 提供拖拽数据（Tab ID）- 使用 "tab:" 前缀与 Page 区分
+        item.setString("tab:\(tabId.uuidString)", forType: .string)
     }
 }
 

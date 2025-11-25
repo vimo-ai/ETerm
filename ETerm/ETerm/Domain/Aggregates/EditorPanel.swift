@@ -93,6 +93,29 @@ final class EditorPanel {
         tabs.count
     }
 
+    /// 重新排序 Tabs
+    ///
+    /// - Parameter tabIds: 新的 Tab ID 顺序
+    /// - Returns: 是否成功
+    func reorderTabs(_ tabIds: [UUID]) -> Bool {
+        // 验证 ID 列表与当前 tabs 一致
+        guard tabIds.count == tabs.count,
+              Set(tabIds) == Set(tabs.map { $0.tabId }) else {
+            return false
+        }
+
+        // 按新顺序重新排列 tabs
+        var newTabs: [TerminalTab] = []
+        for tabId in tabIds {
+            if let tab = tabs.first(where: { $0.tabId == tabId }) {
+                newTabs.append(tab)
+            }
+        }
+
+        tabs = newTabs
+        return true
+    }
+
     // MARK: - Layout Management
 
     /// 更新 Panel 的位置和尺寸（由 TerminalWindow 调用）
