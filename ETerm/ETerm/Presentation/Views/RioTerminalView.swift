@@ -239,35 +239,28 @@ class RioContainerView: NSView {
             height: pageBarHeight
         )
 
-        // 计算底部预留空间（为对话框留出空间）
-        let bottomReservedSpace: CGFloat
-        if let coordinator = coordinator, coordinator.showInlineComposer {
-            // composerInputHeight + 对话框 bottom padding (20) + 阴影余量 (10)
-            bottomReservedSpace = coordinator.composerInputHeight + 30
-        } else {
-            bottomReservedSpace = 0
-        }
-
-        // Metal 层填满 PageBar 下方区域
-        let contentBounds = CGRect(
-            x: 0,
-            y: bottomReservedSpace,
-            width: bounds.width,
-            height: bounds.height - pageBarHeight - bottomReservedSpace
-        )
+        // Metal 层填满 PageBar 下方区域（使用 contentBounds 属性，已考虑对话框空间）
         renderView.frame = contentBounds
 
         // 更新 Panel UI 视图
         updatePanelViews()
     }
 
-    /// 获取内容区域的 bounds（减去 PageBar 高度）
+    /// 计算底部预留空间（为对话框留出空间）
+    private var bottomReservedSpace: CGFloat {
+        if let coordinator = coordinator, coordinator.showInlineComposer {
+            return coordinator.composerInputHeight + 30
+        }
+        return 0
+    }
+
+    /// 获取内容区域的 bounds（减去 PageBar 高度和底部预留空间）
     var contentBounds: CGRect {
         return CGRect(
             x: 0,
-            y: 0,
+            y: bottomReservedSpace,
             width: bounds.width,
-            height: bounds.height - pageBarHeight
+            height: bounds.height - pageBarHeight - bottomReservedSpace
         )
     }
 
