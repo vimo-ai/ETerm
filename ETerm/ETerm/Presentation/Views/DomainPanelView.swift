@@ -10,9 +10,8 @@
 //  - 用户操作通过 Coordinator 调用 AR 方法
 //
 //  重构变化：
-//  - 使用 PanelHeaderView 替代简陋的 NSButton
-//  - 使用 TabItemView 实现完整的 Tab UI
-//  - 通过回调处理事件，避免 button.tag 黑科技
+//  - 使用 PanelHeaderHostingView（SwiftUI 桥接）实现 Tab 栏
+//  - 通过回调处理事件
 //
 
 import AppKit
@@ -29,8 +28,8 @@ final class DomainPanelView: NSView {
     /// Coordinator（用于调用 AR 方法）
     private weak var coordinator: TerminalWindowCoordinator?
 
-    /// Header 视图（使用 PanelHeaderView）
-    private let headerView: PanelHeaderView
+    /// Header 视图（SwiftUI 桥接）
+    private let headerView: PanelHeaderHostingView
 
     /// Content 视图（渲染区域 - 透明）
     let contentView: NSView
@@ -46,7 +45,7 @@ final class DomainPanelView: NSView {
     init(panel: EditorPanel, coordinator: TerminalWindowCoordinator) {
         self.panel = panel
         self.coordinator = coordinator
-        self.headerView = PanelHeaderView()
+        self.headerView = PanelHeaderHostingView()
         self.contentView = NSView()
         self.highlightLayer = CALayer()
 
@@ -94,20 +93,16 @@ final class DomainPanelView: NSView {
             self?.handleTabClose(tabId)
         }
 
+        headerView.onTabRename = { [weak self] tabId, newTitle in
+            self?.handleTabRename(tabId, newTitle: newTitle)
+        }
+
         headerView.onAddTab = { [weak self] in
             self?.handleAddTab()
         }
 
-        headerView.onTabDragStart = { _ in
-            // Tab drag started
-        }
-
         headerView.onSplitHorizontal = { [weak self] in
             self?.handleSplitHorizontal()
-        }
-
-        headerView.onSplitVertical = { [weak self] in
-            self?.handleSplitVertical()
         }
     }
 
@@ -132,7 +127,7 @@ final class DomainPanelView: NSView {
     override func layout() {
         super.layout()
 
-        let headerHeight = PanelHeaderView.recommendedHeight()
+        let headerHeight = PanelHeaderHostingView.recommendedHeight()
 
         // Header 在顶部
         headerView.frame = CGRect(
@@ -167,6 +162,13 @@ final class DomainPanelView: NSView {
         coordinator.handleTabClose(panelId: panel.panelId, tabId: tabId)
     }
 
+    private func handleTabRename(_ tabId: UUID, newTitle: String) {
+        guard let panel = panel,
+              let coordinator = coordinator else { return }
+
+        coordinator.handleTabRename(panelId: panel.panelId, tabId: tabId, newTitle: newTitle)
+    }
+
     private func handleAddTab() {
         guard let panel = panel,
               let coordinator = coordinator else { return }
@@ -179,13 +181,6 @@ final class DomainPanelView: NSView {
               let coordinator = coordinator else { return }
 
         coordinator.handleSplitPanel(panelId: panel.panelId, direction: .horizontal)
-    }
-
-    private func handleSplitVertical() {
-        guard let panel = panel,
-              let coordinator = coordinator else { return }
-
-        coordinator.handleSplitPanel(panelId: panel.panelId, direction: .vertical)
     }
 
     // MARK: - Drop Zone Calculation

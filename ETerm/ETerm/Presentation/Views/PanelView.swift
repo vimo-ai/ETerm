@@ -27,8 +27,8 @@ final class PanelView: NSView {
 
     // MARK: - UI 组件
 
-    /// Header 视图（Tab 栏）
-    private(set) var headerView: PanelHeaderView
+    /// Header 视图（Tab 栏，SwiftUI 桥接）
+    private(set) var headerView: PanelHeaderHostingView
 
     /// Content 视图（Rust 渲染 Term 的区域）
     private(set) var contentView: NSView
@@ -76,7 +76,7 @@ final class PanelView: NSView {
     init(panel: PanelNode, frame: CGRect, layoutKit: PanelLayoutKit) {
         self.panel = panel
         self.layoutKit = layoutKit
-        self.headerView = PanelHeaderView(frame: .zero)
+        self.headerView = PanelHeaderHostingView()
         self.contentView = NSView(frame: .zero)
         self.highlightLayer = CALayer()
 
@@ -192,9 +192,6 @@ final class PanelView: NSView {
         headerView.onTabClick = { [weak self] tabId in
             self?.setActiveTab(tabId)
         }
-        headerView.onTabDragStart = { [weak self] tabId in
-            self?.onTabDragStart?(tabId)
-        }
         headerView.onTabClose = { [weak self] tabId in
             self?.onTabClose?(tabId)
         }
@@ -219,7 +216,7 @@ final class PanelView: NSView {
     override func layout() {
         super.layout()
 
-        let headerHeight = PanelHeaderView.recommendedHeight()
+        let headerHeight = PanelHeaderHostingView.recommendedHeight()
 
         // Header 在顶部
         headerView.frame = CGRect(
