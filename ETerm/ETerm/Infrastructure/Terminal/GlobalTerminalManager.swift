@@ -147,54 +147,62 @@ final class GlobalTerminalManager {
     }
 
     /// 通知对应窗口需要渲染
+    ///
+    /// 注意：使用 [weak coordinator] 确保异步执行时如果 coordinator 已释放则跳过
     private func notifyRender(for terminalId: Int) {
         routesLock.lock()
-        let coordinator = terminalRoutes[terminalId]?.value
+        let coordinatorRef = terminalRoutes[terminalId]
         routesLock.unlock()
 
-        if let coordinator = coordinator {
-            DispatchQueue.main.async {
-                coordinator.scheduleRender()
-            }
+        guard let coordinator = coordinatorRef?.value else { return }
+
+        DispatchQueue.main.async { [weak coordinator] in
+            coordinator?.scheduleRender()
         }
     }
 
     /// 通知对应窗口终端关闭
+    ///
+    /// 注意：使用 [weak coordinator] 确保异步执行时如果 coordinator 已释放则跳过
     private func notifyTerminalClose(for terminalId: Int) {
         routesLock.lock()
-        let coordinator = terminalRoutes[terminalId]?.value
+        let coordinatorRef = terminalRoutes[terminalId]
         routesLock.unlock()
 
-        if let coordinator = coordinator {
-            DispatchQueue.main.async {
-                coordinator.handleTerminalClosed(terminalId: terminalId)
-            }
+        guard let coordinator = coordinatorRef?.value else { return }
+
+        DispatchQueue.main.async { [weak coordinator] in
+            coordinator?.handleTerminalClosed(terminalId: terminalId)
         }
     }
 
     /// 通知对应窗口 Bell 事件
+    ///
+    /// 注意：使用 [weak coordinator] 确保异步执行时如果 coordinator 已释放则跳过
     private func notifyBell(for terminalId: Int) {
         routesLock.lock()
-        let coordinator = terminalRoutes[terminalId]?.value
+        let coordinatorRef = terminalRoutes[terminalId]
         routesLock.unlock()
 
-        if let coordinator = coordinator {
-            DispatchQueue.main.async {
-                coordinator.handleBell(terminalId: terminalId)
-            }
+        guard let coordinator = coordinatorRef?.value else { return }
+
+        DispatchQueue.main.async { [weak coordinator] in
+            coordinator?.handleBell(terminalId: terminalId)
         }
     }
 
     /// 通知对应窗口标题变更
+    ///
+    /// 注意：使用 [weak coordinator] 确保异步执行时如果 coordinator 已释放则跳过
     private func notifyTitleChange(for terminalId: Int, title: String) {
         routesLock.lock()
-        let coordinator = terminalRoutes[terminalId]?.value
+        let coordinatorRef = terminalRoutes[terminalId]
         routesLock.unlock()
 
-        if let coordinator = coordinator {
-            DispatchQueue.main.async {
-                coordinator.handleTitleChange(terminalId: terminalId, title: title)
-            }
+        guard let coordinator = coordinatorRef?.value else { return }
+
+        DispatchQueue.main.async { [weak coordinator] in
+            coordinator?.handleTitleChange(terminalId: terminalId, title: title)
         }
     }
 
@@ -450,6 +458,18 @@ final class GlobalTerminalManager {
     func cleanupStaleRoutes() {
         routesLock.lock()
         terminalRoutes = terminalRoutes.filter { $0.value.value != nil }
+        routesLock.unlock()
+    }
+
+    /// 清理指定 Coordinator 的所有终端路由
+    ///
+    /// 在窗口关闭时调用，确保不会有悬空的弱引用
+    ///
+    /// - Parameter coordinator: 要清理的 Coordinator
+    func cleanupRoutes(for coordinator: TerminalWindowCoordinator) {
+        routesLock.lock()
+        // 移除所有指向该 coordinator 的路由
+        terminalRoutes = terminalRoutes.filter { $0.value.value !== coordinator }
         routesLock.unlock()
     }
 }

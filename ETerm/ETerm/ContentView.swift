@@ -38,8 +38,11 @@ class WindowCwdManager {
 }
 
 struct ContentView: View {
+    /// Coordinator 由 WindowManager 创建和管理，不使用 @StateObject
+    @ObservedObject var coordinator: TerminalWindowCoordinator
+
     var body: some View {
-        RioTerminalView()
+        RioTerminalView(coordinator: coordinator)
             .frame(minWidth: 400, minHeight: 300)
             .ignoresSafeArea()
             .background(
@@ -90,5 +93,10 @@ struct TransparentWindowBackground: NSViewRepresentable {
 }
 
 #Preview {
-    ContentView()
+    // Preview 需要创建一个临时的 Coordinator
+    let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+    let initialPanel = EditorPanel(initialTab: initialTab)
+    let terminalWindow = TerminalWindow(initialPanel: initialPanel)
+    let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+    return ContentView(coordinator: coordinator)
 }

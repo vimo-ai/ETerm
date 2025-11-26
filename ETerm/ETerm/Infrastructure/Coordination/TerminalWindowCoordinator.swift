@@ -153,19 +153,51 @@ class TerminalWindowCoordinator: ObservableObject {
 
 
 
-    deinit {
-        // 关闭所有终端
+    /// 显式清理所有终端（在窗口关闭时调用）
+    ///
+    /// 这个方法应该在 windowWillClose 中调用，而不是依赖 deinit。
+    /// 因为在 deinit 中访问对象可能导致野指针问题。
+    func cleanup() {
+        // 取消所有待处理的渲染任务
+        pendingRenderWorkItem?.cancel()
+        pendingRenderWorkItem = nil
+
+        // 清除渲染视图引用
+        renderView = nil
+
+        // 收集所有终端 ID
+        var terminalIds: [Int] = []
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
                 if let terminalId = tab.rustTerminalId {
-                    if let manager = globalTerminalManager {
-                        _ = manager.closeTerminal(Int(terminalId))
-                    } else {
-                        closeTerminalInternal(Int(terminalId))
-                    }
+                    terminalIds.append(Int(terminalId))
+                    tab.setRustTerminalId(nil)  // 清除引用，防止重复关闭
                 }
             }
         }
+
+        // 关闭终端
+        for terminalId in terminalIds {
+            if let manager = globalTerminalManager {
+                _ = manager.closeTerminal(terminalId)
+            } else {
+                _ = terminalPool.closeTerminal(terminalId)
+            }
+        }
+
+        // 清理全局终端管理器中的路由
+        globalTerminalManager?.cleanupRoutes(for: self)
+
+        // 清除全局终端管理器的引用
+        globalTerminalManager = nil
+    }
+
+    deinit {
+        // 注意：不在 deinit 中访问 terminalWindow.allPanels
+        // 清理工作应该在 cleanup() 中完成
+        // 这里只做最小清理，防止任何野指针访问
+        pendingRenderWorkItem?.cancel()
+        pendingRenderWorkItem = nil
     }
 
     // MARK: - Render Scheduling

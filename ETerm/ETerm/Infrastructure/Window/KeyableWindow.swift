@@ -32,6 +32,10 @@ final class KeyableWindow: NSWindow {
             defer: flag
         )
 
+        // 🔑 关键：防止窗口关闭时自动释放导致 crash
+        // 参考: https://lapcatsoftware.com/articles/working-without-a-nib-part-12.html
+        window.isReleasedWhenClosed = false
+
         // 基础配置
         window.isOpaque = false
         window.backgroundColor = .clear

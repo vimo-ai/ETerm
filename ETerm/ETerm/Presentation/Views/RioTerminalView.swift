@@ -19,18 +19,8 @@ import QuartzCore
 // MARK: - RioTerminalView
 
 struct RioTerminalView: View {
-    @StateObject private var coordinator: TerminalWindowCoordinator
-
-    init() {
-        // 创建初始的 Domain AR
-        let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
-        let initialPanel = EditorPanel(initialTab: initialTab)
-        let terminalWindow = TerminalWindow(initialPanel: initialPanel)
-
-        _coordinator = StateObject(wrappedValue: TerminalWindowCoordinator(
-            initialWindow: terminalWindow
-        ))
-    }
+    /// Coordinator 由 WindowManager 创建和管理，这里只是观察
+    @ObservedObject var coordinator: TerminalWindowCoordinator
 
     var body: some View {
         ZStack {
@@ -123,21 +113,13 @@ class RioContainerView: NSView {
             renderView.coordinator = coordinator
             setupPageBarCallbacks()
             updatePageBar()
-
-            // 注册 Coordinator 到 WindowManager（用于跨窗口操作）
-            if let coordinator = coordinator, let window = self.window {
-                WindowManager.shared.registerCoordinator(coordinator, for: window)
-            }
+            // 注意：Coordinator 的注册现在由 WindowManager 在创建窗口时完成
         }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-
-        // 窗口变化时更新注册
-        if let coordinator = coordinator, let window = self.window {
-            WindowManager.shared.registerCoordinator(coordinator, for: window)
-        }
+        // 注意：Coordinator 的注册现在由 WindowManager 在创建窗口时完成
     }
 
     override init(frame frameRect: NSRect) {
@@ -181,6 +163,22 @@ class RioContainerView: NSView {
             name: NSWindow.didResignKeyNotification,
             object: nil
         )
+
+        // 监听窗口即将关闭（用于清理资源）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillClose),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window == self.window else { return }
+
+        // 窗口关闭前清理资源
+        cleanup()
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
@@ -444,6 +442,25 @@ class RioContainerView: NSView {
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
+
+    /// 清理资源（在窗口关闭前调用）
+    func cleanup() {
+        // 清理 Panel UI 视图
+        for (_, view) in panelUIViews {
+            view.removeFromSuperview()
+        }
+        panelUIViews.removeAll()
+
+        // 清理分割线视图
+        dividerViews.forEach { $0.removeFromSuperview() }
+        dividerViews.removeAll()
+
+        // 清理渲染视图
+        renderView.cleanup()
+
+        // 断开 coordinator 引用
+        coordinator = nil
+    }
 }
 
 // MARK: - RioMetalView
@@ -553,6 +570,14 @@ class RioMetalView: NSView, RenderViewProtocol {
                 object: window
             )
 
+            // 监听窗口即将关闭（用于清理资源）
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowWillClose),
+                name: NSWindow.willCloseNotification,
+                object: window
+            )
+
             // 不管 isKeyWindow 状态，都尝试初始化
             // 使用延迟确保视图布局完成
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -561,6 +586,11 @@ class RioMetalView: NSView, RenderViewProtocol {
         } else {
             NotificationCenter.default.removeObserver(self)
         }
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        // 窗口关闭前清理资源
+        cleanup()
     }
 
     /// 窗口切换屏幕时更新 scale（DPI 变化）
@@ -585,8 +615,9 @@ class RioMetalView: NSView, RenderViewProtocol {
             updateFontMetricsFromSugarloaf(sugarloaf)
 
             // 更新 CoordinateMapper
-            coordinateMapper = CoordinateMapper(scale: newScale, containerBounds: bounds)
-            coordinator?.setCoordinateMapper(coordinateMapper!)
+            let mapper = CoordinateMapper(scale: newScale, containerBounds: bounds)
+            coordinateMapper = mapper
+            coordinator?.setCoordinateMapper(mapper)
 
             // 触发 resize（使用新的 scale 计算物理尺寸）
             let width = Float(bounds.width * newScale)
@@ -629,8 +660,9 @@ class RioMetalView: NSView, RenderViewProtocol {
             sugarloaf_resize(sugarloaf, width, height)
 
             // 更新 coordinateMapper
-            coordinateMapper = CoordinateMapper(scale: scale, containerBounds: bounds)
-            coordinator?.setCoordinateMapper(coordinateMapper!)
+            let mapper = CoordinateMapper(scale: scale, containerBounds: bounds)
+            coordinateMapper = mapper
+            coordinator?.setCoordinateMapper(mapper)
 
             requestRender()
         }
@@ -667,8 +699,9 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 这里先不获取，等 renderTerminal 中创建 RichText 后再更新
 
         // 创建 CoordinateMapper（使用前面定义的 effectiveScale）
-        coordinateMapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
-        coordinator?.setCoordinateMapper(coordinateMapper!)
+        let mapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
+        coordinateMapper = mapper
+        coordinator?.setCoordinateMapper(mapper)
 
         // 初始化全局终端管理器（第一个窗口时）
         if !terminalManager.isInitialized {
@@ -727,7 +760,9 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 2. 遍历每个终端，构建 RichText 内容并累积到列表
     /// 3. 统一提交所有 objects 并渲染
     private func render() {
-        guard let sugarloaf = sugarloaf,
+        // 关键检查：如果已清理或未初始化，不执行渲染
+        guard isInitialized,
+              let sugarloaf = sugarloaf,
               let coordinator = coordinator else { return }
 
         // 从 coordinator 获取所有需要渲染的终端
@@ -1466,6 +1501,27 @@ class RioMetalView: NSView, RenderViewProtocol {
             _ = terminalManager.scroll(terminalId: Int(terminalId), deltaLines: delta)
             requestRender()
         }
+    }
+
+    /// 清理资源（在窗口关闭前调用）
+    ///
+    /// 必须在主线程调用，确保 Metal 渲染完成后再释放资源
+    func cleanup() {
+        // 标记为未初始化，阻止后续渲染
+        isInitialized = false
+
+        // 清除 coordinator 引用
+        coordinator = nil
+
+        // 清除 richTextIds（不再需要渲染）
+        richTextIds.removeAll()
+
+        // 清除坐标映射器
+        coordinateMapper = nil
+
+        // 注意：不在这里释放 sugarloaf handle
+        // 因为 GlobalTerminalManager 可能还在使用同一个 Sugarloaf 实例
+        // Sugarloaf 的生命周期由 GlobalTerminalManager 管理
     }
 
     deinit {

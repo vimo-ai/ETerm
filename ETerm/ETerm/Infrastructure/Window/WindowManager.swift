@@ -86,8 +86,14 @@ final class WindowManager: NSObject {
             styleMask: [.borderless, .resizable, .miniaturizable, .closable]
         )
 
-        // 设置内容视图
-        let contentView = ContentView()
+        // 🔑 关键：在 WindowManager 中创建 Coordinator，而不是在 SwiftUI 中
+        let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+        let initialPanel = EditorPanel(initialTab: initialTab)
+        let terminalWindow = TerminalWindow(initialPanel: initialPanel)
+        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+
+        // 设置内容视图，传入 Coordinator
+        let contentView = ContentView(coordinator: coordinator)
         let hostingView = NSHostingView(rootView: contentView)
         window.contentView = hostingView
 
@@ -101,6 +107,10 @@ final class WindowManager: NSObject {
 
         // 监听窗口关闭
         window.delegate = self
+
+        // 🔑 注册 Coordinator（在窗口有 windowNumber 之后）
+        // 注意：此时窗口还没显示，但 windowNumber 已经分配
+        coordinators[window.windowNumber] = coordinator
 
         // 添加到列表
         windows.append(window)
@@ -208,8 +218,14 @@ final class WindowManager: NSObject {
             styleMask: [.borderless, .resizable, .miniaturizable, .closable]
         )
 
-        // 3. 设置内容视图（普通 ContentView，新终端）
-        let contentView = ContentView()
+        // 🔑 在 WindowManager 中创建 Coordinator
+        let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+        let initialPanel = EditorPanel(initialTab: initialTab)
+        let terminalWindow = TerminalWindow(initialPanel: initialPanel)
+        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+
+        // 3. 设置内容视图，传入 Coordinator
+        let contentView = ContentView(coordinator: coordinator)
         let hostingView = NSHostingView(rootView: contentView)
         window.contentView = hostingView
 
@@ -223,6 +239,9 @@ final class WindowManager: NSObject {
 
         // 监听窗口关闭
         window.delegate = self
+
+        // 🔑 注册 Coordinator
+        coordinators[window.windowNumber] = coordinator
 
         // 添加到列表
         windows.append(window)
@@ -315,8 +334,14 @@ final class WindowManager: NSObject {
             styleMask: [.borderless, .resizable, .miniaturizable, .closable]
         )
 
-        // 3. 设置内容视图（普通 ContentView，新终端）
-        let contentView = ContentView()
+        // 🔑 在 WindowManager 中创建 Coordinator
+        let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+        let initialPanel = EditorPanel(initialTab: initialTab)
+        let terminalWindow = TerminalWindow(initialPanel: initialPanel)
+        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+
+        // 3. 设置内容视图，传入 Coordinator
+        let contentView = ContentView(coordinator: coordinator)
         let hostingView = NSHostingView(rootView: contentView)
         window.contentView = hostingView
 
@@ -330,6 +355,9 @@ final class WindowManager: NSObject {
 
         // 监听窗口关闭
         window.delegate = self
+
+        // 🔑 注册 Coordinator
+        coordinators[window.windowNumber] = coordinator
 
         // 添加到列表
         windows.append(window)
@@ -519,7 +547,21 @@ final class WindowManager: NSObject {
 extension WindowManager: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? KeyableWindow else { return }
+
+        // 关键：在注销 Coordinator 之前，先调用 cleanup() 清理终端
+        // 这样可以确保在对象开始释放之前完成清理
+        if let coordinator = coordinators[window.windowNumber] {
+            coordinator.cleanup()
+        }
+
         unregisterCoordinator(for: window)
         removeWindow(window)
+
+        // 🔑 关键：清除 delegate 引用，防止窗口释放后回调导致 crash
+        // 参考: https://stackoverflow.com/questions/65116534
+        window.delegate = nil
+
+        // 清除 contentView，帮助释放 SwiftUI 视图层级
+        window.contentView = nil
     }
 }
