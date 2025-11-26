@@ -209,6 +209,8 @@ final class PageBarHostingView: NSView {
     var onPageRename: ((UUID, String) -> Void)?
     var onAddPage: (() -> Void)?
     var onPageReorder: (([UUID]) -> Void)?
+    var onPageDragOutOfWindow: ((UUID, NSPoint) -> Void)?
+    var onPageReceivedFromOtherWindow: ((UUID, Int) -> Void)?  // pageId, sourceWindowNumber
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -264,6 +266,10 @@ final class PageBarHostingView: NSView {
 
             pageView.onDragStart = { [weak self] in
                 self?.draggingPageId = page.id
+            }
+
+            pageView.onDragOutOfWindow = { [weak self] screenPoint in
+                self?.onPageDragOutOfWindow?(page.id, screenPoint)
             }
 
             pageContainer.addSubview(pageView)
@@ -327,10 +333,30 @@ final class PageBarHostingView: NSView {
 // MARK: - NSDraggingDestination
 
 extension PageBarHostingView {
+    /// 解析拖拽数据
+    /// 格式：page:{windowNumber}:{pageId}
+    private func parseDragData(_ pasteboardString: String) -> (windowNumber: Int, pageId: UUID)? {
+        guard pasteboardString.hasPrefix("page:") else { return nil }
+
+        let components = pasteboardString.components(separatedBy: ":")
+        // 兼容旧格式 page:{pageId} 和新格式 page:{windowNumber}:{pageId}
+        if components.count == 2 {
+            // 旧格式
+            guard let pageId = UUID(uuidString: components[1]) else { return nil }
+            return (window?.windowNumber ?? 0, pageId)
+        } else if components.count == 3 {
+            // 新格式
+            guard let windowNumber = Int(components[1]),
+                  let pageId = UUID(uuidString: components[2]) else { return nil }
+            return (windowNumber, pageId)
+        }
+        return nil
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         // 检查是否是 Page 拖拽
         guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
-              pasteboardString.hasPrefix("page:") else {
+              parseDragData(pasteboardString) != nil else {
             return []
         }
         return .move
@@ -338,7 +364,7 @@ extension PageBarHostingView {
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
-              pasteboardString.hasPrefix("page:") else {
+              parseDragData(pasteboardString) != nil else {
             return []
         }
 
@@ -348,8 +374,23 @@ extension PageBarHostingView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
-              pasteboardString.hasPrefix("page:"),
-              let draggingId = draggingPageId else {
+              let dragData = parseDragData(pasteboardString) else {
+            return false
+        }
+
+        let sourceWindowNumber = dragData.windowNumber
+        let pageId = dragData.pageId
+        let currentWindowNumber = window?.windowNumber ?? 0
+
+        // 检查是否是跨窗口拖拽
+        if sourceWindowNumber != currentWindowNumber {
+            // 跨窗口移动
+            onPageReceivedFromOtherWindow?(pageId, sourceWindowNumber)
+            return true
+        }
+
+        // 同窗口内重排序
+        guard let draggingId = draggingPageId else {
             return false
         }
 

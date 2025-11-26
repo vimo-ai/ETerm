@@ -123,6 +123,20 @@ class RioContainerView: NSView {
             renderView.coordinator = coordinator
             setupPageBarCallbacks()
             updatePageBar()
+
+            // 注册 Coordinator 到 WindowManager（用于跨窗口操作）
+            if let coordinator = coordinator, let window = self.window {
+                WindowManager.shared.registerCoordinator(coordinator, for: window)
+            }
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+
+        // 窗口变化时更新注册
+        if let coordinator = coordinator, let window = self.window {
+            WindowManager.shared.registerCoordinator(coordinator, for: window)
         }
     }
 
@@ -211,6 +225,28 @@ class RioContainerView: NSView {
 
         pageBarView.onPageReorder = { [weak coordinator] pageIds in
             _ = coordinator?.reorderPages(pageIds)
+        }
+
+        // 跨窗口拖拽：Page 拖出当前窗口
+        pageBarView.onPageDragOutOfWindow = { [weak coordinator, weak self] pageId, screenPoint in
+            guard let coordinator = coordinator,
+                  let page = coordinator.terminalWindow.pages.first(where: { $0.pageId == pageId }) else {
+                return
+            }
+            // 创建新窗口
+            WindowManager.shared.createWindowWithPage(page, from: coordinator, at: screenPoint)
+        }
+
+        // 跨窗口拖拽：从其他窗口接收 Page
+        pageBarView.onPageReceivedFromOtherWindow = { [weak self] pageId, sourceWindowNumber in
+            guard let self = self,
+                  let targetWindow = self.window,
+                  let coordinator = self.coordinator else {
+                return
+            }
+
+            let targetWindowNumber = targetWindow.windowNumber
+            WindowManager.shared.movePage(pageId, from: sourceWindowNumber, to: targetWindowNumber)
         }
     }
 
@@ -419,7 +455,9 @@ class RioMetalView: NSView, RenderViewProtocol {
     private var sugarloaf: SugarloafHandle?
     /// 多终端支持：每个终端一个独立的 richTextId
     private var richTextIds: [Int: Int] = [:]
-    private var terminalPool: RioTerminalPoolWrapper?
+
+    /// 全局终端管理器（便捷访问）
+    private var terminalManager: GlobalTerminalManager { GlobalTerminalManager.shared }
 
     /// 字体度量（从 Sugarloaf 获取）
     private var cellWidth: CGFloat = 8.0
@@ -498,10 +536,8 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        print("🔵 [RioMetalView] viewDidMoveToWindow called, window: \(window != nil)")
 
         if let window = window {
-            print("🔵 [RioMetalView] window.isKeyWindow: \(window.isKeyWindow)")
             NotificationCenter.default.addObserver(
                 self,
                 selector: #selector(windowDidBecomeKey),
@@ -565,28 +601,16 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     @objc private func windowDidBecomeKey() {
-        print("🔵 [RioMetalView] windowDidBecomeKey called")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.initialize()
         }
     }
 
     private func initialize() {
-        print("🔵 [RioMetalView] initialize() called, isInitialized: \(isInitialized), window: \(window != nil), bounds: \(bounds)")
-        guard !isInitialized else {
-            print("🔵 [RioMetalView] Already initialized, skipping")
-            return
-        }
-        guard window != nil else {
-            print("🔴 [RioMetalView] No window, skipping")
-            return
-        }
-        guard bounds.width > 0 && bounds.height > 0 else {
-            print("🔴 [RioMetalView] Invalid bounds, skipping")
-            return
-        }
+        guard !isInitialized else { return }
+        guard window != nil else { return }
+        guard bounds.width > 0 && bounds.height > 0 else { return }
 
-        print("🟢 [RioMetalView] Starting initialization...")
         isInitialized = true
         initializeSugarloaf()
     }
@@ -615,25 +639,19 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - Sugarloaf Initialization
 
     private func initializeSugarloaf() {
-        print("🔵 [RioMetalView] initializeSugarloaf() called")
-        guard let window = window else {
-            print("🔴 [RioMetalView] No window in initializeSugarloaf")
-            return
-        }
+        guard let window = window else { return }
 
         // 优先使用 window 关联的 screen 的 scale，更可靠
         let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
         let scale = Float(effectiveScale)
         let width = Float(bounds.width) * scale
         let height = Float(bounds.height) * scale
-        print("🔵 [RioMetalView] scale: \(scale), width: \(width), height: \(height)")
 
         layer?.contentsScale = effectiveScale
 
         let viewPointer = Unmanaged.passUnretained(self).toOpaque()
         let windowHandle = UnsafeMutableRawPointer(mutating: viewPointer)
 
-        print("🔵 [RioMetalView] Calling sugarloaf_new...")
         sugarloaf = sugarloaf_new(
             windowHandle,
             windowHandle,
@@ -643,11 +661,7 @@ class RioMetalView: NSView, RenderViewProtocol {
             14.0
         )
 
-        guard let sugarloaf = sugarloaf else {
-            print("🔴 [RioMetalView] Failed to create Sugarloaf")
-            return
-        }
-        print("🟢 [RioMetalView] Sugarloaf created successfully")
+        guard let sugarloaf = sugarloaf else { return }
 
         // fontMetrics 会在第一次创建 RichText 后更新为真实值
         // 这里先不获取，等 renderTerminal 中创建 RichText 后再更新
@@ -656,29 +670,18 @@ class RioMetalView: NSView, RenderViewProtocol {
         coordinateMapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
         coordinator?.setCoordinateMapper(coordinateMapper!)
 
-        // 创建终端池
-        print("🔵 [RioMetalView] Creating RioTerminalPoolWrapper...")
-        terminalPool = RioTerminalPoolWrapper(sugarloafHandle: sugarloaf)
-        print("🟢 [RioMetalView] RioTerminalPoolWrapper created")
-
-        // 设置渲染回调
-        terminalPool?.onNeedsRender = { [weak self] in
-            self?.requestRender()
+        // 初始化全局终端管理器（第一个窗口时）
+        if !terminalManager.isInitialized {
+            terminalManager.initialize(with: sugarloaf)
         }
 
-        // 设置终端池到 coordinator
-        if let pool = terminalPool {
-            print("🔵 [RioMetalView] Setting terminalPool to coordinator...")
-            coordinator?.setTerminalPool(pool)
-            print("🟢 [RioMetalView] terminalPool set to coordinator")
-        } else {
-            print("🔴 [RioMetalView] terminalPool is nil!")
+        // 注册 coordinator 到全局终端管理器
+        if let coordinator = coordinator {
+            coordinator.setGlobalTerminalManager(terminalManager)
         }
 
         // 初始渲染
-        print("🔵 [RioMetalView] Requesting initial render...")
         requestRender()
-        print("🟢 [RioMetalView] initializeSugarloaf() completed")
     }
 
     // MARK: - RenderViewProtocol
@@ -725,7 +728,6 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 3. 统一提交所有 objects 并渲染
     private func render() {
         guard let sugarloaf = sugarloaf,
-              let pool = terminalPool,
               let coordinator = coordinator else { return }
 
         // 从 coordinator 获取所有需要渲染的终端
@@ -745,8 +747,7 @@ class RioMetalView: NSView, RenderViewProtocol {
             renderTerminal(
                 terminalId: Int(terminalId),
                 contentBounds: contentBounds,
-                sugarloaf: sugarloaf,
-                pool: pool
+                sugarloaf: sugarloaf
             )
         }
 
@@ -760,11 +761,10 @@ class RioMetalView: NSView, RenderViewProtocol {
     private func renderTerminal(
         terminalId: Int,
         contentBounds: CGRect,
-        sugarloaf: SugarloafHandle,
-        pool: RioTerminalPoolWrapper
+        sugarloaf: SugarloafHandle
     ) {
         guard let mapper = coordinateMapper else { return }
-        guard let snapshot = pool.getSnapshot(terminalId: terminalId) else { return }
+        guard let snapshot = terminalManager.getSnapshot(terminalId: terminalId) else { return }
 
         // 1. 坐标转换：Swift 坐标 → Rust 逻辑坐标（Y 轴翻转）
         let logicalRect = mapper.swiftToRust(rect: contentBounds)
@@ -779,7 +779,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 3. Resize 终端（如果 cols/rows 变化了）
         if cols != snapshot.columns || rows != snapshot.screen_lines {
-            _ = pool.resize(terminalId: terminalId, cols: cols, rows: rows)
+            _ = terminalManager.resize(terminalId: terminalId, cols: cols, rows: rows)
         }
 
         // 4. 获取或创建该终端的 richTextId
@@ -817,7 +817,7 @@ class RioMetalView: NSView, RenderViewProtocol {
             }
 
             let colsToRender = cols > 0 ? Int(cols) : Int(snapshot.columns)
-            let cells = pool.getRowCells(terminalId: terminalId, rowIndex: rowIndex, maxCells: colsToRender)
+            let cells = terminalManager.getRowCells(terminalId: terminalId, rowIndex: rowIndex, maxCells: colsToRender)
 
             renderLine(
                 content: sugarloaf,
@@ -1041,18 +1041,23 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 拦截系统快捷键
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        print("🔵 [RioMetalView] performKeyEquivalent called, keyCode: \(event.keyCode), characters: \(event.characters ?? "nil")")
+        // 如果 InlineComposer 正在显示，放行事件给文本框
+        // 只保留 Cmd+K 的处理（用于关闭 composer）
+        if coordinator?.showInlineComposer == true {
+            if let keyboardSystem = coordinator?.keyboardSystem {
+                let keyStroke = KeyStroke.from(event)
+                // Cmd+K 关闭 composer
+                if keyStroke.matches(.cmd("k")) {
+                    coordinator?.showInlineComposer = false
+                    return true
+                }
+            }
+            return false  // 其他事件放行给 composer 文本框
+        }
+
         // 如果有 KeyboardSystem，使用它处理
         if let keyboardSystem = coordinator?.keyboardSystem {
             let keyStroke = KeyStroke.from(event)
-
-            // 对于编辑类快捷键，检查焦点是否在终端内
-            // 如果焦点在对话框等其他 view，则不拦截，让事件传递给有焦点的 view
-            if keyStroke.matches(.cmd("v")) || keyStroke.matches(.cmd("c")) {
-                if !isFirstResponderInTerminal() {
-                    return false  // 焦点不在终端，不拦截
-                }
-            }
 
             // 需要拦截的系统快捷键
             let interceptedShortcuts: [KeyStroke] = [
@@ -1097,7 +1102,6 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     override func keyDown(with event: NSEvent) {
-        print("🔵 [RioMetalView] keyDown called, keyCode: \(event.keyCode), characters: \(event.characters ?? "nil")")
         lastTypingTime = Date()
         isBlinkingCursorVisible = true
         lastBlinkToggle = nil
@@ -1117,22 +1121,21 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 降级处理：直接发送到当前终端
-        guard let terminalId = coordinator?.getActiveTerminalId(),
-              let pool = terminalPool else {
+        guard let terminalId = coordinator?.getActiveTerminalId() else {
             super.keyDown(with: event)
             return
         }
 
         let keyStroke = KeyStroke.from(event)
 
-        if handleEditShortcut(keyStroke, pool: pool, terminalId: Int(terminalId)) {
+        if handleEditShortcut(keyStroke, terminalId: Int(terminalId)) {
             return
         }
 
         if shouldHandleDirectly(keyStroke) {
             let sequence = keyStroke.toTerminalSequence()
             if !sequence.isEmpty {
-                _ = pool.writeInput(terminalId: Int(terminalId), data: sequence)
+                _ = terminalManager.writeInput(terminalId: Int(terminalId), data: sequence)
             }
         } else {
             interpretKeyEvents([event])
@@ -1140,7 +1143,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     /// 处理编辑快捷键
-    private func handleEditShortcut(_ keyStroke: KeyStroke, pool: RioTerminalPoolWrapper, terminalId: Int) -> Bool {
+    private func handleEditShortcut(_ keyStroke: KeyStroke, terminalId: Int) -> Bool {
         // Cmd+C 复制选中文本
         if keyStroke.matches(.cmd("c")) {
             return handleCopy(terminalId: UInt32(terminalId))
@@ -1149,7 +1152,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         // Cmd+V 粘贴
         if keyStroke.matches(.cmd("v")) {
             if let text = NSPasteboard.general.string(forType: .string) {
-                _ = pool.writeInput(terminalId: terminalId, data: text)
+                _ = terminalManager.writeInput(terminalId: terminalId, data: text)
             }
             return true
         }
@@ -1215,9 +1218,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - 鼠标事件
 
     override func mouseDown(with event: NSEvent) {
-        print("🔵 [RioMetalView] mouseDown called")
-        let result = window?.makeFirstResponder(self)
-        print("🔵 [RioMetalView] makeFirstResponder result: \(String(describing: result))")
+        window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
 
@@ -1266,15 +1267,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     // MARK: - 双击选中单词
 
-    /// 单词分隔符
-    private static let wordDelimiters: CharacterSet = {
-        var set = CharacterSet.whitespaces
-        set.formUnion(.punctuationCharacters)
-        set.formUnion(CharacterSet(charactersIn: "()[]{}\"'`<>=/\\|@#$%^&*+~"))
-        return set
-    }()
-
-    /// 双击选中单词
+    /// 双击选中单词（使用 WordBoundaryDetector 支持中文分词）
     private func selectWordAt(
         gridPos: CursorPosition,
         activeTab: TerminalTab,
@@ -1282,45 +1275,28 @@ class RioMetalView: NSView, RenderViewProtocol {
         panelId: UUID,
         event: NSEvent
     ) {
-        guard let pool = terminalPool else { return }
-
         let row = Int(gridPos.row)
         let col = Int(gridPos.col)
 
         // 获取该行的所有单元格
-        let cells = pool.getRowCells(terminalId: Int(terminalId), rowIndex: row, maxCells: 500)
+        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), rowIndex: row, maxCells: 500)
         guard !cells.isEmpty else { return }
 
-        // 判断字符是否为分隔符
-        func isDelimiter(_ char: UInt32) -> Bool {
-            guard let scalar = UnicodeScalar(char) else { return true }
-            return Self.wordDelimiters.contains(scalar) || char == 0 || char == 32
-        }
+        // 将单元格转换为字符串
+        let lineText = cells.map { cell in
+            guard let scalar = UnicodeScalar(cell.character) else { return " " }
+            return String(Character(scalar))
+        }.joined()
 
-        // 当前位置的字符
-        guard col < cells.count else { return }
-        let currentChar = cells[col].character
-
-        // 如果点击的是分隔符，不选中
-        if isDelimiter(currentChar) {
+        // 使用 WordBoundaryDetector 查找词边界
+        let detector = WordBoundaryDetector()
+        guard let boundary = detector.findBoundary(in: lineText, at: col) else {
             return
         }
 
-        // 向左找单词起点
-        var startCol = col
-        while startCol > 0 && !isDelimiter(cells[startCol - 1].character) {
-            startCol -= 1
-        }
-
-        // 向右找单词终点
-        var endCol = col
-        while endCol < cells.count - 1 && !isDelimiter(cells[endCol + 1].character) {
-            endCol += 1
-        }
-
         // 设置选区
-        let startPos = CursorPosition(col: UInt16(startCol), row: UInt16(row))
-        let endPos = CursorPosition(col: UInt16(endCol), row: UInt16(row))
+        let startPos = CursorPosition(col: UInt16(boundary.startIndex), row: UInt16(row))
+        let endPos = CursorPosition(col: UInt16(boundary.endIndex - 1), row: UInt16(row))
 
         activeTab.startSelection(at: startPos)
         activeTab.updateSelection(to: endPos)
@@ -1338,17 +1314,15 @@ class RioMetalView: NSView, RenderViewProtocol {
         selectionPanelId = panelId
         selectionTab = activeTab
 
-        // 显示翻译气泡
-        if let text = coordinator?.getSelectedText(terminalId: terminalId, selection: activeTab.textSelection!) {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                let mouseLoc = self.convert(event.locationInWindow, from: nil)
-                let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
+        // 显示翻译气泡（使用检测到的文本）
+        let trimmed = boundary.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            let mouseLoc = self.convert(event.locationInWindow, from: nil)
+            let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
 
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    TranslationPopover.shared.show(text: trimmed, at: rect, in: self)
-                }
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                TranslationPopover.shared.show(text: trimmed, at: rect, in: self)
             }
         }
     }
@@ -1480,8 +1454,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     override func scrollWheel(with event: NSEvent) {
         guard let coordinator = coordinator,
-              let terminalId = coordinator.getActiveTerminalId(),
-              let pool = terminalPool else {
+              let terminalId = coordinator.getActiveTerminalId() else {
             super.scrollWheel(with: event)
             return
         }
@@ -1490,7 +1463,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         let delta = Int32(deltaY / 3)
 
         if delta != 0 {
-            _ = pool.scroll(terminalId: Int(terminalId), deltaLines: delta)
+            _ = terminalManager.scroll(terminalId: Int(terminalId), deltaLines: delta)
             requestRender()
         }
     }
@@ -1561,7 +1534,7 @@ extension RioMetalView: NSTextInputClient {
 
         // 获取光标位置用于输入法候选框定位
         if let terminalId = coordinator?.getActiveTerminalId(),
-           let cursor = terminalPool?.getCursorPosition(terminalId: Int(terminalId)) {
+           let cursor = terminalManager.getCursor(terminalId: Int(terminalId)) {
             let x = CGFloat(cursor.col) * cellWidth
             let y = bounds.height - CGFloat(cursor.row + 1) * cellHeight
 
@@ -1591,8 +1564,7 @@ extension RioMetalView: NSTextInputClient {
         let committedText = imeCoord.commitText(text)
 
         // 发送到终端
-        guard let terminalId = coordinator?.getActiveTerminalId(),
-              let pool = terminalPool else { return }
-        _ = pool.writeInput(terminalId: Int(terminalId), data: committedText)
+        guard let terminalId = coordinator?.getActiveTerminalId() else { return }
+        _ = terminalManager.writeInput(terminalId: Int(terminalId), data: committedText)
     }
 }

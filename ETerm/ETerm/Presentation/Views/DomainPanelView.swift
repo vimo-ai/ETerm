@@ -108,6 +108,19 @@ final class DomainPanelView: NSView {
         headerView.onTabReorder = { [weak self] tabIds in
             self?.handleTabReorder(tabIds)
         }
+
+        // 跨窗口拖拽：Tab 拖出当前窗口
+        headerView.onTabDragOutOfWindow = { [weak self] tabId, screenPoint in
+            self?.handleTabDragOutOfWindow(tabId, screenPoint: screenPoint)
+        }
+
+        // 跨窗口拖拽：从其他窗口接收 Tab
+        headerView.onTabReceivedFromOtherWindow = { [weak self] tabId, sourcePanelId, sourceWindowNumber in
+            self?.handleTabReceivedFromOtherWindow(tabId, sourcePanelId: sourcePanelId, sourceWindowNumber: sourceWindowNumber)
+        }
+
+        // 设置 panelId（用于拖拽数据）
+        headerView.panelId = panel?.panelId
     }
 
     // MARK: - Update
@@ -192,6 +205,29 @@ final class DomainPanelView: NSView {
               let coordinator = coordinator else { return }
 
         coordinator.handleTabReorder(panelId: panel.panelId, tabIds: tabIds)
+    }
+
+    private func handleTabDragOutOfWindow(_ tabId: UUID, screenPoint: NSPoint) {
+        guard let panel = panel,
+              let coordinator = coordinator,
+              let tab = panel.tabs.first(where: { $0.tabId == tabId }) else {
+            return
+        }
+
+        // 创建新窗口
+        WindowManager.shared.createWindowWithTab(tab, from: panel.panelId, sourceCoordinator: coordinator, at: screenPoint)
+    }
+
+    private func handleTabReceivedFromOtherWindow(_ tabId: UUID, sourcePanelId: UUID, sourceWindowNumber: Int) {
+        guard let panel = panel,
+              let targetWindow = window else {
+            return
+        }
+
+        let targetWindowNumber = targetWindow.windowNumber
+        let targetPanelId = panel.panelId
+
+        WindowManager.shared.moveTab(tabId, from: sourcePanelId, sourceWindowNumber: sourceWindowNumber, to: targetPanelId, targetWindowNumber: targetWindowNumber)
     }
 
     // MARK: - Drop Zone Calculation

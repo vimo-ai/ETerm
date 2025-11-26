@@ -126,6 +126,9 @@ final class PanelHeaderHostingView: NSView {
     // 拖拽相关
     private var draggingTabId: UUID?
 
+    // 所属 Panel ID
+    var panelId: UUID?
+
     // 回调
     var onTabClick: ((UUID) -> Void)?
     var onTabClose: ((UUID) -> Void)?
@@ -133,6 +136,8 @@ final class PanelHeaderHostingView: NSView {
     var onAddTab: (() -> Void)?
     var onSplitHorizontal: (() -> Void)?
     var onTabReorder: (([UUID]) -> Void)?
+    var onTabDragOutOfWindow: ((UUID, NSPoint) -> Void)?
+    var onTabReceivedFromOtherWindow: ((UUID, UUID, Int) -> Void)?  // tabId, sourcePanelId, sourceWindowNumber
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -191,6 +196,13 @@ final class PanelHeaderHostingView: NSView {
             tabView.onDragStart = { [weak self] in
                 self?.draggingTabId = tab.id
             }
+
+            tabView.onDragOutOfWindow = { [weak self] screenPoint in
+                self?.onTabDragOutOfWindow?(tab.id, screenPoint)
+            }
+
+            // 设置所属 Panel ID（用于拖拽数据）
+            tabView.panelId = panelId
 
             tabContainer.addSubview(tabView)
             tabItemViews.append(tabView)
@@ -251,10 +263,31 @@ final class PanelHeaderHostingView: NSView {
 // MARK: - NSDraggingDestination
 
 extension PanelHeaderHostingView {
+    /// 解析拖拽数据
+    /// 格式：tab:{windowNumber}:{panelId}:{tabId}
+    private func parseTabDragData(_ pasteboardString: String) -> (windowNumber: Int, sourcePanelId: UUID, tabId: UUID)? {
+        guard pasteboardString.hasPrefix("tab:") else { return nil }
+
+        let components = pasteboardString.components(separatedBy: ":")
+        // 兼容旧格式 tab:{tabId} 和新格式 tab:{windowNumber}:{panelId}:{tabId}
+        if components.count == 2 {
+            // 旧格式
+            guard let tabId = UUID(uuidString: components[1]) else { return nil }
+            return (window?.windowNumber ?? 0, panelId ?? UUID(), tabId)
+        } else if components.count == 4 {
+            // 新格式
+            guard let windowNumber = Int(components[1]),
+                  let sourcePanelId = UUID(uuidString: components[2]),
+                  let tabId = UUID(uuidString: components[3]) else { return nil }
+            return (windowNumber, sourcePanelId, tabId)
+        }
+        return nil
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         // 检查是否是 Tab 拖拽
         guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
-              pasteboardString.hasPrefix("tab:") else {
+              parseTabDragData(pasteboardString) != nil else {
             return []
         }
         return .move
@@ -262,7 +295,7 @@ extension PanelHeaderHostingView {
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
-              pasteboardString.hasPrefix("tab:") else {
+              parseTabDragData(pasteboardString) != nil else {
             return []
         }
 
@@ -272,8 +305,24 @@ extension PanelHeaderHostingView {
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let pasteboardString = sender.draggingPasteboard.string(forType: .string),
-              pasteboardString.hasPrefix("tab:"),
-              let draggingId = draggingTabId else {
+              let dragData = parseTabDragData(pasteboardString) else {
+            return false
+        }
+
+        let sourceWindowNumber = dragData.windowNumber
+        let sourcePanelId = dragData.sourcePanelId
+        let tabId = dragData.tabId
+        let currentWindowNumber = window?.windowNumber ?? 0
+
+        // 检查是否是跨窗口拖拽
+        if sourceWindowNumber != currentWindowNumber {
+            // 跨窗口移动
+            onTabReceivedFromOtherWindow?(tabId, sourcePanelId, sourceWindowNumber)
+            return true
+        }
+
+        // 同窗口内重排序
+        guard let draggingId = draggingTabId else {
             return false
         }
 

@@ -53,6 +53,12 @@ final class TabItemView: NSView {
     /// 重命名回调
     var onRename: ((String) -> Void)?
 
+    /// 拖出窗口回调（屏幕坐标）
+    var onDragOutOfWindow: ((NSPoint) -> Void)?
+
+    /// 所属 Panel ID（用于拖拽数据）
+    var panelId: UUID?
+
     // MARK: - 编辑相关
 
     /// 编辑框
@@ -279,13 +285,24 @@ final class TabItemView: NSView {
 extension TabItemView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        return .move
+        // 允许在窗口外部移动（用于创建新窗口）
+        return context == .outsideApplication ? .move : .move
     }
 
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
-        // 拖拽结束（由目标处理布局更新）
+        // 拖拽结束
+        // 如果操作为 none（没有被任何目标接收），检查是否拖出了所有窗口
+        if operation == [] {
+            // 检查是否在任何窗口内
+            let isInAnyWindow = WindowManager.shared.findWindow(at: screenPoint) != nil
+
+            if !isInAnyWindow {
+                // 拖出了所有窗口，通知回调创建新窗口
+                onDragOutOfWindow?(screenPoint)
+            }
+        }
     }
 }
 
@@ -295,8 +312,11 @@ extension TabItemView: NSPasteboardItemDataProvider {
     func pasteboard(_ pasteboard: NSPasteboard?,
                     item: NSPasteboardItem,
                     provideDataForType type: NSPasteboard.PasteboardType) {
-        // 提供拖拽数据（Tab ID）- 使用 "tab:" 前缀与 Page 区分
-        item.setString("tab:\(tabId.uuidString)", forType: .string)
+        // 提供拖拽数据（包含窗口编号、Panel ID 和 Tab ID）
+        // 格式：tab:{windowNumber}:{panelId}:{tabId}
+        let windowNumber = window?.windowNumber ?? 0
+        let panelIdString = panelId?.uuidString ?? ""
+        item.setString("tab:\(windowNumber):\(panelIdString):\(tabId.uuidString)", forType: .string)
     }
 }
 

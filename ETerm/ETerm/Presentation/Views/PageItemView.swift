@@ -56,6 +56,9 @@ final class PageItemView: NSView {
     /// 重命名回调
     var onRename: ((String) -> Void)?
 
+    /// 拖出窗口回调（屏幕坐标）
+    var onDragOutOfWindow: ((NSPoint) -> Void)?
+
     // MARK: - 编辑相关
 
     /// 编辑框
@@ -306,13 +309,24 @@ final class PageItemView: NSView {
 extension PageItemView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        return .move
+        // 允许在窗口外部移动（用于创建新窗口）
+        return context == .outsideApplication ? .move : .move
     }
 
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
-        // 拖拽结束（由目标处理布局更新）
+        // 拖拽结束
+        // 如果操作为 none（没有被任何目标接收），检查是否拖出了所有窗口
+        if operation == [] {
+            // 检查是否在任何窗口内
+            let isInAnyWindow = WindowManager.shared.findWindow(at: screenPoint) != nil
+
+            if !isInAnyWindow {
+                // 拖出了所有窗口，通知回调创建新窗口
+                onDragOutOfWindow?(screenPoint)
+            }
+        }
     }
 }
 
@@ -322,8 +336,10 @@ extension PageItemView: NSPasteboardItemDataProvider {
     func pasteboard(_ pasteboard: NSPasteboard?,
                     item: NSPasteboardItem,
                     provideDataForType type: NSPasteboard.PasteboardType) {
-        // 提供拖拽数据（Page ID）- 使用不同的标识符以区分 Tab 和 Page
-        item.setString("page:\(pageId.uuidString)", forType: .string)
+        // 提供拖拽数据（包含窗口编号和 Page ID）
+        // 格式：page:{windowNumber}:{pageId}
+        let windowNumber = window?.windowNumber ?? 0
+        item.setString("page:\(windowNumber):\(pageId.uuidString)", forType: .string)
     }
 }
 
