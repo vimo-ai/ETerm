@@ -244,22 +244,21 @@ class OllamaService {
     // MARK: - Tools 支持方法
 
     /// Stage 1: AI Dispatcher - 分析文本并决定需要哪些检查
-    func analyzeDispatcher(_ text: String, detailLevel: String = "standard", onReasoning: @escaping (String) -> Void) async throws -> AnalysisPlan {
+    func analyzeDispatcher(_ text: String, onReasoning: @escaping (String) -> Void) async throws -> AnalysisPlan {
         let url = URL(string: "\(baseURL)/api/chat")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let systemPrompt = """
-        You are a writing assistant dispatcher. Analyze the text and decide which checks are needed.
-        User preference level: \(detailLevel) (concise/standard/detailed) - this is a hint, not a rule.
+        You are a writing assistant dispatcher. Analyze the input text and decide which checks are needed.
 
         Rules:
-        - need_grammar_check: true if text has potential grammar issues
+        - need_grammar_check: true if text may have grammar issues
         - need_fixes: true if you found actual errors that need correction
-        - need_idiomatic: true if text could be more natural/idiomatic
+        - need_idiomatic: IMPORTANT - should be true for any English text, as most text can benefit from more idiomatic suggestions
         - need_translation: true if text contains Chinese that needs English translation
-        - need_explanation: true only if complex grammar needs deep explanation (respect user's detail level)
+        - need_explanation: always false (user will load detailed explanation on-demand)
         """
 
         let messages: [[String: Any]] = [
@@ -278,9 +277,9 @@ class OllamaService {
                         "properties": [
                             "need_grammar_check": ["type": "boolean", "description": "Whether grammar check is needed"],
                             "need_fixes": ["type": "boolean", "description": "Whether there are errors to fix"],
-                            "need_idiomatic": ["type": "boolean", "description": "Whether idiomatic suggestions are needed"],
+                            "need_idiomatic": ["type": "boolean", "description": "Whether idiomatic suggestions are needed (should be true for English text)"],
                             "need_translation": ["type": "boolean", "description": "Whether Chinese to English translation is needed"],
-                            "need_explanation": ["type": "boolean", "description": "Whether detailed grammar explanation is needed"],
+                            "need_explanation": ["type": "boolean", "description": "Whether detailed grammar explanation is needed (always false)"],
                             "reasoning": ["type": "string", "description": "Brief reasoning for the analysis plan"]
                         ],
                         "required": ["need_grammar_check", "need_fixes", "need_idiomatic", "need_translation", "need_explanation", "reasoning"]
@@ -429,14 +428,14 @@ class OllamaService {
 
     /// Tool: 获取语法修复
     private func getFixes(_ text: String) async throws -> [GrammarFix] {
-        let systemPrompt = "You are a grammar checker. Find and fix grammar errors in the text."
-        let userPrompt = "Text: \(text)"
+        let systemPrompt = "你是一位语法检查专家。找出文本中的语法错误并提供修正。错误类型请用中文描述。"
+        let userPrompt = "文本: \(text)"
 
         let tool: [String: Any] = [
             "type": "function",
             "function": [
                 "name": "get_fixes",
-                "description": "Return grammar fixes",
+                "description": "返回语法修复建议",
                 "parameters": [
                     "type": "object",
                     "properties": [
@@ -445,9 +444,9 @@ class OllamaService {
                             "items": [
                                 "type": "object",
                                 "properties": [
-                                    "original": ["type": "string"],
-                                    "corrected": ["type": "string"],
-                                    "error_type": ["type": "string"]
+                                    "original": ["type": "string", "description": "原文"],
+                                    "corrected": ["type": "string", "description": "修正后"],
+                                    "error_type": ["type": "string", "description": "错误类型（中文）"]
                                 ],
                                 "required": ["original", "corrected", "error_type"]
                             ]
@@ -471,14 +470,14 @@ class OllamaService {
 
     /// Tool: 获取地道化建议
     private func getIdiomaticSuggestions(_ text: String) async throws -> [IdiomaticSuggestion] {
-        let systemPrompt = "You are a native English writing coach. Suggest more natural and idiomatic expressions."
-        let userPrompt = "Text: \(text)"
+        let systemPrompt = "你是一位英语写作教练。请提供更自然、地道的英文表达建议。所有解释必须使用中文。"
+        let userPrompt = "文本: \(text)"
 
         let tool: [String: Any] = [
             "type": "function",
             "function": [
                 "name": "idiomatic_suggestions",
-                "description": "Return idiomatic suggestions",
+                "description": "返回地道表达建议",
                 "parameters": [
                     "type": "object",
                     "properties": [
@@ -487,9 +486,9 @@ class OllamaService {
                             "items": [
                                 "type": "object",
                                 "properties": [
-                                    "current": ["type": "string"],
-                                    "idiomatic": ["type": "string"],
-                                    "explanation": ["type": "string"]
+                                    "current": ["type": "string", "description": "原表达"],
+                                    "idiomatic": ["type": "string", "description": "更地道的表达"],
+                                    "explanation": ["type": "string", "description": "中文解释为什么这样更好"]
                                 ],
                                 "required": ["current", "idiomatic", "explanation"]
                             ]
@@ -554,16 +553,16 @@ class OllamaService {
         return (pureEnglish, translations)
     }
 
-    /// Tool: 详细语法解释
-    private func getDetailedExplanation(_ text: String) async throws -> [GrammarPoint] {
-        let systemPrompt = "You are a grammar teacher. Explain important grammar rules used in the text."
-        let userPrompt = "Text: \(text)"
+    /// Tool: 详细语法解释（公开方法，支持按需加载）
+    func getDetailedExplanation(_ text: String) async throws -> [GrammarPoint] {
+        let systemPrompt = "你是一位英语语法老师。请用中文详细解释文本中涉及的重要语法规则。"
+        let userPrompt = "文本: \(text)"
 
         let tool: [String: Any] = [
             "type": "function",
             "function": [
                 "name": "detailed_explanation",
-                "description": "Provide detailed grammar explanation",
+                "description": "提供详细的语法解释",
                 "parameters": [
                     "type": "object",
                     "properties": [
@@ -572,11 +571,12 @@ class OllamaService {
                             "items": [
                                 "type": "object",
                                 "properties": [
-                                    "rule": ["type": "string"],
-                                    "explanation": ["type": "string"],
+                                    "rule": ["type": "string", "description": "语法规则名称（中文）"],
+                                    "explanation": ["type": "string", "description": "详细解释（中文）"],
                                     "examples": [
                                         "type": "array",
-                                        "items": ["type": "string"]
+                                        "items": ["type": "string"],
+                                        "description": "例句"
                                     ]
                                 ],
                                 "required": ["rule", "explanation", "examples"]

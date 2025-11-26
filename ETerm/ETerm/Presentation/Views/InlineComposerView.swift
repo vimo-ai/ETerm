@@ -17,21 +17,46 @@ struct ComposerInputHeightKey: PreferenceKey {
     }
 }
 
+// MARK: - Custom NSTextView to handle Cmd+Enter
+
+/// 自定义 NSTextView，重写 performKeyEquivalent 来处理 Cmd+Enter
+class ComposerNSTextView: NSTextView {
+    var onCmdEnter: (() -> Void)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Cmd+Enter：换行
+        if event.modifierFlags.contains(.command) && event.keyCode == 36 {
+            self.insertText("\n", replacementRange: self.selectedRange())
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 // MARK: - Custom TextEditor with Enter to Submit
 
 /// 自定义文本编辑器：Enter 发送，Cmd+Enter 换行
 struct ComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     var onSubmit: () -> Void
-    @Binding var textHeight: CGFloat  // 新增：动态高度绑定
+    @Binding var textHeight: CGFloat
 
     func makeCoordinator() -> Coordinator {
         Coordinator(text: $text, onSubmit: onSubmit, textHeight: $textHeight)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        let textView = scrollView.documentView as! NSTextView
+        // 创建自定义 NSTextView
+        let textView = ComposerNSTextView()
+        textView.autoresizingMask = [.width, .height]
+
+        // 创建 ScrollView
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.backgroundColor = .clear
 
         textView.delegate = context.coordinator
         textView.font = .systemFont(ofSize: 14)
@@ -50,10 +75,6 @@ struct ComposerTextEditor: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.heightTracksTextView = false
-
-        // ScrollView 设置
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
 
         context.coordinator.textView = textView
 
@@ -114,11 +135,15 @@ struct ComposerTextEditor: NSViewRepresentable {
 
         // 拦截键盘事件
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            // 处理 Enter 键（普通 Enter 和 Cmd+Enter 可能触发不同的选择器）
+            let isEnterCommand = commandSelector == #selector(NSResponder.insertNewline(_:)) ||
+                                 commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
+
+            if isEnterCommand {
                 // 检查是否有 Command 修饰符
                 if let event = NSApp.currentEvent, event.modifierFlags.contains(.command) {
                     // Cmd+Enter：换行
-                    textView.insertNewline(nil)
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
                     return true
                 } else {
                     // Enter：发送
@@ -426,20 +451,19 @@ struct InlineComposerView: View {
     @State private var isLoading: Bool = false
     @State private var breathe: Bool = false
     @State private var textHeight: CGFloat = 24  // 初始高度 1 行
-    @State private var detailLevel: DetailLevel = .standard
 
-    // 新增：结构化结果
+    // 结构化结果
     @State private var reasoning: String = ""
+    @State private var currentPlan: AnalysisPlan?
     @State private var analysisResult: AnalysisResult?
+
+    // 按需加载的详细解释
+    @State private var detailedExplanation: [GrammarPoint]?
+    @State private var isLoadingDetail: Bool = false
+    @State private var showDetailedExplanation: Bool = false
 
     var onCancel: () -> Void
     var coordinator: TerminalWindowCoordinator?
-
-    enum DetailLevel: String, CaseIterable {
-        case concise = "简洁"
-        case standard = "标准"
-        case detailed = "详细"
-    }
 
     private var shadowRadius: CGFloat {
         breathe ? 25 : 15
@@ -470,16 +494,6 @@ struct InlineComposerView: View {
                 ComposerTextEditor(text: $inputText, onSubmit: checkWritingWithTools, textHeight: $textHeight)
                     .frame(height: textHeight)
                     .padding(.top, 4)
-
-                // 详细程度选择器
-                Picker("", selection: $detailLevel) {
-                    ForEach(DetailLevel.allCases, id: \.self) { level in
-                        Text(level.rawValue).tag(level)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 70)
-                .padding(.top, 4)
 
                 if isLoading {
                     ProgressView()
@@ -516,21 +530,46 @@ struct InlineComposerView: View {
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
-                            // Stage 1: Reasoning
-                            if !reasoning.isEmpty {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("分析思路")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.purple)
-                                    Text(reasoning)
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.secondary)
+                            // 状态标签区域
+                            if currentPlan != nil {
+                                HStack(spacing: 8) {
+                                    // 语法状态
+                                    statusTag(
+                                        title: "语法",
+                                        isLoading: analysisResult == nil,
+                                        isOK: analysisResult?.fixes?.isEmpty ?? true,
+                                        okText: "正确",
+                                        issueText: analysisResult.map { "\($0.fixes?.count ?? 0)处错误" } ?? ""
+                                    )
+
+                                    // 地道表达状态
+                                    if currentPlan?.needIdiomatic == true {
+                                        statusTag(
+                                            title: "地道",
+                                            isLoading: analysisResult == nil,
+                                            isOK: analysisResult?.idiomaticSuggestions?.isEmpty ?? true,
+                                            okText: "已地道",
+                                            issueText: analysisResult.map { "\($0.idiomaticSuggestions?.count ?? 0)条建议" } ?? ""
+                                        )
+                                    }
+
+                                    // 翻译状态
+                                    if currentPlan?.needTranslation == true {
+                                        statusTag(
+                                            title: "翻译",
+                                            isLoading: analysisResult == nil,
+                                            isOK: true,
+                                            okText: "已完成",
+                                            issueText: ""
+                                        )
+                                    }
                                 }
+                                .padding(.bottom, 4)
                             }
 
-                            // Stage 2: 结构化结果
+                            // 详细结果
                             if let result = analysisResult {
-                                // 语法修复
+                                // 语法修复详情
                                 if let fixes = result.fixes, !fixes.isEmpty {
                                     resultSection(title: "语法修复", icon: "exclamationmark.triangle") {
                                         ForEach(Array(fixes.enumerated()), id: \.offset) { _, fix in
@@ -598,8 +637,33 @@ struct InlineComposerView: View {
                                     }
                                 }
 
-                                // 详细语法解释
-                                if let points = result.grammarPoints, !points.isEmpty {
+                                // 按需加载详细解释按钮
+                                if !showDetailedExplanation {
+                                    Button(action: loadDetailedExplanation) {
+                                        HStack(spacing: 4) {
+                                            if isLoadingDetail {
+                                                ProgressView()
+                                                    .scaleEffect(0.6)
+                                                Text("加载详细解释...")
+                                            } else {
+                                                Image(systemName: "book")
+                                                Text("查看详细语法解释")
+                                            }
+                                        }
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.purple)
+                                        .padding(.vertical, 8)
+                                        .padding(.horizontal, 12)
+                                        .background(Color.purple.opacity(0.1))
+                                        .cornerRadius(6)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(isLoadingDetail)
+                                    .padding(.top, 8)
+                                }
+
+                                // 详细语法解释（按需加载后显示）
+                                if let points = detailedExplanation, !points.isEmpty {
                                     resultSection(title: "语法详解", icon: "book") {
                                         ForEach(Array(points.enumerated()), id: \.offset) { _, point in
                                             VStack(alignment: .leading, spacing: 4) {
@@ -688,6 +752,30 @@ struct InlineComposerView: View {
         .padding(.vertical, 6)
     }
 
+    /// 辅助方法：创建状态标签
+    @ViewBuilder
+    private func statusTag(title: String, isLoading: Bool, isOK: Bool, okText: String, issueText: String) -> some View {
+        HStack(spacing: 4) {
+            if isLoading {
+                ProgressView()
+                    .scaleEffect(0.5)
+                    .frame(width: 12, height: 12)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            } else {
+                Image(systemName: isOK ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .font(.system(size: 11))
+                Text("\(title): \(isOK ? okText : issueText)")
+                    .font(.system(size: 11, weight: .medium))
+            }
+        }
+        .foregroundColor(isLoading ? .secondary : (isOK ? .green : .orange))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background((isLoading ? Color.secondary : (isOK ? Color.green : Color.orange)).opacity(0.12))
+        .cornerRadius(6)
+    }
+
     /// 新的写作检查方法（使用 Tools）
     private func checkWritingWithTools() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -695,18 +783,21 @@ struct InlineComposerView: View {
 
         isLoading = true
         reasoning = ""
+        currentPlan = nil
         analysisResult = nil
         suggestion = ""
+        // 重置详情状态
+        detailedExplanation = nil
+        showDetailedExplanation = false
 
         Task { @MainActor in
             do {
                 // Stage 1: Dispatcher - 流式显示 reasoning
-                let plan = try await OllamaService.shared.analyzeDispatcher(
-                    text,
-                    detailLevel: detailLevel.rawValue
-                ) { updatedReasoning in
+                let plan = try await OllamaService.shared.analyzeDispatcher(text) { updatedReasoning in
                     self.reasoning = updatedReasoning
                 }
+                // 保存分析计划，UI 可以显示
+                self.currentPlan = plan
 
                 // Stage 2: 并行执行具体分析
                 let result = try await OllamaService.shared.performAnalysis(text, plan: plan)
@@ -716,6 +807,26 @@ struct InlineComposerView: View {
                 self.isLoading = false
                 self.suggestion = "❌ Error: \(error.localizedDescription)"
                 print("写作检查失败: \(error)")
+            }
+        }
+    }
+
+    /// 按需加载详细语法解释
+    private func loadDetailedExplanation() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isLoadingDetail else { return }
+
+        isLoadingDetail = true
+
+        Task { @MainActor in
+            do {
+                let points = try await OllamaService.shared.getDetailedExplanation(text)
+                self.detailedExplanation = points
+                self.showDetailedExplanation = true
+                self.isLoadingDetail = false
+            } catch {
+                self.isLoadingDetail = false
+                print("加载详细解释失败: \(error)")
             }
         }
     }
