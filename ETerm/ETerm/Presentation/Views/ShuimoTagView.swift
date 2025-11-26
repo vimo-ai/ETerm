@@ -136,7 +136,7 @@ struct ShuimoTabView: View {
     }
 
     private var tagColor: Color {
-        isActive ? Color.blue.opacity(0.8) : Color.gray.opacity(0.6)
+        isActive ? Color.black.opacity(0.8) : Color.gray.opacity(0.6)
     }
 
     private var leftWidth: CGFloat { height * 51.59 / 240.61 }
