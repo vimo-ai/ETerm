@@ -137,6 +137,12 @@ pub struct Machine<T: EventedPty> {
     terminal: Arc<FairMutex<Crosswords<FFIEventListener>>>,
     event_listener: FFIEventListener,
     route_id: usize,
+    // 🔍 调试：记录上一次的前台进程和状态
+    last_fg_process: Option<String>,
+    last_process_state: Option<String>,
+    // 🔍 调试：PTY 文件描述符和 shell PID
+    pty_fd: i32,
+    shell_pid: u32,
 }
 
 impl<T> Machine<T>
@@ -149,6 +155,8 @@ where
         pty: T,
         event_listener: FFIEventListener,
         route_id: usize,
+        pty_fd: i32,
+        shell_pid: u32,
     ) -> Result<Machine<T>, Box<dyn std::error::Error>> {
         let (sender, receiver) = channel::channel();
         let poll = corcovado::Poll::new()?;
@@ -161,7 +169,42 @@ where
             terminal,
             event_listener,
             route_id,
+            last_fg_process: None,
+            last_process_state: None,
+            pty_fd,
+            shell_pid,
         })
+    }
+
+    /// 获取进程状态 (R=Running, S=Sleeping, etc.)
+    fn get_process_state(pid: i32) -> String {
+        #[cfg(target_os = "macos")]
+        {
+            // macOS: 使用 ps 命令
+            use std::process::Command;
+            if let Ok(output) = Command::new("ps")
+                .args(["-p", &pid.to_string(), "-o", "state="])
+                .output()
+            {
+                return String::from_utf8_lossy(&output.stdout).trim().to_string();
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            // Linux: 读取 /proc/{pid}/stat
+            let stat_path = format!("/proc/{}/stat", pid);
+            if let Ok(content) = std::fs::read_to_string(&stat_path) {
+                // /proc/{pid}/stat 格式: pid (comm) state ...
+                // 第三个字段是 state
+                let parts: Vec<&str> = content.split_whitespace().collect();
+                if parts.len() > 2 {
+                    return parts[2].to_string();
+                }
+            }
+        }
+
+        "?".to_string()
     }
 
     /// 照抄 Rio: Machine::pty_read
@@ -181,7 +224,51 @@ where
             match self.pty.reader().read(&mut buf[unprocessed..]) {
                 // This is received on Windows/macOS when no more data is readable from the PTY.
                 Ok(0) if unprocessed == 0 => break,
-                Ok(got) => unprocessed += got,
+                Ok(got) => {
+                    // 🎯 检测前台进程和状态
+                    let fg_pid = unsafe { libc::tcgetpgrp(self.pty_fd) };
+
+                    if fg_pid > 0 {
+                        let fg_process = teletypewriter::foreground_process_name(self.pty_fd, self.shell_pid);
+                        let fg_process_trimmed = fg_process.trim().to_string();
+
+                        // 获取进程状态
+                        let process_state = Self::get_process_state(fg_pid);
+                        let state_desc = match process_state.as_str() {
+                            "R" => "Running",
+                            "S" => "Sleeping",
+                            "D" => "Disk Sleep",
+                            "Z" => "Zombie",
+                            "T" => "Stopped",
+                            _ => "Unknown",
+                        };
+
+                        // 检测进程切换
+                        let process_changed = self.last_fg_process.as_ref() != Some(&fg_process_trimmed);
+                        let state_changed = self.last_process_state.as_ref() != Some(&process_state);
+
+                        if process_changed {
+                            if let Some(ref last) = self.last_fg_process {
+                                eprintln!("⚡ [进程切换] {} → {} | 状态: {} ({})",
+                                          last, fg_process_trimmed, process_state, state_desc);
+                            } else {
+                                eprintln!("🔧 [初始进程] {} | 状态: {} ({}) | pid: {}",
+                                          fg_process_trimmed, process_state, state_desc, fg_pid);
+                            }
+                        } else if state_changed {
+                            eprintln!("🔄 [状态变化] {} | {} → {} | pid: {}",
+                                      fg_process_trimmed,
+                                      self.last_process_state.as_ref().unwrap_or(&"?".to_string()),
+                                      process_state,
+                                      fg_pid);
+                        }
+
+                        self.last_fg_process = Some(fg_process_trimmed);
+                        self.last_process_state = Some(process_state);
+                    }
+
+                    unprocessed += got
+                },
                 Err(err) => match err.kind() {
                     ErrorKind::Interrupted | ErrorKind::WouldBlock => {
                         // Go back to mio if we're caught up on parsing and the PTY would block.

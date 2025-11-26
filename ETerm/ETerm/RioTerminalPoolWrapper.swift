@@ -386,4 +386,44 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
 
         return result != 0 ? (col, row) : nil
     }
+
+    /// 获取终端当前工作目录（CWD）
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 当前工作目录路径，失败返回 nil
+    func getCwd(terminalId: Int) -> String? {
+        guard let pool = poolHandle else { return nil }
+
+        let cStr = rio_pool_get_cwd(pool, terminalId)
+        guard let cStr = cStr else { return nil }
+
+        let result = String(cString: cStr)
+        rio_free_string(cStr)
+        return result
+    }
+
+    /// 使用指定 CWD 创建终端
+    ///
+    /// - Parameters:
+    ///   - cols: 列数
+    ///   - rows: 行数
+    ///   - shell: Shell 路径
+    ///   - cwd: 工作目录路径
+    /// - Returns: 终端 ID，失败返回 -1
+    func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int {
+        guard let pool = poolHandle else { return -1 }
+
+        print("🔧 [RioTerminalPoolWrapper] Calling FFI: rio_pool_create_terminal_with_cwd(cwd: \(cwd))")
+        let terminalId = rio_pool_create_terminal_with_cwd(pool, cols, rows, shell, cwd)
+        print("🔧 [RioTerminalPoolWrapper] FFI returned terminal ID: \(terminalId)")
+
+        if terminalId >= 0 {
+            // 为新终端创建 PendingUpdate
+            pendingUpdatesLock.lock()
+            pendingUpdates[Int(terminalId)] = PendingUpdate()
+            pendingUpdatesLock.unlock()
+        }
+
+        return Int(terminalId)
+    }
 }

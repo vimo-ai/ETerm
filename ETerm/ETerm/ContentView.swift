@@ -8,6 +8,35 @@
 import SwiftUI
 import Combine
 
+// MARK: - Window CWD Manager
+
+/// 临时存储新窗口的 CWD（用于窗口创建时传递）
+class WindowCwdManager {
+    static let shared = WindowCwdManager()
+
+    private var pendingCwd: String?
+    private let lock = NSLock()
+
+    private init() {}
+
+    /// 设置下一个待创建窗口的 CWD
+    func setPendingCwd(_ cwd: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingCwd = cwd
+    }
+
+    /// 获取并清除待创建窗口的 CWD
+    func takePendingCwd() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        let cwd = pendingCwd
+        pendingCwd = nil
+        print("🔄 [WindowCwdManager] takePendingCwd: \(cwd ?? "nil")")
+        return cwd
+    }
+}
+
 struct ContentView: View {
     var body: some View {
         RioTerminalView()

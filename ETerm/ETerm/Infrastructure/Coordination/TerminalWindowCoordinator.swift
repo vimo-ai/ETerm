@@ -93,6 +93,11 @@ class TerminalWindowCoordinator: ObservableObject {
 
     private let headerHeight: CGFloat = 30.0
 
+    // MARK: - CWD Inheritance
+
+    /// 初始工作目录（继承自父窗口，可选）
+    private var initialCwd: String?
+
     // MARK: - Render Debounce
 
     /// 防抖延迟任务
@@ -104,6 +109,10 @@ class TerminalWindowCoordinator: ObservableObject {
     // MARK: - Initialization
 
     init(initialWindow: TerminalWindow, terminalPool: TerminalPoolProtocol? = nil) {
+        // 获取继承的 CWD（如果有）
+        self.initialCwd = WindowCwdManager.shared.takePendingCwd()
+        print("🎯 [Coordinator] Initialized with CWD: \(self.initialCwd ?? "nil")")
+
         self.terminalWindow = initialWindow
         self.terminalPool = terminalPool ?? MockTerminalPool()
 
@@ -223,6 +232,24 @@ class TerminalWindowCoordinator: ObservableObject {
         return terminalPool
     }
 
+    /// 获取终端的当前工作目录（CWD）
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: CWD 路径，失败返回 nil
+    func getCwd(terminalId: Int) -> String? {
+        // 优先使用 GlobalTerminalManager
+        if let manager = globalTerminalManager {
+            return manager.getCwd(terminalId: terminalId)
+        }
+
+        // 否则尝试使用本地 RioTerminalPoolWrapper
+        if let wrapper = terminalPool as? RioTerminalPoolWrapper {
+            return wrapper.getCwd(terminalId: terminalId)
+        }
+
+        return nil
+    }
+
     /// 调整字体大小
     ///
     /// - Parameter operation: 字体大小操作（增大、减小、重置）
@@ -277,12 +304,13 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 使用全局终端管理器为所有 Tab 创建终端
     private func createTerminalsWithGlobalManager() {
-        guard let manager = globalTerminalManager else { return }
+        guard globalTerminalManager != nil else { return }
 
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
                 if tab.rustTerminalId == nil {
-                    let terminalId = manager.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh", for: self)
+                    // 使用 createTerminalInternal 以支持 CWD 继承
+                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
                     }
@@ -323,7 +351,46 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 创建终端（统一入口）
     ///
     /// 优先使用全局终端管理器，否则使用本地终端池
-    private func createTerminalInternal(cols: UInt16, rows: UInt16, shell: String) -> Int {
+    /// 如果有 initialCwd，则使用指定的工作目录创建第一个终端
+    private func createTerminalInternal(cols: UInt16, rows: UInt16, shell: String, cwd: String? = nil) -> Int {
+        // 优先使用传入的 CWD
+        var effectiveCwd = cwd
+
+        // 如果没有传入 CWD，检查是否有 initialCwd（用于新窗口继承）
+        if effectiveCwd == nil {
+            effectiveCwd = initialCwd
+        }
+
+        // 如果有 CWD，使用 createTerminalWithCwd
+        if let cwdPath = effectiveCwd {
+            print("🚀 [Coordinator] Creating terminal with CWD: \(cwdPath)")
+
+            var terminalId: Int = -1
+
+            // 优先使用全局终端管理器
+            if let manager = globalTerminalManager {
+                terminalId = manager.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath, for: self)
+            } else if let wrapper = terminalPool as? RioTerminalPoolWrapper {
+                terminalId = wrapper.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath)
+            }
+
+            if terminalId >= 0 {
+                print("✅ [Coordinator] Terminal created with ID \(terminalId)")
+
+                // 如果使用的是 initialCwd，清除它（只有第一个终端使用）
+                if cwd == nil && initialCwd != nil {
+                    print("🧹 [Coordinator] Clearing initialCwd after first terminal creation")
+                    initialCwd = nil
+                }
+
+                return terminalId
+            }
+            // 如果带 CWD 创建失败，继续走默认逻辑
+            print("⚠️ [Coordinator] Failed to create terminal with CWD, falling back to default")
+        }
+
+        print("📌 [Coordinator] Creating terminal with default CWD")
+        // 默认行为：不指定 CWD
         if let manager = globalTerminalManager {
             return manager.createTerminal(cols: cols, rows: rows, shell: shell, for: self)
         } else {
@@ -601,6 +668,15 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 用户分割 Panel
     func handleSplitPanel(panelId: UUID, direction: SplitDirection) {
+        // 获取当前激活终端的 CWD（用于继承）
+        var inheritedCwd: String? = nil
+        if let panel = terminalWindow.getPanel(panelId),
+           let activeTab = panel.activeTab,
+           let terminalId = activeTab.rustTerminalId {
+            inheritedCwd = getCwd(terminalId: Int(terminalId))
+            print("🔍 [SplitPanel] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
+        }
+
         // 使用 BinaryTreeLayoutCalculator 计算新布局
         let layoutCalculator = BinaryTreeLayoutCalculator()
 
@@ -609,11 +685,12 @@ class TerminalWindowCoordinator: ObservableObject {
             direction: direction,
             layoutCalculator: layoutCalculator
         ) {
-            // 为新 Panel 的默认 Tab 创建终端
+            // 为新 Panel 的默认 Tab 创建终端（继承 CWD）
             if let newPanel = terminalWindow.getPanel(newPanelId) {
                 for tab in newPanel.tabs {
                     if tab.rustTerminalId == nil {
-                        let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
+                        print("📝 [SplitPanel] Creating terminal with inherited CWD: \(inheritedCwd ?? "nil")")
+                        let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: inheritedCwd)
                         if terminalId >= 0 {
                             tab.setRustTerminalId(UInt32(terminalId))
                         }

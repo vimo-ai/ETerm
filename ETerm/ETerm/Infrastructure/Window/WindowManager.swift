@@ -70,9 +70,16 @@ final class WindowManager: NSObject {
     // MARK: - 窗口创建
 
     /// 创建新窗口
+    ///
+    /// - Parameter inheritCwd: 继承的工作目录（可选）
     @discardableResult
-    func createWindow() -> KeyableWindow {
+    func createWindow(inheritCwd: String? = nil) -> KeyableWindow {
         let frame = calculateNewWindowFrame()
+
+        print("🏗️ [WindowManager] createWindow called with CWD: \(inheritCwd ?? "nil")")
+        // 将 CWD 存入全局管理器（在创建 ContentView 之前）
+        WindowCwdManager.shared.setPendingCwd(inheritCwd)
+        print("✅ [WindowManager] Set pending CWD: \(inheritCwd ?? "nil")")
 
         let window = KeyableWindow.create(
             contentRect: frame,
@@ -378,6 +385,132 @@ final class WindowManager: NSObject {
         }
 
         return true
+    }
+
+    // MARK: - Session 管理
+
+    /// 捕获所有窗口的状态
+    ///
+    /// - Returns: 所有窗口的状态数组
+    func captureAllWindowStates() -> [WindowState] {
+        var windowStates: [WindowState] = []
+
+        for window in windows {
+            // 获取窗口的 Coordinator
+            guard let coordinator = coordinators[window.windowNumber] else {
+                continue
+            }
+
+            // 获取窗口位置和大小
+            let frame = CodableRect(rect: window.frame)
+
+            // 获取 TerminalWindow
+            let terminalWindow = coordinator.terminalWindow
+
+            // 捕获所有 Pages
+            var pageStates: [PageState] = []
+            for page in terminalWindow.pages {
+                if let pageState = capturePageState(page: page, coordinator: coordinator) {
+                    pageStates.append(pageState)
+                }
+            }
+
+            // 确定激活的 Page 索引
+            let activePageIndex = terminalWindow.pages.firstIndex { $0.pageId == terminalWindow.activePageId } ?? 0
+
+            // 创建窗口状态
+            let windowState = WindowState(
+                frame: frame,
+                pages: pageStates,
+                activePageIndex: activePageIndex
+            )
+
+            windowStates.append(windowState)
+        }
+
+        return windowStates
+    }
+
+    /// 捕获 Page 状态
+    ///
+    /// - Parameters:
+    ///   - page: Page 对象
+    ///   - coordinator: 窗口的 Coordinator（用于获取 CWD）
+    /// - Returns: PageState，失败返回 nil
+    private func capturePageState(page: Page, coordinator: TerminalWindowCoordinator) -> PageState? {
+        // 捕获布局状态
+        guard let layoutState = capturePanelLayoutState(
+            layout: page.rootLayout,
+            page: page,
+            coordinator: coordinator
+        ) else {
+            return nil
+        }
+
+        // 确定激活的 Panel ID
+        let activePanelId = coordinator.activePanelId?.uuidString ?? page.allPanelIds.first?.uuidString ?? ""
+
+        return PageState(
+            title: page.title,
+            layout: layoutState,
+            activePanelId: activePanelId
+        )
+    }
+
+    /// 递归捕获 PanelLayout 状态
+    ///
+    /// - Parameters:
+    ///   - layout: PanelLayout 对象
+    ///   - page: Page 对象（用于获取 Panel）
+    ///   - coordinator: Coordinator（用于获取 CWD）
+    /// - Returns: PanelLayoutState，失败返回 nil
+    private func capturePanelLayoutState(
+        layout: PanelLayout,
+        page: Page,
+        coordinator: TerminalWindowCoordinator
+    ) -> PanelLayoutState? {
+        switch layout {
+        case .leaf(let panelId):
+            // Leaf 节点 - 捕获 Tabs
+            guard let panel = page.getPanel(panelId) else {
+                return nil
+            }
+
+            var tabStates: [TabState] = []
+            for tab in panel.tabs {
+                // 获取 CWD
+                var cwd = NSHomeDirectory()  // 默认值
+                if let terminalId = tab.rustTerminalId,
+                   let actualCwd = coordinator.getCwd(terminalId: Int(terminalId)) {
+                    cwd = actualCwd
+                }
+
+                let tabState = TabState(title: tab.title, cwd: cwd)
+                tabStates.append(tabState)
+            }
+
+            let activeTabIndex = panel.tabs.firstIndex { $0.tabId == panel.activeTabId } ?? 0
+
+            return .leaf(
+                panelId: panelId.uuidString,
+                tabs: tabStates,
+                activeTabIndex: activeTabIndex
+            )
+
+        case .split(let direction, let first, let second, let ratio):
+            // Split 节点 - 递归处理子节点
+            guard let firstState = capturePanelLayoutState(layout: first, page: page, coordinator: coordinator),
+                  let secondState = capturePanelLayoutState(layout: second, page: page, coordinator: coordinator) else {
+                return nil
+            }
+
+            // 根据方向选择对应的 case
+            if direction == .horizontal {
+                return .horizontal(ratio: ratio, first: firstState, second: secondState)
+            } else {
+                return .vertical(ratio: ratio, first: firstState, second: secondState)
+            }
+        }
     }
 }
 

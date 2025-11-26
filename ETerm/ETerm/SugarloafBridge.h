@@ -211,6 +211,15 @@ int rio_pool_create_terminal(
     const char* shell
 );
 
+/// 创建终端（指定工作目录，返回 terminal_id，失败返回 -1）
+int rio_pool_create_terminal_with_cwd(
+    RioTerminalPoolHandle pool,
+    unsigned short cols,
+    unsigned short rows,
+    const char* shell,
+    const char* working_dir  // 可以为 NULL
+);
+
 /// 关闭终端
 int rio_pool_close_terminal(
     RioTerminalPoolHandle pool,
@@ -301,6 +310,13 @@ char* rio_pool_get_selected_text(
 
 /// 释放从 Rust 返回的字符串
 void rio_free_string(char* s);
+
+/// 获取终端当前工作目录（CWD）
+/// 返回需要用 rio_free_string 释放的字符串，失败返回 NULL
+char* rio_pool_get_cwd(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id
+);
 
 /// 释放终端池
 void rio_pool_free(RioTerminalPoolHandle pool);

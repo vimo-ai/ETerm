@@ -455,18 +455,12 @@ pub fn create_pty_with_spawn(
             let shell_name = shell_program.rsplit('/').next().unwrap_or(shell_program);
             let mut login_cmd = Command::new("/usr/bin/login");
 
-            // Check for .hushlogin in home directory
-            let hushlogin_path = std::path::Path::new(&user.home).join(".hushlogin");
-            let flags = if hushlogin_path.exists() {
-                "-qflp"
-            } else {
-                "-flp"
-            };
-
+            // 始终使用 -q 静默登录消息
             // -f: Bypasses authentication for already-logged-in user
             // -l: Skips changing directory to $HOME
             // -p: Preserves environment
-            // -q: Act as if .hushlogin exists
+            // -q: Act as if .hushlogin exists (suppress "Last login" message)
+            let flags = "-qflp";
             login_cmd.args([flags, &user.user]);
 
             // Build the exec command to replace the intermediate shell with our target shell

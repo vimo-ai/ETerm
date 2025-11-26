@@ -126,14 +126,26 @@ pub struct RioTerminal {
     cols: u16,
     /// 行数
     rows: u16,
+    /// PTY 主文件描述符（用于获取 CWD）
+    main_fd: std::os::fd::RawFd,
+    /// Shell PID（用于获取 CWD）
+    shell_pid: u32,
 }
 
 impl RioTerminal {
     /// 创建新终端
+    ///
+    /// # 参数
+    /// - `cols`: 列数
+    /// - `rows`: 行数
+    /// - `shell`: Shell 程序路径
+    /// - `working_dir`: 工作目录（可选）
+    /// - `event_queue`: 事件队列
     pub fn new(
         cols: u16,
         rows: u16,
         shell: &str,
+        working_dir: Option<String>,
         event_queue: EventQueue,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let terminal_id = NEXT_TERMINAL_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -152,8 +164,14 @@ impl RioTerminal {
         let (winsize_width, winsize_height, total_width, total_height, square_width, square_height) =
             Self::pixel_dimensions(cols, rows, &font_metrics);
 
-        // 创建 PTY
-        let mut pty = create_pty_with_fork(&Cow::Borrowed(shell), cols, rows)?;
+        // 创建 PTY（使用 working_dir）
+        let mut pty = if let Some(ref wd) = working_dir {
+            // 使用 create_pty_with_spawn 支持工作目录
+            teletypewriter::create_pty_with_spawn(shell, vec![], &working_dir, cols, rows)?
+        } else {
+            // 使用默认的 create_pty_with_fork
+            create_pty_with_fork(&Cow::Borrowed(shell), cols, rows)?
+        };
 
         let initial_winsize = WinsizeBuilder {
             cols,
@@ -162,6 +180,10 @@ impl RioTerminal {
             height: winsize_height,
         };
         let _ = pty.set_winsize(initial_winsize);
+
+        // 保存 PTY 的 main_fd 和 shell_pid（用于获取 CWD，在 PTY move 之前保存）
+        let main_fd = *pty.child.id;
+        let shell_pid = *pty.child.pid as u32;
 
         // 创建 EventListener
         let event_listener = FFIEventListener::new(event_queue.clone(), terminal_id);
@@ -192,8 +214,8 @@ impl RioTerminal {
 
         let terminal = Arc::new(FairMutex::new(terminal));
 
-        // 创建 Machine
-        let machine = Machine::new(terminal.clone(), pty, event_listener, terminal_id)?;
+        // 创建 Machine（传入 pty_fd 和 shell_pid 用于进程检测）
+        let machine = Machine::new(terminal.clone(), pty, event_listener, terminal_id, main_fd, shell_pid)?;
 
         let pty_sender = machine.channel();
 
@@ -208,6 +230,8 @@ impl RioTerminal {
             id: terminal_id,
             cols,
             rows,
+            main_fd,
+            shell_pid,
         })
     }
 
@@ -506,6 +530,13 @@ impl RioTerminal {
         self.id
     }
 
+    /// 获取当前工作目录（CWD）
+    ///
+    /// 使用 teletypewriter::foreground_process_path 获取前台进程的 CWD
+    pub fn get_cwd(&self) -> Option<std::path::PathBuf> {
+        teletypewriter::foreground_process_path(self.main_fd, self.shell_pid).ok()
+    }
+
     /// 设置选区
     ///
     /// 参数使用屏幕坐标（0-indexed），start 和 end 可以是任意顺序
@@ -596,7 +627,12 @@ impl RioTerminalPool {
 
     /// 创建终端
     pub fn create_terminal(&mut self, cols: u16, rows: u16, shell: &str) -> i32 {
-        match RioTerminal::new(cols, rows, shell, self.event_queue.clone()) {
+        self.create_terminal_with_cwd(cols, rows, shell, None)
+    }
+
+    /// 创建终端（指定工作目录）
+    pub fn create_terminal_with_cwd(&mut self, cols: u16, rows: u16, shell: &str, working_dir: Option<String>) -> i32 {
+        match RioTerminal::new(cols, rows, shell, working_dir, self.event_queue.clone()) {
             Ok(terminal) => {
                 let id = terminal.id();
                 self.terminals.insert(id, terminal);
@@ -711,6 +747,33 @@ pub extern "C" fn rio_pool_create_terminal(
         let shell_str = unsafe { CStr::from_ptr(shell).to_str().unwrap_or("/bin/zsh") };
 
         pool.create_terminal(cols, rows, shell_str)
+    })
+}
+
+/// 创建终端（指定工作目录）
+#[no_mangle]
+pub extern "C" fn rio_pool_create_terminal_with_cwd(
+    pool: *mut RioTerminalPool,
+    cols: u16,
+    rows: u16,
+    shell: *const c_char,
+    working_dir: *const c_char,
+) -> i32 {
+    catch_panic!(-1, {
+        if pool.is_null() || shell.is_null() {
+            return -1;
+        }
+
+        let pool = unsafe { &mut *pool };
+        let shell_str = unsafe { CStr::from_ptr(shell).to_str().unwrap_or("/bin/zsh") };
+
+        let working_dir_opt = if working_dir.is_null() {
+            None
+        } else {
+            unsafe { CStr::from_ptr(working_dir).to_str().ok().map(|s| s.to_string()) }
+        };
+
+        pool.create_terminal_with_cwd(cols, rows, shell_str, working_dir_opt)
     })
 }
 
@@ -1009,4 +1072,34 @@ pub extern "C" fn rio_free_string(s: *mut c_char) {
             let _ = std::ffi::CString::from_raw(s);
         }
     }
+}
+
+/// 获取终端当前工作目录（CWD）
+///
+/// 返回的字符串需要调用者使用 `rio_free_string` 释放
+#[no_mangle]
+pub extern "C" fn rio_pool_get_cwd(
+    pool: *mut RioTerminalPool,
+    terminal_id: usize,
+) -> *mut c_char {
+    catch_panic!(ptr::null_mut(), {
+        if pool.is_null() {
+            return ptr::null_mut();
+        }
+
+        let pool = unsafe { &*pool };
+        if let Some(terminal) = pool.get(terminal_id) {
+            if let Some(cwd) = terminal.get_cwd() {
+                // 转换为 C 字符串
+                match std::ffi::CString::new(cwd.to_string_lossy().as_bytes()) {
+                    Ok(c_str) => c_str.into_raw(),
+                    Err(_) => ptr::null_mut(),
+                }
+            } else {
+                ptr::null_mut()
+            }
+        } else {
+            ptr::null_mut()
+        }
+    })
 }

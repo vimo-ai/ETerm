@@ -15,15 +15,27 @@ import SwiftUI
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 创建主窗口
-        WindowManager.shared.createWindow()
+        // 尝试恢复 Session
+        // TODO: 实现 Session 恢复逻辑（需要创建窗口并恢复布局）
+        // 暂时还是创建默认窗口
+        let hasSession = SessionManager.shared.load() != nil
+        if !hasSession {
+            // 没有 Session，创建默认窗口
+            WindowManager.shared.createWindow()
+        } else {
+            // 有 Session，但恢复逻辑复杂，先创建默认窗口
+            // TODO: 实现完整的 Session 恢复
+            WindowManager.shared.createWindow()
+        }
 
         // 设置主菜单
         setupMainMenu()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // 清理工作
+        // 保存 Session
+        let windowStates = WindowManager.shared.captureAllWindowStates()
+        SessionManager.shared.save(windows: windowStates)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -120,6 +132,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 菜单操作
 
     @objc private func newWindow(_ sender: Any?) {
-        WindowManager.shared.createWindow()
+        // 获取当前 focus 窗口的 CWD
+        var inheritedCwd: String? = nil
+
+        if let keyWindow = WindowManager.shared.keyWindow,
+           let coordinator = WindowManager.shared.getCoordinator(for: keyWindow.windowNumber),
+           let activePanelId = coordinator.activePanelId,
+           let panel = coordinator.terminalWindow.getPanel(activePanelId),
+           let activeTab = panel.tabs.first(where: { $0.tabId == panel.activeTabId }),
+           let terminalId = activeTab.rustTerminalId {
+            // 获取当前激活终端的 CWD
+            inheritedCwd = coordinator.getCwd(terminalId: Int(terminalId))
+            print("🔍 [NewWindow] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
+        } else {
+            print("⚠️ [NewWindow] Failed to get CWD - missing window/coordinator/panel/tab")
+        }
+
+        print("📝 [NewWindow] Creating new window with CWD: \(inheritedCwd ?? "nil")")
+        // 创建新窗口，继承 CWD
+        WindowManager.shared.createWindow(inheritCwd: inheritedCwd)
     }
 }
