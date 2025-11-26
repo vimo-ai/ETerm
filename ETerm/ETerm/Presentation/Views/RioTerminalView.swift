@@ -1349,16 +1349,18 @@ class RioMetalView: NSView, RenderViewProtocol {
         selectionPanelId = panelId
         selectionTab = activeTab
 
-        // 显示翻译气泡（使用检测到的文本）
+        // 发布选中结束事件（双击选中）
         let trimmed = boundary.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             let mouseLoc = self.convert(event.locationInWindow, from: nil)
             let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
 
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                TranslationPopover.shared.show(text: trimmed, at: rect, in: self)
-            }
+            let payload = SelectionEndPayload(
+                text: trimmed,
+                screenRect: rect,
+                sourceView: self
+            )
+            EventBus.shared.publish(TerminalEvent.selectionEnd, payload: payload)
         }
     }
 
@@ -1410,14 +1412,16 @@ class RioMetalView: NSView, RenderViewProtocol {
                     _ = coordinator.clearSelection(terminalId: terminalId)
                     requestRender()
                 } else {
-                    // 有有效文本选中，显示翻译气泡
+                    // 发布选中结束事件（拖拽选中）
                     let mouseLoc = self.convert(event.locationInWindow, from: nil)
                     let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
 
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self = self else { return }
-                        TranslationPopover.shared.show(text: text, at: rect, in: self)
-                    }
+                    let payload = SelectionEndPayload(
+                        text: text,
+                        screenRect: rect,
+                        sourceView: self
+                    )
+                    EventBus.shared.publish(TerminalEvent.selectionEnd, payload: payload)
                 }
             }
         }

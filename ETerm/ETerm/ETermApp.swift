@@ -15,6 +15,9 @@ import SwiftUI
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 加载内置插件
+        PluginManager.shared.loadBuiltinPlugins()
+
         // 尝试恢复 Session
         // TODO: 实现 Session 恢复逻辑（需要创建窗口并恢复布局）
         // 暂时还是创建默认窗口
