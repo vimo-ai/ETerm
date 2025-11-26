@@ -206,6 +206,15 @@ final class TerminalWindow {
         return pages.count
     }
 
+    /// 添加已有的 Page（用于跨窗口移动）
+    ///
+    /// - Parameter page: 要添加的 Page
+    func addExistingPage(_ page: Page) {
+        pages.append(page)
+        // 重新扫描计数器以确保正确性
+        scanAndInitNextTerminalNumber()
+    }
+
     // MARK: - Panel Management (通过 Active Page 代理)
 
     /// 分割指定的 Panel（在当前 Page 中）

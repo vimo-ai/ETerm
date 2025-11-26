@@ -71,7 +71,10 @@ class TerminalWindowCoordinator: ObservableObject {
 
     // MARK: - Infrastructure
 
-    /// 终端池（基础设施）
+    /// 全局终端管理器（基础设施）
+    private var globalTerminalManager: GlobalTerminalManager?
+
+    /// 终端池（兼容旧代码，用于渲染）
     private var terminalPool: TerminalPoolProtocol
 
     /// 坐标映射器
@@ -116,7 +119,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 创建新的 Tab 并分配终端
     func createNewTab(in panelId: UUID) -> TerminalTab? {
         // 使用较大的默认尺寸 (120x40) 以减少初始 Reflow 的影响
-        let terminalId = terminalPool.createTerminal(cols: 120, rows: 40, shell: "/bin/zsh")
+        let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh")
         guard terminalId >= 0 else {
             return nil
         }
@@ -146,7 +149,11 @@ class TerminalWindowCoordinator: ObservableObject {
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
                 if let terminalId = tab.rustTerminalId {
-                    terminalPool.closeTerminal(Int(terminalId))
+                    if let manager = globalTerminalManager {
+                        _ = manager.closeTerminal(Int(terminalId))
+                    } else {
+                        closeTerminalInternal(Int(terminalId))
+                    }
                 }
             }
         }
@@ -160,7 +167,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 用于 UI 变更（Tab 切换、Page 切换等）触发的渲染请求。
     ///
     /// - Note: 不影响即时响应（如键盘输入、滚动），这些场景应直接调用 `renderView?.requestRender()`
-    private func scheduleRender() {
+    func scheduleRender() {
         // 取消之前的延迟任务
         pendingRenderWorkItem?.cancel()
 //        print("[Render] 🔄 Scheduled render (debounced)")
@@ -175,6 +182,38 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 延迟执行
         DispatchQueue.main.asyncAfter(deadline: .now() + renderDebounceInterval, execute: workItem)
+    }
+
+    // MARK: - Event Handlers (from GlobalTerminalManager)
+
+    /// 处理终端关闭事件
+    func handleTerminalClosed(terminalId: Int) {
+        // 找到对应的 Tab 并关闭
+        for panel in terminalWindow.allPanels {
+            if let tab = panel.tabs.first(where: { $0.rustTerminalId == UInt32(terminalId) }) {
+                handleTabClose(panelId: panel.panelId, tabId: tab.tabId)
+                return
+            }
+        }
+    }
+
+    /// 处理 Bell 事件
+    func handleBell(terminalId: Int) {
+        // 播放系统提示音
+        NSSound.beep()
+    }
+
+    /// 处理标题变更事件
+    func handleTitleChange(terminalId: Int, title: String) {
+        // 找到对应的 Tab 并更新标题
+        for panel in terminalWindow.allPanels {
+            if let tab = panel.tabs.first(where: { $0.rustTerminalId == UInt32(terminalId) }) {
+                tab.setTitle(title)
+                objectWillChange.send()
+                updateTrigger = UUID()
+                return
+            }
+        }
     }
 
     // MARK: - Terminal Pool Management
@@ -198,7 +237,7 @@ class TerminalWindowCoordinator: ObservableObject {
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
                 if let terminalId = tab.rustTerminalId {
-                    terminalPool.closeTerminal(Int(terminalId))
+                    closeTerminalInternal(Int(terminalId))
                     tab.setRustTerminalId(nil)  // 清空 ID，准备重新分配
                 }
             }
@@ -214,6 +253,42 @@ class TerminalWindowCoordinator: ObservableObject {
         // 初始化键盘系统
         self.keyboardSystem = KeyboardSystem(coordinator: self)
         // print("🟢 [Coordinator] setTerminalPool completed, keyboardSystem initialized")
+    }
+
+    /// 设置全局终端管理器（新的架构）
+    ///
+    /// 使用全局终端管理器代替本地终端池，支持跨窗口终端迁移
+    func setGlobalTerminalManager(_ manager: GlobalTerminalManager) {
+        self.globalTerminalManager = manager
+
+        // 清空旧终端的 rustTerminalId
+        for panel in terminalWindow.allPanels {
+            for tab in panel.tabs {
+                tab.setRustTerminalId(nil)
+            }
+        }
+
+        // 为所有 Tab 创建终端（使用全局管理器）
+        createTerminalsWithGlobalManager()
+
+        // 初始化键盘系统
+        self.keyboardSystem = KeyboardSystem(coordinator: self)
+    }
+
+    /// 使用全局终端管理器为所有 Tab 创建终端
+    private func createTerminalsWithGlobalManager() {
+        guard let manager = globalTerminalManager else { return }
+
+        for panel in terminalWindow.allPanels {
+            for tab in panel.tabs {
+                if tab.rustTerminalId == nil {
+                    let terminalId = manager.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh", for: self)
+                    if terminalId >= 0 {
+                        tab.setRustTerminalId(UInt32(terminalId))
+                    }
+                }
+            }
+        }
     }
 
     /// 设置坐标映射器（初始化时使用）
@@ -233,6 +308,90 @@ class TerminalWindowCoordinator: ObservableObject {
 
     // MARK: - Terminal Lifecycle
 
+    /// 关闭终端（统一入口）
+    ///
+    /// 优先使用全局终端管理器，否则使用本地终端池
+    @discardableResult
+    private func closeTerminalInternal(_ terminalId: Int) -> Bool {
+        if let manager = globalTerminalManager {
+            return manager.closeTerminal(terminalId)
+        } else {
+            return terminalPool.closeTerminal(terminalId)
+        }
+    }
+
+    /// 创建终端（统一入口）
+    ///
+    /// 优先使用全局终端管理器，否则使用本地终端池
+    private func createTerminalInternal(cols: UInt16, rows: UInt16, shell: String) -> Int {
+        if let manager = globalTerminalManager {
+            return manager.createTerminal(cols: cols, rows: rows, shell: shell, for: self)
+        } else {
+            return terminalPool.createTerminal(cols: cols, rows: rows, shell: shell)
+        }
+    }
+
+    /// 写入输入（统一入口）
+    @discardableResult
+    private func writeInputInternal(terminalId: Int, data: String) -> Bool {
+        if let manager = globalTerminalManager {
+            return manager.writeInput(terminalId: terminalId, data: data)
+        } else {
+            return terminalPool.writeInput(terminalId: terminalId, data: data)
+        }
+    }
+
+    /// 滚动（统一入口）
+    @discardableResult
+    private func scrollInternal(terminalId: Int, deltaLines: Int32) -> Bool {
+        if let manager = globalTerminalManager {
+            return manager.scroll(terminalId: terminalId, deltaLines: deltaLines)
+        } else {
+            return terminalPool.scroll(terminalId: terminalId, deltaLines: deltaLines)
+        }
+    }
+
+    /// 设置选区（统一入口）
+    @discardableResult
+    private func setSelectionInternal(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> Bool {
+        if let manager = globalTerminalManager {
+            return manager.setSelection(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
+        } else {
+            return terminalPool.setSelection(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
+        }
+    }
+
+    /// 清除选区（统一入口）
+    @discardableResult
+    private func clearSelectionInternal(terminalId: Int) -> Bool {
+        if let manager = globalTerminalManager {
+            return manager.clearSelection(terminalId: terminalId)
+        } else {
+            return terminalPool.clearSelection(terminalId: terminalId)
+        }
+    }
+
+    /// 获取文本范围（统一入口）
+    private func getTextRangeInternal(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> String? {
+        if let manager = globalTerminalManager {
+            return manager.getTextRange(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
+        } else {
+            return terminalPool.getTextRange(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
+        }
+    }
+
+    /// 获取光标位置（统一入口）
+    private func getCursorPositionInternal(terminalId: Int) -> CursorPosition? {
+        if let manager = globalTerminalManager {
+            if let cursor = manager.getCursor(terminalId: terminalId) {
+                return CursorPosition(col: cursor.col, row: cursor.row)
+            }
+            return nil
+        } else {
+            return terminalPool.getCursorPosition(terminalId: terminalId)
+        }
+    }
+
     /// 为所有 Tab 创建终端
     private func createTerminalsForAllTabs() {
         // print("🔵 [Coordinator] createTerminalsForAllTabs called, panels: \(terminalWindow.allPanels.count)")
@@ -242,8 +401,8 @@ class TerminalWindowCoordinator: ObservableObject {
                 // 如果 Tab 还没有终端，创建一个
                 if tab.rustTerminalId == nil {
                     // print("🔵 [Coordinator] Creating terminal for tab \(tab.tabId)...")
-                    let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
-                    // print("🔵 [Coordinator] terminalPool.createTerminal returned: \(terminalId)")
+                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
+                    // print("🔵 [Coordinator] createTerminalInternal returned: \(terminalId)")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
                         // print("🟢 [Coordinator] Terminal created with ID: \(terminalId)")
@@ -302,7 +461,7 @@ class TerminalWindowCoordinator: ObservableObject {
         // 获取 Tab 的终端 ID，关闭终端
         if let tab = panel.tabs.first(where: { $0.tabId == tabId }),
            let terminalId = tab.rustTerminalId {
-            terminalPool.closeTerminal(Int(terminalId))
+            closeTerminalInternal(Int(terminalId))
         }
 
         // 调用 AR 的方法关闭 Tab
@@ -364,7 +523,7 @@ class TerminalWindowCoordinator: ObservableObject {
             // 关闭 Panel 中的所有终端
             for tab in panel.tabs {
                 if let terminalId = tab.rustTerminalId {
-                    terminalPool.closeTerminal(Int(terminalId))
+                    closeTerminalInternal(Int(terminalId))
                 }
             }
 
@@ -404,7 +563,7 @@ class TerminalWindowCoordinator: ObservableObject {
         // 关闭 Panel 中的所有终端
         for tab in panel.tabs {
             if let terminalId = tab.rustTerminalId {
-                terminalPool.closeTerminal(Int(terminalId))
+                closeTerminalInternal(Int(terminalId))
             }
         }
 
@@ -454,7 +613,7 @@ class TerminalWindowCoordinator: ObservableObject {
             if let newPanel = terminalWindow.getPanel(newPanelId) {
                 for tab in newPanel.tabs {
                     if tab.rustTerminalId == nil {
-                        let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
+                        let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
                         if terminalId >= 0 {
                             tab.setRustTerminalId(UInt32(terminalId))
                         }
@@ -603,7 +762,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 写入输入到指定终端
     func writeInput(terminalId: UInt32, data: String) {
-        terminalPool.writeInput(terminalId: Int(terminalId), data: data)
+        writeInputInternal(terminalId: Int(terminalId), data: data)
     }
 
     // MARK: - Mouse Event Helpers
@@ -628,7 +787,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 处理滚动
     func handleScroll(terminalId: UInt32, deltaLines: Int32) {
-        _ = terminalPool.scroll(terminalId: Int(terminalId), deltaLines: deltaLines)
+        _ = scrollInternal(terminalId: Int(terminalId), deltaLines: deltaLines)
         renderView?.requestRender()
     }
 
@@ -643,7 +802,7 @@ class TerminalWindowCoordinator: ObservableObject {
     func setSelection(terminalId: UInt32, selection: TextSelection) -> Bool {
         let (start, end) = selection.normalized()
 
-        let success = terminalPool.setSelection(
+        let success = setSelectionInternal(
             terminalId: Int(terminalId),
             startRow: start.row,
             startCol: start.col,
@@ -664,7 +823,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 是否成功
     func clearSelection(terminalId: UInt32) -> Bool {
-        let success = terminalPool.clearSelection(terminalId: Int(terminalId))
+        let success = clearSelectionInternal(terminalId: Int(terminalId))
 
         if success {
             renderView?.requestRender()
@@ -682,7 +841,7 @@ class TerminalWindowCoordinator: ObservableObject {
     func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
         let (start, end) = selection.normalized()
 
-        return terminalPool.getTextRange(
+        return getTextRangeInternal(
             terminalId: Int(terminalId),
             startRow: start.row,
             startCol: start.col,
@@ -696,6 +855,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 输入行号，如果不在输入模式返回 nil
     func getInputRow(terminalId: UInt32) -> UInt16? {
+        // getInputRow 目前只有旧的终端池支持，GlobalTerminalManager 不需要
         return terminalPool.getInputRow(terminalId: Int(terminalId))
     }
 
@@ -704,7 +864,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 光标位置，失败返回 nil
     func getCursorPosition(terminalId: UInt32) -> CursorPosition? {
-        return terminalPool.getCursorPosition(terminalId: Int(terminalId))
+        return getCursorPositionInternal(terminalId: Int(terminalId))
     }
 
     // MARK: - Rendering (核心方法)
@@ -828,7 +988,7 @@ class TerminalWindowCoordinator: ObservableObject {
         for panel in newPage.allPanels {
             for tab in panel.tabs {
                 if tab.rustTerminalId == nil {
-                    let terminalId = terminalPool.createTerminal(cols: 80, rows: 24, shell: "/bin/zsh")
+                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
                     }
@@ -896,7 +1056,7 @@ class TerminalWindowCoordinator: ObservableObject {
             for panel in page.allPanels {
                 for tab in panel.tabs {
                     if let terminalId = tab.rustTerminalId {
-                        terminalPool.closeTerminal(Int(terminalId))
+                        closeTerminalInternal(Int(terminalId))
                     }
                 }
             }
@@ -983,5 +1143,128 @@ class TerminalWindowCoordinator: ObservableObject {
         scheduleRender()
 
         return true
+    }
+
+    // MARK: - 跨窗口操作支持
+
+    /// 移除 Page（用于跨窗口移动）
+    ///
+    /// - Parameters:
+    ///   - pageId: 要移除的 Page ID
+    ///   - closeTerminals: 是否关闭终端（跨窗口移动时为 false）
+    /// - Returns: 被移除的 Page，失败返回 nil
+    func removePage(_ pageId: UUID, closeTerminals: Bool) -> Page? {
+        // 获取要移除的 Page
+        guard let page = terminalWindow.pages.first(where: { $0.pageId == pageId }) else {
+            return nil
+        }
+
+        // 如果需要关闭终端
+        if closeTerminals {
+            for panel in page.allPanels {
+                for tab in panel.tabs {
+                    if let terminalId = tab.rustTerminalId {
+                        closeTerminalInternal(Int(terminalId))
+                    }
+                }
+            }
+        }
+
+        // 从 TerminalWindow 移除 Page
+        guard terminalWindow.closePage(pageId) else {
+            return nil
+        }
+
+        // 更新激活的 Panel
+        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+
+        return page
+    }
+
+    /// 添加已有的 Page（用于跨窗口移动）
+    ///
+    /// - Parameter page: 要添加的 Page
+    func addPage(_ page: Page) {
+        terminalWindow.addExistingPage(page)
+
+        // 切换到新添加的 Page
+        _ = terminalWindow.switchToPage(page.pageId)
+
+        // 更新激活的 Panel
+        activePanelId = page.allPanels.first?.panelId
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+    }
+
+    /// 移除 Tab（用于跨窗口移动）
+    ///
+    /// - Parameters:
+    ///   - tabId: 要移除的 Tab ID
+    ///   - panelId: 源 Panel ID
+    ///   - closeTerminal: 是否关闭终端（跨窗口移动时为 false）
+    /// - Returns: 是否成功
+    @discardableResult
+    func removeTab(_ tabId: UUID, from panelId: UUID, closeTerminal: Bool) -> Bool {
+        guard let panel = terminalWindow.getPanel(panelId),
+              let tab = panel.tabs.first(where: { $0.tabId == tabId }) else {
+            return false
+        }
+
+        // 如果需要关闭终端
+        if closeTerminal {
+            if let terminalId = tab.rustTerminalId {
+                closeTerminalInternal(Int(terminalId))
+            }
+        }
+
+        // 如果是最后一个 Tab，移除整个 Panel
+        if panel.tabCount == 1 {
+            _ = terminalWindow.removePanel(panelId)
+
+            // 更新激活的 Panel
+            if activePanelId == panelId {
+                activePanelId = terminalWindow.allPanels.first?.panelId
+            }
+        } else {
+            // 从 Panel 移除 Tab
+            _ = panel.closeTab(tabId)
+        }
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+
+        return true
+    }
+
+    /// 添加已有的 Tab 到指定 Panel（用于跨窗口移动）
+    ///
+    /// - Parameters:
+    ///   - tab: 要添加的 Tab
+    ///   - panelId: 目标 Panel ID
+    func addTab(_ tab: TerminalTab, to panelId: UUID) {
+        guard let panel = terminalWindow.getPanel(panelId) else {
+            return
+        }
+
+        panel.addTab(tab)
+        _ = panel.setActiveTab(tab.tabId)
+
+        // 设置为激活的 Panel
+        setActivePanel(panelId)
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
     }
 }
