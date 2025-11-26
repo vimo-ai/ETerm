@@ -61,8 +61,15 @@ final class KeyboardSystem {
     /// 处理键盘事件
     func handleKeyDown(_ event: NSEvent) -> KeyEventResult {
         let keyStroke = KeyStroke.from(event)
-        let context = buildContext()
 
+        // 优先检查命令系统的快捷键绑定
+        let commandContext = CommandContext(coordinator: coordinator, window: nil)
+        if KeyboardServiceImpl.shared.handleKeyStroke(keyStroke, context: commandContext) {
+            return .handled
+        }
+
+        // 如果命令系统未处理，走原有的键盘处理流程
+        let context = buildContext()
         let result = pipeline.process(keyStroke, context: context)
 
         switch result {
