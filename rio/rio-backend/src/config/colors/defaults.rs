@@ -4,7 +4,8 @@ use crate::config::colors::{ColorArray, ColorBuilder, ColorComposition, Format};
 
 #[inline]
 pub fn background() -> ColorComposition {
-    let color = ColorBuilder::from_hex(String::from("#0F0D0E"), Format::SRGB0_1)
+    // Shuimo 主题背景色（纯黑，但实际由 Sugarloaf 设为透明）
+    let color = ColorBuilder::from_hex(String::from("#000000"), Format::SRGB0_1)
         .unwrap()
         .to_arr();
     (
@@ -20,7 +21,8 @@ pub fn background() -> ColorComposition {
 
 #[inline]
 pub fn cursor() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#F712FF"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 光标颜色（暗红色）
+    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
@@ -74,110 +76,129 @@ pub fn tabs_active_highlight() -> ColorArray {
 
 #[inline]
 pub fn foreground() -> ColorArray {
-    [1., 1., 1., 1.]
+    // Shuimo 主题 - 前景色（淡灰色）
+    ColorBuilder::from_hex(String::from("#dbdadd"), Format::SRGB0_1)
+        .unwrap()
+        .to_arr()
 }
 
 #[inline]
 pub fn green() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#2AD947"), Format::SRGB0_1)
+    // Shuimo 主题 - 青绿色
+    ColorBuilder::from_hex(String::from("#4a9992"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn red() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#FF1261"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 暗红色
+    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn blue() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#2D9AFF"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 蓝色
+    ColorBuilder::from_hex(String::from("#268bd2"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn yellow() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#FCBA28"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 黄色
+    ColorBuilder::from_hex(String::from("#b58900"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn black() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#393A3D"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 黑色
+    ColorBuilder::from_hex(String::from("#0f1423"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn cyan() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#17d5df"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 青色
+    ColorBuilder::from_hex(String::from("#2aa198"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn magenta() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#DD30FF"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 洋红色（使用暗红色保持一致）
+    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn white() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#E7E7E7"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - 白色
+    ColorBuilder::from_hex(String::from("#eee8d5"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn default_light_black() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#6B6B6B"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Black
+    ColorBuilder::from_hex(String::from("#0f1423"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_blue() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#82B8C8"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Blue
+    ColorBuilder::from_hex(String::from("#839496"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_cyan() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#93D3C3"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Cyan
+    ColorBuilder::from_hex(String::from("#93a1a1"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_green() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#AAC474"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Green（与 normal 一致）
+    ColorBuilder::from_hex(String::from("#4a9992"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_magenta() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#C28CB8"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Magenta（使用暗红色）
+    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_red() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#C55555"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Red（与 normal 一致）
+    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_white() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#F8F8F8"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright White
+    ColorBuilder::from_hex(String::from("#fdf6e3"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_yellow() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#FECA88"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Yellow
+    ColorBuilder::from_hex(String::from("#657b83"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }

@@ -43,7 +43,17 @@ pub struct TermColors([Option<ColorArray>; COUNT]);
 
 impl Default for TermColors {
     fn default() -> Self {
-        Self([None; COUNT])
+        // 🎨 ETerm Shuimo: 使用实际颜色而不是 None
+        let colors = Colors::default();
+        let list = List::from(&colors);
+        let mut term_colors = [None; COUNT];
+
+        // 填充命名颜色（0-268）
+        for i in 0..COUNT {
+            term_colors[i] = Some(list[i]);
+        }
+
+        Self(term_colors)
     }
 }
 

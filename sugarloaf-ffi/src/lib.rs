@@ -227,11 +227,12 @@ pub extern "C" fn sugarloaf_new(
 
         #[cfg(target_os = "macos")]
         {
+            // Shuimo 主题 - 半透明背景配合磨砂效果
             instance.set_background_color(Some(wgpu::Color {
                 r: 0.0,
                 g: 0.0,
                 b: 0.0,
-                a: 0.0,  // 完全透明,让窗口的磨砂效果显示出来
+                a: 0.3,  // 30% 不透明度
             }));
         }
 
