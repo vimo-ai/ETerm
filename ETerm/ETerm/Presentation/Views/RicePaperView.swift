@@ -34,7 +34,8 @@ class MouseTracker: ObservableObject {
 
     func startTracking() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { [weak self] event in
+        // 只监听 mouseMoved，不监听拖拽事件，避免拖动选择文本时触发背景重绘导致卡顿
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
             guard let self = self,
                   let window = event.window else { return event }
 
