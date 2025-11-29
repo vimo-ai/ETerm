@@ -84,6 +84,11 @@ final class KeyBindingRegistry {
         register(.cmd("+"), event: .increaseFontSize, modes: [.normal, .selection])  // Shift+= 产生 +
         register(.cmd("-"), event: .decreaseFontSize, modes: [.normal, .selection])
         register(.cmd("0"), event: .resetFontSize, modes: [.normal, .selection])
+
+        // ─────────────────────────────────────────
+        // 辅助功能
+        // ─────────────────────────────────────────
+        register(.cmdShift("y"), event: .toggleTranslationMode)
     }
 
     // MARK: - 注册

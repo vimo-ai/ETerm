@@ -52,6 +52,12 @@ final class GlobalShortcutHandler: KeyboardEventHandler {
             coordinator?.changeFontSize(operation: .reset)
             return .consumed
 
+        case .toggleTranslationMode:
+            Task { @MainActor in
+                TranslationModeStore.shared.toggle()
+            }
+            return .consumed
+
         default:
             return .ignored
         }

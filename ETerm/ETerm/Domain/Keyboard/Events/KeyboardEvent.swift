@@ -50,6 +50,11 @@ enum KeyboardEvent: Equatable {
     case resetFontSize
 
     // ─────────────────────────────────────────
+    // 辅助功能
+    // ─────────────────────────────────────────
+    case toggleTranslationMode
+
+    // ─────────────────────────────────────────
     // 终端输入
     // ─────────────────────────────────────────
     case terminalInput(String)
