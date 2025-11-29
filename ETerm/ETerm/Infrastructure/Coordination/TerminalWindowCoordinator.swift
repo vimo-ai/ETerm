@@ -557,18 +557,13 @@ class TerminalWindowCoordinator: ObservableObject {
             return
         }
 
-        // 获取 Tab 的终端 ID，关闭终端
-        if let tab = panel.tabs.first(where: { $0.tabId == tabId }),
-           let terminalId = tab.rustTerminalId {
-            closeTerminalInternal(Int(terminalId))
+        // 如果这是窗口中最后一个 Panel 的最后一个 Tab，则不允许关闭（保持至少一个终端）
+        if panel.tabCount == 1 && terminalWindow.panelCount <= 1 {
+            return
         }
 
-        // 调用 AR 的方法关闭 Tab
-        if panel.closeTab(tabId) {
-            objectWillChange.send()
-            updateTrigger = UUID()
-            scheduleRender()
-        }
+        // 复用统一的 Tab 移除逻辑，确保在最后一个 Tab 关闭时可以移除 Panel
+        _ = removeTab(tabId, from: panelId, closeTerminal: true)
     }
 
     /// 用户重命名 Tab
@@ -867,6 +862,22 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         return activeTab.rustTerminalId
+    }
+
+    /// 根据滚轮事件位置获取应滚动的终端 ID（鼠标所在 Panel 的激活 Tab）
+    /// - Parameters:
+    ///   - point: 鼠标位置（容器坐标，PageBar 下方区域）
+    ///   - containerBounds: 容器区域（PageBar 下方区域）
+    /// - Returns: 目标终端 ID，如果找不到则返回当前激活终端
+    func getTerminalIdAtPoint(_ point: CGPoint, containerBounds: CGRect) -> UInt32? {
+        if let panelId = findPanel(at: point, containerBounds: containerBounds),
+           let panel = terminalWindow.getPanel(panelId),
+           let activeTab = panel.activeTab,
+           let terminalId = activeTab.rustTerminalId {
+            return terminalId
+        }
+
+        return getActiveTerminalId()
     }
 
     /// 写入输入到指定终端

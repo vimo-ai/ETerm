@@ -549,6 +549,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         wantsLayer = true
         layer?.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
         layer?.isOpaque = false
+        registerForDraggedTypes([.fileURL])
     }
 
     override func viewDidMoveToWindow() {
@@ -930,6 +931,11 @@ class RioMetalView: NSView, RenderViewProtocol {
         snapshot: TerminalSnapshot,
         isCursorVisible: Bool
     ) {
+        // Ignore cursor position reports (ESC[row;colR) that can leak into the buffer
+        if isCursorPositionReportLine(cells) {
+            return
+        }
+
         let cursorRow = Int(snapshot.cursor_row)
         let cursorCol = Int(snapshot.cursor_col)
 
@@ -1019,6 +1025,28 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
     }
 
+    /// 检测是否为光标位置报告行（如 ESC[25;19R），用于过滤掉被 echo 到屏幕的 DSR 响应
+    private func isCursorPositionReportLine(_ cells: [FFICell]) -> Bool {
+        guard let first = cells.first, first.character == 27 else { return false }  // 必须以 ESC 开头
+
+        var scalars: [UnicodeScalar] = []
+        for cell in cells {
+            // 停在第一个空字符，避免遍历整行的空白单元
+            guard cell.character != 0 else { break }
+            if let scalar = UnicodeScalar(cell.character) {
+                scalars.append(scalar)
+            }
+            // 限制长度，防止异常长行走正则
+            if scalars.count > 32 { return false }
+        }
+
+        guard !scalars.isEmpty else { return false }
+        let text = String(String.UnicodeScalarView(scalars))
+
+        // ^\e\[\d+;\d+R$ 形式的 DSR 响应
+        return text.range(of: #"^\u{1B}\[\d+;\d+R$"#, options: .regularExpression) != nil
+    }
+
     /// 检查位置是否在选区内
     private func isInSelection(
         row: Int, col: Int,
@@ -1045,6 +1073,41 @@ class RioMetalView: NSView, RenderViewProtocol {
         } else {
             return true
         }
+    }
+
+    // MARK: - Drag & Drop（文件/文件夹路径）
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard containsFileURLs(sender.draggingPasteboard) else { return [] }
+        return .copy
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        containsFileURLs(sender.draggingPasteboard)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pasteboard = sender.draggingPasteboard
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+
+        guard let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
+              !urls.isEmpty else {
+            return false
+        }
+
+        guard let terminalId = coordinator?.getActiveTerminalId() else { return false }
+
+        let paths = urls.map { $0.path }
+        let payload = paths.joined(separator: " ") + " "
+        _ = terminalManager.writeInput(terminalId: Int(terminalId), data: payload)
+        return true
+    }
+
+    private func containsFileURLs(_ pasteboard: NSPasteboard) -> Bool {
+        guard let types = pasteboard.types else { return false }
+        return types.contains(.fileURL) || types.contains(.URL)
     }
 
     // MARK: - 键盘输入
@@ -1106,6 +1169,7 @@ class RioMetalView: NSView, RenderViewProtocol {
                 .cmd("]"),
                 .cmdShift("["),
                 .cmdShift("]"),
+                .cmdShift("y"),
                 .cmd("="),
                 .cmd("+"),  // Shift+= 产生 +
                 .cmd("-"),
@@ -1492,14 +1556,23 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        guard let coordinator = coordinator,
-              let terminalId = coordinator.getActiveTerminalId() else {
+        guard let coordinator = coordinator else {
             super.scrollWheel(with: event)
             return
         }
 
+        // 使用鼠标所在位置确定目标 Panel/Tab，再滚动对应终端
+        let locationInView = convert(event.locationInWindow, from: nil)
+        let terminalId = coordinator.getTerminalIdAtPoint(locationInView, containerBounds: bounds)
+
+        guard let terminalId else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        // 默认每次滚动 1 行（根据方向确定正负）
         let deltaY = event.scrollingDeltaY
-        let delta = Int32(deltaY / 3)
+        let delta = Int32(deltaY == 0 ? 0 : (deltaY > 0 ? 1 : -1))
 
         if delta != 0 {
             _ = terminalManager.scroll(terminalId: Int(terminalId), deltaLines: delta)
