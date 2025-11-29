@@ -271,6 +271,19 @@ final class DomainPanelView: NSView {
         currentDropZone = nil
         highlightLayer.isHidden = true
     }
+
+    /// 解析拖拽数据（新格式）
+    /// - Parameter dataString: 粘贴板字符串，格式 `tab:{windowNumber}:{panelId}:{tabId}`
+    /// - Returns: 提取到的 Tab ID
+    private func parseDraggedTabId(_ dataString: String) -> UUID? {
+        guard dataString.hasPrefix("tab:") else { return nil }
+
+        let components = dataString.components(separatedBy: ":")
+        guard components.count >= 4 else { return nil }
+
+        // 新格式：tab:{windowNumber}:{panelId}:{tabId}
+        return UUID(uuidString: components[3])
+    }
 }
 
 // MARK: - NSDraggingDestination
@@ -297,14 +310,9 @@ extension DomainPanelView {
         // 先清除高亮，无论成功与否
         clearHighlight()
 
-        // 解析拖拽数据（格式：tab:uuid）
+        // 解析拖拽数据（新格式）
         guard let dataString = sender.draggingPasteboard.string(forType: .string),
-              dataString.hasPrefix("tab:") else {
-            return false
-        }
-
-        let tabIdString = String(dataString.dropFirst(4))  // 去掉 "tab:" 前缀
-        guard let tabId = UUID(uuidString: tabIdString) else {
+              let tabId = parseDraggedTabId(dataString) else {
             return false
         }
 

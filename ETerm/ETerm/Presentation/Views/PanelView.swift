@@ -249,6 +249,16 @@ final class PanelView: NSView {
             setAccessibilityLabel("Panel")
         }
     }
+
+    /// 解析拖拽数据（新格式 tab:{windowNumber}:{panelId}:{tabId}）
+    private func parseDraggedTabId(_ dataString: String) -> UUID? {
+        guard dataString.hasPrefix("tab:") else { return nil }
+
+        let components = dataString.components(separatedBy: ":")
+        guard components.count >= 4 else { return nil }
+
+        return UUID(uuidString: components[3])
+    }
 }
 
 // MARK: - NSDraggingDestination
@@ -279,7 +289,7 @@ extension PanelView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         // 获取拖拽的 Tab ID
         guard let tabIdString = sender.draggingPasteboard.string(forType: .string),
-              let tabId = UUID(uuidString: tabIdString) else {
+              let tabId = parseDraggedTabId(tabIdString) else {
             return false
         }
 
