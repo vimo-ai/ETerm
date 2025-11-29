@@ -24,6 +24,7 @@ struct PageBarView: View {
 
     @Binding var pages: [PageItem]
     @Binding var activePageId: UUID?
+    @ObservedObject private var translationMode = TranslationModeStore.shared
 
     // MARK: - 回调
 
@@ -66,7 +67,14 @@ struct PageBarView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 8)
+            .padding(.trailing, 6)
+
+            StatusTabView(
+                text: translationMode.statusText,
+                isActive: translationMode.isEnabled,
+                onTap: { translationMode.toggle() }
+            )
+            .padding(.trailing, 12)
         }
         .frame(height: Self.barHeight)
     }
@@ -180,6 +188,35 @@ struct PageTabView: View {
             height: height,
             onClose: showCloseButton ? onClose : nil
         )
+        .onTapGesture {
+            onTap?()
+        }
+    }
+}
+
+// MARK: - Status Tab
+
+struct StatusTabView: View {
+    let text: String
+    let isActive: Bool
+    var onTap: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(isActive ? Color.green : Color.gray.opacity(0.6))
+                .frame(width: 8, height: 8)
+            Text(text)
+                .font(.caption)
+                .foregroundColor(isActive ? .primary : .secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isActive ? Color.green.opacity(0.15) : Color.gray.opacity(0.12))
+        )
+        .contentShape(Rectangle())
         .onTapGesture {
             onTap?()
         }
@@ -460,6 +497,7 @@ extension PageBarHostingView {
 
 /// 只包含红绿灯和添加按钮的控制栏
 struct PageBarControlsView: View {
+    @ObservedObject private var translationMode = TranslationModeStore.shared
     var onAddPage: (() -> Void)?
 
     var body: some View {
@@ -477,7 +515,14 @@ struct PageBarControlsView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 8)
+            .padding(.trailing, 6)
+
+            StatusTabView(
+                text: translationMode.statusText,
+                isActive: translationMode.isEnabled,
+                onTap: { translationMode.toggle() }
+            )
+            .padding(.trailing, 12)
         }
         .frame(height: 28)
     }
