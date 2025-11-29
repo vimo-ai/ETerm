@@ -1,0 +1,62 @@
+# ETerm 自定义主题配置 - Shuimo (水墨)
+#
+# 来源：从 Warp 自定义主题移植
+# 文件位置：~/.warp/themes/shuimo.yaml
+# 移植日期：2025-01-26
+#
+# ⚠️ 重要提示：
+# 当更新 Rio 子模块时，需要重新应用这些颜色到：
+# 1. rio/rio-backend/src/config/colors/defaults.rs - ANSI 颜色
+# 2. rio/rio-backend/src/config/colors/term.rs - TermColors::default() 实现
+# 3. sugarloaf-ffi/src/lib.rs - 背景透明度 (a: 0.3)
+#
+# 使用方法：
+# 1. 复制下面的颜色值到 defaults.rs
+# 2. 确保 term.rs 的 TermColors::default() 调用 Colors::default()
+# 3. 设置 Sugarloaf 背景透明度为 0.3
+# 4. 重新编译：./scripts/update_sugarloaf.sh
+
+[colors]
+# 基础颜色
+background = "#000000"  # 实际透明度由 Sugarloaf 控制 (alpha = 0.3)
+foreground = "#dbdadd"
+accent = "#861717"
+
+# ANSI Normal Colors
+black = "#0f1423"
+red = "#861717"
+green = "#4a9992"
+yellow = "#b58900"
+blue = "#268bd2"
+magenta = "#861717"
+cyan = "#2aa198"
+white = "#eee8d5"
+
+# ANSI Bright Colors (Light)
+light-black = "#0f1423"
+light-red = "#861717"
+light-green = "#4a9992"
+light-yellow = "#657b83"
+light-blue = "#839496"
+light-magenta = "#861717"
+light-cyan = "#93a1a1"
+light-white = "#fdf6e3"
+
+# UI 颜色（可选，根据需要调整）
+cursor = "#861717"
+# tabs = "#443d40"
+# tabs-foreground = "#7d7d7d"
+# tabs-active = "#303030"
+# tabs-active-foreground = "#dbdadd"
+# tabs-active-highlight = "#861717"
+
+[metadata]
+name = "Shuimo"
+description = "水墨主题 - 低饱和度护眼配色"
+based_on = "Solarized + 自定义调整"
+
+# 配色特点：
+# - 深黑背景 (#000000) 配合水墨画背景图
+# - 低饱和度色彩，护眼舒适
+# - 青绿色 (#4a9992) 作为主要强调色
+# - 暗红色 (#861717) 用于警告和错误

@@ -164,6 +164,34 @@ match find_font(&db, emoji_font, false, true)
 
 **修复**: 从 macOS fallback 列表中移除 `Apple Color Emoji`，由 `spec.emoji` 配置控制。
 
+### 3. 自定义颜色主题 (Shuimo 水墨)
+
+**文件**: `rio/rio-backend/src/config/colors/defaults.rs`
+
+**说明**: ETerm 使用从 Warp 自定义主题移植的 "Shuimo（水墨）" 配色方案，特点是低饱和度、护眼舒适。
+
+**配色方案**:
+- 背景色: `#000000` (深黑)
+- 前景色: `#dbdadd` (淡灰)
+- 主要强调色: `#4a9992` (青绿) - 用于目录、成功提示
+- 警告/错误色: `#861717` (暗红)
+
+**配置备份**: `.eterm-config/shuimo-theme.toml`
+
+**⚠️ 重要**: 当更新 Rio 子模块时，需要重新应用颜色配置：
+1. 参考 `.eterm-config/shuimo-theme.toml` 中的颜色值
+2. 修改 `rio/rio-backend/src/config/colors/defaults.rs` 中对应的 hex 值
+3. 重新编译：`./scripts/update_sugarloaf.sh`
+
+**快速恢复命令**:
+```bash
+# 查看备份的配色
+cat .eterm-config/shuimo-theme.toml
+
+# 修改 defaults.rs 后重新编译
+./scripts/update_sugarloaf.sh
+```
+
 ## 相关文档
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - DDD 架构详细设计

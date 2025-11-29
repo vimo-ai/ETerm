@@ -33,3 +33,6 @@ Cargo.lock
 # Auto-generated docs
 DDD_REFACTORING_SUMMARY.md
 TESTING_GUIDE.md
+
+# Local secrets
+.env
