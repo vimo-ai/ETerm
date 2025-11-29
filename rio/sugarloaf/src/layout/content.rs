@@ -441,6 +441,7 @@ impl Content {
                 &self.fonts,
                 &render_data,
                 &mut Graphics::default(),
+                rte.layout.dimensions.scale,
             ) {
                 rte.layout.dimensions.height = dimension.height;
                 rte.layout.dimensions.width = dimension.width;

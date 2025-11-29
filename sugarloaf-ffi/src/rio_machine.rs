@@ -245,8 +245,6 @@ where
 
                         // 检测进程切换
                         let process_changed = self.last_fg_process.as_ref() != Some(&fg_process_trimmed);
-                        let state_changed = self.last_process_state.as_ref() != Some(&process_state);
-
                         if process_changed {
                             if let Some(ref last) = self.last_fg_process {
                                 eprintln!("⚡ [进程切换] {} → {} | 状态: {} ({})",
@@ -255,12 +253,6 @@ where
                                 eprintln!("🔧 [初始进程] {} | 状态: {} ({}) | pid: {}",
                                           fg_process_trimmed, process_state, state_desc, fg_pid);
                             }
-                        } else if state_changed {
-                            eprintln!("🔄 [状态变化] {} | {} → {} | pid: {}",
-                                      fg_process_trimmed,
-                                      self.last_process_state.as_ref().unwrap_or(&"?".to_string()),
-                                      process_state,
-                                      fg_pid);
                         }
 
                         self.last_fg_process = Some(fg_process_trimmed);
@@ -568,4 +560,3 @@ pub fn send_resize(sender: &channel::Sender<Msg>, winsize: teletypewriter::Winsi
 pub fn send_shutdown(sender: &channel::Sender<Msg>) -> bool {
     sender.send(Msg::Shutdown).is_ok()
 }
-

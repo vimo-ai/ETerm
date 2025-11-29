@@ -93,6 +93,15 @@ impl RichTextBrush {
                         ),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX
+                            | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(
+                            wgpu::SamplerBindingType::Filtering,
+                        ),
+                        count: None,
+                    },
                 ],
             });
 
@@ -139,7 +148,20 @@ impl RichTextBrush {
 
         let images = ImageCache::new(context);
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        // Emoji/color glyphs benefit from linear filtering; mask alpha stays nearest.
+        let color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            lod_min_clamp: 0f32,
+            lod_max_clamp: 0f32,
+            ..Default::default()
+        });
+
+        let mask_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -164,7 +186,11 @@ impl RichTextBrush {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(&color_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&mask_sampler),
                 },
             ],
             label: Some("rich_text::constant_bind_group"),
@@ -284,6 +310,15 @@ impl RichTextBrush {
         self.comp.begin();
         let library = state.content.font_library();
 
+        // Prefer oversampling color glyphs (emoji) at fixed 2x to avoid aliasing.
+        let supersample_scale = 2.0;
+        if supersample_scale > 1.0 {
+            // Force rebuild of cached glyphs/vertices so supersampled emoji take effect.
+            self.text_run_manager.clear_all();
+            self.glyphs = GlyphCache::new();
+            self.images.clear_atlas();
+        }
+
         for rich_text in &state.rich_texts {
             if let Some(rt) = state.content.get_state(&rich_text.id) {
                 // Check if this specific rich text needs cache invalidation
@@ -314,6 +349,7 @@ impl RichTextBrush {
                     library,
                     Some(&rt.layout),
                     graphics,
+                    supersample_scale,
                 );
             }
         }
@@ -329,11 +365,21 @@ impl RichTextBrush {
         font_library: &FontLibrary,
         render_data: &crate::layout::BuilderLine,
         graphics: &mut Graphics,
+        supersample_scale: f32,
     ) -> Option<SugarDimensions> {
         self.comp.begin();
 
         let lines = vec![render_data.clone()];
-        self.draw_layout(0, &lines, &None, None, font_library, None, graphics)
+        self.draw_layout(
+            0,
+            &lines,
+            &None,
+            None,
+            font_library,
+            None,
+            graphics,
+            supersample_scale,
+        )
     }
 
     /// Extract font metrics using per-font calculation.
@@ -383,6 +429,7 @@ impl RichTextBrush {
         font_library: &FontLibrary,
         rte_layout: Option<&RichTextLayout>,
         graphics: &mut Graphics,
+        supersample_scale: f32,
     ) -> Option<SugarDimensions> {
         if lines.is_empty() {
             return None;
@@ -435,6 +482,7 @@ impl RichTextBrush {
                 font_library,
                 font_coords,
                 current_font_size,
+                supersample_scale,
             );
 
             // Calculate line height with modifier if available
@@ -596,6 +644,7 @@ impl RichTextBrush {
                                         font_library,
                                         font_coords,
                                         style.font_size,
+                                        supersample_scale,
                                     );
                                 }
 
@@ -695,6 +744,7 @@ impl RichTextBrush {
                                         font_library,
                                         font_coords,
                                         style.font_size,
+                                        supersample_scale,
                                     );
                                 }
 

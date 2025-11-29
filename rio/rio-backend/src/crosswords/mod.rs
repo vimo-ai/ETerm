@@ -2298,24 +2298,19 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     #[inline]
     fn device_status(&mut self, arg: usize) {
-        eprintln!("[CPR DEBUG] device_status called with arg: {}", arg);
         match arg {
             5 => {
                 let text = String::from("\x1b[0n");
-                eprintln!("[CPR DEBUG] Sending device status response: {:?}", text);
                 self.event_proxy
                     .send_event(RioEvent::PtyWrite(text), self.window_id);
             }
             6 => {
                 let pos = self.grid.cursor.pos;
                 let text = format!("\x1b[{};{}R", pos.row + 1, pos.col + 1);
-                eprintln!("[CPR DEBUG] Sending CPR response: {:?}, cursor pos: row={}, col={}", text, pos.row, pos.col);
-                eprintln!("[CPR DEBUG] Before send_event call");
                 self.event_proxy
                     .send_event(RioEvent::PtyWrite(text), self.window_id);
-                eprintln!("[CPR DEBUG] After send_event call");
             }
-            _ => eprintln!("[CPR DEBUG] unknown device status query: {}", arg),
+            _ => {}
         };
     }
 

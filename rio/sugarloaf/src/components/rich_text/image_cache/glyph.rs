@@ -49,6 +49,7 @@ impl GlyphCache {
         font_library: &'a FontLibrary,
         coords: &[i16],
         size: f32,
+        supersample_scale: f32,
     ) -> GlyphCacheSession<'a> {
         // let quant_size = (size * 32.) as u16;
         let quant_size = size as u16;
@@ -62,6 +63,7 @@ impl GlyphCache {
             scaled_image: &mut self.img,
             quant_size,
             scale_context: &mut self.scx,
+            supersample_scale,
         }
     }
 
@@ -104,6 +106,7 @@ pub struct GlyphCacheSession<'a> {
     quant_size: u16,
     #[allow(unused)]
     max_height: &'a u16,
+    supersample_scale: f32,
 }
 
 impl GlyphCacheSession<'_> {
@@ -119,7 +122,13 @@ impl GlyphCacheSession<'_> {
         };
         if let Some(entry) = self.entry.glyphs.get(&key) {
             if self.images.is_valid(entry.image) {
-                return Some(*entry);
+                // If we have a bitmap glyph but it was cached without the desired
+                // supersample factor, re-render to improve quality.
+                let needs_supersample = entry.is_bitmap
+                    && self.supersample_scale > entry.supersample_scale + 0.01;
+                if !needs_supersample {
+                    return Some(*entry);
+                }
             }
         }
 
@@ -130,6 +139,8 @@ impl GlyphCacheSession<'_> {
         );
 
         self.scaled_image.data.clear();
+        let target_supersample = self.supersample_scale.max(1.0);
+        let mut render_scale = 1.0;
         let font_library_data = self.font_library.inner.read();
         let enable_hint = font_library_data.hinting;
         let font_data = font_library_data.get(&self.font);
@@ -144,36 +155,43 @@ impl GlyphCacheSession<'_> {
                 offset,
                 key: cache_key,
             };
-            let mut scaler = self
-                .scale_context
-                .builder(font_ref)
-                // With the advent of high-DPI displays (displays with >300 pixels per inch),
-                // font hinting has become less relevant, as aliasing effects become
-                // un-noticeable to the human eye.
-                // As a result Apple's Quartz text renderer, which is targeted for Retina displays,
-                // now ignores font hint information completely.
-                // .hint(!IS_MACOS)
-                .hint(enable_hint)
-                .size(self.quant_size.into())
-                // .normalized_coords(coords)
-                .build();
+            'render: loop {
+                let target_size =
+                    (self.quant_size as f32 * render_scale).ceil() as u16;
 
-            // 使用 skrifa 光栅化
-            // let embolden = if IS_MACOS { 0.25 } else { 0. };
-            if Render::new(SOURCES)
-                .format(Format::Alpha)  // 改回灰度抗锯齿
-                // .offset(Vector::new(subpx[0].to_f32(), subpx[1].to_f32()))
-                .embolden(if should_embolden { 0.5 } else { 0.0 })
-                .transform(if should_italicize {
-                    Some(Transform::skew(
-                        Angle::from_degrees(14.0),
-                        Angle::from_degrees(0.0),
-                    ))
-                } else {
-                    None
-                })
-                .render_into(&mut scaler, id, self.scaled_image)
-            {
+                let mut scaler = self
+                    .scale_context
+                    .builder(font_ref)
+                    // With the advent of high-DPI displays (displays with >300 pixels per inch),
+                    // font hinting has become less relevant, as aliasing effects become
+                    // un-noticeable to the human eye.
+                    // As a result Apple's Quartz text renderer, which is targeted for Retina displays,
+                    // now ignores font hint information completely.
+                    // .hint(!IS_MACOS)
+                    .hint(enable_hint)
+                    .size(target_size.into())
+                    // .normalized_coords(coords)
+                    .build();
+
+                // 使用 skrifa 光栅化
+                // let embolden = if IS_MACOS { 0.25 } else { 0. };
+                if !Render::new(SOURCES)
+                    .format(Format::Alpha)  // 改回灰度抗锯齿
+                    // .offset(Vector::new(subpx[0].to_f32(), subpx[1].to_f32()))
+                    .embolden(if should_embolden { 0.5 } else { 0.0 })
+                    .transform(if should_italicize {
+                        Some(Transform::skew(
+                            Angle::from_degrees(14.0),
+                            Angle::from_degrees(0.0),
+                        ))
+                    } else {
+                        None
+                    })
+                    .render_into(&mut scaler, id, self.scaled_image)
+                {
+                    break;
+                }
+
                 let p = self.scaled_image.placement;
                 let w = p.width as u16;
                 let h = p.height as u16;
@@ -186,10 +204,26 @@ impl GlyphCacheSession<'_> {
                         width: w,
                         height: h,
                         image: ImageId::empty(), // Use a special empty image ID
+                        supersample_scale: 1.0,
                         is_bitmap: false,
                     };
                     self.entry.glyphs.insert(key, entry);
                     return Some(entry);
+                }
+
+                let is_color_glyph = matches!(
+                    self.scaled_image.content,
+                    Content::Color | Content::SubpixelMask
+                );
+
+                // For color glyphs (emoji), render at a higher scale when available.
+                if is_color_glyph
+                    && target_supersample > 1.0
+                    && render_scale + 0.01 < target_supersample
+                {
+                    render_scale = target_supersample;
+                    self.scaled_image.data.clear();
+                    continue 'render;
                 }
 
                 // Use the appropriate content type and data format
@@ -248,13 +282,14 @@ impl GlyphCacheSession<'_> {
                 // }
 
                 let entry = GlyphEntry {
-                    left: p.left,
-                    top: p.top,
-                    width: w,
-                    height: h,
+                    left: (p.left as f32 / render_scale).round() as i32,
+                    top: (p.top as f32 / render_scale).round() as i32,
+                    width: ((w as f32 / render_scale).ceil()) as u16,
+                    height: ((h as f32 / render_scale).ceil()) as u16,
                     image,
+                    supersample_scale: render_scale,
                     // Color 内容走 color 路径，Alpha 走 mask 路径
-                    is_bitmap: self.scaled_image.content == Content::Color,
+                    is_bitmap: is_color_glyph,
                 };
 
                 self.entry.glyphs.insert(key, entry);
@@ -345,6 +380,7 @@ pub struct GlyphEntry {
     pub width: u16,
     pub height: u16,
     pub image: ImageId,
+    pub supersample_scale: f32,
     pub is_bitmap: bool,
     // pub desc: DescenderRegion,
 }
