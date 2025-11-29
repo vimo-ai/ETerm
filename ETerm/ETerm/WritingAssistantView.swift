@@ -131,7 +131,7 @@ struct WritingAssistantView: View {
 
         Task {
             do {
-                try await OllamaService.shared.checkWriting(text) { result in
+                try await AIService.shared.checkWriting(text) { result in
                     self.suggestions = result
                     self.isLoading = false
                 }

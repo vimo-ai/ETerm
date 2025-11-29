@@ -8,6 +8,18 @@
 import SwiftUI
 import AppKit
 
+// MARK: - Theme (Shuimo-inspired)
+private enum ComposerTheme {
+    static let accent = Color(red: 0x4a/255, green: 0x99/255, blue: 0x92/255)
+    static let success = Color(red: 0x73/255, green: 0xc9/255, blue: 0x91/255)
+    static let warning = Color(red: 0xfc/255, green: 0xa1/255, blue: 0x04/255)
+    static let danger = Color(red: 0xc7/255, green: 0x4e/255, blue: 0x39/255)
+    static let info = Color(red: 0x00/255, green: 0x7a/255, blue: 0xcc/255)
+    static let surface = Color(red: 0x1e/255, green: 0x1e/255, blue: 0x1e/255).opacity(0.95)
+    static let border = Color(red: 0x09/255, green: 0x47/255, blue: 0x71/255).opacity(0.75)
+    static let textSecondary = Color(red: 0x7f/255, green: 0x84/255, blue: 0x8e/255)
+}
+
 // MARK: - PreferenceKey for Input Area Height
 
 struct ComposerInputHeightKey: PreferenceKey {
@@ -168,13 +180,12 @@ struct PathGradientBorder: View {
     let lineWidth: CGFloat
     @State private var phase: CGFloat = 0
 
-    // 紫粉色系
+    // Shuimo-inspired teal/blue ribbon（去掉黄，只保留冷色系过渡）
     private let colors: [SIMD4<Float>] = [
-        SIMD4<Float>(0.74, 0.51, 0.95, 1.0),  // 紫
-        SIMD4<Float>(0.96, 0.73, 0.92, 1.0),  // 粉
-        SIMD4<Float>(0.55, 0.62, 1.0, 1.0),   // 蓝紫
-        SIMD4<Float>(0.78, 0.53, 0.93, 1.0),  // 淡紫
-        SIMD4<Float>(0.67, 0.43, 0.93, 1.0),  // 深紫
+        SIMD4<Float>(74.0/255.0, 153.0/255.0, 146.0/255.0, 1.0),  // teal
+        SIMD4<Float>(0.0/255.0, 122.0/255.0, 204.0/255.0, 1.0),   // blue
+        SIMD4<Float>(22.0/255.0, 97.0/255.0, 171.0/255.0, 1.0),   // deep blue
+        SIMD4<Float>(74.0/255.0, 153.0/255.0, 146.0/255.0, 1.0),  // teal
     ]
 
     var body: some View {
@@ -487,7 +498,7 @@ struct InlineComposerView: View {
             // 输入区（多行）
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "sparkles")
-                    .foregroundColor(.purple)
+                    .foregroundColor(ComposerTheme.accent)
                     .font(.system(size: 14))
                     .padding(.top, 4)
 
@@ -502,7 +513,7 @@ struct InlineComposerView: View {
                 } else {
                     Button(action: checkWritingWithTools) {
                         Image(systemName: "arrow.right.circle.fill")
-                            .foregroundColor(inputText.isEmpty ? .gray : .purple)
+                            .foregroundColor(inputText.isEmpty ? .gray : ComposerTheme.accent)
                     }
                     .buttonStyle(.plain)
                     .disabled(inputText.isEmpty)
@@ -523,7 +534,7 @@ struct InlineComposerView: View {
                             .scaleEffect(0.7)
                         Text("AI 思考中...")
                             .font(.system(size: 13))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(ComposerTheme.textSecondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 16)
@@ -578,12 +589,12 @@ struct InlineComposerView: View {
                                                     Text("❌")
                                                     Text(fix.original)
                                                         .strikethrough()
-                                                        .foregroundColor(.red)
+                                                        .foregroundColor(ComposerTheme.danger)
                                                 }
                                                 HStack {
                                                     Text("✅")
                                                     Text(fix.corrected)
-                                                        .foregroundColor(.green)
+                                                        .foregroundColor(ComposerTheme.success)
                                                 }
                                                 Text("错误类型: \(fix.errorType)")
                                                     .font(.system(size: 11))
@@ -600,9 +611,9 @@ struct InlineComposerView: View {
                                         ForEach(Array(suggestions.enumerated()), id: \.offset) { _, suggestion in
                                             VStack(alignment: .leading, spacing: 4) {
                                                 Text("当前: \(suggestion.current)")
-                                                    .foregroundColor(.orange)
+                                                    .foregroundColor(ComposerTheme.warning)
                                                 Text("建议: \(suggestion.idiomatic)")
-                                                    .foregroundColor(.green)
+                                                    .foregroundColor(ComposerTheme.success)
                                                 Text(suggestion.explanation)
                                                     .font(.system(size: 11))
                                                     .foregroundColor(.secondary)
@@ -620,7 +631,7 @@ struct InlineComposerView: View {
                                                 Text("完整英文版本:")
                                                     .font(.system(size: 12, weight: .semibold))
                                                 Text(pureEnglish)
-                                                    .foregroundColor(.green)
+                                                    .foregroundColor(ComposerTheme.success)
                                             }
                                             .padding(.vertical, 4)
                                         }
@@ -628,9 +639,9 @@ struct InlineComposerView: View {
                                         ForEach(Array(translations.enumerated()), id: \.offset) { _, translation in
                                             HStack(alignment: .top) {
                                                 Text("\(translation.chinese) →")
-                                                    .foregroundColor(.orange)
+                                                    .foregroundColor(ComposerTheme.warning)
                                                 Text(translation.english)
-                                                    .foregroundColor(.green)
+                                                    .foregroundColor(ComposerTheme.success)
                                             }
                                             .padding(.vertical, 2)
                                         }
@@ -651,10 +662,10 @@ struct InlineComposerView: View {
                                             }
                                         }
                                         .font(.system(size: 12))
-                                        .foregroundColor(.purple)
+                                        .foregroundColor(ComposerTheme.accent)
                                         .padding(.vertical, 8)
                                         .padding(.horizontal, 12)
-                                        .background(Color.purple.opacity(0.1))
+                                        .background(ComposerTheme.accent.opacity(0.12))
                                         .cornerRadius(6)
                                     }
                                     .buttonStyle(.plain)
@@ -669,7 +680,7 @@ struct InlineComposerView: View {
                                             VStack(alignment: .leading, spacing: 4) {
                                                 Text(point.rule)
                                                     .font(.system(size: 12, weight: .semibold))
-                                                    .foregroundColor(.purple)
+                                                    .foregroundColor(ComposerTheme.accent)
                                                 Text(point.explanation)
                                                     .font(.system(size: 12))
                                                 if !point.examples.isEmpty {
@@ -704,11 +715,15 @@ struct InlineComposerView: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: 14)
+                .fill(ComposerTheme.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(ComposerTheme.border, lineWidth: 1)
+                )
         )
-        .overlay(PathGradientBorder(cornerRadius: 12, lineWidth: 2.5))
-        .shadow(color: Color.purple.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 8)
+        .overlay(PathGradientBorder(cornerRadius: 14, lineWidth: 2.5))
+        .shadow(color: ComposerTheme.accent.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: 8)
         .padding(.horizontal, 20)
         .overlay(
             GeometryReader { geo in
@@ -742,10 +757,10 @@ struct InlineComposerView: View {
             HStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.system(size: 11))
-                    .foregroundColor(.purple)
+                    .foregroundColor(ComposerTheme.accent)
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.purple)
+                    .foregroundColor(ComposerTheme.accent)
             }
             content()
         }
@@ -755,6 +770,11 @@ struct InlineComposerView: View {
     /// 辅助方法：创建状态标签
     @ViewBuilder
     private func statusTag(title: String, isLoading: Bool, isOK: Bool, okText: String, issueText: String) -> some View {
+        let baseColor: Color = {
+            if isLoading { return ComposerTheme.textSecondary }
+            return isOK ? ComposerTheme.success : ComposerTheme.warning
+        }()
+
         HStack(spacing: 4) {
             if isLoading {
                 ProgressView()
@@ -769,10 +789,10 @@ struct InlineComposerView: View {
                     .font(.system(size: 11, weight: .medium))
             }
         }
-        .foregroundColor(isLoading ? .secondary : (isOK ? .green : .orange))
+        .foregroundColor(baseColor)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background((isLoading ? Color.secondary : (isOK ? Color.green : Color.orange)).opacity(0.12))
+        .background(baseColor.opacity(0.12))
         .cornerRadius(6)
     }
 
@@ -793,14 +813,14 @@ struct InlineComposerView: View {
         Task { @MainActor in
             do {
                 // Stage 1: Dispatcher - 流式显示 reasoning
-                let plan = try await OllamaService.shared.analyzeDispatcher(text) { updatedReasoning in
+                let plan = try await AIService.shared.analyzeDispatcher(text) { updatedReasoning in
                     self.reasoning = updatedReasoning
                 }
                 // 保存分析计划，UI 可以显示
                 self.currentPlan = plan
 
                 // Stage 2: 并行执行具体分析
-                let result = try await OllamaService.shared.performAnalysis(text, plan: plan)
+                let result = try await AIService.shared.performAnalysis(text, plan: plan)
                 self.analysisResult = result
                 self.isLoading = false
             } catch {
@@ -820,7 +840,7 @@ struct InlineComposerView: View {
 
         Task { @MainActor in
             do {
-                let points = try await OllamaService.shared.getDetailedExplanation(text)
+                let points = try await AIService.shared.getDetailedExplanation(text)
                 self.detailedExplanation = points
                 self.showDetailedExplanation = true
                 self.isLoadingDetail = false
@@ -842,7 +862,7 @@ struct InlineComposerView: View {
         Task { @MainActor in
             do {
                 var hasReceivedContent = false
-                try await OllamaService.shared.checkWriting(text) { result in
+                try await AIService.shared.checkWriting(text) { result in
                     if !hasReceivedContent {
                         hasReceivedContent = true
                         self.isLoading = false

@@ -146,7 +146,7 @@ struct SentenceUnderstandingView: View {
 
         Task {
             do {
-                try await OllamaService.shared.analyzeSentence(text) { trans, grammar in
+                try await AIService.shared.analyzeSentence(text) { trans, grammar in
                     self.translation = trans
                     self.grammarAnalysis = grammar
                     self.isLoading = false

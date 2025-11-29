@@ -226,7 +226,7 @@ struct WordLearningView: View {
                     }
                 }
 
-                let translated = try await OllamaService.shared.translateDictionaryContent(definitions: definitionsToTranslate)
+                let translated = try await AIService.shared.translateDictionaryContent(definitions: definitionsToTranslate)
 
                 await MainActor.run {
                     translations = translated

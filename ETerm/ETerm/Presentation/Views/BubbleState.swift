@@ -28,7 +28,7 @@ class BubbleState: ObservableObject {
         case loading
         case dictionary(DictionaryWord, translations: [(String, String?)])  // 单词：词典数据 + 中文翻译
         case translation(String)                                            // 短语/句子：翻译结果
-        case analysis(translation: String, grammar: String)                 // 句子分析（翻译 + 语法）
+        case analysis                                                       // 句子分析（翻译 + 语法），具体内容单独存储以便流式更新
         case error(String)
     }
 
@@ -38,6 +38,15 @@ class BubbleState: ObservableObject {
     @Published var originalText: String = ""
     @Published var position: CGPoint = .zero
     @Published var content: Content = .idle
+    /// 当前使用的模型名，用于 UI 标签
+    @Published var currentModelTag: String = ""
+    /// 流式句子分析 - 翻译
+    @Published var analysisTranslation: String = ""
+    /// 流式句子分析 - 语法
+    @Published var analysisGrammar: String = ""
+    /// 控制流式更新的节流间隔，避免视图频繁重建导致闪烁
+    private let analysisUpdateMinInterval: TimeInterval = 0.05  // ~20fps
+    private var lastAnalysisUpdate: Date = .distantPast
 
     // MARK: - Computed Properties
 
@@ -68,6 +77,11 @@ class BubbleState: ObservableObject {
     /// 更新文本并重新加载（用于已展开状态下的新选词）
     func updateText(_ text: String) {
         let newText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 当翻译窗口已展开时，忽略单字符点击，避免误触触发新的翻译请求
+        if mode == .expanded && newText.count == 1 {
+            return
+        }
 
         // 如果文本相同，不重复加载
         guard newText != originalText else { return }
@@ -107,6 +121,10 @@ class BubbleState: ObservableObject {
     /// 加载内容（核心业务逻辑）
     func loadContent() async {
         content = .loading
+        currentModelTag = ""
+        analysisTranslation = ""
+        analysisGrammar = ""
+        lastAnalysisUpdate = .distantPast
 
         let text = originalText
 
@@ -117,6 +135,7 @@ class BubbleState: ObservableObject {
                     let word = try await DictionaryService.shared.lookup(text)
                     // 先显示英文词典内容
                     content = .dictionary(word, translations: [])
+                    currentModelTag = "词典"
 
                     // 异步加载中文翻译
                     Task {
@@ -124,28 +143,55 @@ class BubbleState: ObservableObject {
                     }
                 } catch DictionaryError.wordNotFound {
                     // 词典查不到（专有名词等），降级翻译
-                    let result = try await OllamaService.shared.translate(text)
+                    let result = try await AIService.shared.translate(text)
                     content = .translation(result)
+                    currentModelTag = "qwen-mt-flash"
                 }
             } else {
                 // 句子/短语 → 句子分析（翻译 + 语法）
-                var translation = ""
-                var grammar = ""
+                var receivedStreaming = false
+                var didShowAnalysis = false
+                var finalTranslation = ""
+                var finalGrammar = ""
 
-                try await OllamaService.shared.analyzeSentence(text) { trans, gram in
-                    translation = trans
-                    grammar = gram
-                    // 流式更新 UI
-                    self.content = .analysis(translation: translation, grammar: grammar)
+                try await AIService.shared.analyzeSentence(text) { trans, gram in
+                    receivedStreaming = true
+                    finalTranslation = trans
+                    finalGrammar = gram
+
+                    let now = Date()
+                    // 节流：降低 UI 刷新频率，避免闪烁
+                    guard now.timeIntervalSince(self.lastAnalysisUpdate) >= self.analysisUpdateMinInterval else {
+                        return
+                    }
+                    self.lastAnalysisUpdate = now
+
+                    withTransaction(Transaction(animation: nil)) {
+                        self.analysisTranslation = trans
+                        self.analysisGrammar = gram
+                    }
+
+                    // 首次收到内容时切换到分析模式，后续仅更新字符串，避免视图重建闪烁
+                    if !didShowAnalysis {
+                        self.content = .analysis
+                        self.currentModelTag = "qwen3-max"
+                        didShowAnalysis = true
+                    }
                 }
 
                 // 最终结果
-                if !translation.isEmpty {
-                    content = .analysis(translation: translation, grammar: grammar)
+                if receivedStreaming, !analysisTranslation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    withTransaction(Transaction(animation: nil)) {
+                        self.analysisTranslation = finalTranslation
+                        self.analysisGrammar = finalGrammar
+                        content = .analysis
+                    }
+                    currentModelTag = "qwen3-max"
                 } else {
                     // 降级到普通翻译
-                    let result = try await OllamaService.shared.translate(text)
+                    let result = try await AIService.shared.translate(text)
                     content = .translation(result)
+                    currentModelTag = "qwen-mt-flash"
                 }
             }
         } catch {
@@ -169,14 +215,23 @@ class BubbleState: ObservableObject {
             }
         }
 
-        do {
-            let translations = try await OllamaService.shared.translateDictionaryContent(definitions: definitionsToTranslate)
+        // 并行翻译，每个结果返回就更新 UI
+        var translations: [(String, String?)] = Array(repeating: ("", nil), count: definitionsToTranslate.count)
 
-            // 更新内容（保持当前 word，添加翻译）
-            content = .dictionary(word, translations: translations)
-        } catch {
-            // 翻译失败时，保持英文内容不变
-            print("翻译失败: \(error.localizedDescription)")
+        await withTaskGroup(of: (Int, String, String?).self) { group in
+            for (index, item) in definitionsToTranslate.enumerated() {
+                group.addTask {
+                    let def = try? await AIService.shared.translate(item.0)
+                    let ex = item.1 != nil ? (try? await AIService.shared.translate(item.1!)) : nil
+                    return (index, def ?? "", ex)
+                }
+            }
+
+            for await (index, def, ex) in group {
+                translations[index] = (def, ex)
+                content = .dictionary(word, translations: translations)
+                currentModelTag = "qwen-mt-flash"
+            }
         }
     }
 
@@ -219,8 +274,8 @@ class BubbleState: ObservableObject {
         case .translation(let text):
             pasteboard.setString(text, forType: .string)
 
-        case .analysis(let translation, let grammar):
-            let text = "翻译：\(translation)\n\n语法分析：\(grammar)"
+        case .analysis:
+            let text = "翻译：\(analysisTranslation)\n\n语法分析：\(analysisGrammar)"
             pasteboard.setString(text, forType: .string)
 
         default:
@@ -234,5 +289,16 @@ class BubbleState: ObservableObject {
             x: position.x + offset.width,
             y: position.y + offset.height
         )
+    }
+
+    // MARK: - Model tag for UI
+
+    var modelTag: String {
+        switch content {
+        case .dictionary:
+            return "词典"
+        default:
+            return currentModelTag
+        }
     }
 }

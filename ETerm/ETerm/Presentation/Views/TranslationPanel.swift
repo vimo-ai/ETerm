@@ -11,6 +11,23 @@ import SwiftUI
 import AppKit
 import Combine
 
+// MARK: - Translation Mode
+
+@MainActor
+final class TranslationModeStore: ObservableObject {
+    static let shared = TranslationModeStore()
+
+    @Published var isEnabled: Bool = false
+
+    var statusText: String {
+        isEnabled ? "翻译模式：开" : "翻译模式：关"
+    }
+
+    func toggle() {
+        isEnabled.toggle()
+    }
+}
+
 // MARK: - Translation Controller
 
 /// 翻译功能控制器（单例）
@@ -88,6 +105,12 @@ final class TranslationController: NSObject {
         }
     }
 
+    /// 直接展开并翻译（用于翻译模式自动触发）
+    func translateImmediately(text: String, at rect: NSRect, in view: NSView) {
+        show(text: text, at: rect, in: view)
+        state.expand()
+    }
+
     /// 隐藏所有
     func hide() {
         state.hide()
@@ -121,18 +144,6 @@ final class TranslationController: NSObject {
     }
 
     private func showTranslationWindow() {
-        // 计算窗口位置（基于来源视图）
-        if let view = sourceView, let window = view.window {
-            let viewPoint = NSPoint(
-                x: sourceRect.midX,
-                y: sourceRect.maxY + 10
-            )
-            let windowPoint = view.convert(viewPoint, to: nil)
-            let screenPoint = window.convertPoint(toScreen: windowPoint)
-
-            translationWindow.positionNear(screenPoint: screenPoint)
-        }
-
         translationWindow.orderFront(nil)
     }
 
@@ -236,7 +247,7 @@ final class TranslationWindow: NSPanel {
             }
         }
 
-        setFrameOrigin(origin)
+        super.setFrameOrigin(origin)
     }
 
     // 关闭时同步状态
@@ -287,7 +298,7 @@ struct TranslationContentView: View {
         case .dictionary:
             TagView(text: "词典", color: .green)
         case .translation, .analysis:
-            TagView(text: "AI", color: .blue)
+            TagView(text: state.modelTag, color: .blue)
         default:
             EmptyView()
         }
@@ -323,8 +334,11 @@ struct TranslationContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-        case .analysis(let translation, let grammar):
-            AnalysisView(translation: translation, grammar: grammar)
+        case .analysis:
+            AnalysisView(
+                translation: state.analysisTranslation,
+                grammar: state.analysisGrammar
+            )
 
         case .error(let message):
             VStack(spacing: 8) {

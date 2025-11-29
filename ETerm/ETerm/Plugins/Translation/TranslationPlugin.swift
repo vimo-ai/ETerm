@@ -23,8 +23,13 @@ final class TranslationPlugin: Plugin {
     /// 选中事件订阅
     private var selectionSubscription: EventSubscription?
 
+    /// 划词翻译触发防抖
+    private var selectionDebounce: DispatchWorkItem?
+
     /// 插件上下文（弱引用）
     private weak var context: PluginContext?
+    /// 翻译模式状态
+    private let translationMode = TranslationModeStore.shared
 
     // MARK: - 初始化
 
@@ -48,6 +53,8 @@ final class TranslationPlugin: Plugin {
         // 取消订阅
         selectionSubscription?.unsubscribe()
         selectionSubscription = nil
+        selectionDebounce?.cancel()
+        selectionDebounce = nil
 
         // 注销命令
         context?.commands.unregister("translation.show")
@@ -98,13 +105,26 @@ final class TranslationPlugin: Plugin {
             return
         }
 
-        // 异步显示翻译面板（避免阻塞事件发布者）
-        DispatchQueue.main.async {
-            TranslationController.shared.show(
-                text: trimmed,
-                at: payload.screenRect,
-                in: view
-            )
+        // 异步显示翻译面板（避免阻塞事件发布者），并做 1s 防抖
+        selectionDebounce?.cancel()
+        let workItem = DispatchWorkItem {
+            let controller = TranslationController.shared
+
+            if self.translationMode.isEnabled {
+                controller.translateImmediately(
+                    text: trimmed,
+                    at: payload.screenRect,
+                    in: view
+                )
+            } else if controller.state.mode != .expanded {
+                controller.show(
+                    text: trimmed,
+                    at: payload.screenRect,
+                    in: view
+                )
+            }
         }
+        selectionDebounce = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
     }
 }
