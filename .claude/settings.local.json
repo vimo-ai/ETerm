@@ -1,4 +1,13 @@
 {
+  "hooks": {
+    "Stop": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "bash .claude/hooks/test_stop.sh"
+      }]
+    }]
+  },
   "permissions": {
     "allow": [
       "WebFetch(domain:github.com)",
@@ -30,7 +39,27 @@
       "Bash(git reset:*)",
       "Bash(git rm:*)",
       "WebFetch(domain:stackoverflow.com)",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:nilcoalescing.com)",
+      "WebFetch(domain:wwdcnotes.com)",
+      "WebFetch(domain:yaacoub.github.io)",
+      "WebFetch(domain:troz.net)",
+      "Bash(git config:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo tree:*)",
+      "WebFetch(domain:docs.warp.dev)",
+      "WebFetch(domain:code.visualstudio.com)",
+      "Bash(ETerm/ETerm/Domain/Aggregates/TerminalWindow.swift )",
+      "Bash(ETerm/ETerm/Infrastructure/Coordination/TerminalWindowCoordinator.swift )",
+      "Bash(ETerm/ETerm/Infrastructure/Window/WindowManager.swift)",
+      "Bash(ETerm/ETerm/Domain/Services/WordBoundaryDetector.swift)",
+      "Bash(ETerm/ETerm/Presentation/Views/PanelHeaderView.swift )",
+      "Bash(ETerm/ETerm/Presentation/Views/PageBarView.swift )",
+      "Bash(ETerm/ETerm/Presentation/Views/PageItemView.swift )",
+      "Bash(ETerm/ETerm/Presentation/Views/TabItemView.swift )",
+      "Bash(ETerm/ETerm/Presentation/Views/RioTerminalView.swift)",
+      "Bash(ETerm/ETerm/OllamaService.swift)",
+      "WebFetch(domain:iterm2.com)"
     ],
     "deny": [],
     "ask": []
