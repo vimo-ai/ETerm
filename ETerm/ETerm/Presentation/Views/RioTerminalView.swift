@@ -604,8 +604,6 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 只有 scale 变化时才更新
         if abs(newScale - currentScale) > 0.01 {
-            print("🔄 Scale changed: \(currentScale) -> \(newScale), bounds: \(bounds.size)")
-
             // 1. 更新 layer 的 scale
             layer?.contentsScale = newScale
 
@@ -629,8 +627,6 @@ class RioMetalView: NSView, RenderViewProtocol {
 
             // 7. 重新渲染
             requestRender()
-
-            print("✅ Scale update complete")
         }
     }
 
@@ -661,8 +657,6 @@ class RioMetalView: NSView, RenderViewProtocol {
         // Rust 侧的 resize 会自动用 scale 计算物理像素
         let width = Float(bounds.width)
         let height = Float(bounds.height)
-
-        print("📏 layout() -> scale: \(scale), bounds (logical): \(width)x\(height)")
 
         if width > 0 && height > 0 {
             sugarloaf_resize(sugarloaf, width, height)
