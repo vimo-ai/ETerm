@@ -1,0 +1,29 @@
+[package]
+name = "sugarloaf-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[[example]]
+name = "visual_test"
+path = "examples/visual_test.rs"
+
+[dependencies]
+sugarloaf = { path = "../sugarloaf" }
+raw-window-handle = "0.6.2"
+wgpu = "27.0.1"
+
+# Skia (macOS only)
+[target.'cfg(target_os = "macos")'.dependencies]
+skia-safe = { version = "0.82.0", features = ["metal", "textlayout"] }
+
+# 终端相关依赖 (RIO)
+teletypewriter = { path = "../teletypewriter" }
+rio-backend = { path = "../rio-backend" }
+parking_lot = "0.12.4"
+libc = "0.2.174"
+
+# 事件驱动 PTY (mio fork)
+corcovado = { path = "../corcovado" }
