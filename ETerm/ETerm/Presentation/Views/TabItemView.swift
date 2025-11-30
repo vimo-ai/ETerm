@@ -30,6 +30,9 @@ final class TabItemView: NSView {
     /// 是否激活
     private var isActive: Bool = false
 
+    /// 所属 Page 是否激活
+    private var isPageActive: Bool = true
+
     /// SwiftUI 水墨标签视图
     private var hostingView: NSHostingView<ShuimoTabView>?
 
@@ -38,6 +41,12 @@ final class TabItemView: NSView {
 
     /// 是否真正发生了拖动（鼠标移动）
     private var didActuallyDrag: Bool = false
+
+    /// Rust Terminal ID（用于 Claude 响应匹配）
+    var rustTerminalId: Int?
+
+    /// Claude 响应完成提醒状态
+    private var needsAttention: Bool = false
 
     // MARK: - 回调
 
@@ -88,6 +97,11 @@ final class TabItemView: NSView {
 
         setupUI()
         setupGestures()
+        setupClaudeNotifications()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     required init?(coder: NSCoder) {
@@ -100,6 +114,12 @@ final class TabItemView: NSView {
     func setActive(_ active: Bool) {
         isActive = active
         updateShuimoView()
+    }
+
+    /// 设置所属 Page 是否激活
+    func setPageActive(_ active: Bool) {
+        isPageActive = active
+        // Page 激活状态变化不需要重新渲染视图，只影响通知逻辑
     }
 
     /// 更新标题
@@ -129,7 +149,7 @@ final class TabItemView: NSView {
         hostingView?.removeFromSuperview()
 
         // 创建新的 SwiftUI 视图
-        let shuimoTab = ShuimoTabView(title, isActive: isActive, height: 26) { [weak self] in
+        let shuimoTab = ShuimoTabView(title, isActive: isActive, needsAttention: needsAttention, height: 26) { [weak self] in
             self?.onClose?()
         }
 
@@ -340,4 +360,55 @@ extension TabItemView: NSTextFieldDelegate {
         }
         return false
     }
+}
+
+// MARK: - Claude Notification Handling
+
+extension TabItemView {
+    /// 设置 Claude 通知监听
+    private func setupClaudeNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleClaudeResponseComplete(_:)),
+            name: .claudeResponseComplete,
+            object: nil
+        )
+    }
+
+    @objc private func handleClaudeResponseComplete(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let terminalId = userInfo["terminal_id"] as? Int else {
+            return
+        }
+
+        // 检查是否是当前 Tab 的 terminal
+        guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
+            return
+        }
+
+        // 如果 Tab 已激活 且 Page 也激活，不需要提醒
+        // 只有当 Tab 不是激活状态，或者 Page 不是激活状态时，才需要提醒
+        if isActive && isPageActive {
+            return
+        }
+
+        // 设置需要注意状态（不自动消失，只有用户点击才消失）
+        needsAttention = true
+        updateShuimoView()
+    }
+
+    /// 设置提醒状态
+    func setNeedsAttention(_ attention: Bool) {
+        needsAttention = attention
+        updateShuimoView()
+    }
+
+    /// 清除提醒状态
+    func clearAttention() {
+        if needsAttention {
+            needsAttention = false
+            updateShuimoView()
+        }
+    }
+
 }

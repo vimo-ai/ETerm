@@ -49,6 +49,29 @@ struct RioTerminalView: View {
                     .padding(.bottom, 20)
                 }
             }
+
+            // Terminal Search Overlay (Cmd+F)
+            if coordinator.showTerminalSearch {
+                VStack {
+                    HStack {
+                        Spacer()
+                        TerminalSearchView(
+                            searchText: $coordinator.searchText,
+                            isVisible: $coordinator.showTerminalSearch,
+                            matchCount: coordinator.searchMatches.count,
+                            onClose: {
+                                coordinator.clearSearch()
+                            }
+                        )
+                        .padding(.trailing, 20)
+                        .padding(.top, 50)  // 在 PageBar 下方
+                    }
+                    Spacer()
+                }
+                .onChange(of: coordinator.searchText) {
+                    coordinator.performSearch()
+                }
+            }
         }
     }
 }
@@ -328,10 +351,17 @@ class RioContainerView: NSView {
                 // 更新现有视图
                 existingView.updateUI()
                 existingView.frame = panel.bounds
+
+                // 设置 Page 激活状态（用于 Tab 通知逻辑）
+                existingView.setPageActive(true)  // allPanels 中的都是当前激活 Page 的
             } else {
                 // 创建新视图
                 let view = DomainPanelView(panel: panel, coordinator: coordinator)
                 view.frame = panel.bounds
+
+                // 设置 Page 激活状态（用于 Tab 通知逻辑）
+                view.setPageActive(true)  // allPanels 中的都是当前激活 Page 的
+
                 addSubview(view)
                 panelUIViews[panel.panelId] = view
             }
@@ -437,6 +467,11 @@ class RioContainerView: NSView {
 
             return result
         }
+    }
+
+    /// 设置指定 Page 的提醒状态
+    func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
+        pageBarView.setPageNeedsAttention(pageId, attention: attention)
     }
 
     deinit {
@@ -746,6 +781,16 @@ class RioMetalView: NSView, RenderViewProtocol {
         requestRender()
     }
 
+    func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
+        // 通知 PageBarView 高亮指定的 Page
+        // 需要通过 superview（RioContainerView）访问 pageBarView
+        DispatchQueue.main.async { [weak self] in
+            if let containerView = self?.superview as? RioContainerView {
+                containerView.setPageNeedsAttention(pageId, attention: attention)
+            }
+        }
+    }
+
     /// 从 Sugarloaf 更新 fontMetrics
     private func updateFontMetricsFromSugarloaf(_ sugarloaf: SugarloafHandle) {
         var metrics = SugarloafFontMetrics()
@@ -809,14 +854,21 @@ class RioMetalView: NSView, RenderViewProtocol {
         let logicalRect = mapper.swiftToRust(rect: contentBounds)
 
         // 2. 网格计算：使用物理像素计算 cols/rows
-        // fontMetrics (cellWidth, lineHeight) 是物理像素
-        // 所以需要用物理尺寸来计算
+        // ✅ 关键修复：必须使用 coordinator.fontMetrics，和 screenToGrid 保持一致
         let physicalWidth = logicalRect.width * mapper.scale
         let physicalHeight = logicalRect.height * mapper.scale
 
-        // 防止除以 0 或无效值
-        let safeCellWidth = cellWidth > 0 ? cellWidth : 8.0
-        let safeLineHeight = lineHeight > 0 ? lineHeight : 16.0
+        // 从 coordinator 获取字体度量，确保和坐标转换使用同一数据源
+        let safeCellWidth: CGFloat
+        let safeLineHeight: CGFloat
+        if let metrics = coordinator?.fontMetrics {
+            safeCellWidth = CGFloat(metrics.cell_width)
+            safeLineHeight = CGFloat(metrics.line_height)
+        } else {
+            // Fallback
+            safeCellWidth = 16.8
+            safeLineHeight = 33.6
+        }
 
         let cols = UInt16(max(1, min(physicalWidth / safeCellWidth, CGFloat(UInt16.max - 1))))
         let rows = UInt16(max(1, min(physicalHeight / safeLineHeight, CGFloat(UInt16.max - 1))))
@@ -1027,12 +1079,42 @@ class RioMetalView: NSView, RenderViewProtocol {
                 }
             }
 
+            // 搜索高亮（优先级低于选中高亮）
+            if let coordinator = coordinator,
+               !coordinator.searchMatches.isEmpty {
+                // 计算绝对行号（考虑滚动偏移）
+                let absoluteRow = rowIndex + Int(snapshot.display_offset)
+
+                // 检查当前单元格是否在搜索匹配项中
+                let isInSearchMatch = coordinator.searchMatches.contains { match in
+                    match.row == absoluteRow &&
+                    colIndex >= match.startCol &&
+                    colIndex <= match.endCol
+                }
+
+                if isInSearchMatch {
+                    // 黄色高亮背景
+                    hasBg = true
+                    bgR = 1.0
+                    bgG = 1.0
+                    bgB = 0.0
+                    // 黑色前景（确保可读性）
+                    fgR = 0.0
+                    fgG = 0.0
+                    fgB = 0.0
+                }
+            }
+
+            // 使用实际的 alpha 值（支持半透明前景色，如 LightBlack = 50% foreground）
+            let fgA = Float(cell.fg_a) / 255.0
+            let bgA = Float(cell.bg_a) / 255.0
+
             sugarloaf_content_add_text_decorated(
                 content,
                 charToRender,
-                fgR, fgG, fgB, 1.0,
+                fgR, fgG, fgB, fgA,
                 hasBg,
-                bgR, bgG, bgB, 1.0,
+                bgR, bgG, bgB, bgA,
                 glyphWidth,
                 hasCursor && snapshot.cursor_shape == 0,
                 cursorR, cursorG, cursorB, cursorA,
@@ -1176,6 +1258,7 @@ class RioMetalView: NSView, RenderViewProtocol {
             // 需要拦截的系统快捷键
             let interceptedShortcuts: [KeyStroke] = [
                 .cmd("k"),  // Inline AI Composer
+                .cmd("f"),  // Terminal Search
                 .cmd("w"),
                 .cmd("t"),
                 .cmd("n"),
@@ -1200,6 +1283,12 @@ class RioMetalView: NSView, RenderViewProtocol {
                 // Cmd+K 直接处理，不经过键盘系统
                 if keyStroke.matches(.cmd("k")) {
                     showInlineComposer()
+                    return true
+                }
+
+                // Cmd+F 显示/隐藏搜索框
+                if keyStroke.matches(.cmd("f")) {
+                    coordinator?.toggleTerminalSearch()
                     return true
                 }
 
@@ -1683,11 +1772,18 @@ extension RioMetalView: NSTextInputClient {
 
         // 获取光标位置用于输入法候选框定位
         if let terminalId = coordinator?.getActiveTerminalId(),
-           let cursor = terminalManager.getCursor(terminalId: Int(terminalId)) {
-            let x = CGFloat(cursor.col) * cellWidth
-            let y = bounds.height - CGFloat(cursor.row + 1) * cellHeight
+           let cursor = terminalManager.getCursor(terminalId: Int(terminalId)),
+           let mapper = coordinateMapper {
 
-            let rect = CGRect(x: x, y: y, width: cellWidth, height: cellHeight)
+            // ✅ 关键修复：cellWidth/cellHeight 是物理像素，需要转换为逻辑点
+            // bounds 是逻辑坐标，必须用逻辑点来计算
+            let logicalCellWidth = cellWidth / mapper.scale
+            let logicalCellHeight = cellHeight / mapper.scale
+
+            let x = CGFloat(cursor.col) * logicalCellWidth
+            let y = bounds.height - CGFloat(cursor.row + 1) * logicalCellHeight
+
+            let rect = CGRect(x: x, y: y, width: logicalCellWidth, height: logicalCellHeight)
             return window.convertToScreen(convert(rect, to: nil))
         }
 

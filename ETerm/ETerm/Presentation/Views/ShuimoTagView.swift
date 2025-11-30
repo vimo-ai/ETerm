@@ -125,18 +125,24 @@ struct ShuimoTagView: View {
 struct ShuimoTabView: View {
     let text: String
     let isActive: Bool
+    let needsAttention: Bool
     let height: CGFloat
     let onClose: (() -> Void)?
 
-    init(_ text: String, isActive: Bool = false, height: CGFloat = 28, onClose: (() -> Void)? = nil) {
+    init(_ text: String, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, onClose: (() -> Void)? = nil) {
         self.text = text
         self.isActive = isActive
+        self.needsAttention = needsAttention
         self.height = height
         self.onClose = onClose
     }
 
     private var tagColor: Color {
-        isActive ? Color.black.opacity(0.8) : Color.gray.opacity(0.6)
+        if needsAttention {
+            // Claude 响应完成提醒 - 橙色
+            return Color.orange.opacity(0.7)
+        }
+        return isActive ? Color.black.opacity(0.8) : Color.gray.opacity(0.6)
     }
 
     private var leftWidth: CGFloat { height * 51.59 / 240.61 }

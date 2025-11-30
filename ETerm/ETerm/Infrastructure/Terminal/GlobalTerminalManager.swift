@@ -293,6 +293,9 @@ final class GlobalTerminalManager {
             pendingUpdatesLock.lock()
             pendingUpdates.removeValue(forKey: terminalId)
             pendingUpdatesLock.unlock()
+
+            // 移除 Claude Session 映射
+            ClaudeSessionMapper.shared.remove(terminalId: terminalId)
         }
 
         return result != 0

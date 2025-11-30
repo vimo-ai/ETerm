@@ -27,6 +27,9 @@ protocol RenderViewProtocol: AnyObject {
 
     /// 调整字体大小
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation)
+
+    /// 设置指定 Page 的提醒状态
+    func setPageNeedsAttention(_ pageId: UUID, attention: Bool)
 }
 
 /// 智能关闭结果
@@ -69,6 +72,20 @@ class TerminalWindowCoordinator: ObservableObject {
     /// AI 辅助输入框的输入区高度（不含结果区）
     @Published var composerInputHeight: CGFloat = 0
 
+    // MARK: - Terminal Search State
+
+    /// 是否显示终端搜索框
+    @Published var showTerminalSearch: Bool = false
+
+    /// 搜索文本
+    @Published var searchText: String = ""
+
+    /// 搜索匹配项
+    @Published var searchMatches: [SearchMatch] = []
+
+    /// 搜索引擎
+    private let searchEngine = TerminalSearch()
+
     // MARK: - Infrastructure
 
     /// 全局终端管理器（基础设施）
@@ -88,6 +105,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 键盘系统
     private(set) var keyboardSystem: KeyboardSystem?
+
+    /// 需要高亮的 Tab 集合（即使 Tab 所在的 Page 不可见，也要记住）
+    private var tabsNeedingAttention: Set<UUID> = []
 
     // MARK: - Constants
 
@@ -121,6 +141,54 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 设置初始激活的 Panel 为第一个 Panel
         activePanelId = initialWindow.allPanels.first?.panelId
+
+        // 监听 Claude 响应完成通知
+        setupClaudeNotifications()
+    }
+
+    /// 设置 Claude 通知监听
+    private func setupClaudeNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleClaudeResponseComplete(_:)),
+            name: .claudeResponseComplete,
+            object: nil
+        )
+    }
+
+    @objc private func handleClaudeResponseComplete(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let terminalId = userInfo["terminal_id"] as? Int else {
+            return
+        }
+
+        // 找到包含该终端的 Page 和 Tab
+        for page in terminalWindow.pages {
+            for panel in page.allPanels {
+                if let tab = panel.tabs.first(where: { $0.rustTerminalId == UInt32(terminalId) }) {
+                    // 检查 Tab 是否激活且 Page 也激活
+                    let isTabActive = (panel.activeTabId == tab.tabId)
+                    let isPageActive = (page.pageId == terminalWindow.activePageId)
+
+                    // 如果 Tab 激活且 Page 也激活，不需要提醒
+                    if isTabActive && isPageActive {
+                        return
+                    }
+
+                    // 否则，记录这个 Tab 需要高亮
+                    tabsNeedingAttention.insert(tab.tabId)
+
+                    // 如果 Page 不是当前激活的，则高亮它
+                    if !isPageActive {
+                        DispatchQueue.main.async { [weak self] in
+                            self?.renderView?.setPageNeedsAttention(page.pageId, attention: true)
+                        }
+                    }
+
+                    return
+                }
+            }
+        }
     }
     
     // ... (中间代码保持不变) ...
@@ -158,6 +226,9 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 这个方法应该在 windowWillClose 中调用，而不是依赖 deinit。
     /// 因为在 deinit 中访问对象可能导致野指针问题。
     func cleanup() {
+        // 移除通知监听
+        NotificationCenter.default.removeObserver(self)
+
         // 取消所有待处理的渲染任务
         pendingRenderWorkItem?.cancel()
         pendingRenderWorkItem = nil
@@ -1154,6 +1225,16 @@ class TerminalWindowCoordinator: ObservableObject {
         return true
     }
 
+    /// 检查指定 Tab 是否需要高亮
+    func isTabNeedingAttention(_ tabId: UUID) -> Bool {
+        return tabsNeedingAttention.contains(tabId)
+    }
+
+    /// 清除 Tab 的高亮状态（当用户点击 Tab 时调用）
+    func clearTabAttention(_ tabId: UUID) {
+        tabsNeedingAttention.remove(tabId)
+    }
+
     /// 关闭当前 Page（供快捷键调用）
     ///
     /// - Returns: 是否成功关闭
@@ -1386,5 +1467,50 @@ class TerminalWindowCoordinator: ObservableObject {
         objectWillChange.send()
         updateTrigger = UUID()
         scheduleRender()
+    }
+
+    // MARK: - Terminal Search
+
+    /// 执行搜索
+    ///
+    /// 在当前激活的终端中搜索文本
+    func performSearch() {
+        guard !searchText.isEmpty,
+              let terminalId = getActiveTerminalId() else {
+            searchMatches = []
+            return
+        }
+
+        // 异步搜索
+        Task {
+            let matches = await searchEngine.searchAsync(
+                pattern: searchText,
+                in: Int(terminalId),
+                caseSensitive: false,
+                maxRows: 1000  // 限制搜索最近 1000 行
+            )
+
+            await MainActor.run {
+                self.searchMatches = matches
+                // 触发渲染以显示高亮
+                self.scheduleRender()
+            }
+        }
+    }
+
+    /// 清除搜索
+    func clearSearch() {
+        searchText = ""
+        searchMatches = []
+        showTerminalSearch = false
+        scheduleRender()
+    }
+
+    /// 切换搜索框显示状态
+    func toggleTerminalSearch() {
+        showTerminalSearch.toggle()
+        if !showTerminalSearch {
+            clearSearch()
+        }
     }
 }

@@ -130,13 +130,27 @@ final class DomainPanelView: NSView {
         guard let panel = panel else { return }
 
         // 更新 Header 显示的 Tab
-        let tabs = panel.tabs.map { (id: $0.tabId, title: $0.title) }
+        let tabs = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
         headerView.setTabs(tabs)
 
         // 更新激活的 Tab
         if let activeTabId = panel.activeTabId {
             headerView.setActiveTab(activeTabId)
         }
+
+        // 恢复需要高亮的 Tab 状态（从 Coordinator 查询）
+        if let coordinator = coordinator {
+            for tab in panel.tabs {
+                if coordinator.isTabNeedingAttention(tab.tabId) {
+                    headerView.setTabNeedsAttention(tab.tabId, attention: true)
+                }
+            }
+        }
+    }
+
+    /// 设置所属 Page 的激活状态
+    func setPageActive(_ active: Bool) {
+        headerView.setPageActive(active)
     }
 
     // MARK: - Layout
@@ -168,6 +182,9 @@ final class DomainPanelView: NSView {
     private func handleTabClick(_ tabId: UUID) {
         guard let panel = panel,
               let coordinator = coordinator else { return }
+
+        // 清除 Tab 的高亮状态（如果有）
+        coordinator.clearTabAttention(tabId)
 
         coordinator.handleTabClick(panelId: panel.panelId, tabId: tabId)
     }

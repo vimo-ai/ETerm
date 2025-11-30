@@ -305,24 +305,26 @@ final class PageBarHostingView: NSView {
             pageView.setActive(page.id == activePageId)
             pageView.setShowCloseButton(pages.count > 1)
 
+            // 捕获 pageId 而不是 page，避免闭包捕获问题
+            let pageId = page.id
             pageView.onTap = { [weak self] in
-                self?.onPageClick?(page.id)
+                self?.onPageClick?(pageId)
             }
 
             pageView.onClose = { [weak self] in
-                self?.onPageClose?(page.id)
+                self?.onPageClose?(pageId)
             }
 
             pageView.onRename = { [weak self] newTitle in
-                self?.onPageRename?(page.id, newTitle)
+                self?.onPageRename?(pageId, newTitle)
             }
 
             pageView.onDragStart = { [weak self] in
-                self?.draggingPageId = page.id
+                self?.draggingPageId = pageId
             }
 
             pageView.onDragOutOfWindow = { [weak self] screenPoint in
-                self?.onPageDragOutOfWindow?(page.id, screenPoint)
+                self?.onPageDragOutOfWindow?(pageId, screenPoint)
             }
 
             pageContainer.addSubview(pageView)
@@ -361,9 +363,21 @@ final class PageBarHostingView: NSView {
     /// 设置激活的 Page（兼容旧接口）
     func setActivePage(_ pageId: UUID) {
         activePageId = pageId
-        // 更新激活状态
+        // 更新激活状态，并清除被激活 Page 的提醒状态
         for pageView in pageItemViews {
-            pageView.setActive(pageView.pageId == pageId)
+            let isActive = pageView.pageId == pageId
+            pageView.setActive(isActive)
+            if isActive {
+                pageView.clearAttention()
+            }
+        }
+    }
+
+    /// 设置指定 Page 的提醒状态
+    func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
+        for pageView in pageItemViews where pageView.pageId == pageId {
+            pageView.setNeedsAttention(attention)
+            break
         }
     }
 

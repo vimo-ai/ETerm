@@ -42,6 +42,9 @@ final class PageItemView: NSView {
     /// 是否真正发生了拖动（鼠标移动）
     private var didActuallyDrag: Bool = false
 
+    /// Claude 响应完成提醒状态
+    private var needsAttention: Bool = false
+
     // MARK: - 回调
 
     /// 点击回调
@@ -113,6 +116,20 @@ final class PageItemView: NSView {
         updateShuimoView()
     }
 
+    /// 设置提醒状态
+    func setNeedsAttention(_ attention: Bool) {
+        needsAttention = attention
+        updateShuimoView()
+    }
+
+    /// 清除提醒状态
+    func clearAttention() {
+        if needsAttention {
+            needsAttention = false
+            updateShuimoView()
+        }
+    }
+
     // MARK: - Private Methods
 
     private func setupUI() {
@@ -134,15 +151,17 @@ final class PageItemView: NSView {
             self?.onClose?()
         } : nil
 
-        let shuimoTab = ShuimoTabView(title, isActive: isActive, height: 22, onClose: closeAction)
+        let shuimoTab = ShuimoTabView(title, isActive: isActive, needsAttention: needsAttention, height: 22, onClose: closeAction)
 
         let hosting = NSHostingView(rootView: shuimoTab)
         // 让 NSHostingView 使用固有大小，不居中
         hosting.translatesAutoresizingMaskIntoConstraints = true
-        let size = hosting.fittingSize
-        hosting.frame = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+
         addSubview(hosting)
         hostingView = hosting
+
+        // 立即布局 hostingView，确保它的 frame 和 PageItemView 的 bounds 一致
+        hosting.frame = bounds
 
         // 确保编辑框在最上层
         if editField.superview != nil {
@@ -220,6 +239,24 @@ final class PageItemView: NSView {
     }
 
     // MARK: - Event Handlers
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 检查点击是否在 bounds 内
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        // 检查是否点击了关闭按钮（在 hostingView 内）
+        if let hosting = hostingView,
+           let swiftUIHit = hosting.hitTest(convert(point, to: hosting)),
+           swiftUIHit !== hosting {
+            // 点击了 SwiftUI 的某个可交互元素（比如关闭按钮）
+            return swiftUIHit
+        }
+
+        // 其他区域返回自己，让 PageItemView 处理点击
+        return self
+    }
 
     override func mouseDown(with event: NSEvent) {
         // 重置拖拽标志

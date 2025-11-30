@@ -19,6 +19,7 @@ import AppKit
 struct TabItem: Identifiable, Equatable {
     let id: UUID
     var title: String
+    var rustTerminalId: Int?
 }
 
 // MARK: - PanelHeaderView (SwiftUI)
@@ -118,6 +119,7 @@ final class PanelHeaderHostingView: NSView {
     // 数据状态
     private var tabs: [TabItem] = []
     private var activeTabId: UUID?
+    private var isPageActive: Bool = true
 
     // Tab 标签容器
     private let tabContainer = NSView()
@@ -181,6 +183,9 @@ final class PanelHeaderHostingView: NSView {
             let tabView = TabItemView(tabId: tab.id, title: tab.title)
             tabView.setActive(tab.id == activeTabId)
 
+            // 设置 Rust Terminal ID（用于 Claude 响应匹配）
+            tabView.rustTerminalId = tab.rustTerminalId
+
             tabView.onTap = { [weak self] in
                 self?.onTabClick?(tab.id)
             }
@@ -231,17 +236,50 @@ final class PanelHeaderHostingView: NSView {
     }
 
     /// 设置 Tab 列表（兼容旧接口）
-    func setTabs(_ newTabs: [(id: UUID, title: String)]) {
-        tabs = newTabs.map { TabItem(id: $0.id, title: $0.title) }
+    func setTabs(_ newTabs: [(id: UUID, title: String, rustTerminalId: Int?)]) {
+        tabs = newTabs.map { TabItem(id: $0.id, title: $0.title, rustTerminalId: $0.rustTerminalId) }
         rebuildTabItemViews()
     }
 
     /// 设置激活的 Tab（兼容旧接口）
     func setActiveTab(_ tabId: UUID) {
         activeTabId = tabId
-        // 更新激活状态
+        // 更新激活状态，只有当 Page 也激活时才清除提醒
         for tabView in tabItemViews {
-            tabView.setActive(tabView.tabId == tabId)
+            let isActive = tabView.tabId == tabId
+            tabView.setActive(isActive)
+            // 只有 Tab 激活且 Page 也激活时，才清除提醒
+            if isActive && isPageActive {
+                tabView.clearAttention()
+            }
+        }
+    }
+
+    /// 设置所属 Page 的激活状态
+    func setPageActive(_ active: Bool) {
+        isPageActive = active
+        for tabView in tabItemViews {
+            tabView.setPageActive(active)
+        }
+
+        // 如果 Page 变为激活，且当前有激活的 Tab，清除其提醒
+        if active, let activeTabId = activeTabId {
+            for tabView in tabItemViews where tabView.tabId == activeTabId {
+                tabView.clearAttention()
+                break
+            }
+        }
+    }
+
+    /// 设置指定 Tab 的高亮状态
+    func setTabNeedsAttention(_ tabId: UUID, attention: Bool) {
+        for tabView in tabItemViews where tabView.tabId == tabId {
+            if attention {
+                tabView.setNeedsAttention(true)
+            } else {
+                tabView.clearAttention()
+            }
+            break
         }
     }
 

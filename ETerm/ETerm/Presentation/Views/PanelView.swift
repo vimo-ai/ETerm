@@ -202,7 +202,7 @@ final class PanelView: NSView {
 
     private func updateTabs() {
         // 更新 Header 显示的 Tab（保持顺序）
-        let tabs = panel.tabs.map { (id: $0.id, title: $0.title) }
+        let tabs = panel.tabs.map { (id: $0.id, title: $0.title, rustTerminalId: $0.rustTerminalId >= 0 ? $0.rustTerminalId : nil) }
         headerView.setTabs(tabs)
 
         // 更新激活的 Tab（内部同步，不触发回调）

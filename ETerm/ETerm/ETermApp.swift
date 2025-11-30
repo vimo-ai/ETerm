@@ -15,6 +15,9 @@ import SwiftUI
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 启动 Claude Socket Server（接收 Hook 调用）
+        ClaudeSocketServer.shared.start()
+
         // 加载内置插件
         PluginManager.shared.loadBuiltinPlugins()
 
@@ -36,6 +39,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // 停止 Claude Socket Server
+        ClaudeSocketServer.shared.stop()
+
         // 保存 Session
         let windowStates = WindowManager.shared.captureAllWindowStates()
         SessionManager.shared.save(windows: windowStates)
