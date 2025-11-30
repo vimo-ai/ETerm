@@ -243,17 +243,8 @@ where
                             _ => "Unknown",
                         };
 
-                        // 检测进程切换
+                        // 检测进程切换（不输出日志）
                         let process_changed = self.last_fg_process.as_ref() != Some(&fg_process_trimmed);
-                        if process_changed {
-                            if let Some(ref last) = self.last_fg_process {
-                                eprintln!("⚡ [进程切换] {} → {} | 状态: {} ({})",
-                                          last, fg_process_trimmed, process_state, state_desc);
-                            } else {
-                                eprintln!("🔧 [初始进程] {} | 状态: {} ({}) | pid: {}",
-                                          fg_process_trimmed, process_state, state_desc, fg_pid);
-                            }
-                        }
 
                         self.last_fg_process = Some(fg_process_trimmed);
                         self.last_process_state = Some(process_state);
