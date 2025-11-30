@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "rice-paper-warm.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

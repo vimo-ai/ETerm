@@ -93,6 +93,38 @@ void sugarloaf_content_add_text_full(
     float cursor_a
 );
 
+// Add text with full styling including text decorations (bold, italic, underline, etc.)
+// flags bit mask:
+//   0x0002 = BOLD
+//   0x0004 = ITALIC
+//   0x0008 = UNDERLINE
+//   0x0080 = DIM
+//   0x0200 = STRIKEOUT
+//   0x0800 = DOUBLE_UNDERLINE
+//   0x1000 = UNDERCURL
+//   0x2000 = DOTTED_UNDERLINE
+//   0x4000 = DASHED_UNDERLINE
+void sugarloaf_content_add_text_decorated(
+    SugarloafHandle handle,
+    const char* text,
+    float fg_r,
+    float fg_g,
+    float fg_b,
+    float fg_a,
+    bool has_bg,
+    float bg_r,
+    float bg_g,
+    float bg_b,
+    float bg_a,
+    float width,
+    bool has_cursor,
+    float cursor_r,
+    float cursor_g,
+    float cursor_b,
+    float cursor_a,
+    uint32_t flags
+);
+
 void sugarloaf_content_build(SugarloafHandle handle);
 void sugarloaf_commit_rich_text(SugarloafHandle handle, size_t rt_id);
 
@@ -186,6 +218,7 @@ typedef struct {
     uint8_t bg_b;           // 背景色 B
     uint8_t bg_a;           // 背景色 A
     uint32_t flags;         // 标志位
+    bool has_vs16;          // 是否有 VS16 (U+FE0F) emoji 变体选择符
 } FFICell;
 
 // 事件回调类型
@@ -194,6 +227,9 @@ typedef void (*StringEventCallback)(void* context, uint32_t event_type, const ch
 
 /// 创建 Rio 风格终端池
 RioTerminalPoolHandle rio_pool_new(SugarloafHandle sugarloaf);
+
+/// 创建独立终端池（不需要 Sugarloaf，用于 Skia 渲染器）
+RioTerminalPoolHandle rio_pool_new_headless(void);
 
 /// 设置事件回调
 void rio_pool_set_event_callback(
@@ -217,7 +253,7 @@ int rio_pool_create_terminal_with_cwd(
     unsigned short cols,
     unsigned short rows,
     const char* shell,
-    const char* working_dir  // 可以为 NULL
+    const char* working_dir
 );
 
 /// 关闭终端
@@ -308,15 +344,14 @@ char* rio_pool_get_selected_text(
     int end_row
 );
 
-/// 释放从 Rust 返回的字符串
-void rio_free_string(char* s);
-
-/// 获取终端当前工作目录（CWD）
-/// 返回需要用 rio_free_string 释放的字符串，失败返回 NULL
+/// 获取终端当前工作目录（返回需要用 rio_free_string 释放的字符串）
 char* rio_pool_get_cwd(
     RioTerminalPoolHandle pool,
     size_t terminal_id
 );
+
+/// 释放从 Rust 返回的字符串
+void rio_free_string(char* s);
 
 /// 释放终端池
 void rio_pool_free(RioTerminalPoolHandle pool);

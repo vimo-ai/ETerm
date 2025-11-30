@@ -5,10 +5,10 @@
 
 use crate::font::FontLibrary;
 use crate::layout::RootStyle;
-use crate::sugarloaf::QuadBrush;
-use crate::sugarloaf::{RichTextBrush, RichTextLayout};
-use crate::Graphics;
-use crate::{Content, Object, Quad, RichText, SugarDimensions};
+use crate::layout::RichTextLayout;
+use crate::sugarloaf::graphics::Graphics;
+use crate::{Content, Object, Quad, SugarDimensions};
+use crate::sugarloaf::primitives::RichText;
 use std::collections::HashSet;
 
 pub struct SugarState {
@@ -72,92 +72,10 @@ impl SugarState {
     }
 
     #[inline]
-    pub fn compute_layout_rescale(
-        &mut self,
-        scale: f32,
-        advance_brush: &mut RichTextBrush,
-    ) {
-        self.style.scale_factor = scale;
-        for (id, state) in &mut self.content.states {
-            state.rescale(scale);
-            state.layout.dimensions.height = 0.0;
-            state.layout.dimensions.width = 0.0;
-
-            self.rich_text_repaint.insert(*id);
-        }
-
-        self.process_rich_text_repaint(advance_brush);
-    }
-
-    #[inline]
-    pub fn set_rich_text_font_size(
-        &mut self,
-        rich_text_id: &usize,
-        font_size: f32,
-        advance_brush: &mut RichTextBrush,
-    ) {
-        if let Some(rte) = self.content.get_state_mut(rich_text_id) {
-            rte.layout.font_size = font_size;
-            rte.update_font_size();
-
-            rte.layout.dimensions.height = 0.0;
-            rte.layout.dimensions.width = 0.0;
-            self.rich_text_repaint.insert(*rich_text_id);
-        }
-
-        self.process_rich_text_repaint(advance_brush);
-    }
-
-    #[inline]
-    pub fn set_rich_text_font_size_based_on_action(
-        &mut self,
-        rich_text_id: &usize,
-        operation: u8,
-        advance_brush: &mut RichTextBrush,
-    ) {
-        if let Some(rte) = self.content.get_state_mut(rich_text_id) {
-            let should_update = match operation {
-                0 => rte.reset_font_size(),
-                2 => rte.increase_font_size(),
-                1 => rte.decrease_font_size(),
-                _ => false,
-            };
-
-            if should_update {
-                rte.layout.dimensions.height = 0.0;
-                rte.layout.dimensions.width = 0.0;
-                self.rich_text_repaint.insert(*rich_text_id);
-            }
-        }
-
-        self.process_rich_text_repaint(advance_brush);
-    }
-
-    #[inline]
     pub fn set_rich_text_line_height(&mut self, rich_text_id: &usize, line_height: f32) {
         if let Some(rte) = self.content.get_state_mut(rich_text_id) {
             rte.layout.line_height = line_height;
         }
-    }
-
-    fn process_rich_text_repaint(&mut self, advance_brush: &mut RichTextBrush) {
-        for rich_text in &self.rich_text_repaint {
-            self.content.update_dimensions(rich_text, advance_brush);
-        }
-
-        self.rich_text_repaint.clear();
-    }
-
-    #[inline]
-    pub fn set_fonts(&mut self, fonts: &FontLibrary, advance_brush: &mut RichTextBrush) {
-        self.content.set_font_library(fonts);
-        for (id, state) in &mut self.content.states {
-            state.layout.dimensions.height = 0.0;
-            state.layout.dimensions.width = 0.0;
-            self.rich_text_repaint.insert(*id);
-        }
-
-        self.process_rich_text_repaint(advance_brush);
     }
 
     #[inline]
@@ -168,13 +86,11 @@ impl SugarState {
 
     #[inline]
     pub fn clean_screen(&mut self) {
-        // self.content.clear();
         self.objects.clear();
     }
 
     #[inline]
     pub fn compute_objects(&mut self, new_objects: Vec<Object>) {
-        // Block are used only with elementary renderer
         let mut rich_texts: Vec<RichText> = vec![];
         for obj in &new_objects {
             if let Object::RichText(rich_text) = obj {
@@ -221,72 +137,80 @@ impl SugarState {
     }
 
     #[inline]
-    pub fn compute_updates(
-        &mut self,
-        advance_brush: &mut RichTextBrush,
-        quad_brush: &mut QuadBrush,
-        context: &mut super::Context,
-        graphics: &mut Graphics,
-    ) {
-        advance_brush.prepare(context, self, graphics);
-        quad_brush.resize(context);
+    pub fn set_visual_bell_overlay(&mut self, overlay: Option<Quad>) {
+        self.visual_bell_overlay = overlay;
+    }
 
-        // Elementary renderer is used for everything else in sugarloaf
-        // like objects rendering (created by .text() or .append_rects())
-        // It means that's either the first render or objects were erased on compute_diff() step
-        for object in &self.objects {
-            match object {
-                Object::Quad(composed_quad) => {
-                    self.quads.push(*composed_quad);
-                }
-                Object::RichText(_rich_text) => {
-                    // self.rich_texts.push(*rich_text);
-                }
+    // Skia-specific methods that don't use brushes
+    #[inline]
+    pub fn set_fonts_skia(&mut self, fonts: &FontLibrary) {
+        self.content.set_font_library(fonts);
+        for (id, state) in &mut self.content.states {
+            state.layout.dimensions.height = 0.0;
+            state.layout.dimensions.width = 0.0;
+            self.rich_text_repaint.insert(*id);
+        }
+    }
+
+    #[inline]
+    pub fn compute_layout_rescale_skia(&mut self, scale: f32) {
+        self.style.scale_factor = scale;
+        for (id, state) in &mut self.content.states {
+            state.rescale(scale);
+            state.layout.dimensions.height = 0.0;
+            state.layout.dimensions.width = 0.0;
+            self.rich_text_repaint.insert(*id);
+        }
+    }
+
+    #[inline]
+    pub fn set_rich_text_font_size_skia(&mut self, rich_text_id: &usize, font_size: f32) {
+        if let Some(rte) = self.content.get_state_mut(rich_text_id) {
+            rte.layout.font_size = font_size;
+            rte.update_font_size();
+
+            rte.layout.dimensions.height = 0.0;
+            rte.layout.dimensions.width = 0.0;
+            self.rich_text_repaint.insert(*rich_text_id);
+        }
+    }
+
+    #[inline]
+    pub fn set_rich_text_font_size_based_on_action_skia(
+        &mut self,
+        rich_text_id: &usize,
+        operation: u8,
+    ) {
+        if let Some(rte) = self.content.get_state_mut(rich_text_id) {
+            let should_update = match operation {
+                0 => rte.reset_font_size(),
+                2 => rte.increase_font_size(),
+                1 => rte.decrease_font_size(),
+                _ => false,
+            };
+
+            if should_update {
+                rte.layout.dimensions.height = 0.0;
+                rte.layout.dimensions.width = 0.0;
+                self.rich_text_repaint.insert(*rich_text_id);
             }
         }
     }
 
     #[inline]
-    pub fn get_rich_text_dimensions(
-        &mut self,
-        id: &usize,
-        advance_brush: &mut RichTextBrush,
-    ) -> SugarDimensions {
-        self.content.update_dimensions(id, advance_brush);
-        if let Some(rte) = self.content.get_state(id) {
-            return rte.layout.dimensions;
-        }
-
+    pub fn get_rich_text_dimensions_skia(&mut self, _id: &usize) -> SugarDimensions {
+        // For Skia, we'll compute dimensions differently
+        // TODO: Implement proper dimension calculation using Skia
         SugarDimensions::default()
     }
 
     #[inline]
-    pub fn compute_dimensions(&mut self, advance_brush: &mut RichTextBrush) {
-        // If sugar dimensions are empty then need to find it
-        for rich_text in &self.rich_texts {
-            if let Some(rte) = self.content.get_state(&rich_text.id) {
-                if rte.layout.dimensions.width == 0.0
-                    || rte.layout.dimensions.height == 0.0
-                {
-                    self.rich_text_repaint.insert(rich_text.id);
-
-                    tracing::info!("has empty dimensions, will try to find...");
-                }
+    pub fn compute_dimensions_skia(&mut self) {
+        // Process objects to extract quads
+        for object in &self.objects {
+            if let Object::Quad(composed_quad) = object {
+                self.quads.push(*composed_quad);
             }
         }
-
-        if self.rich_text_repaint.is_empty() {
-            return;
-        }
-        for rich_text in &self.rich_text_repaint {
-            self.content.update_dimensions(rich_text, advance_brush);
-        }
-
-        self.rich_text_repaint.clear();
-    }
-
-    #[inline]
-    pub fn set_visual_bell_overlay(&mut self, overlay: Option<Quad>) {
-        self.visual_bell_overlay = overlay;
     }
 }

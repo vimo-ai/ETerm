@@ -1,7 +1,8 @@
 #!/bin/bash
 # ANSI 颜色测试脚本 - 用于调试 ETerm 的字符渲染问题
 
-echo "=== ETerm ANSI 渲染测试 ==="
+echo "=== ETerm ANSI 渲染测试 🎉==="
+echo "☀️ ✂️ ✨ 🚀 🔧 🗑 🩷"
 echo ""
 
 # 1. 基础颜色测试
@@ -54,3 +55,6 @@ echo -e "\033[38;2;255;255;255m⏺\033[0m pong"
 echo ""
 
 echo "=== 测试完成 ==="
+echo "hereisenglth"
+echo "这里是纯中文的"
+

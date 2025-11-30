@@ -810,8 +810,13 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 所以需要用物理尺寸来计算
         let physicalWidth = logicalRect.width * mapper.scale
         let physicalHeight = logicalRect.height * mapper.scale
-        let cols = UInt16(max(1, physicalWidth / cellWidth))
-        let rows = UInt16(max(1, physicalHeight / lineHeight))
+
+        // 防止除以 0 或无效值
+        let safeCellWidth = cellWidth > 0 ? cellWidth : 8.0
+        let safeLineHeight = lineHeight > 0 ? lineHeight : 16.0
+
+        let cols = UInt16(max(1, min(physicalWidth / safeCellWidth, CGFloat(UInt16.max - 1))))
+        let rows = UInt16(max(1, min(physicalHeight / safeLineHeight, CGFloat(UInt16.max - 1))))
 
         // 3. Resize 终端（如果 cols/rows 变化了）
         if cols != snapshot.columns || rows != snapshot.screen_lines {
@@ -951,7 +956,14 @@ class RioMetalView: NSView, RenderViewProtocol {
             }
 
             guard let scalar = UnicodeScalar(cell.character) else { continue }
-            let char = String(Character(scalar))
+
+            // 如果 cell 有 VS16 标记，追加 VS16 形成 emoji 样式
+            let charToRender: String
+            if cell.has_vs16 {
+                charToRender = String(Character(scalar)) + "\u{FE0F}"
+            } else {
+                charToRender = String(Character(scalar))
+            }
 
             let isWideChar = cell.flags & WIDE_CHAR != 0
             let glyphWidth: Float = isWideChar ? 2.0 : 1.0
@@ -1012,15 +1024,16 @@ class RioMetalView: NSView, RenderViewProtocol {
                 }
             }
 
-            sugarloaf_content_add_text_full(
+            sugarloaf_content_add_text_decorated(
                 content,
-                char,
+                charToRender,
                 fgR, fgG, fgB, 1.0,
                 hasBg,
                 bgR, bgG, bgB, 1.0,
                 glyphWidth,
                 hasCursor && snapshot.cursor_shape == 0,
-                cursorR, cursorG, cursorB, cursorA
+                cursorR, cursorG, cursorB, cursorA,
+                cell.flags
             )
         }
     }

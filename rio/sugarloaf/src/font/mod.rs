@@ -553,11 +553,11 @@ impl AsRef<[u8]> for SharedData {
     }
 }
 
-#[derive(Clone)]
 pub struct FontData {
     // Full content of the font file
     data: Option<SharedData>,
-    path: Option<PathBuf>,
+    /// Font file path or family name (for system fonts like emoji)
+    pub path: Option<PathBuf>,
     // Offset to the table directory
     offset: u32,
     // Cache key
@@ -571,6 +571,29 @@ pub struct FontData {
     pub is_emoji: bool,
     // Cached metrics per font size (per-font caching)
     metrics_cache: FxHashMap<u32, Metrics>,
+    // Glyph ID to character mapping for SDF generation
+    glyph_to_char_cache: parking_lot::RwLock<Option<FxHashMap<u16, char>>>,
+}
+
+impl Clone for FontData {
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            path: self.path.clone(),
+            offset: self.offset,
+            key: self.key,
+            weight: self.weight,
+            style: self.style,
+            stretch: self.stretch,
+            synth: self.synth,
+            should_embolden: self.should_embolden,
+            should_italicize: self.should_italicize,
+            is_emoji: self.is_emoji,
+            metrics_cache: self.metrics_cache.clone(),
+            // Don't clone the cache, let it rebuild if needed
+            glyph_to_char_cache: parking_lot::RwLock::new(None),
+        }
+    }
 }
 
 impl PartialEq for FontData {
@@ -648,6 +671,45 @@ impl FontData {
             .map(|m| m.for_rich_text())
     }
 
+    /// Get character corresponding to glyph_id (for SDF generation)
+    /// Builds the reverse mapping on first access
+    pub fn glyph_id_to_char(&self, glyph_id: u16) -> Option<char> {
+        // Check if cache is already built
+        {
+            let cache = self.glyph_to_char_cache.read();
+            if let Some(ref map) = *cache {
+                return map.get(&glyph_id).copied();
+            }
+        }
+
+        // Build the cache if not exists
+        if let Some(ref data) = self.data {
+            let font_ref = crate::font_introspector::FontRef {
+                data: data.as_ref(),
+                offset: self.offset,
+                key: self.key,
+            };
+
+            let charmap = font_ref.charmap();
+            let mut map = FxHashMap::default();
+
+            // Enumerate all char -> glyph_id mappings and reverse them
+            charmap.enumerate(|codepoint, gid| {
+                if let Some(ch) = char::from_u32(codepoint) {
+                    // If multiple chars map to the same glyph, keep the first one
+                    map.entry(gid).or_insert(ch);
+                }
+            });
+
+            // Store the built cache
+            *self.glyph_to_char_cache.write() = Some(map.clone());
+
+            return map.get(&glyph_id).copied();
+        }
+
+        None
+    }
+
     #[inline]
     pub fn from_data(
         data: SharedData,
@@ -689,6 +751,7 @@ impl FontData {
             path: Some(path),
             is_emoji,
             metrics_cache: FxHashMap::default(),
+            glyph_to_char_cache: parking_lot::RwLock::new(None),
         })
     }
 
@@ -720,6 +783,7 @@ impl FontData {
             path: None,
             is_emoji,
             metrics_cache: FxHashMap::default(),
+            glyph_to_char_cache: parking_lot::RwLock::new(None),
         })
     }
 }

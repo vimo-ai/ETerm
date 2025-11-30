@@ -3,8 +3,6 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
-use crate::sugarloaf::types;
-use crate::sugarloaf::Handle;
 use image_rs::DynamicImage;
 use rustc_hash::FxHashMap;
 use std::cmp;
@@ -13,7 +11,7 @@ use std::cmp;
 pub const MAX_GRAPHIC_DIMENSIONS: [usize; 2] = [4096, 4096];
 
 pub struct GraphicDataEntry {
-    pub handle: Handle,
+    pub pixels: Vec<u8>,
     pub width: f32,
     pub height: f32,
 }
@@ -27,15 +25,9 @@ pub struct GraphicRenderRequest {
     pub height: Option<f32>,
 }
 
-pub struct BottomLayer {
-    pub data: types::Raster,
-    pub should_fit: bool,
-}
-
 #[derive(Default)]
 pub struct Graphics {
     inner: FxHashMap<GraphicId, GraphicDataEntry>,
-    pub bottom_layer: Option<BottomLayer>,
     pub top_layer: Vec<GraphicRenderRequest>,
 }
 
@@ -64,11 +56,7 @@ impl Graphics {
         self.inner.insert(
             graphic_data.id,
             GraphicDataEntry {
-                handle: Handle::from_pixels(
-                    graphic_data.width as u32,
-                    graphic_data.height as u32,
-                    graphic_data.pixels,
-                ),
+                pixels: graphic_data.pixels,
                 width: graphic_data.width as f32,
                 height: graphic_data.height as f32,
             },

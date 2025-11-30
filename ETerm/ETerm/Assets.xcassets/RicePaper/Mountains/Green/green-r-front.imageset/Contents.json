@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "green-r-front.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
