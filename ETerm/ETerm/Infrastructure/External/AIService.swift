@@ -82,15 +82,28 @@ private enum AnalysisTask {
 final class AIService {
     static let shared = AIService()
 
-    // Model routing
-    private let dispatcherModel = "qwen-flash"
-    private let analysisModel = "qwen3-max"
-    private let translationModel = "qwen-mt-flash"
+    private var client: DashScopeClient?
 
-    private let client: DashScopeClient?
+    // Model routing - 从配置管理器读取
+    private var dispatcherModel: String {
+        AIConfigManager.shared.config.dispatcherModel
+    }
+
+    private var analysisModel: String {
+        AIConfigManager.shared.config.analysisModel
+    }
+
+    private var translationModel: String {
+        AIConfigManager.shared.config.translationModel
+    }
 
     private init() {
-        client = try? DashScopeClient(defaultModel: analysisModel)
+        client = try? DashScopeClient(defaultModel: AIConfigManager.shared.config.analysisModel)
+    }
+
+    /// 重新初始化客户端（配置变更后调用）
+    func reinitializeClient() {
+        client = try? DashScopeClient(defaultModel: AIConfigManager.shared.config.analysisModel)
     }
 
     // MARK: - Public APIs
