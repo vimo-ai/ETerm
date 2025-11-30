@@ -390,12 +390,18 @@ impl Sugarloaf<'_> {
         if let Some(ref typeface) = primary_typeface {
             let primary_font = Font::from_typeface(typeface, font_size);
             let (_, metrics) = primary_font.metrics();
-            let cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height;
+            let raw_cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height;
+            // 🔧 在物理像素层面对齐到整数,避免行间缝隙
+            let cell_height = (raw_cell_height * scale).round() / scale;
             let baseline_offset = -metrics.ascent;
 
             // 计算单个 cell 的宽度（基于主字体的等宽特性）
             // 使用 "M" 作为基准字符来测量 cell 宽度
-            let (cell_width, _) = primary_font.measure_str("M", None);
+            let (raw_cell_width, _) = primary_font.measure_str("M", None);
+            // 🔧 在物理像素层面对齐到整数,避免子像素渲染导致的字符缝隙
+            // scale=1.0: 8.4 → 8.0
+            // scale=2.0: 8.4 → 8.5 (物理像素 17.0)
+            let cell_width = (raw_cell_width * scale).round() / scale;
 
             for rich_text in &self.state.rich_texts {
                 if let Some(builder_state) = self.state.content.get_state(&rich_text.id) {
@@ -466,10 +472,12 @@ impl Sugarloaf<'_> {
 
                                 // 测量字形实际宽度，用于居中绘制
                                 let ch_str = ch.to_string();
-                                let (glyph_width, _) = best_font.measure_str(&ch_str, None);
+                                // let (glyph_width, _) = best_font.measure_str(&ch_str, None);
 
-                                // 计算居中偏移
-                                let center_offset = (char_cell_advance - glyph_width) / 2.0;
+                                // 🔧 注释掉居中偏移 - 等宽字体已经在字体设计层面处理了字符居中
+                                // 二次居中会导致字符缝隙和位置偏移
+                                // let center_offset = (char_cell_advance - glyph_width) / 2.0;
+                                let center_offset = 0.0;
 
                                 // 绘制背景（如果有）
                                 if let Some(bg) = fragment.style.background_color {
@@ -693,7 +701,7 @@ impl Sugarloaf<'_> {
     }
 
     /// 为单个字符找到最佳渲染字体（带样式支持）
-    /// 使用 Skia 的系统字体匹配机制自动查找支持该字符的字体
+    /// 优先使用主字体，只有主字体不支持时才使用系统 fallback
     #[cfg(target_os = "macos")]
     fn find_font_for_char_styled(
         &self,
@@ -707,7 +715,14 @@ impl Sugarloaf<'_> {
             return (styled_font.clone(), false);
         }
 
-        // 检查缓存
+        // 🔧 优先检查主字体(styled_font)是否支持该字符
+        // unichar_to_glyph 返回 0 表示字体不支持该字符
+        let glyph_id = styled_font.unichar_to_glyph(ch as i32);
+        if glyph_id != 0 {
+            return (styled_font.clone(), false);
+        }
+
+        // 主字体不支持，检查缓存
         {
             let cache = self.char_font_cache.borrow();
             if let Some((typeface, is_emoji)) = cache.get(&ch) {
@@ -715,7 +730,7 @@ impl Sugarloaf<'_> {
             }
         }
 
-        // 使用系统字体匹配查找能渲染该字符的字体
+        // 主字体不支持且无缓存，使用系统字体匹配
         let font_mgr = FontMgr::new();
         if let Some(typeface) = font_mgr.match_family_style_character(
             "",

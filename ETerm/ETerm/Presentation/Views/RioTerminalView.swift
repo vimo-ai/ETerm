@@ -604,31 +604,33 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 只有 scale 变化时才更新
         if abs(newScale - currentScale) > 0.01 {
+            print("🔄 Scale changed: \(currentScale) -> \(newScale), bounds: \(bounds.size)")
 
-            // 更新 layer 的 scale
+            // 1. 更新 layer 的 scale
             layer?.contentsScale = newScale
 
-            // 通知 Sugarloaf 更新 scale
+            // 2. 通知 Sugarloaf 更新 scale（内部会自动更新 fontMetrics）
             sugarloaf_rescale(sugarloaf, Float(newScale))
 
-            // 关键修复：rescale 后必须重新获取 fontMetrics
-            // 因为 fontMetrics 是物理像素，scale 变化后值会不同
+            // 3. 不要在这里调用 resize！
+            // layout() 会被自动调用，它会用正确的 scale 计算物理像素并调用 resize
+
+            // 4. 更新 fontMetrics（rescale 后需要重新获取）
             updateFontMetricsFromSugarloaf(sugarloaf)
 
-            // 更新 CoordinateMapper
+            // 5. 更新 CoordinateMapper
             let mapper = CoordinateMapper(scale: newScale, containerBounds: bounds)
             coordinateMapper = mapper
             coordinator?.setCoordinateMapper(mapper)
 
-            // 触发 resize（使用新的 scale 计算物理尺寸）
-            let width = Float(bounds.width * newScale)
-            let height = Float(bounds.height * newScale)
-            if width > 0 && height > 0 {
-                sugarloaf_resize(sugarloaf, width, height)
-            }
+            // 6. 触发 layout（确保 resize 被正确调用）
+            needsLayout = true
+            layoutSubtreeIfNeeded()
 
-            // 重新渲染
+            // 7. 重新渲染
             requestRender()
+
+            print("✅ Scale update complete")
         }
     }
 
@@ -654,8 +656,13 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 优先使用 window 关联的 screen 的 scale，更可靠
         let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        let width = Float(bounds.width * scale)
-        let height = Float(bounds.height * scale)
+
+        // ⚠️ 重要：resize 应该传逻辑像素，而不是物理像素
+        // Rust 侧的 resize 会自动用 scale 计算物理像素
+        let width = Float(bounds.width)
+        let height = Float(bounds.height)
+
+        print("📏 layout() -> scale: \(scale), bounds (logical): \(width)x\(height)")
 
         if width > 0 && height > 0 {
             sugarloaf_resize(sugarloaf, width, height)
@@ -677,8 +684,10 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 优先使用 window 关联的 screen 的 scale，更可靠
         let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
         let scale = Float(effectiveScale)
-        let width = Float(bounds.width) * scale
-        let height = Float(bounds.height) * scale
+
+        // ⚠️ 重要：传递逻辑像素，Rust 侧会用 scale 计算物理像素
+        let width = Float(bounds.width)
+        let height = Float(bounds.height)
 
         layer?.contentsScale = effectiveScale
 

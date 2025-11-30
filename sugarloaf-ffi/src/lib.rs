@@ -972,6 +972,7 @@ pub extern "C" fn sugarloaf_resize(
     }
 
     let handle = unsafe { &mut *handle };
+    println!("[Sugarloaf FFI] 📐 resize() called: {}x{} (current scale: {})", width, height, handle.scale);
     handle.instance.resize(width as u32, height as u32);
 }
 
@@ -992,6 +993,8 @@ pub extern "C" fn sugarloaf_rescale(
     }
 
     let handle = unsafe { &mut *handle };
+    let old_scale = handle.scale;
+    println!("[Sugarloaf FFI] 🔄 rescale() called: {} -> {}", old_scale, scale);
     handle.instance.rescale(scale);
 
     // 关键修复：更新 handle.scale
