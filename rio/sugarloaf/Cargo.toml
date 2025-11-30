@@ -55,8 +55,10 @@ futures = { workspace = true }
 
 # Skia renderer (macOS only)
 skia-safe = { version = "0.82.0", features = ["metal", "textlayout"] }
-cocoa = "0.26.0"
-objc = "0.2.7"
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSArray", "NSString", "NSGeometry"] }
+objc2-quartz-core = { version = "0.2", features = ["CAMetalLayer"] }
+objc2-metal = "0.2"
 
 # Keep wgpu for filters (will be removed later)
 wgpu = { workspace = true, optional = true }
@@ -89,7 +91,6 @@ ttf-parser = { version = "0.25.1", default-features = false, features = ["openty
 fontconfig-parser = { version = "0.5.8", default-features = false }
 
 [dev-dependencies]
-rio-window = { workspace = true }
 png = "0.17.16"
 deflate = "1.0.0"
 criterion = { workspace = true }

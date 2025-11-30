@@ -294,13 +294,18 @@ impl Sugarloaf<'_> {
             let primary_font = Font::from_typeface(typeface, font_size);
             let (_, metrics) = primary_font.metrics();
             let cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height_factor;
-            let (cell_width, _) = primary_font.measure_str("M", None);
+            let (cell_width_raw, _) = primary_font.measure_str("M", None);
+
+            // 🎯 关键修复：Round 到整数像素，避免渲染时的亚像素缝隙
+            // 同时确保渲染和坐标转换使用完全相同的值
+            let cell_width = cell_width_raw.round();
+            let cell_height = cell_height.round();
 
             (cell_width, cell_height, cell_height)
         } else {
             // Fallback 值
-            let cell_width = font_size * 0.6;
-            let cell_height = font_size * 1.2;
+            let cell_width = (font_size * 0.6).round();
+            let cell_height = (font_size * 1.2).round();
             (cell_width, cell_height, cell_height)
         }
     }

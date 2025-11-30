@@ -8,7 +8,9 @@
 use crate::sugarloaf::{SugarloafWindow, SugarloafWindowSize};
 
 #[cfg(target_os = "macos")]
-use cocoa::base::id;
+use objc2::runtime::{AnyObject, AnyClass};
+#[cfg(target_os = "macos")]
+use objc2::msg_send;
 #[cfg(target_os = "macos")]
 use skia_safe::{
     gpu::{self, direct_contexts, mtl, DirectContext, SurfaceOrigin},
@@ -61,7 +63,7 @@ impl Context<'_> {
         sugarloaf_window: SugarloafWindow,
         renderer_config: crate::SugarloafRenderer,
     ) -> Context<'a> {
-        use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
         let size = sugarloaf_window.size;
         let scale = sugarloaf_window.scale;
@@ -70,18 +72,23 @@ impl Context<'_> {
         let window_handle = sugarloaf_window.window_handle().unwrap();
         let layer_ptr = match window_handle.as_raw() {
             RawWindowHandle::AppKit(handle) => {
-                let ns_view = handle.ns_view.as_ptr();
+                let ns_view = handle.ns_view.as_ptr() as *mut AnyObject;
 
                 unsafe {
-                    let layer: id = msg_send![ns_view as id, layer];
-                    let is_metal_layer: bool = msg_send![layer, isKindOfClass: class!(CAMetalLayer)];
+                    let layer: *mut AnyObject = msg_send![ns_view, layer];
+
+                    // Get CAMetalLayer class
+                    let metal_layer_class = AnyClass::get("CAMetalLayer")
+                        .expect("CAMetalLayer class not found");
+                    let is_metal_layer: bool = msg_send![layer, isKindOfClass: metal_layer_class];
 
                     if is_metal_layer {
                         layer as *mut std::ffi::c_void
                     } else {
-                        let metal_layer: id = msg_send![class!(CAMetalLayer), layer];
-                        let _: () = msg_send![ns_view as id, setLayer: metal_layer];
-                        let _: () = msg_send![ns_view as id, setWantsLayer: true];
+                        // Create a new CAMetalLayer
+                        let metal_layer: *mut AnyObject = msg_send![metal_layer_class, layer];
+                        let _: () = msg_send![ns_view, setLayer: metal_layer];
+                        let _: () = msg_send![ns_view, setWantsLayer: true];
                         metal_layer as *mut std::ffi::c_void
                     }
                 }
@@ -90,23 +97,25 @@ impl Context<'_> {
         };
 
         let device: *mut std::ffi::c_void = unsafe {
-            msg_send![layer_ptr as id, device]
+            msg_send![layer_ptr as *mut AnyObject, device]
         };
 
         let device = if device.is_null() {
-            let default_device: id = unsafe {
-                msg_send![class!(MTLCreateSystemDefaultDevice), alloc]
-            };
-            unsafe {
-                let _: () = msg_send![layer_ptr as id, setDevice: default_device];
+            // Use C function to create system default Metal device
+            extern "C" {
+                fn MTLCreateSystemDefaultDevice() -> *mut std::ffi::c_void;
             }
-            default_device as *mut std::ffi::c_void
+            unsafe {
+                let default_device = MTLCreateSystemDefaultDevice();
+                let _: () = msg_send![layer_ptr as *mut AnyObject, setDevice: default_device as *mut AnyObject];
+                default_device
+            }
         } else {
             device
         };
 
         let command_queue: *mut std::ffi::c_void = unsafe {
-            msg_send![device as id, newCommandQueue]
+            msg_send![device as *mut AnyObject, newCommandQueue]
         };
 
         if command_queue.is_null() {
@@ -115,19 +124,20 @@ impl Context<'_> {
 
         unsafe {
             // 1. 设置 drawable 尺寸 (必须先设置，否则 drawable 池可能已存在)
-            let drawable_size = cocoa::foundation::NSSize::new(
+            use objc2_foundation::CGSize;
+            let drawable_size = CGSize::new(
                 (size.width * scale) as f64,
                 (size.height * scale) as f64,
             );
-            let _: () = msg_send![layer_ptr as id, setDrawableSize: drawable_size];
-            let _: () = msg_send![layer_ptr as id, setContentsScale: scale as f64];
+            let _: () = msg_send![layer_ptr as *mut AnyObject, setDrawableSize: drawable_size];
+            let _: () = msg_send![layer_ptr as *mut AnyObject, setContentsScale: scale as f64];
 
             // 2. 设置像素格式 - 80 = BGRA8Unorm (Skia 需要非 sRGB 格式)
             let pixel_format: u64 = 80;
-            let _: () = msg_send![layer_ptr as id, setPixelFormat: pixel_format];
+            let _: () = msg_send![layer_ptr as *mut AnyObject, setPixelFormat: pixel_format];
 
             // 3. 设置 maximumDrawableCount 来重置 drawable 池
-            let _: () = msg_send![layer_ptr as id, setMaximumDrawableCount: 2u64];
+            let _: () = msg_send![layer_ptr as *mut AnyObject, setMaximumDrawableCount: 2u64];
         }
 
         let backend = unsafe {
@@ -258,11 +268,12 @@ impl Context<'_> {
         self.size.height = height as f32;
 
         unsafe {
-            let drawable_size = cocoa::foundation::NSSize::new(
+            use objc2_foundation::CGSize;
+            let drawable_size = CGSize::new(
                 (width as f32 * self.scale) as f64,
                 (height as f32 * self.scale) as f64,
             );
-            let _: () = msg_send![self.layer_ptr as id, setDrawableSize: drawable_size];
+            let _: () = msg_send![self.layer_ptr as *mut AnyObject, setDrawableSize: drawable_size];
         }
 
         #[cfg(feature = "wgpu-backend")]
@@ -284,19 +295,19 @@ impl Context<'_> {
     pub fn begin_frame(&mut self) -> Option<(Surface, mtl::Handle)> {
         // 每次渲染前强制确保像素格式正确
         unsafe {
-            let current_format: u64 = msg_send![self.layer_ptr as id, pixelFormat];
+            let current_format: u64 = msg_send![self.layer_ptr as *mut AnyObject, pixelFormat];
             if current_format != 80 {
-                let _: () = msg_send![self.layer_ptr as id, setPixelFormat: 80u64];
+                let _: () = msg_send![self.layer_ptr as *mut AnyObject, setPixelFormat: 80u64];
             }
         }
 
-        let drawable: id = unsafe { msg_send![self.layer_ptr as id, nextDrawable] };
+        let drawable: *mut AnyObject = unsafe { msg_send![self.layer_ptr as *mut AnyObject, nextDrawable] };
 
         if drawable.is_null() {
             return None;
         }
 
-        let texture: id = unsafe { msg_send![drawable, texture] };
+        let texture: *mut AnyObject = unsafe { msg_send![drawable, texture] };
         if texture.is_null() {
             return None;
         }
@@ -341,11 +352,11 @@ impl Context<'_> {
         self.skia_context.flush_and_submit();
 
         unsafe {
-            let command_buffer: id =
-                msg_send![self.command_queue_ptr as id, commandBuffer];
+            let command_buffer: *mut AnyObject =
+                msg_send![self.command_queue_ptr as *mut AnyObject, commandBuffer];
 
             if !command_buffer.is_null() {
-                let _: () = msg_send![command_buffer, presentDrawable: drawable as id];
+                let _: () = msg_send![command_buffer, presentDrawable: drawable as *mut AnyObject];
                 let _: () = msg_send![command_buffer, commit];
             } else {
                 tracing::error!("Failed to create command buffer for presentation");
