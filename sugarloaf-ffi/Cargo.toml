@@ -15,6 +15,10 @@ sugarloaf = { path = "../rio/sugarloaf" }
 raw-window-handle = "0.6.2"
 wgpu = "27.0.1"
 
+# Skia (macOS only)
+[target.'cfg(target_os = "macos")'.dependencies]
+skia-safe = { version = "0.82.0", features = ["metal", "textlayout"] }
+
 # 终端相关依赖 (RIO)
 teletypewriter = { path = "../rio/teletypewriter" }
 rio-backend = { path = "../rio/rio-backend" }

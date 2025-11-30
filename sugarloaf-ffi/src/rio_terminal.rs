@@ -87,6 +87,8 @@ pub struct FFICell {
     pub bg_a: u8,
     /// 标志位 (bold, italic, underline, etc.)
     pub flags: u32,
+    /// 是否有 VS16 (U+FE0F) emoji 变体选择符
+    pub has_vs16: bool,
 }
 
 impl Default for FFICell {
@@ -102,6 +104,7 @@ impl Default for FFICell {
             bg_b: 0,
             bg_a: 0,
             flags: 0,
+            has_vs16: false,
         }
     }
 }
@@ -408,6 +411,12 @@ impl RioTerminal {
             let (fg_r, fg_g, fg_b) = Self::ansi_color_to_rgb(&square.fg, &terminal);
             let (bg_r, bg_g, bg_b) = Self::ansi_color_to_rgb(&square.bg, &terminal);
 
+            // 检查 zerowidth 字符中是否有 VS16 (U+FE0F)
+            let has_vs16 = square
+                .zerowidth()
+                .map(|zw| zw.contains(&'\u{FE0F}'))
+                .unwrap_or(false);
+
             cells.push(FFICell {
                 character: square.c as u32,
                 fg_r,
@@ -425,6 +434,7 @@ impl RioTerminal {
                     255
                 },
                 flags: square.flags.bits() as u32,
+                has_vs16,
             });
         }
 
@@ -540,15 +550,22 @@ impl RioTerminal {
     /// 设置选区
     ///
     /// 参数使用屏幕坐标（0-indexed），start 和 end 可以是任意顺序
+    /// 内部会根据 display_offset 转换为实际的 grid 坐标
     pub fn set_selection(&self, start_col: usize, start_row: i32, end_col: usize, end_row: i32) {
         use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
         use rio_backend::selection::{Selection, SelectionType};
 
         let mut terminal = self.terminal.lock();
 
+        // 获取滚动偏移量，将屏幕坐标转换为 grid 坐标
+        // display_offset > 0 表示向上滚动查看历史，此时屏幕行号需要减去偏移量
+        let display_offset = terminal.display_offset() as i32;
+        let actual_start_row = start_row - display_offset;
+        let actual_end_row = end_row - display_offset;
+
         // 创建选区起点和终点
-        let start = Pos::new(Line(start_row), Column(start_col));
-        let end = Pos::new(Line(end_row), Column(end_col));
+        let start = Pos::new(Line(actual_start_row), Column(start_col));
+        let end = Pos::new(Line(actual_end_row), Column(end_col));
 
         // 创建选区（Simple 类型，支持任意方向）
         let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
@@ -564,15 +581,24 @@ impl RioTerminal {
     }
 
     /// 获取选中的文本
+    ///
+    /// 参数使用屏幕坐标（0-indexed）
+    /// 内部会根据 display_offset 转换为实际的 grid 坐标
     pub fn get_selected_text(&self, start_col: usize, start_row: i32, end_col: usize, end_row: i32) -> Option<String> {
         use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
         use rio_backend::selection::{Selection, SelectionType};
 
         let mut terminal = self.terminal.lock();
 
+        // 获取滚动偏移量，将屏幕坐标转换为 grid 坐标
+        // display_offset > 0 表示向上滚动查看历史，此时屏幕行号需要减去偏移量
+        let display_offset = terminal.display_offset() as i32;
+        let actual_start_row = start_row - display_offset;
+        let actual_end_row = end_row - display_offset;
+
         // 创建临时选区来获取文本范围
-        let start = Pos::new(Line(start_row), Column(start_col));
-        let end = Pos::new(Line(end_row), Column(end_col));
+        let start = Pos::new(Line(actual_start_row), Column(start_col));
+        let end = Pos::new(Line(actual_end_row), Column(end_col));
 
         let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
         selection.update(end, Side::Right);

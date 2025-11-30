@@ -117,8 +117,20 @@ final class DashScopeClient {
     }
 
     convenience init(defaultModel: String = "qwen-plus", session: URLSession = .shared) throws {
-        let config = try Configuration.fromEnvironment(defaultModel: defaultModel)
-        self.init(configuration: config, session: session)
+        // 优先从配置管理器读取
+        let managerConfig = AIConfigManager.shared.config
+        if managerConfig.isValid, let url = URL(string: managerConfig.baseURL) {
+            let config = Configuration(
+                apiKey: managerConfig.apiKey,
+                baseURL: url,
+                defaultModel: defaultModel
+            )
+            self.init(configuration: config, session: session)
+        } else {
+            // 降级到环境变量
+            let config = try Configuration.fromEnvironment(defaultModel: defaultModel)
+            self.init(configuration: config, session: session)
+        }
     }
 
     // 非流式调用

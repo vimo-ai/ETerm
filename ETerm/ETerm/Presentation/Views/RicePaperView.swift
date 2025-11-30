@@ -73,11 +73,9 @@ struct RicePaperView<Content: View>: View {
     let overallOpacity: Double
     let content: Content
 
-    // 图片基础路径（开发阶段用文件路径，后续可改为 Assets）
-    private let imageBasePath = "/Users/higuaifan/Desktop/shuimo/shuimo-ui/lib/components/template/ricePaper/assets/img/converted"
-
-    // 宣纸纹理路径
-    private let textureBasePath = "/Users/higuaifan/Desktop/shuimo/shuimo-ui/cli/build/config/output/public/rice-paper"
+    // Asset Catalog 资源命名规则：
+    // 山脉图片: {theme}-{name}，如 dark-l-base、green-r-mid
+    // 纹理图片: rice-paper、rice-paper-warm
 
     init(showMountain: Bool = true, overallOpacity: Double = 1.0, @ViewBuilder content: () -> Content) {
         self.showMountain = showMountain
@@ -85,7 +83,7 @@ struct RicePaperView<Content: View>: View {
         self.content = content()
     }
 
-    private var themePath: String {
+    private var themePrefix: String {
         colorScheme == .dark ? "dark" : "green"
     }
 
@@ -125,6 +123,12 @@ struct RicePaperView<Content: View>: View {
                     mountainsView(in: geometry.size)
                 }
 
+                // 深色模式下的暗化遮罩层
+                if colorScheme == .dark {
+                    Color.black.opacity(0.6)
+                        .ignoresSafeArea()
+                }
+
                 // 宣纸纹理叠加层
                 ricePaperTextureView(in: geometry.size)
 
@@ -148,11 +152,10 @@ struct RicePaperView<Content: View>: View {
     // MARK: - 宣纸纹理叠加层
     @ViewBuilder
     private func ricePaperTextureView(in size: CGSize) -> some View {
-        let textureName = colorScheme == .dark ? "rice-paper-warm.webp" : "rice-paper.webp"
-        let texturePath = "\(textureBasePath)/\(textureName)"
+        let textureName = colorScheme == .dark ? "rice-paper-warm" : "rice-paper"
         let textureOpacity = colorScheme == .dark ? 0.5 : 0.8
 
-        if let nsImage = NSImage(contentsOfFile: texturePath) {
+        if let nsImage = NSImage(named: textureName) {
             TiledImageView(image: nsImage)
                 .frame(width: size.width, height: size.height)
                 .opacity(textureOpacity)
@@ -183,6 +186,7 @@ struct RicePaperView<Content: View>: View {
                 }
             }
             .frame(height: size.width * 773 / 4096)  // 按原始比例
+            .padding(.bottom, 60)  // 山脉上移
         }
     }
 
@@ -217,9 +221,10 @@ struct RicePaperView<Content: View>: View {
 
     @ViewBuilder
     private func mountainImage(layer: MountainLayer, xMove: CGFloat, yMove: CGFloat, containerWidth: CGFloat) -> some View {
-        let imagePath = "\(imageBasePath)/\(themePath)/\(layer.imageName).png"
+        // 从 Asset Catalog 加载: {theme}-{name}，如 dark-l-base、green-r-mid
+        let assetName = "\(themePrefix)-\(layer.imageName)"
 
-        if let nsImage = NSImage(contentsOfFile: imagePath) {
+        if let nsImage = NSImage(named: assetName) {
             let imageSize = nsImage.size
             let scaledWidth = containerWidth * imageSize.width / 4096
             let scaledHeight = scaledWidth * imageSize.height / imageSize.width

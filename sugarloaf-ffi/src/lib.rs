@@ -91,15 +91,20 @@ impl SugarloafHandle {
     fn update_font_metrics_from_dimensions(&mut self, rt_id: usize) {
         let dimensions = self.instance.get_rich_text_dimensions(&rt_id);
 
-        // dimensions.width 和 height 是物理像素
-        let metrics = SugarloafFontMetrics {
-            cell_width: dimensions.width,
-            cell_height: dimensions.height,
-            line_height: dimensions.height,
-        };
+        // 检查 dimensions 是否有效（Skia 版本可能返回 0）
+        // 如果无效，保持当前的 fallback 值
+        if dimensions.width > 0.0 && dimensions.height > 0.0 {
+            // dimensions.width 和 height 是物理像素
+            let metrics = SugarloafFontMetrics {
+                cell_width: dimensions.width,
+                cell_height: dimensions.height,
+                line_height: dimensions.height,
+            };
 
-        self.font_metrics = metrics;
-        set_global_font_metrics(metrics);
+            self.font_metrics = metrics;
+            set_global_font_metrics(metrics);
+        }
+        // 如果 dimensions 无效，保持使用 fallback 值
     }
 }
 
@@ -227,13 +232,12 @@ pub extern "C" fn sugarloaf_new(
 
         #[cfg(target_os = "macos")]
         {
-            // 透明背景，让 SwiftUI 的水墨背景显示出来
-            instance.set_background_color(Some(wgpu::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 0.0,  // 完全透明
-            }));
+            instance.set_background_color(Some(skia_safe::Color4f::new(
+                0.0, // r
+                0.0, // g
+                0.0, // b
+                0.0, // a - 完全透明,让窗口的磨砂效果显示出来
+            )));
         }
 
         let handle = Box::new(SugarloafHandle {
@@ -267,7 +271,8 @@ pub extern "C" fn sugarloaf_create_rich_text(handle: *mut SugarloafHandle) -> us
     rt_id
 }
 
-/// Returns the cached font metrics used by Sugarloaf.
+/// Returns the font metrics calculated by Skia.
+/// This method directly queries Skia for accurate cell dimensions.
 #[no_mangle]
 pub extern "C" fn sugarloaf_get_font_metrics(
     handle: *mut SugarloafHandle,
@@ -278,8 +283,28 @@ pub extern "C" fn sugarloaf_get_font_metrics(
     }
 
     let handle_ref = unsafe { &mut *handle };
-    unsafe {
-        *out_metrics = handle_ref.font_metrics;
+
+    // 直接从 Skia 获取字体度量
+    let (cell_width, cell_height, line_height) = handle_ref.instance.get_font_metrics_skia();
+
+    // 如果获取到有效值，更新缓存
+    if cell_width > 0.0 && cell_height > 0.0 {
+        let metrics = SugarloafFontMetrics {
+            cell_width,
+            cell_height,
+            line_height,
+        };
+        handle_ref.font_metrics = metrics;
+        set_global_font_metrics(metrics);
+
+        unsafe {
+            *out_metrics = metrics;
+        }
+    } else {
+        // 返回缓存的值（fallback）
+        unsafe {
+            *out_metrics = handle_ref.font_metrics;
+        }
     }
     true
 }
@@ -454,6 +479,144 @@ pub extern "C" fn sugarloaf_content_add_text_full(
     }
 
     // Default: use base style (font_id = 0)
+    content.add_text(text_str, base_style);
+}
+
+/// Add text with full styling options including text decoration flags
+/// flags bit mask:
+///   0x0002 = BOLD
+///   0x0004 = ITALIC
+///   0x0008 = UNDERLINE
+///   0x0080 = DIM
+///   0x0200 = STRIKEOUT
+///   0x0800 = DOUBLE_UNDERLINE
+///   0x1000 = UNDERCURL
+///   0x2000 = DOTTED_UNDERLINE
+///   0x4000 = DASHED_UNDERLINE
+#[no_mangle]
+pub extern "C" fn sugarloaf_content_add_text_decorated(
+    handle: *mut SugarloafHandle,
+    text: *const c_char,
+    fg_r: f32, fg_g: f32, fg_b: f32, fg_a: f32,
+    has_bg: bool,
+    bg_r: f32, bg_g: f32, bg_b: f32, bg_a: f32,
+    width: f32,
+    has_cursor: bool,
+    cursor_r: f32, cursor_g: f32, cursor_b: f32, cursor_a: f32,
+    flags: u32,
+) {
+    if handle.is_null() || text.is_null() {
+        return;
+    }
+
+    let handle = unsafe { &mut *handle };
+    let text_str = unsafe { CStr::from_ptr(text).to_str().unwrap_or("") };
+
+    let cursor = if has_cursor {
+        Some(sugarloaf::SugarCursor::Block([cursor_r, cursor_g, cursor_b, cursor_a]))
+    } else {
+        None
+    };
+
+    let background_color = if has_bg {
+        Some([bg_r, bg_g, bg_b, bg_a])
+    } else {
+        None
+    };
+
+    // Parse decoration from flags
+    use sugarloaf::layout::{FragmentStyleDecoration, UnderlineInfo, UnderlineShape};
+
+    let decoration = if flags & 0x0008 != 0 {
+        // UNDERLINE
+        Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+            is_doubled: false,
+            shape: UnderlineShape::Regular,
+        }))
+    } else if flags & 0x0800 != 0 {
+        // DOUBLE_UNDERLINE
+        Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+            is_doubled: true,
+            shape: UnderlineShape::Regular,
+        }))
+    } else if flags & 0x1000 != 0 {
+        // UNDERCURL
+        Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+            is_doubled: false,
+            shape: UnderlineShape::Curly,
+        }))
+    } else if flags & 0x2000 != 0 {
+        // DOTTED_UNDERLINE
+        Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+            is_doubled: false,
+            shape: UnderlineShape::Dotted,
+        }))
+    } else if flags & 0x4000 != 0 {
+        // DASHED_UNDERLINE
+        Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+            is_doubled: false,
+            shape: UnderlineShape::Dashed,
+        }))
+    } else if flags & 0x0200 != 0 {
+        // STRIKEOUT
+        Some(FragmentStyleDecoration::Strikethrough)
+    } else {
+        None
+    };
+
+    // Determine font_id based on bold/italic flags
+    // FontLibrary 加载顺序: 0=regular, 1=italic, 2=bold, 3=bold_italic
+    let is_bold = flags & 0x0002 != 0;
+    let is_italic = flags & 0x0004 != 0;
+
+    let base_font_id = match (is_bold, is_italic) {
+        (false, false) => 0, // regular
+        (true, false) => 2,  // bold
+        (false, true) => 1,  // italic
+        (true, true) => 3,   // bold_italic
+    };
+
+    // Apply DIM by reducing alpha
+    let final_fg_a = if flags & 0x0080 != 0 {
+        fg_a * 0.5
+    } else {
+        fg_a
+    };
+
+    let base_style = FragmentStyle {
+        font_id: base_font_id,
+        color: [fg_r, fg_g, fg_b, final_fg_a],
+        background_color,
+        width,
+        cursor,
+        decoration,
+        decoration_color: Some([fg_r, fg_g, fg_b, final_fg_a]), // Use foreground color for decoration
+        ..FragmentStyle::default()
+    };
+
+    // Check if text contains characters that need font fallback
+    let content = handle.instance.content();
+
+    if text_str.chars().count() == 1 {
+        let ch = text_str.chars().next().unwrap();
+        let needs_fallback = ch as u32 > 0x7F || is_emoji_like(ch);
+
+        if needs_fallback {
+            let font_library = content.font_library();
+            let font_library_data = font_library.inner.read();
+            if let Some((font_id, _is_emoji)) = font_library_data.find_best_font_match(ch, &base_style) {
+                drop(font_library_data);
+                let style = FragmentStyle {
+                    font_id,
+                    ..base_style
+                };
+                content.add_text(text_str, style);
+                return;
+            }
+            drop(font_library_data);
+        }
+    }
+
     content.add_text(text_str, base_style);
 }
 
@@ -769,16 +932,22 @@ pub extern "C" fn sugarloaf_render_demo_with_rich_text(
 /// Render
 #[no_mangle]
 pub extern "C" fn sugarloaf_render(handle: *mut SugarloafHandle) {
+    eprintln!("[Sugarloaf FFI] sugarloaf_render() called");
+
     if handle.is_null() {
         eprintln!("[Sugarloaf FFI] render() called with null handle!");
         return;
     }
 
     let handle = unsafe { &mut *handle };
+    eprintln!("[Sugarloaf FFI] Calling instance.render()...");
+
     // 添加panic捕获
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle.instance.render();
     }));
+
+    eprintln!("[Sugarloaf FFI] instance.render() completed");
 
     if let Err(e) = result {
         eprintln!("[Sugarloaf FFI] ❌ render() panicked: {:?}", e);
@@ -803,6 +972,7 @@ pub extern "C" fn sugarloaf_resize(
     }
 
     let handle = unsafe { &mut *handle };
+    println!("[Sugarloaf FFI] 📐 resize() called: {}x{} (current scale: {})", width, height, handle.scale);
     handle.instance.resize(width as u32, height as u32);
 }
 
@@ -823,6 +993,8 @@ pub extern "C" fn sugarloaf_rescale(
     }
 
     let handle = unsafe { &mut *handle };
+    let old_scale = handle.scale;
+    println!("[Sugarloaf FFI] 🔄 rescale() called: {} -> {}", old_scale, scale);
     handle.instance.rescale(scale);
 
     // 关键修复：更新 handle.scale

@@ -223,6 +223,22 @@ struct StatusTabView: View {
     }
 }
 
+// MARK: - 穿透容器（只响应子视图区域的点击）
+
+private class PassthroughContainerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 检查所有子视图
+        for subview in subviews.reversed() {
+            let convertedPoint = convert(point, to: subview)
+            if let hitView = subview.hitTest(convertedPoint) {
+                return hitView
+            }
+        }
+        // 没有子视图响应，返回 nil 让点击穿透
+        return nil
+    }
+}
+
 // MARK: - AppKit Bridge（供 RioContainerView 使用）
 
 /// AppKit 桥接类，用于在 NSView 层级中使用 SwiftUI PageBarView
@@ -233,8 +249,8 @@ final class PageBarHostingView: NSView {
     private var pages: [PageItem] = []
     private var activePageId: UUID?
 
-    // Page 标签容器
-    private let pageContainer = NSView()
+    // Page 标签容器（使用穿透容器）
+    private let pageContainer = PassthroughContainerView()
     private var pageItemViews: [PageItemView] = []
 
     // 拖拽相关
@@ -331,6 +347,7 @@ final class PageBarHostingView: NSView {
     override func layout() {
         super.layout()
         hostingView?.frame = bounds
+        // pageContainer 占满整个区域，但通过 hitTest 让点击穿透到下层
         pageContainer.frame = bounds
         layoutPageItems()
     }
@@ -499,6 +516,7 @@ extension PageBarHostingView {
 struct PageBarControlsView: View {
     @ObservedObject private var translationMode = TranslationModeStore.shared
     var onAddPage: (() -> Void)?
+    @State private var showSettings = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -516,6 +534,18 @@ struct PageBarControlsView: View {
             }
             .buttonStyle(.plain)
             .padding(.trailing, 6)
+
+            // 设置按钮
+            Button(action: { showSettings = true }) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 6)
+            .sheet(isPresented: $showSettings) {
+                SettingsView()
+            }
 
             StatusTabView(
                 text: translationMode.statusText,

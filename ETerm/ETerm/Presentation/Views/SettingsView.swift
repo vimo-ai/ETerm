@@ -1,0 +1,309 @@
+//
+//  SettingsView.swift
+//  ETerm
+//
+//  设置页面
+//
+
+import SwiftUI
+
+struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var configManager = AIConfigManager.shared
+
+    @State private var apiKey: String = ""
+    @State private var baseURL: String = ""
+    @State private var dispatcherModel: String = ""
+    @State private var analysisModel: String = ""
+    @State private var translationModel: String = ""
+
+    @State private var testStatus: TestStatus = .idle
+    @State private var showTestResult = false
+    @State private var testMessage = ""
+
+    enum TestStatus {
+        case idle
+        case testing
+        case success
+        case failure
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 标题栏
+            HStack {
+                Text("设置")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+
+                Spacer()
+
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+
+            Divider()
+
+            // 设置内容区域
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    // AI 服务配置
+                    SettingsSectionView(title: "AI 服务配置") {
+                        VStack(alignment: .leading, spacing: 16) {
+                            // API Key
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("API Key")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+
+                                SecureField("请输入 DashScope API Key", text: $apiKey)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+
+                            // Base URL
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Base URL")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+
+                                TextField("https://dashscope.aliyuncs.com/compatible-mode/v1", text: $baseURL)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+
+                            Divider()
+
+                            // 模型配置
+                            Text("模型配置")
+                                .font(.headline)
+
+                            VStack(alignment: .leading, spacing: 12) {
+                                ModelField(label: "调度模型", model: $dispatcherModel, placeholder: "qwen-flash")
+                                ModelField(label: "分析模型", model: $analysisModel, placeholder: "qwen3-max")
+                                ModelField(label: "翻译模型", model: $translationModel, placeholder: "qwen-mt-flash")
+                            }
+
+                            Divider()
+
+                            // 操作按钮
+                            HStack(spacing: 12) {
+                                Button(action: testConnection) {
+                                    HStack {
+                                        if testStatus == .testing {
+                                            ProgressView()
+                                                .scaleEffect(0.7)
+                                                .frame(width: 14, height: 14)
+                                        } else {
+                                            Image(systemName: testStatusIcon)
+                                        }
+                                        Text(testStatusText)
+                                    }
+                                }
+                                .disabled(testStatus == .testing || !isFormValid)
+
+                                Spacer()
+
+                                Button("重置为默认", action: resetToDefault)
+                                    .foregroundColor(.orange)
+
+                                Button("保存", action: saveConfig)
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(!isFormValid)
+                            }
+
+                            // 测试结果提示
+                            if showTestResult {
+                                HStack {
+                                    Image(systemName: testStatus == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                        .foregroundColor(testStatus == .success ? .green : .red)
+                                    Text(testMessage)
+                                        .font(.caption)
+                                }
+                                .padding(8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(testStatus == .success ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
+                                )
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(width: 650, height: 550)
+        .onAppear(perform: loadConfig)
+    }
+
+    // MARK: - 辅助视图
+
+    private var isFormValid: Bool {
+        !apiKey.isEmpty && !baseURL.isEmpty && URL(string: baseURL) != nil
+    }
+
+    private var testStatusIcon: String {
+        switch testStatus {
+        case .idle: return "antenna.radiowaves.left.and.right"
+        case .testing: return "antenna.radiowaves.left.and.right"
+        case .success: return "checkmark.circle"
+        case .failure: return "xmark.circle"
+        }
+    }
+
+    private var testStatusText: String {
+        switch testStatus {
+        case .idle: return "测试连接"
+        case .testing: return "测试中..."
+        case .success: return "连接成功"
+        case .failure: return "连接失败"
+        }
+    }
+
+    // MARK: - 操作方法
+
+    private func loadConfig() {
+        let config = configManager.config
+        apiKey = config.apiKey
+        baseURL = config.baseURL
+        dispatcherModel = config.dispatcherModel
+        analysisModel = config.analysisModel
+        translationModel = config.translationModel
+    }
+
+    private func saveConfig() {
+        configManager.config = AIConfig(
+            apiKey: apiKey,
+            baseURL: baseURL,
+            dispatcherModel: dispatcherModel,
+            analysisModel: analysisModel,
+            translationModel: translationModel
+        )
+
+        // 重新初始化 AI 服务
+        AIService.shared.reinitializeClient()
+
+        // 显示保存成功提示
+        testStatus = .success
+        testMessage = "配置已保存"
+        showTestResult = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showTestResult = false
+            testStatus = .idle
+        }
+    }
+
+    private func resetToDefault() {
+        let defaultConfig = AIConfig.default
+        apiKey = defaultConfig.apiKey
+        baseURL = defaultConfig.baseURL
+        dispatcherModel = defaultConfig.dispatcherModel
+        analysisModel = defaultConfig.analysisModel
+        translationModel = defaultConfig.translationModel
+    }
+
+    private func testConnection() {
+        testStatus = .testing
+        showTestResult = false
+
+        Task {
+            do {
+                // 创建临时配置进行测试
+                let tempConfig = AIConfig(
+                    apiKey: apiKey,
+                    baseURL: baseURL,
+                    dispatcherModel: dispatcherModel,
+                    analysisModel: analysisModel,
+                    translationModel: translationModel
+                )
+
+                // 临时保存配置
+                let originalConfig = configManager.config
+                configManager.config = tempConfig
+
+                // 测试连接
+                _ = try await configManager.testConnection()
+
+                await MainActor.run {
+                    testStatus = .success
+                    testMessage = "连接成功！API 可用"
+                    showTestResult = true
+
+                    // 2秒后重置状态
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        testStatus = .idle
+                        showTestResult = false
+                    }
+                }
+
+                // 恢复原配置
+                configManager.config = originalConfig
+
+            } catch {
+                await MainActor.run {
+                    testStatus = .failure
+                    testMessage = "连接失败：\(error.localizedDescription)"
+                    showTestResult = true
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        testStatus = .idle
+                        showTestResult = false
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 设置分组视图
+
+struct SettingsSectionView<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                content
+            }
+            .padding()
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(NSColor.controlBackgroundColor))
+            )
+        }
+    }
+}
+
+// MARK: - 模型配置字段
+
+struct ModelField: View {
+    let label: String
+    @Binding var model: String
+    let placeholder: String
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .frame(width: 80, alignment: .leading)
+
+            TextField(placeholder, text: $model)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    SettingsView()
+}
