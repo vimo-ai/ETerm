@@ -1,13 +1,4 @@
 {
-  "hooks": {
-    "Stop": [{
-      "matcher": "",
-      "hooks": [{
-        "type": "command",
-        "command": "bash .claude/hooks/test_stop.sh"
-      }]
-    }]
-  },
   "permissions": {
     "allow": [
       "WebFetch(domain:github.com)",
@@ -59,9 +50,24 @@
       "Bash(ETerm/ETerm/Presentation/Views/TabItemView.swift )",
       "Bash(ETerm/ETerm/Presentation/Views/RioTerminalView.swift)",
       "Bash(ETerm/ETerm/OllamaService.swift)",
-      "WebFetch(domain:iterm2.com)"
+      "WebFetch(domain:iterm2.com)",
+      "Bash(fc-list:*)",
+      "Bash(system_profiler:*)"
     ],
     "deny": [],
     "ask": []
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop_hook.sh"
+          }
+        ]
+      }
+    ]
   }
 }
