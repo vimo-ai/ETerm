@@ -148,10 +148,12 @@ pub fn white() -> ColorArray {
 
 #[inline]
 pub fn default_light_black() -> ColorArray {
-    // ETerm Shuimo Theme - Bright Black
-    ColorBuilder::from_hex(String::from("#0f1423"), Format::SRGB0_1)
+    // ETerm Shuimo Theme - Bright Black（使用半透明 foreground，模拟 Warp 的 details 色）
+    let mut color = ColorBuilder::from_hex(String::from("#dbdadd"), Format::SRGB0_1)
         .unwrap()
-        .to_arr()
+        .to_arr();
+    color[3] = 0.5; // 设置 alpha = 0.5
+    color
 }
 #[inline]
 pub fn default_light_blue() -> ColorArray {

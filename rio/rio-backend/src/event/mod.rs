@@ -8,7 +8,6 @@ use crate::crosswords::pos::{Direction, Pos};
 use crate::crosswords::search::{Match, RegexSearch};
 use crate::crosswords::LineDamage;
 use crate::error::RioError;
-use rio_window::event::Event as RioWindowEvent;
 use std::borrow::Cow;
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Debug;
@@ -16,9 +15,30 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use teletypewriter::WinsizeBuilder;
 
-use rio_window::event_loop::EventLoopProxy;
+// ============================================================================
+// 简化的类型定义（替代 rio-window 依赖）
+// ============================================================================
 
-pub type WindowId = rio_window::window::WindowId;
+/// 窗口标识符（简化版，不依赖 winit）
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct WindowId(u64);
+
+impl From<u64> for WindowId {
+    fn from(id: u64) -> Self {
+        WindowId(id)
+    }
+}
+
+/// 事件循环代理（简化版）
+pub trait EventLoopProxy<T>: Clone {
+    fn send_event(&self, event: T) -> Result<(), ()>;
+}
+
+/// 窗口事件（简化版）
+#[derive(Debug, Clone)]
+pub enum Event<T> {
+    UserEvent(T),
+}
 
 #[derive(Debug, Clone)]
 pub enum RioEventType {
@@ -239,9 +259,9 @@ impl EventPayload {
     }
 }
 
-impl From<EventPayload> for RioWindowEvent<EventPayload> {
+impl From<EventPayload> for Event<EventPayload> {
     fn from(event: EventPayload) -> Self {
-        RioWindowEvent::UserEvent(event)
+        Event::UserEvent(event)
     }
 }
 
@@ -280,12 +300,12 @@ impl EventListener for VoidListener {
 }
 
 #[derive(Debug, Clone)]
-pub struct EventProxy {
-    proxy: EventLoopProxy<EventPayload>,
+pub struct EventProxy<P: EventLoopProxy<EventPayload>> {
+    proxy: P,
 }
 
-impl EventProxy {
-    pub fn new(proxy: EventLoopProxy<EventPayload>) -> Self {
+impl<P: EventLoopProxy<EventPayload>> EventProxy<P> {
+    pub fn new(proxy: P) -> Self {
         Self { proxy }
     }
 
@@ -294,7 +314,7 @@ impl EventProxy {
     }
 }
 
-impl EventListener for EventProxy {
+impl<P: EventLoopProxy<EventPayload>> EventListener for EventProxy<P> {
     fn event(&self) -> (std::option::Option<RioEvent>, bool) {
         (None, false)
     }

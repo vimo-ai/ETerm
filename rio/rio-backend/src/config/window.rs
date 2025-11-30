@@ -136,19 +136,7 @@ impl Colorspace {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    pub fn to_rio_window_colorspace(&self) -> rio_window::platform::macos::Colorspace {
-        match self {
-            Colorspace::Srgb => rio_window::platform::macos::Colorspace::Srgb,
-            Colorspace::DisplayP3 => rio_window::platform::macos::Colorspace::DisplayP3,
-            Colorspace::Rec2020 => rio_window::platform::macos::Colorspace::Rec2020,
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    pub fn to_rio_window_colorspace(&self) {
-        // No-op for non-macOS platforms
-    }
+    // 注：to_rio_window_colorspace 已删除（不再依赖 rio-window）
 }
 
 impl Window {
