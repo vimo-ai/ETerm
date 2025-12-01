@@ -31,13 +31,13 @@ class TerminalSearch {
     ///   - pattern: 搜索关键词
     ///   - terminalId: 终端 ID
     ///   - caseSensitive: 是否区分大小写
-    ///   - maxRows: 最大搜索行数（nil 表示搜索所有）
+    ///   - maxRows: 最大搜索行数（默认 1000 行）
     /// - Returns: 匹配项列表
     func search(
         pattern: String,
         in terminalId: Int,
         caseSensitive: Bool = false,
-        maxRows: Int? = nil
+        maxRows: Int = 1000
     ) -> [SearchMatch] {
         guard !pattern.isEmpty else { return [] }
 
@@ -46,24 +46,26 @@ class TerminalSearch {
             return []
         }
 
-        // 搜索整个历史缓冲区 + 屏幕区域
-        let totalHistoryRows = Int(snapshot.scrollback_lines) + Int(snapshot.screen_lines)
-        let rowsToSearch = maxRows ?? min(totalHistoryRows, 10000) // 限制最多搜索 10000 行
-
-        // 记录搜索时的状态，用于计算真实行号
         let scrollbackLines = Int64(snapshot.scrollback_lines)
-        let displayOffset = Int64(snapshot.display_offset)
+        let screenLines = Int64(snapshot.screen_lines)
+
+        // 搜索范围：从历史缓冲区开始到当前屏幕结束
+        // absoluteRow 范围: [0, scrollback_lines + screen_lines - 1]
+        let totalRows = scrollbackLines + screenLines
+
+        // 限制搜索行数，避免性能问题
+        let rowsToSearch = min(Int(totalRows), maxRows)
 
         var matches: [SearchMatch] = []
 
         // 转换搜索模式（处理大小写）
         let searchPattern = caseSensitive ? pattern : pattern.lowercased()
 
-        // 遍历每一行
-        for rowIndex in 0..<rowsToSearch {
-            let cells = terminalManager.getRowCells(
+        // 从最旧的历史开始遍历（absoluteRow = 0）
+        for absoluteRow in 0..<rowsToSearch {
+            let cells = terminalManager.getRowCellsAbsolute(
                 terminalId: terminalId,
-                rowIndex: rowIndex,
+                absoluteRow: Int64(absoluteRow),
                 maxCells: Int(snapshot.columns)
             )
 
@@ -89,12 +91,8 @@ class TerminalSearch {
 
                 let matchText = String(lineText[range])
 
-                // 计算真实行号
-                // absoluteRow = scrollbackLines - displayOffset + rowIndex
-                let absoluteRow = scrollbackLines - displayOffset + Int64(rowIndex)
-
                 matches.append(SearchMatch(
-                    absoluteRow: absoluteRow,
+                    absoluteRow: Int64(absoluteRow),
                     startCol: startCol,
                     endCol: endCol,
                     text: matchText
@@ -114,13 +112,13 @@ class TerminalSearch {
     ///   - pattern: 搜索关键词
     ///   - terminalId: 终端 ID
     ///   - caseSensitive: 是否区分大小写
-    ///   - maxRows: 最大搜索行数
+    ///   - maxRows: 最大搜索行数（默认 1000 行）
     /// - Returns: 匹配项列表
     func searchAsync(
         pattern: String,
         in terminalId: Int,
         caseSensitive: Bool = false,
-        maxRows: Int? = nil
+        maxRows: Int = 1000
     ) async -> [SearchMatch] {
         // 在后台线程执行搜索
         return await Task.detached(priority: .userInitiated) { [weak self] in
