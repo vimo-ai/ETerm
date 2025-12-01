@@ -187,6 +187,8 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
 
         switch type {
         case .title:
+            // 标题变更可能很频繁，记录一下
+            print("📝 [Title Change] '\(string)'")
             // 标题变更
             // 注意：这里我们没有 terminalId，需要改进 FFI 接口
             DispatchQueue.main.async { [weak self] in

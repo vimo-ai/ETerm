@@ -25,6 +25,11 @@ final class GlobalTerminalManager {
     /// 终端池句柄
     private var poolHandle: RioTerminalPoolHandle?
 
+    /// 获取终端池句柄（供渲染使用）
+    var poolHandleForRender: RioTerminalPoolHandle? {
+        return poolHandle
+    }
+
     /// Sugarloaf 句柄（用于初始化池，实际渲染由各窗口自己的 Sugarloaf 处理）
     private var sugarloafHandle: SugarloafHandle?
 

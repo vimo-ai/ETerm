@@ -522,6 +522,23 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 坐标映射器
     private var coordinateMapper: CoordinateMapper?
 
+    // MARK: - CVDisplayLink（帧率限制）
+
+    /// CVDisplayLink - 同步屏幕刷新率
+    private var displayLink: CVDisplayLink?
+
+    /// 需要渲染的标记（原子操作）
+    private var needsRender = false
+    private let needsRenderLock = NSLock()
+
+    /// 渲染性能统计
+    private var renderCount: Int = 0
+    private var lastStatTime: Date = Date()
+    private var skipCount: Int = 0  // CVDisplayLink 跳过的帧数
+    private var totalRenderTime: TimeInterval = 0  // 累计渲染耗时
+    private var maxRenderTime: TimeInterval = 0    // 最大单帧耗时
+    private var requestCount: Int = 0  // requestRender 调用次数
+
     // MARK: - 光标闪烁相关（照抄 Rio）
 
     private var lastBlinkToggle: Date?
@@ -752,8 +769,91 @@ class RioMetalView: NSView, RenderViewProtocol {
             coordinator.setGlobalTerminalManager(terminalManager)
         }
 
+        // 启动 CVDisplayLink
+        setupDisplayLink()
+
         // 初始渲染
         requestRender()
+    }
+
+    // MARK: - CVDisplayLink Setup
+
+    /// 设置 CVDisplayLink（同步屏幕刷新率）
+    private func setupDisplayLink() {
+        // 创建 CVDisplayLink
+        var link: CVDisplayLink?
+        CVDisplayLinkCreateWithActiveCGDisplays(&link)
+
+        guard let displayLink = link else {
+            print("⚠️ [CVDisplayLink] Failed to create CVDisplayLink")
+            return
+        }
+
+        self.displayLink = displayLink
+
+        // 设置回调
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        CVDisplayLinkSetOutputCallback(displayLink, { (displayLink, inNow, inOutputTime, flagsIn, flagsOut, context) -> CVReturn in
+            guard let context = context else { return kCVReturnSuccess }
+            let view = Unmanaged<RioMetalView>.fromOpaque(context).takeUnretainedValue()
+
+            // 在主线程执行渲染
+            DispatchQueue.main.async {
+                view.renderIfNeeded()
+            }
+
+            return kCVReturnSuccess
+        }, context)
+
+        // 启动 CVDisplayLink
+        CVDisplayLinkStart(displayLink)
+        print("✅ [CVDisplayLink] Started (synced to screen refresh rate)")
+    }
+
+    /// 仅在需要时渲染（由 CVDisplayLink 调用）
+    private func renderIfNeeded() {
+        needsRenderLock.lock()
+        let shouldRender = needsRender
+        needsRender = false
+        needsRenderLock.unlock()
+
+        if shouldRender {
+            // 测量渲染耗时
+            let startTime = Date()
+            render()
+            let renderTime = Date().timeIntervalSince(startTime)
+
+            renderCount += 1
+            totalRenderTime += renderTime
+            maxRenderTime = max(maxRenderTime, renderTime)
+
+            // 每秒统计一次
+            let now = Date()
+            if now.timeIntervalSince(lastStatTime) >= 1.0 {
+                let duration = now.timeIntervalSince(lastStatTime)
+                let fps = Double(renderCount) / duration
+                let avgRenderTime = renderCount > 0 ? totalRenderTime / Double(renderCount) * 1000 : 0
+                let maxRenderTimeMs = maxRenderTime * 1000
+                let skipRate = Double(skipCount) / Double(renderCount + skipCount) * 100
+
+                print("📊 [Performance Stats]")
+                print("   FPS: \(String(format: "%.1f", fps)) (actual renders)")
+                print("   requestRender() calls: \(requestCount) (\(String(format: "%.1f", Double(requestCount) / duration))/sec)")
+                print("   Skipped frames: \(skipCount) (\(String(format: "%.1f", skipRate))%)")
+                print("   Avg render time: \(String(format: "%.2f", avgRenderTime))ms")
+                print("   Max render time: \(String(format: "%.2f", maxRenderTimeMs))ms")
+
+                // 重置统计
+                renderCount = 0
+                skipCount = 0
+                requestCount = 0
+                totalRenderTime = 0
+                maxRenderTime = 0
+                lastStatTime = now
+            }
+        } else {
+            skipCount += 1
+        }
     }
 
     // MARK: - RenderViewProtocol
@@ -761,9 +861,11 @@ class RioMetalView: NSView, RenderViewProtocol {
     func requestRender() {
         guard isInitialized else { return }
 
-        DispatchQueue.main.async { [weak self] in
-            self?.render()
-        }
+        // 只标记需要渲染，实际渲染由 CVDisplayLink 在下一帧执行
+        needsRenderLock.lock()
+        needsRender = true
+        requestCount += 1  // 统计调用次数
+        needsRenderLock.unlock()
     }
 
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
@@ -814,6 +916,8 @@ class RioMetalView: NSView, RenderViewProtocol {
               let sugarloaf = sugarloaf,
               let coordinator = coordinator else { return }
 
+        let renderStart = Date()
+
         // 从 coordinator 获取所有需要渲染的终端
         let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
             containerBounds: bounds,
@@ -824,9 +928,12 @@ class RioMetalView: NSView, RenderViewProtocol {
         if tabsToRender.isEmpty { return }
 
         // 1. 清空待渲染列表（每帧开始）
+        let clearStart = Date()
         sugarloaf_clear_objects(sugarloaf)
+        let clearTime = Date().timeIntervalSince(clearStart) * 1000
 
         // 2. 渲染每个终端（累积 RichText 到列表）
+        let buildStart = Date()
         for (terminalId, contentBounds) in tabsToRender {
             renderTerminal(
                 terminalId: Int(terminalId),
@@ -834,9 +941,22 @@ class RioMetalView: NSView, RenderViewProtocol {
                 sugarloaf: sugarloaf
             )
         }
+        let buildTime = Date().timeIntervalSince(buildStart) * 1000
 
         // 3. 统一提交所有 objects 并渲染（每帧结束）
+        let flushStart = Date()
         sugarloaf_flush_and_render(sugarloaf)
+        let flushTime = Date().timeIntervalSince(flushStart) * 1000
+
+        let totalTime = Date().timeIntervalSince(renderStart) * 1000
+
+        // 只打印慢帧（>15ms，即低于 60fps）
+        if totalTime > 15 {
+            print("🐢 [Slow Frame] Total: \(String(format: "%.2f", totalTime))ms")
+            print("   ├─ Clear: \(String(format: "%.2f", clearTime))ms")
+            print("   ├─ Build: \(String(format: "%.2f", buildTime))ms (terminals: \(tabsToRender.count))")
+            print("   └─ Flush: \(String(format: "%.2f", flushTime))ms")
+        }
     }
 
     /// 渲染单个终端
@@ -847,8 +967,13 @@ class RioMetalView: NSView, RenderViewProtocol {
         contentBounds: CGRect,
         sugarloaf: SugarloafHandle
     ) {
+        let termStart = Date()
+
         guard let mapper = coordinateMapper else { return }
+
+        let snapshotStart = Date()
         guard let snapshot = terminalManager.getSnapshot(terminalId: terminalId) else { return }
+        let snapshotTime = Date().timeIntervalSince(snapshotStart) * 1000
 
         // 1. 坐标转换：Swift 坐标 → Rust 逻辑坐标（Y 轴翻转）
         let logicalRect = mapper.swiftToRust(rect: contentBounds)
@@ -898,35 +1023,27 @@ class RioMetalView: NSView, RenderViewProtocol {
             }
         }
 
-        // 选择并清空 RichText
-        sugarloaf_content_sel(sugarloaf, richTextId)
-        sugarloaf_content_clear(sugarloaf)
-
         let isCursorVisible = calculateCursorVisibility(snapshot: snapshot)
 
-        // 渲染每一行
-        // 使用计算出的 rows（如果有效），否则使用 snapshot 中的值
-        let linesToRender = rows > 0 ? Int(rows) : Int(snapshot.screen_lines)
-        for rowIndex in 0..<linesToRender {
-            if rowIndex > 0 {
-                sugarloaf_content_new_line(sugarloaf)
-            }
-
-            let colsToRender = cols > 0 ? Int(cols) : Int(snapshot.columns)
-            // 转换屏幕坐标为绝对行号
-            let absoluteRow = Int64(snapshot.scrollback_lines) - Int64(snapshot.display_offset) + Int64(rowIndex)
-            let cells = terminalManager.getRowCells(terminalId: terminalId, absoluteRow: absoluteRow, maxCells: colsToRender)
-
-            renderLine(
-                content: sugarloaf,
-                cells: cells,
-                rowIndex: rowIndex,
-                snapshot: snapshot,
-                isCursorVisible: isCursorVisible
-            )
+        // 🎯 关键修改：一次 FFI 调用完成所有渲染（Rust 批量渲染）
+        let renderStart = Date()
+        guard let poolHandle = terminalManager.poolHandleForRender else {
+            print("   ❌ Terminal \(terminalId) render failed: pool handle not available")
+            return
         }
 
-        sugarloaf_content_build(sugarloaf)
+        let result = rio_terminal_render_to_richtext(
+            poolHandle,
+            Int32(terminalId),
+            sugarloaf,
+            Int32(richTextId),
+            isCursorVisible
+        )
+        let renderTime = Date().timeIntervalSince(renderStart) * 1000
+
+        if result != 0 {
+            print("   ❌ Terminal \(terminalId) render failed: \(result)")
+        }
 
         // 累积 RichText 到待渲染列表（不立即渲染）
         // 渲染在 render() 方法的 sugarloaf_flush_and_render 中统一执行
@@ -936,6 +1053,15 @@ class RioMetalView: NSView, RenderViewProtocol {
             Float(logicalRect.origin.x),
             Float(logicalRect.origin.y)
         )
+
+        let termTime = Date().timeIntervalSince(termStart) * 1000
+
+        // 只打印慢的终端渲染（>10ms）
+        if termTime > 10 {
+            print("   🔸 Terminal \(terminalId): \(String(format: "%.2f", termTime))ms")
+            print("      ├─ Snapshot: \(String(format: "%.2f", snapshotTime))ms")
+            print("      └─ Rust Render: \(String(format: "%.2f", renderTime))ms (batch FFI)")
+        }
     }
 
     /// 计算光标可见性
@@ -1725,6 +1851,13 @@ class RioMetalView: NSView, RenderViewProtocol {
     ///
     /// 必须在主线程调用，确保 Metal 渲染完成后再释放资源
     func cleanup() {
+        // 停止 CVDisplayLink
+        if let displayLink = displayLink {
+            CVDisplayLinkStop(displayLink)
+            print("🛑 [CVDisplayLink] Stopped")
+            self.displayLink = nil
+        }
+
         // 标记为未初始化，阻止后续渲染
         isInitialized = false
 

@@ -929,6 +929,223 @@ pub extern "C" fn sugarloaf_render_demo_with_rich_text(
     handle.instance.render();
 }
 
+// ============================================================================
+// Terminal Rendering API - Batch rendering in Rust
+// ============================================================================
+
+/// Render terminal content directly from Rust (batch rendering)
+///
+/// This function moves all rendering logic from Swift to Rust, reducing FFI calls
+/// from ~14000 per frame to just 1.
+///
+/// # Parameters
+/// - pool_handle: Terminal pool handle
+/// - terminal_id: Terminal ID
+/// - sugarloaf_handle: Sugarloaf handle
+/// - rich_text_id: RichText ID to render into
+/// - cursor_visible: Whether cursor is visible
+///
+/// # Returns
+/// - 0: Success
+/// - -1: Error (null pointer, terminal not found, etc.)
+#[no_mangle]
+pub extern "C" fn rio_terminal_render_to_richtext(
+    pool_handle: *mut crate::rio_terminal::RioTerminalPool,
+    terminal_id: i32,
+    sugarloaf_handle: *mut SugarloafHandle,
+    rich_text_id: i32,
+    cursor_visible: bool,
+) -> i32 {
+    catch_panic!(-1, {
+        // Validate pointers
+        if pool_handle.is_null() || sugarloaf_handle.is_null() {
+            eprintln!("[rio_terminal_render_to_richtext] Null pointer error");
+            return -1;
+        }
+
+        let pool = unsafe { &*pool_handle };
+        let sugarloaf = unsafe { &mut *sugarloaf_handle };
+        let terminal_id_usize = terminal_id as usize;
+
+        // Get terminal
+        let terminal = match pool.get(terminal_id_usize) {
+            Some(t) => t,
+            None => {
+                eprintln!("[rio_terminal_render_to_richtext] Terminal {} not found", terminal_id);
+                return -1;
+            }
+        };
+
+        // Get snapshot
+        let snapshot = terminal.snapshot();
+
+        // Select and clear rich text
+        let content = sugarloaf.instance.content();
+        content.sel(rich_text_id as usize);
+        content.clear();
+
+        // Flag constants (from Swift)
+        const INVERSE: u32 = 0x0001;
+        const WIDE_CHAR: u32 = 0x0020;
+        const WIDE_CHAR_SPACER: u32 = 0x0040;
+        const LEADING_WIDE_CHAR_SPACER: u32 = 0x0400;
+
+        // Render each line
+        let lines_to_render = snapshot.screen_lines;
+        let cols_to_render = snapshot.columns;
+
+        for row_index in 0..lines_to_render {
+            if row_index > 0 {
+                content.new_line();
+            }
+
+            // Calculate absolute row
+            let absolute_row = snapshot.scrollback_lines as i64
+                - snapshot.display_offset as i64
+                + row_index as i64;
+
+            // Get row cells
+            let cells = terminal.get_row_cells(absolute_row);
+
+            // Check if this is a cursor position report line (skip if so)
+            if is_cursor_position_report_line(&cells) {
+                continue;
+            }
+
+            let cursor_row = snapshot.cursor_row;
+            let cursor_col = snapshot.cursor_col;
+
+            // Render each cell
+            for (col_index, cell) in cells.iter().enumerate().take(cols_to_render) {
+                // Skip spacers
+                let is_spacer = cell.flags & (WIDE_CHAR_SPACER | LEADING_WIDE_CHAR_SPACER);
+                if is_spacer != 0 {
+                    continue;
+                }
+
+                // Get character
+                let scalar = match std::char::from_u32(cell.character) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                // Add VS16 if needed
+                let char_to_render = if cell.has_vs16 {
+                    format!("{}\u{FE0F}", scalar)
+                } else {
+                    scalar.to_string()
+                };
+
+                // Determine width
+                let is_wide = cell.flags & WIDE_CHAR != 0;
+                let glyph_width = if is_wide { 2.0 } else { 1.0 };
+
+                // Get colors (normalized to 0.0-1.0)
+                let mut fg_r = cell.fg_r as f32 / 255.0;
+                let mut fg_g = cell.fg_g as f32 / 255.0;
+                let mut fg_b = cell.fg_b as f32 / 255.0;
+                let mut fg_a = cell.fg_a as f32 / 255.0;
+
+                let mut bg_r = cell.bg_r as f32 / 255.0;
+                let mut bg_g = cell.bg_g as f32 / 255.0;
+                let mut bg_b = cell.bg_b as f32 / 255.0;
+                let mut bg_a = cell.bg_a as f32 / 255.0;
+
+                // Handle INVERSE flag
+                let is_inverse = cell.flags & INVERSE != 0;
+                let mut has_bg = false;
+
+                if is_inverse {
+                    // Swap foreground and background (including alpha)
+                    std::mem::swap(&mut fg_r, &mut bg_r);
+                    std::mem::swap(&mut fg_g, &mut bg_g);
+                    std::mem::swap(&mut fg_b, &mut bg_b);
+                    std::mem::swap(&mut fg_a, &mut bg_a);
+                    has_bg = true;
+                } else {
+                    has_bg = bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01;
+                }
+
+                // Handle cursor
+                let has_cursor = cursor_visible
+                    && row_index == cursor_row
+                    && col_index == cursor_col;
+
+                let cursor_r = 1.0;
+                let cursor_g = 1.0;
+                let cursor_b = 1.0;
+                let cursor_a = 0.8;
+
+                // Block cursor inverts colors
+                if has_cursor && snapshot.cursor_shape == 0 {
+                    fg_r = 0.0;
+                    fg_g = 0.0;
+                    fg_b = 0.0;
+                }
+
+                // Call sugarloaf to add text (need to convert to CString)
+                let c_str = match std::ffi::CString::new(char_to_render.as_bytes()) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+
+                sugarloaf_content_add_text_decorated(
+                    sugarloaf_handle,
+                    c_str.as_ptr(),
+                    fg_r, fg_g, fg_b, fg_a,
+                    has_bg,
+                    bg_r, bg_g, bg_b, bg_a,
+                    glyph_width,
+                    has_cursor && snapshot.cursor_shape == 0,
+                    cursor_r, cursor_g, cursor_b, cursor_a,
+                    cell.flags,
+                );
+            }
+        }
+
+        // Build content
+        content.build();
+
+        0 // Success
+    })
+}
+
+/// Check if a line is a cursor position report (DSR response)
+fn is_cursor_position_report_line(cells: &[crate::rio_terminal::FFICell]) -> bool {
+    if cells.is_empty() {
+        return false;
+    }
+
+    // Must start with ESC (0x1B)
+    if cells[0].character != 27 {
+        return false;
+    }
+
+    // Build string from cells
+    let mut scalars = Vec::new();
+    for cell in cells {
+        if cell.character == 0 {
+            break; // Stop at null
+        }
+        if let Some(scalar) = std::char::from_u32(cell.character) {
+            scalars.push(scalar);
+        }
+        if scalars.len() > 32 {
+            return false; // Too long
+        }
+    }
+
+    if scalars.is_empty() {
+        return false;
+    }
+
+    let text: String = scalars.into_iter().collect();
+
+    // Pattern: ESC[<row>;<col>R
+    // Simple check: starts with "\x1B[" and ends with "R"
+    text.starts_with("\x1B[") && text.ends_with('R') && text.contains(';')
+}
+
 /// Render
 #[no_mangle]
 pub extern "C" fn sugarloaf_render(handle: *mut SugarloafHandle) {

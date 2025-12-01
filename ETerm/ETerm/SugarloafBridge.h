@@ -392,4 +392,31 @@ void rio_free_string(char* s);
 /// 释放终端池
 void rio_pool_free(RioTerminalPoolHandle pool);
 
+// =============================================================================
+// Terminal Rendering API - Batch rendering in Rust
+// =============================================================================
+
+/// Render terminal content directly from Rust (batch rendering)
+///
+/// This function moves all rendering logic from Swift to Rust, reducing FFI calls
+/// from ~14000 per frame to just 1.
+///
+/// Parameters:
+/// - pool_handle: Terminal pool handle
+/// - terminal_id: Terminal ID
+/// - sugarloaf_handle: Sugarloaf handle
+/// - rich_text_id: RichText ID to render into
+/// - cursor_visible: Whether cursor is visible
+///
+/// Returns:
+/// - 0: Success
+/// - -1: Error (null pointer, terminal not found, etc.)
+int rio_terminal_render_to_richtext(
+    RioTerminalPoolHandle pool_handle,
+    int terminal_id,
+    SugarloafHandle sugarloaf_handle,
+    int rich_text_id,
+    bool cursor_visible
+);
+
 #endif /* SugarloafBridge_h */
