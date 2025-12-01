@@ -946,9 +946,7 @@ class RioMetalView: NSView, RenderViewProtocol {
                 true  // visible
             )
 
-            // TODO: 处理 resize - 暂时注释掉，每帧渲染时检查 resize 导致 Layout Setup 耗时 1000ms+
-            // 应该在窗口 resize 事件时单独处理，而不是在渲染路径
-            /*
+            // 处理 resize（只在尺寸变化时才调用，避免每帧都 resize）
             if let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)) {
                 let physicalWidth = logicalRect.width * mapper.scale
                 let physicalHeight = logicalRect.height * mapper.scale
@@ -966,11 +964,11 @@ class RioMetalView: NSView, RenderViewProtocol {
                 let cols = UInt16(max(1, min(physicalWidth / safeCellWidth, CGFloat(UInt16.max - 1))))
                 let rows = UInt16(max(1, min(physicalHeight / safeLineHeight, CGFloat(UInt16.max - 1))))
 
+                // 只在尺寸真的变化时才调用 resize（避免无谓的 PTY 操作）
                 if cols != snapshot.columns || rows != snapshot.screen_lines {
                     _ = terminalManager.resize(terminalId: Int(terminalId), cols: cols, rows: rows)
                 }
             }
-            */
 
             // 确保 RichText 已创建
             if richTextIds[Int(terminalId)] == nil {
