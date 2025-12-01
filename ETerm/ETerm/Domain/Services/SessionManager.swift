@@ -26,6 +26,17 @@ struct WindowState: Codable {
     let frame: CodableRect  // 窗口位置和大小
     let pages: [PageState]
     let activePageIndex: Int
+    let screenIdentifier: String?  // 屏幕唯一标识符（通过 UUID 或屏幕序号）
+    let screenFrame: CodableRect?  // 创建时所在屏幕的尺寸（用于验证）
+
+    // 兼容旧版本的初始化器
+    init(frame: CodableRect, pages: [PageState], activePageIndex: Int, screenIdentifier: String? = nil, screenFrame: CodableRect? = nil) {
+        self.frame = frame
+        self.pages = pages
+        self.activePageIndex = activePageIndex
+        self.screenIdentifier = screenIdentifier
+        self.screenFrame = screenFrame
+    }
 }
 
 /// Page 状态
@@ -77,33 +88,16 @@ struct CodableRect: Codable {
 /// Session 管理器（单例）
 ///
 /// 职责：
-/// - 保存所有窗口状态到 ~/.eterm-config/session.json
+/// - 保存所有窗口状态到 UserDefaults
 /// - 启动时恢复窗口状态
 /// - 窗口关闭时从 session 移除
 final class SessionManager {
     static let shared = SessionManager()
 
-    private let configDir = NSHomeDirectory() + "/.eterm-config"
-    private let sessionPath = NSHomeDirectory() + "/.eterm-config/session.json"
+    private let userDefaults = UserDefaults.standard
+    private let sessionKey = "com.eterm.windowSession"
 
-    private init() {
-        // 确保配置目录存在
-        ensureConfigDirectory()
-    }
-
-    // MARK: - 配置目录管理
-
-    /// 确保配置目录存在
-    private func ensureConfigDirectory() {
-        let fileManager = FileManager.default
-        if !fileManager.fileExists(atPath: configDir) {
-            try? fileManager.createDirectory(
-                atPath: configDir,
-                withIntermediateDirectories: true,
-                attributes: nil
-            )
-        }
-    }
+    private init() {}
 
     // MARK: - Session 保存和加载
 
@@ -118,39 +112,32 @@ final class SessionManager {
 
         do {
             let data = try encoder.encode(session)
-            try data.write(to: URL(fileURLWithPath: sessionPath))
+            userDefaults.set(data, forKey: sessionKey)
         } catch {
-            print("❌ SessionManager: Failed to save session - \(error)")
+            // 保存失败时静默处理
         }
     }
 
     /// 加载 Session
     ///
-    /// - Returns: Session 状态，如果文件不存在或解析失败返回 nil
+    /// - Returns: Session 状态，如果不存在或解析失败返回 nil
     func load() -> SessionState? {
-        let fileManager = FileManager.default
-
-        guard fileManager.fileExists(atPath: sessionPath) else {
+        guard let data = userDefaults.data(forKey: sessionKey) else {
             return nil
         }
 
         do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: sessionPath))
             let decoder = JSONDecoder()
             let session = try decoder.decode(SessionState.self, from: data)
             return session
         } catch {
-            print("❌ SessionManager: Failed to load session - \(error)")
             return nil
         }
     }
 
-    /// 清除 Session 文件
+    /// 清除 Session
     func clear() {
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: sessionPath) {
-            try? fileManager.removeItem(atPath: sessionPath)
-        }
+        userDefaults.removeObject(forKey: sessionKey)
     }
 
     // MARK: - 窗口状态更新
@@ -169,5 +156,33 @@ final class SessionManager {
 
         // 简化处理：重新保存所有剩余窗口
         // 这个方法会在 WindowManager 中被调用，传入最新的窗口列表
+    }
+
+    // MARK: - 屏幕辅助方法
+
+    /// 获取屏幕的唯一标识符
+    ///
+    /// - Parameter screen: NSScreen 实例
+    /// - Returns: 屏幕标识符字符串
+    static func screenIdentifier(for screen: NSScreen) -> String {
+        // 使用屏幕的设备描述获取编号
+        if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+            return "screen-\(screenNumber.intValue)"
+        }
+        // 备选方案：使用屏幕原点坐标
+        return "screen-\(Int(screen.frame.origin.x))-\(Int(screen.frame.origin.y))"
+    }
+
+    /// 根据标识符查找屏幕
+    ///
+    /// - Parameter identifier: 屏幕标识符
+    /// - Returns: 找到的 NSScreen，如果不存在返回主屏幕
+    static func findScreen(withIdentifier identifier: String) -> NSScreen {
+        // 先尝试精确匹配
+        if let screen = NSScreen.screens.first(where: { screenIdentifier(for: $0) == identifier }) {
+            return screen
+        }
+        // 找不到则返回主屏幕
+        return NSScreen.main ?? NSScreen.screens.first!
     }
 }
