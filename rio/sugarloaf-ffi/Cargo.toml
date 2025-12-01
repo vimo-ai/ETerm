@@ -27,3 +27,6 @@ libc = "0.2.174"
 
 # 事件驱动 PTY (mio fork)
 corcovado = { path = "../corcovado" }
+
+# 并发渲染优化
+rayon = "1.8"

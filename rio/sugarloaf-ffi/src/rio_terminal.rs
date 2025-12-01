@@ -34,6 +34,39 @@ static NEXT_TERMINAL_ID: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(1);
 
 // ============================================================================
+// 并发渲染中间数据结构
+// ============================================================================
+
+/// 单个字符的渲染数据（并发阶段解析后的中间格式）
+#[derive(Debug, Clone)]
+struct CharRenderData {
+    char_str: String,
+    fg_r: f32,
+    fg_g: f32,
+    fg_b: f32,
+    fg_a: f32,
+    has_bg: bool,
+    bg_r: f32,
+    bg_g: f32,
+    bg_b: f32,
+    bg_a: f32,
+    glyph_width: f32,
+    has_cursor: bool,
+    cursor_r: f32,
+    cursor_g: f32,
+    cursor_b: f32,
+    cursor_a: f32,
+    flags: u32,
+}
+
+/// 单行的渲染数据
+#[derive(Debug, Clone)]
+struct RowRenderData {
+    chars: Vec<CharRenderData>,
+    is_cursor_report: bool,
+}
+
+// ============================================================================
 // 终端快照 - 照抄 Rio 的 TerminalSnapshot
 // ============================================================================
 
@@ -759,13 +792,19 @@ impl RioTerminalPool {
 
     /// 渲染所有终端（Rust 侧完全负责）
     pub fn render_all(&self) {
+        let total_start = std::time::Instant::now();
+
         unsafe {
             let sugarloaf = &mut *self.sugarloaf;
 
             // 清空待渲染列表
+            let clear_start = std::time::Instant::now();
             crate::sugarloaf_clear_objects(self.sugarloaf);
+            let clear_time = clear_start.elapsed().as_micros();
 
             // 遍历所有终端
+            let mut build_time_total = 0u128;
+            let mut content_time_total = 0u128;
             for (id, terminal) in &self.terminals {
                 // 获取布局
                 let layout = match terminal.layout() {
@@ -789,6 +828,7 @@ impl RioTerminalPool {
                 content.clear();
 
                 // 渲染终端内容（复用现有逻辑）
+                let content_start = std::time::Instant::now();
                 Self::render_terminal_content(
                     terminal,
                     &snapshot,
@@ -796,8 +836,11 @@ impl RioTerminalPool {
                     cursor_visible,
                     self.sugarloaf,
                 );
+                content_time_total += content_start.elapsed().as_micros();
 
+                let build_start = std::time::Instant::now();
                 content.build();
+                build_time_total += build_start.elapsed().as_micros();
 
                 // 添加到渲染列表（指定位置）
                 crate::sugarloaf_add_rich_text(
@@ -809,11 +852,22 @@ impl RioTerminalPool {
             }
 
             // 统一渲染
+            let flush_start = std::time::Instant::now();
             crate::sugarloaf_flush_and_render(self.sugarloaf);
+            let flush_time = flush_start.elapsed().as_micros();
+
+            let total_time = total_start.elapsed().as_micros();
+
+            // 打印详细耗时分解
+            println!("🎨 [render_all] Total: {}μs ({}ms)", total_time, total_time / 1000);
+            println!("   ├─ clear_objects: {}μs", clear_time);
+            println!("   ├─ render_terminal_content: {}μs", content_time_total);
+            println!("   ├─ content.build(): {}μs", build_time_total);
+            println!("   └─ flush_and_render: {}μs ({}ms)", flush_time, flush_time / 1000);
         }
     }
 
-    /// 渲染单个终端的内容
+    /// 渲染单个终端的内容（使用 Rayon 并发优化）
     fn render_terminal_content(
         terminal: &RioTerminal,
         snapshot: &TerminalSnapshot,
@@ -821,6 +875,8 @@ impl RioTerminalPool {
         cursor_visible: bool,
         sugarloaf_handle: *mut SugarloafHandle,
     ) {
+        use rayon::prelude::*;
+
         // Flag constants
         const INVERSE: u32 = 0x0001;
         const WIDE_CHAR: u32 = 0x0020;
@@ -829,98 +885,143 @@ impl RioTerminalPool {
 
         let lines_to_render = snapshot.screen_lines;
         let cols_to_render = snapshot.columns;
+        let cursor_row = snapshot.cursor_row;
+        let cursor_col = snapshot.cursor_col;
 
-        for row_index in 0..lines_to_render {
+        // 🔥 阶段 1：并发提取和解析所有行的数据
+        let phase1_start = std::time::Instant::now();
+        let rows_data: Vec<RowRenderData> = (0..lines_to_render)
+            .into_par_iter()
+            .map(|row_index| {
+                // 计算绝对行号
+                let absolute_row = snapshot.scrollback_lines as i64
+                    - snapshot.display_offset as i64
+                    + row_index as i64;
+
+                // 获取行单元格
+                let cells = terminal.get_row_cells(absolute_row);
+
+                // 检查是否为光标位置报告行
+                if Self::is_cursor_position_report_line(&cells) {
+                    return RowRenderData {
+                        chars: Vec::new(),
+                        is_cursor_report: true,
+                    };
+                }
+
+                // 解析该行的所有字符
+                let mut char_data_vec = Vec::with_capacity(cols_to_render);
+
+                for (col_index, cell) in cells.iter().enumerate().take(cols_to_render) {
+                    // 跳过占位符
+                    let is_spacer = cell.flags & (WIDE_CHAR_SPACER | LEADING_WIDE_CHAR_SPACER);
+                    if is_spacer != 0 {
+                        continue;
+                    }
+
+                    // 获取字符
+                    let scalar = match std::char::from_u32(cell.character) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+
+                    // 添加 VS16 标记
+                    let char_str = if cell.has_vs16 {
+                        format!("{}\u{FE0F}", scalar)
+                    } else {
+                        scalar.to_string()
+                    };
+
+                    // 确定宽度
+                    let is_wide = cell.flags & WIDE_CHAR != 0;
+                    let glyph_width = if is_wide { 2.0 } else { 1.0 };
+
+                    // 获取颜色
+                    let mut fg_r = cell.fg_r as f32 / 255.0;
+                    let mut fg_g = cell.fg_g as f32 / 255.0;
+                    let mut fg_b = cell.fg_b as f32 / 255.0;
+                    let mut fg_a = cell.fg_a as f32 / 255.0;
+
+                    let mut bg_r = cell.bg_r as f32 / 255.0;
+                    let mut bg_g = cell.bg_g as f32 / 255.0;
+                    let mut bg_b = cell.bg_b as f32 / 255.0;
+                    let mut bg_a = cell.bg_a as f32 / 255.0;
+
+                    // 处理 INVERSE
+                    let is_inverse = cell.flags & INVERSE != 0;
+                    let mut has_bg = false;
+
+                    if is_inverse {
+                        std::mem::swap(&mut fg_r, &mut bg_r);
+                        std::mem::swap(&mut fg_g, &mut bg_g);
+                        std::mem::swap(&mut fg_b, &mut bg_b);
+                        std::mem::swap(&mut fg_a, &mut bg_a);
+                        has_bg = true;
+                    } else {
+                        has_bg = bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01;
+                    }
+
+                    // 处理光标
+                    let has_cursor = cursor_visible
+                        && row_index == cursor_row
+                        && col_index == cursor_col;
+
+                    let cursor_r = 1.0;
+                    let cursor_g = 1.0;
+                    let cursor_b = 1.0;
+                    let cursor_a = 0.8;
+
+                    // Block cursor 反转颜色
+                    if has_cursor && snapshot.cursor_shape == 0 {
+                        fg_r = 0.0;
+                        fg_g = 0.0;
+                        fg_b = 0.0;
+                    }
+
+                    char_data_vec.push(CharRenderData {
+                        char_str,
+                        fg_r,
+                        fg_g,
+                        fg_b,
+                        fg_a,
+                        has_bg,
+                        bg_r,
+                        bg_g,
+                        bg_b,
+                        bg_a,
+                        glyph_width,
+                        has_cursor: has_cursor && snapshot.cursor_shape == 0,
+                        cursor_r,
+                        cursor_g,
+                        cursor_b,
+                        cursor_a,
+                        flags: cell.flags,
+                    });
+                }
+
+                RowRenderData {
+                    chars: char_data_vec,
+                    is_cursor_report: false,
+                }
+            })
+            .collect();
+        let phase1_time = phase1_start.elapsed().as_micros();
+
+        // 🔥 阶段 2：串行调用 Sugarloaf API
+        let phase2_start = std::time::Instant::now();
+        for (row_index, row_data) in rows_data.iter().enumerate() {
             if row_index > 0 {
                 content.new_line();
             }
 
-            // 计算绝对行号
-            let absolute_row = snapshot.scrollback_lines as i64
-                - snapshot.display_offset as i64
-                + row_index as i64;
-
-            // 获取行单元格
-            let cells = terminal.get_row_cells(absolute_row);
-
-            // 跳过光标位置报告行
-            if Self::is_cursor_position_report_line(&cells) {
+            // 跳过光标报告行
+            if row_data.is_cursor_report {
                 continue;
             }
 
-            let cursor_row = snapshot.cursor_row;
-            let cursor_col = snapshot.cursor_col;
-
-            // 渲染每个单元格
-            for (col_index, cell) in cells.iter().enumerate().take(cols_to_render) {
-                // 跳过占位符
-                let is_spacer = cell.flags & (WIDE_CHAR_SPACER | LEADING_WIDE_CHAR_SPACER);
-                if is_spacer != 0 {
-                    continue;
-                }
-
-                // 获取字符
-                let scalar = match std::char::from_u32(cell.character) {
-                    Some(s) => s,
-                    None => continue,
-                };
-
-                // 添加 VS16 标记（emoji 样式）
-                let char_to_render = if cell.has_vs16 {
-                    format!("{}\u{FE0F}", scalar)
-                } else {
-                    scalar.to_string()
-                };
-
-                // 确定宽度
-                let is_wide = cell.flags & WIDE_CHAR != 0;
-                let glyph_width = if is_wide { 2.0 } else { 1.0 };
-
-                // 获取颜色（归一化到 0.0-1.0）
-                let mut fg_r = cell.fg_r as f32 / 255.0;
-                let mut fg_g = cell.fg_g as f32 / 255.0;
-                let mut fg_b = cell.fg_b as f32 / 255.0;
-                let mut fg_a = cell.fg_a as f32 / 255.0;
-
-                let mut bg_r = cell.bg_r as f32 / 255.0;
-                let mut bg_g = cell.bg_g as f32 / 255.0;
-                let mut bg_b = cell.bg_b as f32 / 255.0;
-                let mut bg_a = cell.bg_a as f32 / 255.0;
-
-                // 处理 INVERSE 标志
-                let is_inverse = cell.flags & INVERSE != 0;
-                let mut has_bg = false;
-
-                if is_inverse {
-                    // 交换前景和背景颜色（包括 alpha）
-                    std::mem::swap(&mut fg_r, &mut bg_r);
-                    std::mem::swap(&mut fg_g, &mut bg_g);
-                    std::mem::swap(&mut fg_b, &mut bg_b);
-                    std::mem::swap(&mut fg_a, &mut bg_a);
-                    has_bg = true;
-                } else {
-                    has_bg = bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01;
-                }
-
-                // 处理光标
-                let has_cursor = cursor_visible
-                    && row_index == cursor_row
-                    && col_index == cursor_col;
-
-                let cursor_r = 1.0;
-                let cursor_g = 1.0;
-                let cursor_b = 1.0;
-                let cursor_a = 0.8;
-
-                // Block cursor 反转颜色
-                if has_cursor && snapshot.cursor_shape == 0 {
-                    fg_r = 0.0;
-                    fg_g = 0.0;
-                    fg_b = 0.0;
-                }
-
-                // 调用 sugarloaf 添加文本
-                let c_str = match std::ffi::CString::new(char_to_render.as_bytes()) {
+            // 添加该行的所有字符
+            for char_data in &row_data.chars {
+                let c_str = match std::ffi::CString::new(char_data.char_str.as_bytes()) {
                     Ok(s) => s,
                     Err(_) => continue,
                 };
@@ -929,16 +1030,34 @@ impl RioTerminalPool {
                     crate::sugarloaf_content_add_text_decorated(
                         sugarloaf_handle,
                         c_str.as_ptr(),
-                        fg_r, fg_g, fg_b, fg_a,
-                        has_bg,
-                        bg_r, bg_g, bg_b, bg_a,
-                        glyph_width,
-                        has_cursor && snapshot.cursor_shape == 0,
-                        cursor_r, cursor_g, cursor_b, cursor_a,
-                        cell.flags,
+                        char_data.fg_r,
+                        char_data.fg_g,
+                        char_data.fg_b,
+                        char_data.fg_a,
+                        char_data.has_bg,
+                        char_data.bg_r,
+                        char_data.bg_g,
+                        char_data.bg_b,
+                        char_data.bg_a,
+                        char_data.glyph_width,
+                        char_data.has_cursor,
+                        char_data.cursor_r,
+                        char_data.cursor_g,
+                        char_data.cursor_b,
+                        char_data.cursor_a,
+                        char_data.flags,
                     );
                 }
             }
+        }
+        let phase2_time = phase2_start.elapsed().as_micros();
+
+        // 打印耗时（只在行数 > 30 时打印，避免噪音）
+        if lines_to_render > 30 {
+            println!("⚡ [Parallel Render] {} lines, {} cols", lines_to_render, cols_to_render);
+            println!("   Phase 1 (parallel parse): {}μs", phase1_time);
+            println!("   Phase 2 (serial API): {}μs", phase2_time);
+            println!("   Total: {}μs ({}ms)", phase1_time + phase2_time, (phase1_time + phase2_time) / 1000);
         }
     }
 
