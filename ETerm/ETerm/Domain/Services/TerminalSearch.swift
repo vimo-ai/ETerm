@@ -9,7 +9,9 @@ import Foundation
 
 /// 搜索匹配项
 struct SearchMatch: Equatable {
-    let row: Int
+    /// 真实行号（绝对坐标系统）
+    /// 注意：使用真实行号，不随滚动变化
+    let absoluteRow: Int64
     let startCol: Int
     let endCol: Int
     let text: String
@@ -44,12 +46,13 @@ class TerminalSearch {
             return []
         }
 
-        // 只搜索当前可见区域 + 向上滚动的部分
-        // display_offset 表示当前向上滚动了多少行
-        let visibleRows = Int(snapshot.screen_lines)
-        let scrolledRows = Int(snapshot.display_offset)
-        let totalRows = visibleRows + scrolledRows
-        let rowsToSearch = maxRows ?? min(totalRows, 10000) // 限制最多搜索 10000 行
+        // 搜索整个历史缓冲区 + 屏幕区域
+        let totalHistoryRows = Int(snapshot.scrollback_lines) + Int(snapshot.screen_lines)
+        let rowsToSearch = maxRows ?? min(totalHistoryRows, 10000) // 限制最多搜索 10000 行
+
+        // 记录搜索时的状态，用于计算真实行号
+        let scrollbackLines = Int64(snapshot.scrollback_lines)
+        let displayOffset = Int64(snapshot.display_offset)
 
         var matches: [SearchMatch] = []
 
@@ -86,8 +89,12 @@ class TerminalSearch {
 
                 let matchText = String(lineText[range])
 
+                // 计算真实行号
+                // absoluteRow = scrollbackLines - displayOffset + rowIndex
+                let absoluteRow = scrollbackLines - displayOffset + Int64(rowIndex)
+
                 matches.append(SearchMatch(
-                    row: rowIndex,
+                    absoluteRow: absoluteRow,
                     startCol: startCol,
                     endCol: endCol,
                     text: matchText
