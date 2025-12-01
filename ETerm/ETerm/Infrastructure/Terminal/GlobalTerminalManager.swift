@@ -347,6 +347,31 @@ final class GlobalTerminalManager {
         return Array(UnsafeBufferPointer(start: cellsPtr, count: Int(count)))
     }
 
+    /// 获取指定绝对行号的单元格数据（支持历史缓冲区）
+    ///
+    /// 绝对行号坐标系统：
+    /// - 0 到 (scrollback_lines - 1): 历史缓冲区
+    /// - scrollback_lines 到 (scrollback_lines + screen_lines - 1): 屏幕可见行
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - absoluteRow: 绝对行号（0-based，包含历史缓冲区）
+    ///   - maxCells: 最大单元格数量
+    /// - Returns: 单元格数组
+    func getRowCellsAbsolute(terminalId: Int, absoluteRow: Int64, maxCells: Int) -> [FFICell] {
+        guard let pool = poolHandle else { return [] }
+
+        let cellsPtr = UnsafeMutablePointer<FFICell>.allocate(capacity: maxCells)
+        defer { cellsPtr.deallocate() }
+
+        cellsPtr.initialize(repeating: FFICell(), count: maxCells)
+        defer { cellsPtr.deinitialize(count: maxCells) }
+
+        let count = rio_pool_get_row_cells_absolute(pool, terminalId, absoluteRow, cellsPtr, maxCells)
+
+        return Array(UnsafeBufferPointer(start: cellsPtr, count: Int(count)))
+    }
+
     func getCursor(terminalId: Int) -> (col: UInt16, row: UInt16)? {
         guard let pool = poolHandle else { return nil }
 
@@ -386,6 +411,22 @@ final class GlobalTerminalManager {
             Int32(endRow)
         )
 
+        guard let cStr = cStr else { return nil }
+
+        let result = String(cString: cStr)
+        rio_free_string(cStr)
+        return result
+    }
+
+    /// 获取选中的文本（使用绝对坐标系统）
+    ///
+    /// 直接使用当前 terminal.selection 获取文本
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 选中的文本，失败返回 nil
+    func getSelectedTextAbsolute(terminalId: Int) -> String? {
+        guard let pool = poolHandle else { return nil }
+
+        let cStr = rio_pool_get_selected_text_absolute(pool, terminalId)
         guard let cStr = cStr else { return nil }
 
         let result = String(cString: cStr)

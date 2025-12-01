@@ -402,7 +402,7 @@ impl RioTerminal {
         terminal.visible_rows()
     }
 
-    /// 获取指定行的单元格数据
+    /// 获取指定行的单元格数据（仅可见行）
     pub fn get_row_cells(&self, row_index: usize) -> Vec<FFICell> {
         let terminal = self.terminal.lock();
         let visible_rows = terminal.visible_rows();
@@ -473,6 +473,109 @@ impl RioTerminal {
                 fg_g,
                 fg_b,
                 fg_a, // 使用实际的 alpha 值
+                bg_r,
+                bg_g,
+                bg_b,
+                bg_a: final_bg_a,
+                flags: square.flags.bits() as u32,
+                has_vs16,
+            });
+        }
+
+        cells
+    }
+
+    /// 获取指定绝对行号的单元格数据（支持历史缓冲区）
+    ///
+    /// 绝对行号坐标系统：
+    /// - 0 到 (scrollback_lines - 1): 历史缓冲区
+    /// - scrollback_lines 到 (scrollback_lines + screen_lines - 1): 屏幕可见行
+    ///
+    /// 参数：
+    /// - absolute_row: 绝对行号（0-based，包含历史缓冲区）
+    ///
+    /// 返回：该行的单元格数组
+    pub fn get_row_cells_absolute(&self, absolute_row: i64) -> Vec<FFICell> {
+        use rio_backend::crosswords::pos::Line;
+
+        let terminal = self.terminal.lock();
+        let scrollback_lines = terminal.grid.history_size() as i64;
+        let screen_lines = terminal.screen_lines() as i64;
+
+        // 转换绝对行号到 Grid 行号
+        // absolute_row = scrollback_lines + grid_row
+        // grid_row = absolute_row - scrollback_lines
+        let grid_row = absolute_row - scrollback_lines;
+
+        // 边界检查
+        // Grid 有效范围: -scrollback_lines 到 (screen_lines - 1)
+        let min_row = -(scrollback_lines);
+        let max_row = screen_lines - 1;
+
+        if grid_row < min_row || grid_row > max_row {
+            return Vec::new();
+        }
+
+        // 直接访问 grid[Line(grid_row)]
+        let line = Line(grid_row as i32);
+        let row = &terminal.grid[line];
+        let mut cells = Vec::with_capacity(row.len());
+
+        // 获取选区（Grid 坐标）
+        let selection_range = terminal.selection
+            .as_ref()
+            .and_then(|s| s.to_range(&terminal));
+
+        for (col_idx, square) in row.inner.iter().enumerate() {
+            // 获取原始颜色
+            let (mut fg_r, mut fg_g, mut fg_b, mut fg_a) = Self::ansi_color_to_rgba(&square.fg, &terminal);
+            let (mut bg_r, mut bg_g, mut bg_b, mut bg_a) = Self::ansi_color_to_rgba(&square.bg, &terminal);
+
+            // 检查是否在选区内
+            let in_selection = if let Some(range) = &selection_range {
+                use rio_backend::crosswords::pos::{Column, Pos};
+
+                let grid_pos = Pos::new(line, Column(col_idx));
+                range.contains(grid_pos)
+            } else {
+                false
+            };
+
+            if in_selection {
+                // 设置选区背景色（淡蓝色）
+                fg_r = 255;  // 白色前景
+                fg_g = 255;
+                fg_b = 255;
+                fg_a = 255;
+                bg_r = 76;   // 0.3 * 255 ≈ 76
+                bg_g = 127;  // 0.5 * 255 ≈ 127
+                bg_b = 204;  // 0.8 * 255 ≈ 204
+                bg_a = 255;
+            }
+
+            // 检查 zerowidth 字符中是否有 VS16 (U+FE0F)
+            let has_vs16 = square
+                .zerowidth()
+                .map(|zw| zw.contains(&'\u{FE0F}'))
+                .unwrap_or(false);
+
+            // 处理背景透明度
+            let final_bg_a = if in_selection {
+                255 // 选区内的背景不透明
+            } else if square.bg == rio_backend::config::colors::AnsiColor::Named(
+                rio_backend::config::colors::NamedColor::Background,
+            ) {
+                0 // 默认背景色透明，显示窗口背景
+            } else {
+                bg_a // 使用实际的 alpha 值
+            };
+
+            cells.push(FFICell {
+                character: square.c as u32,
+                fg_r,
+                fg_g,
+                fg_b,
+                fg_a,
                 bg_r,
                 bg_g,
                 bg_b,
@@ -674,6 +777,7 @@ impl RioTerminal {
         // 获取终端状态
         let display_offset = terminal.display_offset() as i64;
         let scrollback_lines = terminal.grid.history_size() as i64;
+        let screen_lines = terminal.screen_lines() as i64;
 
         // CoordinateMapper 已经翻转过了（row=0 是顶部）
         // 直接转换为 Grid 坐标
@@ -681,9 +785,6 @@ impl RioTerminal {
 
         // Grid → Absolute
         let absolute_row = scrollback_lines + grid_row;
-
-        eprintln!("[DEBUG] screen_row={}, grid_row={}, absolute_row={}",
-            screen_row, grid_row, absolute_row);
 
         (absolute_row, screen_col)
     }
@@ -745,6 +846,15 @@ impl RioTerminal {
         terminal.selection = Some(selection);
 
         Ok(())
+    }
+
+    /// 获取选中的文本（使用绝对坐标）
+    ///
+    /// - 参数：绝对行号（0 到 scrollback_lines + screen_lines - 1）
+    /// - 功能：直接使用当前的 terminal.selection 获取文本
+    pub fn get_selected_text_absolute(&self) -> Option<String> {
+        let terminal = self.terminal.lock();
+        terminal.selection_to_string()
     }
 }
 
@@ -1117,6 +1227,49 @@ pub extern "C" fn rio_pool_get_row_cells(
     })
 }
 
+/// 获取指定绝对行号的单元格数据（支持历史缓冲区）
+///
+/// 绝对行号坐标系统：
+/// - 0 到 (scrollback_lines - 1): 历史缓冲区
+/// - scrollback_lines 到 (scrollback_lines + screen_lines - 1): 屏幕可见行
+///
+/// 参数：
+/// - absolute_row: 绝对行号（0-based，包含历史缓冲区）
+/// - out_cells: 输出缓冲区
+/// - max_cells: 缓冲区最大容量
+///
+/// 返回：实际写入的单元格数量
+#[no_mangle]
+pub extern "C" fn rio_pool_get_row_cells_absolute(
+    pool: *mut RioTerminalPool,
+    terminal_id: usize,
+    absolute_row: i64,
+    out_cells: *mut FFICell,
+    max_cells: usize,
+) -> usize {
+    catch_panic!(0, {
+        if pool.is_null() || out_cells.is_null() {
+            return 0;
+        }
+
+        let pool = unsafe { &*pool };
+        if let Some(terminal) = pool.get(terminal_id) {
+            let cells = terminal.get_row_cells_absolute(absolute_row);
+            let count = cells.len().min(max_cells);
+
+            unsafe {
+                for (i, cell) in cells.iter().take(count).enumerate() {
+                    *out_cells.add(i) = *cell;
+                }
+            }
+
+            count
+        } else {
+            0
+        }
+    })
+}
+
 /// 获取光标位置
 #[no_mangle]
 pub extern "C" fn rio_pool_get_cursor(
@@ -1323,6 +1476,36 @@ pub extern "C" fn rio_pool_set_selection_absolute(
             }
         } else {
             -1
+        }
+    })
+}
+
+/// 获取选中的文本（使用绝对坐标系统）
+///
+/// 直接使用当前 terminal.selection 获取文本，不需要传入坐标参数
+/// 返回的字符串需要调用者使用 `rio_free_string` 释放
+#[no_mangle]
+pub extern "C" fn rio_pool_get_selected_text_absolute(
+    pool: *mut RioTerminalPool,
+    terminal_id: usize,
+) -> *mut c_char {
+    catch_panic!(ptr::null_mut(), {
+        if pool.is_null() {
+            return ptr::null_mut();
+        }
+
+        let pool = unsafe { &*pool };
+        if let Some(terminal) = pool.get(terminal_id) {
+            if let Some(text) = terminal.get_selected_text_absolute() {
+                match std::ffi::CString::new(text) {
+                    Ok(c_str) => c_str.into_raw(),
+                    Err(_) => ptr::null_mut(),
+                }
+            } else {
+                ptr::null_mut()
+            }
+        } else {
+            ptr::null_mut()
         }
     })
 }

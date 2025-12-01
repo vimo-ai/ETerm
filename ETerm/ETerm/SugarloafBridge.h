@@ -311,6 +311,26 @@ size_t rio_pool_get_row_cells(
     size_t max_cells
 );
 
+/// 获取指定绝对行号的单元格数据（支持历史缓冲区）
+///
+/// 绝对行号坐标系统：
+/// - 0 到 (scrollback_lines - 1): 历史缓冲区
+/// - scrollback_lines 到 (scrollback_lines + screen_lines - 1): 屏幕可见行
+///
+/// 参数：
+/// - absolute_row: 绝对行号（0-based，包含历史缓冲区）
+/// - out_cells: 输出缓冲区
+/// - max_cells: 缓冲区最大容量
+///
+/// 返回：实际写入的单元格数量
+size_t rio_pool_get_row_cells_absolute(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id,
+    int64_t absolute_row,
+    FFICell* out_cells,
+    size_t max_cells
+);
+
 /// 获取光标位置
 int rio_pool_get_cursor(
     RioTerminalPoolHandle pool,
@@ -343,6 +363,14 @@ char* rio_pool_get_selected_text(
     int start_row,
     size_t end_col,
     int end_row
+);
+
+/// 获取选中的文本（使用绝对坐标系统）
+/// 直接使用当前 terminal.selection，不需要传入坐标参数
+/// 返回需要用 rio_free_string 释放的字符串
+char* rio_pool_get_selected_text_absolute(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id
 );
 
 /// 获取终端当前工作目录（返回需要用 rio_free_string 释放的字符串）

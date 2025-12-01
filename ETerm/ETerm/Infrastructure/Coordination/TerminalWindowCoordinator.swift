@@ -1031,33 +1031,9 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - selection: 选中范围（使用真实行号）
     /// - Returns: 选中的文本，失败返回 nil
     func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
-        let (startAbsRow, startCol, endAbsRow, endCol) = selection.normalized()
-
-        // 获取终端快照以转换坐标
-        guard let snapshot = globalTerminalManager?.getSnapshot(terminalId: Int(terminalId)) else {
-            return nil
-        }
-
-        let scrollbackLines = Int64(snapshot.scrollback_lines)
-
-        // 将真实行号转换为 Grid 坐标
-        let startGridRow = Int32(startAbsRow - scrollbackLines)
-        let endGridRow = Int32(endAbsRow - scrollbackLines)
-
-        // 将 Grid 坐标转换为 Screen 坐标（用于 getTextRange FFI）
-        // 注意：getTextRange 期望的是 UInt16，所以我们需要确保值有效
-        guard startGridRow >= Int32(Int16.min) && startGridRow <= Int32(Int16.max),
-              endGridRow >= Int32(Int16.min) && endGridRow <= Int32(Int16.max) else {
-            return nil
-        }
-
-        return getTextRangeInternal(
-            terminalId: Int(terminalId),
-            startRow: UInt16(bitPattern: Int16(startGridRow)),
-            startCol: startCol,
-            endRow: UInt16(bitPattern: Int16(endGridRow)),
-            endCol: endCol
-        )
+        // 使用绝对坐标系统直接获取
+        // 前提：selection 已经通过 setSelection 同步到 Rust 层
+        return globalTerminalManager?.getSelectedTextAbsolute(terminalId: Int(terminalId))
     }
 
     /// 获取指定终端的当前输入行号
