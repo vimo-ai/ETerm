@@ -22,15 +22,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         PluginManager.shared.loadBuiltinPlugins()
 
         // 尝试恢复 Session
-        // TODO: 实现 Session 恢复逻辑（需要创建窗口并恢复布局）
-        // 暂时还是创建默认窗口
-        let hasSession = SessionManager.shared.load() != nil
-        if !hasSession {
-            // 没有 Session，创建默认窗口
-            WindowManager.shared.createWindow()
+        if let session = SessionManager.shared.load(), !session.windows.isEmpty {
+            // 恢复每个窗口
+            for windowState in session.windows {
+                restoreWindow(from: windowState)
+            }
         } else {
-            // 有 Session，但恢复逻辑复杂，先创建默认窗口
-            // TODO: 实现完整的 Session 恢复
+            // 没有 Session，创建默认窗口
             WindowManager.shared.createWindow()
         }
 
@@ -138,6 +136,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.windowsMenu = windowMenu
     }
 
+    // MARK: - Session 恢复
+
+    /// 从窗口状态恢复窗口
+    ///
+    /// - Parameter windowState: 窗口状态
+    private func restoreWindow(from windowState: WindowState) {
+        let frame = windowState.frame.cgRect
+
+        // 使用保存的位置、尺寸和屏幕信息创建窗口
+        // TODO: 未来可以扩展恢复完整的 Page/Panel/Tab 布局
+        WindowManager.shared.createWindow(
+            inheritCwd: nil,
+            frame: frame,
+            screenIdentifier: windowState.screenIdentifier
+        )
+    }
+
     // MARK: - 菜单操作
 
     @objc private func newWindow(_ sender: Any?) {
@@ -152,12 +167,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
            let terminalId = activeTab.rustTerminalId {
             // 获取当前激活终端的 CWD
             inheritedCwd = coordinator.getCwd(terminalId: Int(terminalId))
-            print("🔍 [NewWindow] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
-        } else {
-            print("⚠️ [NewWindow] Failed to get CWD - missing window/coordinator/panel/tab")
         }
 
-        print("📝 [NewWindow] Creating new window with CWD: \(inheritedCwd ?? "nil")")
         // 创建新窗口，继承 CWD
         WindowManager.shared.createWindow(inheritCwd: inheritedCwd)
     }
