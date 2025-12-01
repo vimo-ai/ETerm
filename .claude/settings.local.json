@@ -53,7 +53,9 @@
       "WebFetch(domain:iterm2.com)",
       "Bash(fc-list:*)",
       "Bash(system_profiler:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "Bash(chmod:*)",
+      "Bash(/Users/higuaifan/Desktop/hi/小工具/english/test_search.swift)"
     ],
     "deny": [],
     "ask": []
