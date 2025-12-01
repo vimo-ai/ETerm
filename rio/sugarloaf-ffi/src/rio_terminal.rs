@@ -116,6 +116,16 @@ impl Default for FFICell {
 // 单个终端
 // ============================================================================
 
+/// 终端布局信息
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalLayout {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub visible: bool,
+}
+
 /// 单个终端
 pub struct RioTerminal {
     /// 终端状态
@@ -136,6 +146,8 @@ pub struct RioTerminal {
     main_fd: std::os::fd::RawFd,
     /// Shell PID（用于获取 CWD）
     shell_pid: u32,
+    /// 布局信息（渲染位置和尺寸）
+    layout: parking_lot::RwLock<Option<TerminalLayout>>,
 }
 
 impl RioTerminal {
@@ -241,6 +253,7 @@ impl RioTerminal {
             rows,
             main_fd,
             shell_pid,
+            layout: parking_lot::RwLock::new(None),
         })
     }
 
@@ -709,6 +722,16 @@ impl RioTerminal {
         let terminal = self.terminal.lock();
         terminal.selection_to_string()
     }
+
+    /// 设置终端布局
+    pub fn set_layout(&self, layout: TerminalLayout) {
+        *self.layout.write() = Some(layout);
+    }
+
+    /// 获取终端布局
+    pub fn layout(&self) -> Option<TerminalLayout> {
+        *self.layout.read()
+    }
 }
 
 // ============================================================================
@@ -732,6 +755,242 @@ impl RioTerminalPool {
             event_queue: EventQueue::new(),
             sugarloaf,
         }
+    }
+
+    /// 渲染所有终端（Rust 侧完全负责）
+    pub fn render_all(&self) {
+        unsafe {
+            let sugarloaf = &mut *self.sugarloaf;
+
+            // 清空待渲染列表
+            crate::sugarloaf_clear_objects(self.sugarloaf);
+
+            // 遍历所有终端
+            for (id, terminal) in &self.terminals {
+                // 获取布局
+                let layout = match terminal.layout() {
+                    Some(l) if l.visible => l,
+                    _ => continue,  // 没有布局或不可见，跳过
+                };
+
+                // 获取 RichText ID（使用终端 ID 作为 richTextId）
+                let rich_text_id = *id;
+
+                // 获取快照
+                let snapshot = terminal.snapshot();
+
+                // 计算光标可见性
+                let cursor_visible = snapshot.cursor_visible != 0
+                    && snapshot.display_offset == 0;
+
+                // 选中并清空 RichText
+                let content = sugarloaf.instance.content();
+                content.sel(rich_text_id);
+                content.clear();
+
+                // 渲染终端内容（复用现有逻辑）
+                Self::render_terminal_content(
+                    terminal,
+                    &snapshot,
+                    content,
+                    cursor_visible,
+                    self.sugarloaf,
+                );
+
+                content.build();
+
+                // 添加到渲染列表（指定位置）
+                crate::sugarloaf_add_rich_text(
+                    self.sugarloaf,
+                    rich_text_id,
+                    layout.x,
+                    layout.y,
+                );
+            }
+
+            // 统一渲染
+            crate::sugarloaf_flush_and_render(self.sugarloaf);
+        }
+    }
+
+    /// 渲染单个终端的内容
+    fn render_terminal_content(
+        terminal: &RioTerminal,
+        snapshot: &TerminalSnapshot,
+        content: &mut sugarloaf::layout::Content,
+        cursor_visible: bool,
+        sugarloaf_handle: *mut SugarloafHandle,
+    ) {
+        // Flag constants
+        const INVERSE: u32 = 0x0001;
+        const WIDE_CHAR: u32 = 0x0020;
+        const WIDE_CHAR_SPACER: u32 = 0x0040;
+        const LEADING_WIDE_CHAR_SPACER: u32 = 0x0400;
+
+        let lines_to_render = snapshot.screen_lines;
+        let cols_to_render = snapshot.columns;
+
+        for row_index in 0..lines_to_render {
+            if row_index > 0 {
+                content.new_line();
+            }
+
+            // 计算绝对行号
+            let absolute_row = snapshot.scrollback_lines as i64
+                - snapshot.display_offset as i64
+                + row_index as i64;
+
+            // 获取行单元格
+            let cells = terminal.get_row_cells(absolute_row);
+
+            // 跳过光标位置报告行
+            if Self::is_cursor_position_report_line(&cells) {
+                continue;
+            }
+
+            let cursor_row = snapshot.cursor_row;
+            let cursor_col = snapshot.cursor_col;
+
+            // 渲染每个单元格
+            for (col_index, cell) in cells.iter().enumerate().take(cols_to_render) {
+                // 跳过占位符
+                let is_spacer = cell.flags & (WIDE_CHAR_SPACER | LEADING_WIDE_CHAR_SPACER);
+                if is_spacer != 0 {
+                    continue;
+                }
+
+                // 获取字符
+                let scalar = match std::char::from_u32(cell.character) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
+                // 添加 VS16 标记（emoji 样式）
+                let char_to_render = if cell.has_vs16 {
+                    format!("{}\u{FE0F}", scalar)
+                } else {
+                    scalar.to_string()
+                };
+
+                // 确定宽度
+                let is_wide = cell.flags & WIDE_CHAR != 0;
+                let glyph_width = if is_wide { 2.0 } else { 1.0 };
+
+                // 获取颜色（归一化到 0.0-1.0）
+                let mut fg_r = cell.fg_r as f32 / 255.0;
+                let mut fg_g = cell.fg_g as f32 / 255.0;
+                let mut fg_b = cell.fg_b as f32 / 255.0;
+                let mut fg_a = cell.fg_a as f32 / 255.0;
+
+                let mut bg_r = cell.bg_r as f32 / 255.0;
+                let mut bg_g = cell.bg_g as f32 / 255.0;
+                let mut bg_b = cell.bg_b as f32 / 255.0;
+                let mut bg_a = cell.bg_a as f32 / 255.0;
+
+                // 处理 INVERSE 标志
+                let is_inverse = cell.flags & INVERSE != 0;
+                let mut has_bg = false;
+
+                if is_inverse {
+                    // 交换前景和背景颜色（包括 alpha）
+                    std::mem::swap(&mut fg_r, &mut bg_r);
+                    std::mem::swap(&mut fg_g, &mut bg_g);
+                    std::mem::swap(&mut fg_b, &mut bg_b);
+                    std::mem::swap(&mut fg_a, &mut bg_a);
+                    has_bg = true;
+                } else {
+                    has_bg = bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01;
+                }
+
+                // 处理光标
+                let has_cursor = cursor_visible
+                    && row_index == cursor_row
+                    && col_index == cursor_col;
+
+                let cursor_r = 1.0;
+                let cursor_g = 1.0;
+                let cursor_b = 1.0;
+                let cursor_a = 0.8;
+
+                // Block cursor 反转颜色
+                if has_cursor && snapshot.cursor_shape == 0 {
+                    fg_r = 0.0;
+                    fg_g = 0.0;
+                    fg_b = 0.0;
+                }
+
+                // 调用 sugarloaf 添加文本
+                let c_str = match std::ffi::CString::new(char_to_render.as_bytes()) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+
+                unsafe {
+                    crate::sugarloaf_content_add_text_decorated(
+                        sugarloaf_handle,
+                        c_str.as_ptr(),
+                        fg_r, fg_g, fg_b, fg_a,
+                        has_bg,
+                        bg_r, bg_g, bg_b, bg_a,
+                        glyph_width,
+                        has_cursor && snapshot.cursor_shape == 0,
+                        cursor_r, cursor_g, cursor_b, cursor_a,
+                        cell.flags,
+                    );
+                }
+            }
+        }
+    }
+
+    /// 检查是否为光标位置报告行
+    fn is_cursor_position_report_line(cells: &[FFICell]) -> bool {
+        if cells.is_empty() {
+            return false;
+        }
+
+        // 必须以 ESC (0x1B) 开头
+        if cells[0].character != 27 {
+            return false;
+        }
+
+        // 构建字符串
+        let mut scalars = Vec::new();
+        for cell in cells {
+            if cell.character == 0 {
+                break; // 遇到空字符停止
+            }
+            if let Some(scalar) = std::char::from_u32(cell.character) {
+                scalars.push(scalar);
+            }
+            // 限制长度，防止异常长行
+            if scalars.len() > 32 {
+                return false;
+            }
+        }
+
+        if scalars.is_empty() {
+            return false;
+        }
+
+        let text: String = scalars.iter().collect();
+
+        // 正则匹配 ^\e\[\d+;\d+R$ 形式的 DSR 响应
+        // 简单实现：检查格式 ESC [ digits ; digits R
+        if !text.starts_with("\u{1B}[") || !text.ends_with('R') {
+            return false;
+        }
+
+        // 提取中间部分 (去掉 ESC[ 和 R)
+        let middle = &text[2..text.len()-1];
+
+        // 检查是否为 "数字;数字" 格式
+        let parts: Vec<&str> = middle.split(';').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+
+        parts[0].chars().all(|c| c.is_ascii_digit())
+            && parts[1].chars().all(|c| c.is_ascii_digit())
     }
 
     /// 设置事件回调
@@ -1269,6 +1528,51 @@ pub extern "C" fn rio_pool_get_selected_text(
         } else {
             ptr::null_mut()
         }
+    })
+}
+
+/// 设置终端布局位置
+#[no_mangle]
+pub extern "C" fn rio_terminal_set_layout(
+    pool_handle: *mut RioTerminalPool,
+    terminal_id: i32,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    visible: bool,
+) -> i32 {
+    catch_panic!(-1, {
+        if pool_handle.is_null() {
+            return -1;
+        }
+
+        let pool = unsafe { &*pool_handle };
+        if let Some(terminal) = pool.get(terminal_id as usize) {
+            terminal.set_layout(TerminalLayout {
+                x,
+                y,
+                width,
+                height,
+                visible,
+            });
+            0
+        } else {
+            -1
+        }
+    })
+}
+
+/// 渲染所有终端（统一入口）
+#[no_mangle]
+pub extern "C" fn rio_pool_render_all(pool_handle: *mut RioTerminalPool) {
+    catch_panic!((), {
+        if pool_handle.is_null() {
+            return;
+        }
+
+        let pool = unsafe { &*pool_handle };
+        pool.render_all();
     })
 }
 

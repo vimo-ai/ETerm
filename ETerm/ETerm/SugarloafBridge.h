@@ -419,4 +419,41 @@ int rio_terminal_render_to_richtext(
     bool cursor_visible
 );
 
+/// Set terminal layout position (for batch rendering)
+///
+/// Parameters:
+/// - pool_handle: Terminal pool handle
+/// - terminal_id: Terminal ID
+/// - x: X position (logical coordinates)
+/// - y: Y position (logical coordinates)
+/// - width: Width (logical coordinates)
+/// - height: Height (logical coordinates)
+/// - visible: Whether terminal is visible
+///
+/// Returns:
+/// - 0: Success
+/// - -1: Error
+int rio_terminal_set_layout(
+    RioTerminalPoolHandle pool_handle,
+    int terminal_id,
+    float x,
+    float y,
+    float width,
+    float height,
+    bool visible
+);
+
+/// Render all terminals (Rust-side batch rendering)
+///
+/// This function renders all terminals in the pool using their stored layout.
+/// It performs:
+/// 1. Clear render list
+/// 2. Render each visible terminal to RichText
+/// 3. Add all RichText objects to render queue
+/// 4. Execute unified render
+///
+/// Parameters:
+/// - pool_handle: Terminal pool handle
+void rio_pool_render_all(RioTerminalPoolHandle pool_handle);
+
 #endif /* SugarloafBridge_h */

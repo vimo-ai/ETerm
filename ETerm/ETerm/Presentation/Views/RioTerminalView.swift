@@ -906,15 +906,17 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 渲染所有 Panel（多终端支持）
     ///
-    /// 使用累积模式：
-    /// 1. 清空待渲染列表
-    /// 2. 遍历每个终端，构建 RichText 内容并累积到列表
-    /// 3. 统一提交所有 objects 并渲染
+    /// 🎯 新架构：Swift 只设置布局，Rust 负责所有渲染
+    /// 1. 设置每个终端的布局（位置、尺寸）
+    /// 2. 调用 Rust 统一渲染函数
     private func render() {
         // 关键检查：如果已清理或未初始化，不执行渲染
         guard isInitialized,
               let sugarloaf = sugarloaf,
               let coordinator = coordinator else { return }
+
+        guard let poolHandle = terminalManager.poolHandleForRender else { return }
+        guard let mapper = coordinateMapper else { return }
 
         let renderStart = Date()
 
@@ -927,142 +929,80 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 如果没有终端，跳过渲染
         if tabsToRender.isEmpty { return }
 
-        // 1. 清空待渲染列表（每帧开始）
-        let clearStart = Date()
-        sugarloaf_clear_objects(sugarloaf)
-        let clearTime = Date().timeIntervalSince(clearStart) * 1000
-
-        // 2. 渲染每个终端（累积 RichText 到列表）
-        let buildStart = Date()
+        // 1. 设置每个终端的布局（Swift 只负责这一步）
+        let layoutStart = Date()
         for (terminalId, contentBounds) in tabsToRender {
-            renderTerminal(
-                terminalId: Int(terminalId),
-                contentBounds: contentBounds,
-                sugarloaf: sugarloaf
-            )
-        }
-        let buildTime = Date().timeIntervalSince(buildStart) * 1000
+            // 坐标转换：Swift 坐标 → Rust 逻辑坐标（Y 轴翻转）
+            let logicalRect = mapper.swiftToRust(rect: contentBounds)
 
-        // 3. 统一提交所有 objects 并渲染（每帧结束）
-        let flushStart = Date()
-        sugarloaf_flush_and_render(sugarloaf)
-        let flushTime = Date().timeIntervalSince(flushStart) * 1000
+            // 设置布局到 Rust 侧
+            _ = rio_terminal_set_layout(
+                poolHandle,
+                Int32(terminalId),
+                Float(logicalRect.origin.x),
+                Float(logicalRect.origin.y),
+                Float(logicalRect.width),
+                Float(logicalRect.height),
+                true  // visible
+            )
+
+            // TODO: 处理 resize - 暂时注释掉，每帧渲染时检查 resize 导致 Layout Setup 耗时 1000ms+
+            // 应该在窗口 resize 事件时单独处理，而不是在渲染路径
+            /*
+            if let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)) {
+                let physicalWidth = logicalRect.width * mapper.scale
+                let physicalHeight = logicalRect.height * mapper.scale
+
+                let safeCellWidth: CGFloat
+                let safeLineHeight: CGFloat
+                if let metrics = coordinator.fontMetrics {
+                    safeCellWidth = CGFloat(metrics.cell_width)
+                    safeLineHeight = CGFloat(metrics.line_height)
+                } else {
+                    safeCellWidth = 16.8
+                    safeLineHeight = 33.6
+                }
+
+                let cols = UInt16(max(1, min(physicalWidth / safeCellWidth, CGFloat(UInt16.max - 1))))
+                let rows = UInt16(max(1, min(physicalHeight / safeLineHeight, CGFloat(UInt16.max - 1))))
+
+                if cols != snapshot.columns || rows != snapshot.screen_lines {
+                    _ = terminalManager.resize(terminalId: Int(terminalId), cols: cols, rows: rows)
+                }
+            }
+            */
+
+            // 确保 RichText 已创建
+            if richTextIds[Int(terminalId)] == nil {
+                let richTextId = Int(sugarloaf_create_rich_text(sugarloaf))
+                richTextIds[Int(terminalId)] = richTextId
+
+                // 第一次创建时更新 fontMetrics
+                if richTextIds.count == 1 {
+                    updateFontMetricsFromSugarloaf(sugarloaf)
+                    DispatchQueue.main.async { [weak self] in
+                        self?.requestRender()
+                    }
+                }
+            }
+        }
+        let layoutTime = Date().timeIntervalSince(layoutStart) * 1000
+
+        // 2. 调用 Rust 统一渲染（一次 FFI 调用完成所有渲染）
+        let rustRenderStart = Date()
+        rio_pool_render_all(poolHandle)
+        let rustRenderTime = Date().timeIntervalSince(rustRenderStart) * 1000
 
         let totalTime = Date().timeIntervalSince(renderStart) * 1000
 
         // 只打印慢帧（>15ms，即低于 60fps）
         if totalTime > 15 {
             print("🐢 [Slow Frame] Total: \(String(format: "%.2f", totalTime))ms")
-            print("   ├─ Clear: \(String(format: "%.2f", clearTime))ms")
-            print("   ├─ Build: \(String(format: "%.2f", buildTime))ms (terminals: \(tabsToRender.count))")
-            print("   └─ Flush: \(String(format: "%.2f", flushTime))ms")
+            print("   ├─ Layout Setup: \(String(format: "%.2f", layoutTime))ms (terminals: \(tabsToRender.count))")
+            print("   └─ Rust Render: \(String(format: "%.2f", rustRenderTime))ms")
         }
     }
 
-    /// 渲染单个终端
-    ///
-    /// 多终端渲染：每个终端有独立的 richTextId，通过累积模式统一渲染。
-    private func renderTerminal(
-        terminalId: Int,
-        contentBounds: CGRect,
-        sugarloaf: SugarloafHandle
-    ) {
-        let termStart = Date()
-
-        guard let mapper = coordinateMapper else { return }
-
-        let snapshotStart = Date()
-        guard let snapshot = terminalManager.getSnapshot(terminalId: terminalId) else { return }
-        let snapshotTime = Date().timeIntervalSince(snapshotStart) * 1000
-
-        // 1. 坐标转换：Swift 坐标 → Rust 逻辑坐标（Y 轴翻转）
-        let logicalRect = mapper.swiftToRust(rect: contentBounds)
-
-        // 2. 网格计算：使用物理像素计算 cols/rows
-        // ✅ 关键修复：必须使用 coordinator.fontMetrics，和 screenToGrid 保持一致
-        let physicalWidth = logicalRect.width * mapper.scale
-        let physicalHeight = logicalRect.height * mapper.scale
-
-        // 从 coordinator 获取字体度量，确保和坐标转换使用同一数据源
-        let safeCellWidth: CGFloat
-        let safeLineHeight: CGFloat
-        if let metrics = coordinator?.fontMetrics {
-            safeCellWidth = CGFloat(metrics.cell_width)
-            safeLineHeight = CGFloat(metrics.line_height)
-        } else {
-            // Fallback
-            safeCellWidth = 16.8
-            safeLineHeight = 33.6
-        }
-
-        let cols = UInt16(max(1, min(physicalWidth / safeCellWidth, CGFloat(UInt16.max - 1))))
-        let rows = UInt16(max(1, min(physicalHeight / safeLineHeight, CGFloat(UInt16.max - 1))))
-
-        // 3. Resize 终端（如果 cols/rows 变化了）
-        if cols != snapshot.columns || rows != snapshot.screen_lines {
-            _ = terminalManager.resize(terminalId: terminalId, cols: cols, rows: rows)
-        }
-
-        // 4. 获取或创建该终端的 richTextId
-        let richTextId: Int
-        if let existingId = richTextIds[terminalId] {
-            richTextId = existingId
-        } else {
-            // 为新终端创建 RichText
-            let newId = Int(sugarloaf_create_rich_text(sugarloaf))
-            richTextIds[terminalId] = newId
-            richTextId = newId
-
-            // 🎯 创建 RichText 后更新 fontMetrics（只需要更新一次）
-            if richTextIds.count == 1 {
-                updateFontMetricsFromSugarloaf(sugarloaf)
-                // 请求重新渲染，下一帧会使用正确的 fontMetrics
-                DispatchQueue.main.async { [weak self] in
-                    self?.requestRender()
-                }
-            }
-        }
-
-        let isCursorVisible = calculateCursorVisibility(snapshot: snapshot)
-
-        // 🎯 关键修改：一次 FFI 调用完成所有渲染（Rust 批量渲染）
-        let renderStart = Date()
-        guard let poolHandle = terminalManager.poolHandleForRender else {
-            print("   ❌ Terminal \(terminalId) render failed: pool handle not available")
-            return
-        }
-
-        let result = rio_terminal_render_to_richtext(
-            poolHandle,
-            Int32(terminalId),
-            sugarloaf,
-            Int32(richTextId),
-            isCursorVisible
-        )
-        let renderTime = Date().timeIntervalSince(renderStart) * 1000
-
-        if result != 0 {
-            print("   ❌ Terminal \(terminalId) render failed: \(result)")
-        }
-
-        // 累积 RichText 到待渲染列表（不立即渲染）
-        // 渲染在 render() 方法的 sugarloaf_flush_and_render 中统一执行
-        sugarloaf_add_rich_text(
-            sugarloaf,
-            richTextId,
-            Float(logicalRect.origin.x),
-            Float(logicalRect.origin.y)
-        )
-
-        let termTime = Date().timeIntervalSince(termStart) * 1000
-
-        // 只打印慢的终端渲染（>10ms）
-        if termTime > 10 {
-            print("   🔸 Terminal \(terminalId): \(String(format: "%.2f", termTime))ms")
-            print("      ├─ Snapshot: \(String(format: "%.2f", snapshotTime))ms")
-            print("      └─ Rust Render: \(String(format: "%.2f", renderTime))ms (batch FFI)")
-        }
-    }
 
     /// 计算光标可见性
     private func calculateCursorVisibility(snapshot: TerminalSnapshot) -> Bool {
