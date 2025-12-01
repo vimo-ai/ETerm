@@ -295,23 +295,7 @@ int rio_pool_get_snapshot(
     TerminalSnapshot* out_snapshot
 );
 
-/// 获取指定行的单元格数量
-size_t rio_pool_get_row_cell_count(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    size_t row_index
-);
-
-/// 获取指定行的单元格数据
-size_t rio_pool_get_row_cells(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    size_t row_index,
-    FFICell* out_cells,
-    size_t max_cells
-);
-
-/// 获取指定绝对行号的单元格数据（支持历史缓冲区）
+/// 获取指定行的单元格数据（支持历史缓冲区）
 ///
 /// 绝对行号坐标系统：
 /// - 0 到 (scrollback_lines - 1): 历史缓冲区
@@ -323,7 +307,7 @@ size_t rio_pool_get_row_cells(
 /// - max_cells: 缓冲区最大容量
 ///
 /// 返回：实际写入的单元格数量
-size_t rio_pool_get_row_cells_absolute(
+size_t rio_pool_get_row_cells(
     RioTerminalPoolHandle pool,
     size_t terminal_id,
     int64_t absolute_row,
@@ -339,36 +323,16 @@ int rio_pool_get_cursor(
     unsigned short* out_row
 );
 
-/// 设置选区
-int rio_pool_set_selection(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    size_t start_col,
-    int start_row,
-    size_t end_col,
-    int end_row
-);
-
 /// 清除选区
 int rio_pool_clear_selection(
     RioTerminalPoolHandle pool,
     size_t terminal_id
 );
 
-/// 获取选中的文本（返回需要用 rio_free_string 释放的字符串）
-char* rio_pool_get_selected_text(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    size_t start_col,
-    int start_row,
-    size_t end_col,
-    int end_row
-);
-
-/// 获取选中的文本（使用绝对坐标系统）
+/// 获取选中的文本
 /// 直接使用当前 terminal.selection，不需要传入坐标参数
 /// 返回需要用 rio_free_string 释放的字符串
-char* rio_pool_get_selected_text_absolute(
+char* rio_pool_get_selected_text(
     RioTerminalPoolHandle pool,
     size_t terminal_id
 );
@@ -403,7 +367,7 @@ AbsolutePosition rio_pool_screen_to_absolute(
     size_t screen_col
 );
 
-/// 使用真实行号设置选区
+/// 设置选区
 ///
 /// 参数：
 ///   start_absolute_row: 起始真实行号
@@ -413,7 +377,7 @@ AbsolutePosition rio_pool_screen_to_absolute(
 ///
 /// 注意：Rust 内部会转换为 Grid 坐标
 /// 返回：成功返回 0，失败返回 -1
-int rio_pool_set_selection_absolute(
+int rio_pool_set_selection(
     RioTerminalPoolHandle pool,
     size_t terminal_id,
     int64_t start_absolute_row,
