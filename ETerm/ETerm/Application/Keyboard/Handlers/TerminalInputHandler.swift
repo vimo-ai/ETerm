@@ -171,8 +171,9 @@ final class TerminalInputHandler: KeyboardEventHandler {
             return .consumed
         }
 
-        // 获取当前行的文本
-        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), rowIndex: row, maxCells: 500)
+        // 获取当前行的文本（转换为绝对行号）
+        let absoluteRow = Int64(snapshot.scrollback_lines) + Int64(row)
+        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), absoluteRow: absoluteRow, maxCells: 500)
         let lineText = cells.map { cell in
             guard let scalar = UnicodeScalar(cell.character) else { return " " }
             return String(Character(scalar))

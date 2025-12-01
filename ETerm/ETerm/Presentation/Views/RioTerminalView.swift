@@ -913,7 +913,9 @@ class RioMetalView: NSView, RenderViewProtocol {
             }
 
             let colsToRender = cols > 0 ? Int(cols) : Int(snapshot.columns)
-            let cells = terminalManager.getRowCells(terminalId: terminalId, rowIndex: rowIndex, maxCells: colsToRender)
+            // 转换屏幕坐标为绝对行号
+            let absoluteRow = Int64(snapshot.scrollback_lines) - Int64(snapshot.display_offset) + Int64(rowIndex)
+            let cells = terminalManager.getRowCells(terminalId: terminalId, absoluteRow: absoluteRow, maxCells: colsToRender)
 
             renderLine(
                 content: sugarloaf,
@@ -1479,8 +1481,14 @@ class RioMetalView: NSView, RenderViewProtocol {
         let row = Int(gridPos.row)
         let col = Int(gridPos.col)
 
+        // 获取快照以转换坐标
+        guard let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)) else { return }
+
+        // 转换屏幕坐标为绝对行号
+        let absoluteRow = Int64(snapshot.scrollback_lines) - Int64(snapshot.display_offset) + Int64(row)
+
         // 获取该行的所有单元格
-        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), rowIndex: row, maxCells: 500)
+        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), absoluteRow: absoluteRow, maxCells: 500)
         guard !cells.isEmpty else { return }
 
         // 将单元格转换为字符串
@@ -1522,7 +1530,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         selectionTab = activeTab
 
         // 发布选中结束事件（双击选中）
-        let trimmed = boundary.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = boundary.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
         if !trimmed.isEmpty {
             let mouseLoc = self.convert(event.locationInWindow, from: nil)
             let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
