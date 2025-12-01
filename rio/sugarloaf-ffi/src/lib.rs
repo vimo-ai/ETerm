@@ -783,11 +783,8 @@ pub extern "C" fn sugarloaf_set_test_objects(handle: *mut SugarloafHandle) {
 
     let handle = unsafe { &mut *handle };
 
-    eprintln!("[Sugarloaf FFI] Testing simple text rendering");
-
     // 创建 rich text
     let rt_id = handle.instance.create_temp_rich_text();
-    eprintln!("[Sugarloaf FFI] Created rich text ID: {}", rt_id);
 
     // 选择并清空
     let content = handle.instance.content();
@@ -795,14 +792,12 @@ pub extern "C" fn sugarloaf_set_test_objects(handle: *mut SugarloafHandle) {
     content.clear();
 
     // 添加简单文本
-    eprintln!("[Sugarloaf FFI] Adding test text");
     content.add_text("Hello, Sugarloaf!", FragmentStyle {
         color: [1.0, 1.0, 0.0, 1.0], // 黄色
         ..FragmentStyle::default()
     });
 
     // 构建
-    eprintln!("[Sugarloaf FFI] Building content");
     content.build();
 
     // 创建测试用的彩色矩形和文本对象
@@ -820,7 +815,6 @@ pub extern "C" fn sugarloaf_set_test_objects(handle: *mut SugarloafHandle) {
         }),
     ];
 
-    eprintln!("[Sugarloaf FFI] Setting {} test objects (quad + richtext)", objects.len());
     handle.set_objects(objects);
 }
 

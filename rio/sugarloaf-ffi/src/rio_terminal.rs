@@ -34,6 +34,18 @@ use crate::{global_font_metrics, SugarloafFontMetrics, SugarloafHandle};
 /// 历史行数
 const DEFAULT_HISTORY_LINES: usize = 1_000;
 
+/// 性能日志开关（开发调试时设为 true，生产环境设为 false）
+const DEBUG_PERFORMANCE: bool = false;
+
+/// 性能日志宏（只在 DEBUG_PERFORMANCE = true 时输出）
+macro_rules! perf_log {
+    ($($arg:tt)*) => {
+        if DEBUG_PERFORMANCE {
+            println!($($arg)*);
+        }
+    };
+}
+
 /// 全局终端 ID 计数器
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(1);
@@ -406,8 +418,8 @@ impl RioTerminal {
         let lock_wait = lock_start.elapsed().as_micros();
 
         if lock_wait > 1000 {
-            println!("🔒 [Render Thread] snapshot() waited {}μs ({}ms) for read lock",
-                     lock_wait, lock_wait / 1000);
+            perf_log!("🔒 [Render Thread] snapshot() waited {}μs ({}ms) for read lock",
+                      lock_wait, lock_wait / 1000);
         }
 
         // 照抄 Rio: terminal.cursor() 内部处理了所有光标隐藏逻辑
@@ -965,11 +977,11 @@ impl RioTerminalPool {
             let total_time = total_start.elapsed().as_micros();
 
             // 打印详细耗时分解
-            println!("🎨 [render_all] Total: {}μs ({}ms)", total_time, total_time / 1000);
-            println!("   ├─ clear_objects: {}μs", clear_time);
-            println!("   ├─ render_terminal_content: {}μs", content_time_total);
-            println!("   ├─ content.build(): {}μs", build_time_total);
-            println!("   └─ flush_and_render: {}μs ({}ms)", flush_time, flush_time / 1000);
+            perf_log!("🎨 [render_all] Total: {}μs ({}ms)", total_time, total_time / 1000);
+            perf_log!("   ├─ clear_objects: {}μs", clear_time);
+            perf_log!("   ├─ render_terminal_content: {}μs", content_time_total);
+            perf_log!("   ├─ content.build(): {}μs", build_time_total);
+            perf_log!("   └─ flush_and_render: {}μs ({}ms)", flush_time, flush_time / 1000);
         }
     }
 
@@ -1008,8 +1020,8 @@ impl RioTerminalPool {
 
         // 如果等待超过 1ms，打印日志
         if lock_wait_time > 1000 {
-            println!("🔒 [Render Thread] Waited {}μs ({}ms) to acquire read lock for Phase 1",
-                     lock_wait_time, lock_wait_time / 1000);
+            perf_log!("🔒 [Render Thread] Waited {}μs ({}ms) to acquire read lock for Phase 1",
+                      lock_wait_time, lock_wait_time / 1000);
         }
         let scrollback_lines = terminal_lock.grid.history_size() as i64;
         let screen_lines_i64 = terminal_lock.screen_lines() as i64;
@@ -1215,23 +1227,23 @@ impl RioTerminalPool {
                 0.0
             };
 
-            println!("⚡ [Parallel Render] {} lines, {} cols", lines_to_render, cols_to_render);
-            println!("   Phase 1 (lock + extract): {}μs ({:.1}%)",
+            perf_log!("⚡ [Parallel Render] {} lines, {} cols", lines_to_render, cols_to_render);
+            perf_log!("   Phase 1 (lock + extract): {}μs ({:.1}%)",
                 extract_time,
                 extract_time as f32 / phase1_time as f32 * 100.0
             );
-            println!("   Phase 1 (parallel parse): {}μs ({:.1}%)",
+            perf_log!("   Phase 1 (parallel parse): {}μs ({:.1}%)",
                 parse_time,
                 parse_time as f32 / phase1_time as f32 * 100.0
             );
-            println!("   Phase 1 Total: {}μs ({}ms)", phase1_time, phase1_time / 1000);
-            println!("   Phase 2 (merged render): {}μs", phase2_time);
-            println!("   Total: {}μs ({}ms) - {} chars",
+            perf_log!("   Phase 1 Total: {}μs ({}ms)", phase1_time, phase1_time / 1000);
+            perf_log!("   Phase 2 (merged render): {}μs", phase2_time);
+            perf_log!("   Total: {}μs ({}ms) - {} chars",
                 phase1_time + phase2_time,
                 (phase1_time + phase2_time) / 1000,
                 total_chars
             );
-            println!("   Style segments: {} (avg {:.1} per line)",
+            perf_log!("   Style segments: {} (avg {:.1} per line)",
                 total_segments,
                 avg_segments_per_line
             );

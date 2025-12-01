@@ -22,6 +22,18 @@ use teletypewriter::EventedPty;
 
 use crate::rio_event::{FFIEventListener, RioEvent};
 
+/// 性能日志开关（开发调试时设为 true，生产环境设为 false）
+const DEBUG_PERFORMANCE: bool = false;
+
+/// 性能日志宏（只在 DEBUG_PERFORMANCE = true 时输出）
+macro_rules! perf_log {
+    ($($arg:tt)*) => {
+        if DEBUG_PERFORMANCE {
+            println!($($arg)*);
+        }
+    };
+}
+
 /// 照抄 Rio: READ_BUFFER_SIZE = 1MB
 const READ_BUFFER_SIZE: usize = 0x10_0000;
 
@@ -275,17 +287,17 @@ where
                     let lock_acquired = match self.terminal.try_write() {
                         // Force block if we are at the buffer size limit.
                         None if unprocessed >= READ_BUFFER_SIZE => {
-                            println!("🔒 [I/O Thread] try_write failed, forcing write lock...");
+                            perf_log!("🔒 [I/O Thread] try_write failed, forcing write lock...");
                             let t = self.terminal.write();
                             let elapsed = lock_start.elapsed().as_micros();
-                            println!("🔒 [I/O Thread] Acquired write lock after {}μs ({}ms)", elapsed, elapsed / 1000);
+                            perf_log!("🔒 [I/O Thread] Acquired write lock after {}μs ({}ms)", elapsed, elapsed / 1000);
                             t
                         }
                         None => continue,
                         Some(t) => {
                             let elapsed = lock_start.elapsed().as_micros();
                             if elapsed > 1000 {
-                                println!("🔒 [I/O Thread] Acquired write lock (try_write) after {}μs", elapsed);
+                                perf_log!("🔒 [I/O Thread] Acquired write lock (try_write) after {}μs", elapsed);
                             }
                             t
                         }
@@ -300,7 +312,7 @@ where
             let parse_time = parse_start.elapsed().as_micros();
 
             if parse_time > 10000 {
-                println!("🔒 [I/O Thread] parser.advance() took {}μs ({}ms) for {} bytes",
+                perf_log!("🔒 [I/O Thread] parser.advance() took {}μs ({}ms) for {} bytes",
                          parse_time, parse_time / 1000, unprocessed);
             }
 
@@ -309,14 +321,14 @@ where
 
             // 照抄 Rio: Assure we're not blocking the terminal too long unnecessarily.
             if processed >= MAX_LOCKED_READ {
-                println!("🔒 [I/O Thread] Releasing write lock after processing {} bytes (MAX_LOCKED_READ limit)", processed);
+                perf_log!("🔒 [I/O Thread] Releasing write lock after processing {} bytes (MAX_LOCKED_READ limit)", processed);
                 break;
             }
         }
 
         // 释放锁时打印日志
         if terminal.is_some() && processed > 0 {
-            println!("🔒 [I/O Thread] Releasing write lock after processing {} bytes total", processed);
+            perf_log!("🔒 [I/O Thread] Releasing write lock after processing {} bytes total", processed);
         }
 
         // 照抄 Rio: Queue terminal update processing unless all processed bytes were synchronized.
