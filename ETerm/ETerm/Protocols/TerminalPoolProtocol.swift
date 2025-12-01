@@ -76,28 +76,9 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 获取光标位置
     func getCursorPosition(terminalId: Int) -> CursorPosition?
 
-    /// 设置选区
-    @discardableResult
-    func setSelection(
-        terminalId: Int,
-        startRow: UInt16,
-        startCol: UInt16,
-        endRow: UInt16,
-        endCol: UInt16
-    ) -> Bool
-
     /// 清除选区
     @discardableResult
     func clearSelection(terminalId: Int) -> Bool
-
-    /// 获取选中范围的文本
-    func getTextRange(
-        terminalId: Int,
-        startRow: UInt16,
-        startCol: UInt16,
-        endRow: UInt16,
-        endCol: UInt16
-    ) -> String?
 
     /// 获取当前输入行号
     func getInputRow(terminalId: Int) -> UInt16?
@@ -123,9 +104,7 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func render(terminalId: Int, x: Float, y: Float, width: Float, height: Float, cols: UInt16, rows: UInt16) -> Bool { false }
     func flush() {}
     func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
-    func setSelection(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> Bool { false }
     func clearSelection(terminalId: Int) -> Bool { false }
-    func getTextRange(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> String? { nil }
     func getInputRow(terminalId: Int) -> UInt16? { nil }
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {}
 }

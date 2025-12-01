@@ -333,21 +333,7 @@ final class GlobalTerminalManager {
         return result != 0 ? snapshot : nil
     }
 
-    func getRowCells(terminalId: Int, rowIndex: Int, maxCells: Int) -> [FFICell] {
-        guard let pool = poolHandle else { return [] }
-
-        let cellsPtr = UnsafeMutablePointer<FFICell>.allocate(capacity: maxCells)
-        defer { cellsPtr.deallocate() }
-
-        cellsPtr.initialize(repeating: FFICell(), count: maxCells)
-        defer { cellsPtr.deinitialize(count: maxCells) }
-
-        let count = rio_pool_get_row_cells(pool, terminalId, rowIndex, cellsPtr, maxCells)
-
-        return Array(UnsafeBufferPointer(start: cellsPtr, count: Int(count)))
-    }
-
-    /// 获取指定绝对行号的单元格数据（支持历史缓冲区）
+    /// 获取指定行的单元格数据（支持历史缓冲区）
     ///
     /// 绝对行号坐标系统：
     /// - 0 到 (scrollback_lines - 1): 历史缓冲区
@@ -358,7 +344,7 @@ final class GlobalTerminalManager {
     ///   - absoluteRow: 绝对行号（0-based，包含历史缓冲区）
     ///   - maxCells: 最大单元格数量
     /// - Returns: 单元格数组
-    func getRowCellsAbsolute(terminalId: Int, absoluteRow: Int64, maxCells: Int) -> [FFICell] {
+    func getRowCells(terminalId: Int, absoluteRow: Int64, maxCells: Int) -> [FFICell] {
         guard let pool = poolHandle else { return [] }
 
         let cellsPtr = UnsafeMutablePointer<FFICell>.allocate(capacity: maxCells)
@@ -367,7 +353,7 @@ final class GlobalTerminalManager {
         cellsPtr.initialize(repeating: FFICell(), count: maxCells)
         defer { cellsPtr.deinitialize(count: maxCells) }
 
-        let count = rio_pool_get_row_cells_absolute(pool, terminalId, absoluteRow, cellsPtr, maxCells)
+        let count = rio_pool_get_row_cells(pool, terminalId, absoluteRow, cellsPtr, maxCells)
 
         return Array(UnsafeBufferPointer(start: cellsPtr, count: Int(count)))
     }
@@ -382,51 +368,20 @@ final class GlobalTerminalManager {
         return result != 0 ? (col, row) : nil
     }
 
-    func setSelection(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> Bool {
-        guard let pool = poolHandle else { return false }
-        return rio_pool_set_selection(
-            pool,
-            terminalId,
-            Int(startCol),
-            Int32(startRow),
-            Int(endCol),
-            Int32(endRow)
-        ) != 0
-    }
-
     func clearSelection(terminalId: Int) -> Bool {
         guard let pool = poolHandle else { return false }
         return rio_pool_clear_selection(pool, terminalId) != 0
     }
 
-    func getTextRange(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> String? {
-        guard let pool = poolHandle else { return nil }
-
-        let cStr = rio_pool_get_selected_text(
-            pool,
-            terminalId,
-            Int(startCol),
-            Int32(startRow),
-            Int(endCol),
-            Int32(endRow)
-        )
-
-        guard let cStr = cStr else { return nil }
-
-        let result = String(cString: cStr)
-        rio_free_string(cStr)
-        return result
-    }
-
-    /// 获取选中的文本（使用绝对坐标系统）
+    /// 获取选中的文本
     ///
     /// 直接使用当前 terminal.selection 获取文本
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 选中的文本，失败返回 nil
-    func getSelectedTextAbsolute(terminalId: Int) -> String? {
+    func getSelectedText(terminalId: Int) -> String? {
         guard let pool = poolHandle else { return nil }
 
-        let cStr = rio_pool_get_selected_text_absolute(pool, terminalId)
+        let cStr = rio_pool_get_selected_text(pool, terminalId)
         guard let cStr = cStr else { return nil }
 
         let result = String(cString: cStr)
@@ -548,7 +503,7 @@ final class GlobalTerminalManager {
     ///   - endAbsoluteRow: 结束真实行号
     ///   - endCol: 结束列号
     /// - Returns: 成功返回 true，失败返回 false
-    func setSelectionAbsolute(
+    func setSelection(
         terminalId: Int,
         startAbsoluteRow: Int64,
         startCol: Int,
@@ -557,7 +512,7 @@ final class GlobalTerminalManager {
     ) -> Bool {
         guard let pool = poolHandle else { return false }
 
-        let result = rio_pool_set_selection_absolute(
+        let result = rio_pool_set_selection(
             pool,
             terminalId,
             startAbsoluteRow,

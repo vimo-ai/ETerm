@@ -301,40 +301,9 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
         return result != 0 ? CursorPosition(col: col, row: row) : nil
     }
 
-    func setSelection(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> Bool {
-        guard let pool = poolHandle else { return false }
-        return rio_pool_set_selection(
-            pool,
-            terminalId,
-            Int(startCol),
-            Int32(startRow),
-            Int(endCol),
-            Int32(endRow)
-        ) != 0
-    }
-
     func clearSelection(terminalId: Int) -> Bool {
         guard let pool = poolHandle else { return false }
         return rio_pool_clear_selection(pool, terminalId) != 0
-    }
-
-    func getTextRange(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> String? {
-        guard let pool = poolHandle else { return nil }
-
-        let cStr = rio_pool_get_selected_text(
-            pool,
-            terminalId,
-            Int(startCol),
-            Int32(startRow),
-            Int(endCol),
-            Int32(endRow)
-        )
-
-        guard let cStr = cStr else { return nil }
-
-        let result = String(cString: cStr)
-        rio_free_string(cStr)
-        return result
     }
 
     func getInputRow(terminalId: Int) -> UInt16? {
@@ -356,24 +325,6 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
         let result = rio_pool_get_snapshot(pool, terminalId, &snapshot)
 
         return result != 0 ? snapshot : nil
-    }
-
-    /// 获取指定行的单元格数据
-    func getRowCells(terminalId: Int, rowIndex: Int, maxCells: Int) -> [FFICell] {
-        guard let pool = poolHandle else { return [] }
-
-        // 使用 UnsafeMutablePointer 直接分配内存
-        let cellsPtr = UnsafeMutablePointer<FFICell>.allocate(capacity: maxCells)
-        defer { cellsPtr.deallocate() }
-
-        // 初始化内存
-        cellsPtr.initialize(repeating: FFICell(), count: maxCells)
-        defer { cellsPtr.deinitialize(count: maxCells) }
-
-        let count = rio_pool_get_row_cells(pool, terminalId, rowIndex, cellsPtr, maxCells)
-
-        // 转换为 Swift 数组
-        return Array(UnsafeBufferPointer(start: cellsPtr, count: Int(count)))
     }
 
     /// 获取光标位置（元组版本）
