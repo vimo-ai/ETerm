@@ -63,7 +63,7 @@ class TerminalSearch {
 
         // 从最旧的历史开始遍历（absoluteRow = 0）
         for absoluteRow in 0..<rowsToSearch {
-            let cells = terminalManager.getRowCellsAbsolute(
+            let cells = terminalManager.getRowCells(
                 terminalId: terminalId,
                 absoluteRow: Int64(absoluteRow),
                 maxCells: Int(snapshot.columns)

@@ -521,16 +521,6 @@ class TerminalWindowCoordinator: ObservableObject {
         }
     }
 
-    /// 设置选区（统一入口）
-    @discardableResult
-    private func setSelectionInternal(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> Bool {
-        if let manager = globalTerminalManager {
-            return manager.setSelection(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
-        } else {
-            return terminalPool.setSelection(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
-        }
-    }
-
     /// 清除选区（统一入口）
     @discardableResult
     private func clearSelectionInternal(terminalId: Int) -> Bool {
@@ -538,15 +528,6 @@ class TerminalWindowCoordinator: ObservableObject {
             return manager.clearSelection(terminalId: terminalId)
         } else {
             return terminalPool.clearSelection(terminalId: terminalId)
-        }
-    }
-
-    /// 获取文本范围（统一入口）
-    private func getTextRangeInternal(terminalId: Int, startRow: UInt16, startCol: UInt16, endRow: UInt16, endCol: UInt16) -> String? {
-        if let manager = globalTerminalManager {
-            return manager.getTextRange(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
-        } else {
-            return terminalPool.getTextRange(terminalId: terminalId, startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol)
         }
     }
 
@@ -994,7 +975,7 @@ class TerminalWindowCoordinator: ObservableObject {
         let (startRow, startCol, endRow, endCol) = selection.normalized()
 
         // 使用真实行号设置选区
-        let success = globalTerminalManager?.setSelectionAbsolute(
+        let success = globalTerminalManager?.setSelection(
             terminalId: Int(terminalId),
             startAbsoluteRow: startRow,
             startCol: Int(startCol),
@@ -1033,7 +1014,7 @@ class TerminalWindowCoordinator: ObservableObject {
     func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
         // 使用绝对坐标系统直接获取
         // 前提：selection 已经通过 setSelection 同步到 Rust 层
-        return globalTerminalManager?.getSelectedTextAbsolute(terminalId: Int(terminalId))
+        return globalTerminalManager?.getSelectedText(terminalId: Int(terminalId))
     }
 
     /// 获取指定终端的当前输入行号
