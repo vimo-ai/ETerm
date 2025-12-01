@@ -15,6 +15,7 @@ use std::thread::JoinHandle;
 use corcovado::channel;
 use rio_backend::ansi::CursorShape;
 use rio_backend::crosswords::grid::row::Row;
+use rio_backend::crosswords::grid::Dimensions;
 use rio_backend::crosswords::square::Square;
 use rio_backend::crosswords::{Crosswords, CrosswordsSize};
 use rio_backend::event::Msg;
@@ -43,6 +44,8 @@ static NEXT_TERMINAL_ID: std::sync::atomic::AtomicUsize =
 pub struct TerminalSnapshot {
     /// 显示偏移（滚动位置）
     pub display_offset: usize,
+    /// 历史缓冲区行数
+    pub scrollback_lines: usize,
     /// 光标是否闪烁
     pub blinking_cursor: i32,
     /// 光标位置（列）
@@ -370,6 +373,7 @@ impl RioTerminal {
 
         TerminalSnapshot {
             display_offset: terminal.display_offset(),
+            scrollback_lines: terminal.grid.history_size(),
             blinking_cursor: terminal.blinking_cursor as i32,
             cursor_col: cursor.pos.col.0,
             cursor_row: cursor.pos.row.0 as usize,
@@ -410,15 +414,58 @@ impl RioTerminal {
         let row = &visible_rows[row_index];
         let mut cells = Vec::with_capacity(row.len());
 
+        // 获取选区（Grid 坐标）
+        let selection_range = terminal.selection
+            .as_ref()
+            .and_then(|s| s.to_range(&terminal));
+
+        // 计算当前行的 Grid 行号
+        let display_offset = terminal.display_offset() as i32;
+        let grid_row = row_index as i32 - display_offset;
+
         for (col_idx, square) in row.inner.iter().enumerate() {
-            let (fg_r, fg_g, fg_b, fg_a) = Self::ansi_color_to_rgba(&square.fg, &terminal);
-            let (bg_r, bg_g, bg_b, bg_a) = Self::ansi_color_to_rgba(&square.bg, &terminal);
+            // 获取原始颜色
+            let (mut fg_r, mut fg_g, mut fg_b, mut fg_a) = Self::ansi_color_to_rgba(&square.fg, &terminal);
+            let (mut bg_r, mut bg_g, mut bg_b, mut bg_a) = Self::ansi_color_to_rgba(&square.bg, &terminal);
+
+            // 检查是否在选区内
+            let in_selection = if let Some(range) = &selection_range {
+                use rio_backend::crosswords::pos::{Column, Line, Pos};
+
+                let grid_pos = Pos::new(Line(grid_row), Column(col_idx));
+                range.contains(grid_pos)
+            } else {
+                false
+            };
+
+            if in_selection {
+                // 设置选区背景色（淡蓝色）
+                fg_r = 255;  // 白色前景
+                fg_g = 255;
+                fg_b = 255;
+                fg_a = 255;
+                bg_r = 76;   // 0.3 * 255 ≈ 76
+                bg_g = 127;  // 0.5 * 255 ≈ 127
+                bg_b = 204;  // 0.8 * 255 ≈ 204
+                bg_a = 255;
+            }
 
             // 检查 zerowidth 字符中是否有 VS16 (U+FE0F)
             let has_vs16 = square
                 .zerowidth()
                 .map(|zw| zw.contains(&'\u{FE0F}'))
                 .unwrap_or(false);
+
+            // 处理背景透明度
+            let final_bg_a = if in_selection {
+                255 // 选区内的背景不透明
+            } else if square.bg == rio_backend::config::colors::AnsiColor::Named(
+                rio_backend::config::colors::NamedColor::Background,
+            ) {
+                0 // 默认背景色透明，显示窗口背景
+            } else {
+                bg_a // 使用实际的 alpha 值
+            };
 
             cells.push(FFICell {
                 character: square.c as u32,
@@ -429,13 +476,7 @@ impl RioTerminal {
                 bg_r,
                 bg_g,
                 bg_b,
-                bg_a: if square.bg == rio_backend::config::colors::AnsiColor::Named(
-                    rio_backend::config::colors::NamedColor::Background,
-                ) {
-                    0 // 背景色透明，显示窗口背景
-                } else {
-                    bg_a // 使用实际的 alpha 值
-                },
+                bg_a: final_bg_a,
                 flags: square.flags.bits() as u32,
                 has_vs16,
             });
@@ -619,6 +660,91 @@ impl RioTerminal {
         terminal.selection = old_selection;
 
         text
+    }
+
+    /// 屏幕坐标 → 真实行号
+    ///
+    /// 转换公式：
+    /// - Swift 的 screen_row 已经翻转过（0 = 顶部，对应 Line(0)）
+    /// - Screen → Grid: grid_row = screen_row - display_offset
+    /// - Grid → Absolute: absolute_row = scrollback_lines + grid_row
+    pub fn screen_to_absolute(&self, screen_row: usize, screen_col: usize) -> (i64, usize) {
+        let terminal = self.terminal.lock();
+
+        // 获取终端状态
+        let display_offset = terminal.display_offset() as i64;
+        let scrollback_lines = terminal.grid.history_size() as i64;
+
+        // CoordinateMapper 已经翻转过了（row=0 是顶部）
+        // 直接转换为 Grid 坐标
+        let grid_row = screen_row as i64 - display_offset;
+
+        // Grid → Absolute
+        let absolute_row = scrollback_lines + grid_row;
+
+        eprintln!("[DEBUG] screen_row={}, grid_row={}, absolute_row={}",
+            screen_row, grid_row, absolute_row);
+
+        (absolute_row, screen_col)
+    }
+
+    /// 使用真实行号设置选区
+    ///
+    /// 转换公式：
+    /// - Absolute → Grid: gridRow = absoluteRow - scrollbackLines
+    ///
+    /// Grid 坐标系统：
+    /// - Line(0) = 屏幕最底部
+    /// - Line(screen_lines - 1) = 屏幕最顶部
+    /// - Line(-1), Line(-2), ... = 历史缓冲区（负数）
+    /// - 有效范围: Line(-history_size) 到 Line(screen_lines - 1)
+    pub fn set_selection_absolute(
+        &mut self,
+        start_absolute_row: i64,
+        start_col: usize,
+        end_absolute_row: i64,
+        end_col: usize,
+    ) -> Result<(), String> {
+        use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
+        use rio_backend::selection::{Selection, SelectionType};
+
+        let mut terminal = self.terminal.lock();
+        let scrollback_lines = terminal.grid.history_size() as i64;
+        let screen_lines = terminal.screen_lines() as i64;
+
+        // Absolute → Grid
+        let start_grid_row = start_absolute_row - scrollback_lines;
+        let end_grid_row = end_absolute_row - scrollback_lines;
+
+        // 边界检查
+        // Grid 坐标有效范围: [-scrollback_lines, screen_lines)
+        let min_row = -(scrollback_lines);
+        let max_row = screen_lines - 1;
+
+        if start_grid_row < min_row || start_grid_row > max_row {
+            return Err(format!(
+                "Selection start out of bounds: start_grid_row={}, valid range=[{}, {}]",
+                start_grid_row, min_row, max_row
+            ));
+        }
+
+        if end_grid_row < min_row || end_grid_row > max_row {
+            return Err(format!(
+                "Selection end out of bounds: end_grid_row={}, valid range=[{}, {}]",
+                end_grid_row, min_row, max_row
+            ));
+        }
+
+        // 使用 Grid 坐标创建选区
+        let start = Pos::new(Line(start_grid_row as i32), Column(start_col));
+        let end = Pos::new(Line(end_grid_row as i32), Column(end_col));
+
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+
+        terminal.selection = Some(selection);
+
+        Ok(())
     }
 }
 
@@ -1133,4 +1259,164 @@ pub extern "C" fn rio_pool_get_cwd(
             ptr::null_mut()
         }
     })
+}
+
+// ============================================================================
+// 坐标转换 API - 支持真实行号（绝对坐标系统）
+// ============================================================================
+
+/// 绝对坐标（真实行号）
+#[repr(C)]
+pub struct AbsolutePosition {
+    pub absolute_row: i64,
+    pub col: usize,
+}
+
+/// 屏幕坐标 → 真实行号
+#[no_mangle]
+pub extern "C" fn rio_pool_screen_to_absolute(
+    pool: *mut RioTerminalPool,
+    terminal_id: usize,
+    screen_row: usize,
+    screen_col: usize,
+) -> AbsolutePosition {
+    catch_panic!(AbsolutePosition { absolute_row: -1, col: 0 }, {
+        if pool.is_null() {
+            return AbsolutePosition { absolute_row: -1, col: 0 };
+        }
+
+        let pool = unsafe { &*pool };
+        if let Some(terminal) = pool.get(terminal_id) {
+            let (absolute_row, col) = terminal.screen_to_absolute(screen_row, screen_col);
+            AbsolutePosition { absolute_row, col }
+        } else {
+            AbsolutePosition { absolute_row: -1, col: 0 }
+        }
+    })
+}
+
+/// 使用真实行号设置选区
+#[no_mangle]
+pub extern "C" fn rio_pool_set_selection_absolute(
+    pool: *mut RioTerminalPool,
+    terminal_id: usize,
+    start_absolute_row: i64,
+    start_col: usize,
+    end_absolute_row: i64,
+    end_col: usize,
+) -> i32 {
+    catch_panic!(-1, {
+        if pool.is_null() {
+            return -1;
+        }
+
+        let pool = unsafe { &mut *(pool as *mut RioTerminalPool) };
+        if let Some(terminal) = pool.get_mut(terminal_id) {
+            match terminal.set_selection_absolute(
+                start_absolute_row,
+                start_col,
+                end_absolute_row,
+                end_col,
+            ) {
+                Ok(_) => 0,
+                Err(_) => -1,
+            }
+        } else {
+            -1
+        }
+    })
+}
+
+// ============================================================================
+// 测试模块
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试坐标转换逻辑
+    ///
+    /// 这个测试验证了 Swift Screen 坐标到 Rio Grid 坐标的转换是否正确
+    #[test]
+    fn test_coordinate_transformation() {
+        // 模拟场景:
+        // - screen_lines = 24
+        // - scrollback_lines = 1000
+        // - display_offset = 0 (无滚动)
+
+        // 场景 1: 点击屏幕顶部 (Swift screen_row = 0)
+        // Swift: 0 = 顶部
+        // Rio: 23 = 顶部
+        // 公式: rio_screen_row = (24 - 1) - 0 = 23
+        // grid_row = 23 - 0 = 23
+        // absolute_row = 1000 + 23 = 1023
+        let screen_lines = 24i64;
+        let scrollback_lines = 1000i64;
+        let display_offset = 0i64;
+
+        let screen_row = 0i64;
+        let rio_screen_row = (screen_lines - 1) - screen_row;
+        assert_eq!(rio_screen_row, 23, "Swift screen_row=0 应该对应 Rio screen_row=23");
+
+        let grid_row = rio_screen_row - display_offset;
+        assert_eq!(grid_row, 23, "Grid row 应该是 23");
+
+        let absolute_row = scrollback_lines + grid_row;
+        assert_eq!(absolute_row, 1023, "Absolute row 应该是 1023");
+
+        // 场景 2: 点击屏幕底部 (Swift screen_row = 23)
+        // Swift: 23 = 底部
+        // Rio: 0 = 底部
+        // 公式: rio_screen_row = (24 - 1) - 23 = 0
+        // grid_row = 0 - 0 = 0
+        // absolute_row = 1000 + 0 = 1000
+        let screen_row = 23i64;
+        let rio_screen_row = (screen_lines - 1) - screen_row;
+        assert_eq!(rio_screen_row, 0, "Swift screen_row=23 应该对应 Rio screen_row=0");
+
+        let grid_row = rio_screen_row - display_offset;
+        assert_eq!(grid_row, 0, "Grid row 应该是 0");
+
+        let absolute_row = scrollback_lines + grid_row;
+        assert_eq!(absolute_row, 1000, "Absolute row 应该是 1000");
+
+        // 场景 3: 点击屏幕顶部，向上滚动 10 行 (display_offset = 10)
+        // Swift: 0 = 可见区域顶部
+        // Rio: 23 = 可见区域顶部（但显示的是历史缓冲区中的内容）
+        // 公式: rio_screen_row = (24 - 1) - 0 = 23
+        // grid_row = 23 - 10 = 13
+        // absolute_row = 1000 + 13 = 1013
+        let display_offset = 10i64;
+        let screen_row = 0i64;
+        let rio_screen_row = (screen_lines - 1) - screen_row;
+        assert_eq!(rio_screen_row, 23, "Swift screen_row=0 应该对应 Rio screen_row=23");
+
+        let grid_row = rio_screen_row - display_offset;
+        assert_eq!(grid_row, 13, "Grid row 应该是 13（滚动后）");
+
+        let absolute_row = scrollback_lines + grid_row;
+        assert_eq!(absolute_row, 1013, "Absolute row 应该是 1013");
+    }
+
+    /// 测试边界检查
+    #[test]
+    fn test_boundary_validation() {
+        let screen_lines = 24i64;
+        let scrollback_lines = 1000i64;
+
+        // 有效范围测试
+        let min_row = -(scrollback_lines);
+        let max_row = screen_lines - 1;
+
+        // 边界内的值应该有效
+        assert!(min_row <= 0 && 0 <= max_row, "Grid row 0 应该在有效范围内");
+        assert!(min_row <= 23 && 23 <= max_row, "Grid row 23 应该在有效范围内");
+        assert!(min_row <= -1 && -1 <= max_row, "Grid row -1 应该在有效范围内（历史缓冲区）");
+        assert!(min_row <= -1000 && -1000 <= max_row, "Grid row -1000 应该在边界上");
+
+        // 边界外的值应该无效
+        assert!(-1001 < min_row, "Grid row -1001 应该超出下界");
+        assert!(24 > max_row, "Grid row 24 应该超出上界");
+    }
 }

@@ -938,6 +938,11 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 计算光标可见性
     private func calculateCursorVisibility(snapshot: TerminalSnapshot) -> Bool {
+        // 滚动历史内容时隐藏光标（光标在底部，已滚出屏幕）
+        if snapshot.display_offset > 0 {
+            return false
+        }
+
         if snapshot.cursor_visible == 0 {
             return false
         }
@@ -1056,58 +1061,40 @@ class RioMetalView: NSView, RenderViewProtocol {
                 fgB = 0.0
             }
 
-            if snapshot.has_selection != 0 {
-                let selStartRow = Int(snapshot.selection_start_row)
-                let selEndRow = Int(snapshot.selection_end_row)
-                let selStartCol = Int(snapshot.selection_start_col)
-                let selEndCol = Int(snapshot.selection_end_col)
+            // 使用实际的 alpha 值（提前读取，以便搜索高亮可以覆盖）
+            var fgA = Float(cell.fg_a) / 255.0
+            var bgA = Float(cell.bg_a) / 255.0
 
-                let inSelection = isInSelection(
-                    row: rowIndex, col: colIndex,
-                    startRow: selStartRow, startCol: selStartCol,
-                    endRow: selEndRow, endCol: selEndCol
-                )
-
-                if inSelection {
-                    fgR = 1.0
-                    fgG = 1.0
-                    fgB = 1.0
-                    hasBg = true
-                    bgR = 0.3
-                    bgG = 0.5
-                    bgB = 0.8
-                }
-            }
-
-            // 搜索高亮（优先级低于选中高亮）
+            // 搜索高亮（优先级低，先处理）
             if let coordinator = coordinator,
                !coordinator.searchMatches.isEmpty {
-                // 计算绝对行号（考虑滚动偏移）
-                let absoluteRow = rowIndex + Int(snapshot.display_offset)
+                // 计算当前行的真实行号
+                let scrollbackLines = Int64(snapshot.scrollback_lines)
+                let displayOffset = Int64(snapshot.display_offset)
+                let currentAbsoluteRow = scrollbackLines - displayOffset + Int64(rowIndex)
 
                 // 检查当前单元格是否在搜索匹配项中
                 let isInSearchMatch = coordinator.searchMatches.contains { match in
-                    match.row == absoluteRow &&
+                    match.absoluteRow == currentAbsoluteRow &&
                     colIndex >= match.startCol &&
                     colIndex <= match.endCol
                 }
 
                 if isInSearchMatch {
-                    // 黄色高亮背景
+                    // #b58900 金黄色背景（Solarized yellow，柔和的搜索高亮）
                     hasBg = true
-                    bgR = 1.0
-                    bgG = 1.0
-                    bgB = 0.0
-                    // 黑色前景（确保可读性）
+                    bgR = Float(0xb5) / 255.0  // 181/255 ≈ 0.710
+                    bgG = Float(0x89) / 255.0  // 137/255 ≈ 0.537
+                    bgB = Float(0x00) / 255.0  // 0/255 = 0.0
+                    bgA = 1.0  // 强制不透明（修复 ll 命令等带颜色文本的背景色不显示问题）
+
+                    // 黑色前景（在金黄色背景上确保可读性）
                     fgR = 0.0
                     fgG = 0.0
                     fgB = 0.0
+                    fgA = 1.0
                 }
             }
-
-            // 使用实际的 alpha 值（支持半透明前景色，如 LightBlack = 50% foreground）
-            let fgA = Float(cell.fg_a) / 255.0
-            let bgA = Float(cell.bg_a) / 255.0
 
             sugarloaf_content_add_text_decorated(
                 content,
@@ -1453,7 +1440,17 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 单击：开始拖拽选择
-        activeTab.startSelection(at: gridPos)
+        // 将 Screen 坐标转换为真实行号
+        guard let (absoluteRow, col) = terminalManager.screenToAbsolute(
+            terminalId: Int(terminalId),
+            screenRow: Int(gridPos.row),
+            screenCol: Int(gridPos.col)
+        ) else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
         // 通知 Rust 层渲染高亮
         if let selection = activeTab.textSelection {
@@ -1498,12 +1495,18 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 设置选区
-        let startPos = CursorPosition(col: UInt16(boundary.startIndex), row: UInt16(row))
-        let endPos = CursorPosition(col: UInt16(boundary.endIndex - 1), row: UInt16(row))
+        // 将 Screen 坐标转换为真实行号
+        guard let (absoluteRow, _) = terminalManager.screenToAbsolute(
+            terminalId: Int(terminalId),
+            screenRow: row,
+            screenCol: col
+        ) else {
+            return
+        }
 
-        activeTab.startSelection(at: startPos)
-        activeTab.updateSelection(to: endPos)
+        // 设置选区（使用真实行号）
+        activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(boundary.startIndex))
+        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(boundary.endIndex - 1))
 
         // 通知 Rust 层渲染高亮
         if let selection = activeTab.textSelection {
@@ -1549,8 +1552,18 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 转换为网格坐标
         let gridPos = screenToGrid(location: location, panelId: panelId)
 
+        // 将 Screen 坐标转换为真实行号
+        guard let (absoluteRow, col) = terminalManager.screenToAbsolute(
+            terminalId: Int(terminalId),
+            screenRow: Int(gridPos.row),
+            screenCol: Int(gridPos.col)
+        ) else {
+            super.mouseDragged(with: event)
+            return
+        }
+
         // 更新 Domain 层状态
-        activeTab.updateSelection(to: gridPos)
+        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
         // 通知 Rust 层渲染高亮
         if let selection = activeTab.textSelection {
@@ -1681,6 +1694,21 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         if delta != 0 {
             _ = terminalManager.scroll(terminalId: Int(terminalId), deltaLines: delta)
+
+            // 同步 displayOffset（仅用于记录滚动位置）
+            if let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)),
+               let panel = coordinator.terminalWindow.allPanels.first(where: {
+                   $0.activeTab?.rustTerminalId == terminalId
+               }),
+               let tab = panel.activeTab {
+                // 更新偏移量
+                tab.updateDisplayOffset(Int(snapshot.display_offset))
+
+                // 注意：不要重新同步选区！
+                // Rust 内部已经存储了选区的 Grid 坐标，滚动不应该改变它
+                // 重新同步会导致选区使用新的 display_offset 重新计算 Grid 坐标，位置错误
+            }
+
             requestRender()
         }
     }

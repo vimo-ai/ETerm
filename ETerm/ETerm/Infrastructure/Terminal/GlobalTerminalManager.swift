@@ -475,6 +475,58 @@ final class GlobalTerminalManager {
         terminalRoutes = terminalRoutes.filter { $0.value.value !== coordinator }
         routesLock.unlock()
     }
+
+    // MARK: - Coordinate Conversion (Absolute Row Support)
+
+    /// 屏幕坐标 → 真实行号
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - screenRow: 相对于当前可见区域的行号（0-based）
+    ///   - screenCol: 列号
+    /// - Returns: 真实行号坐标，失败返回 nil
+    func screenToAbsolute(terminalId: Int, screenRow: Int, screenCol: Int) -> (absoluteRow: Int64, col: Int)? {
+        guard let pool = poolHandle else { return nil }
+
+        let result = rio_pool_screen_to_absolute(
+            pool,
+            terminalId,
+            screenRow,
+            screenCol
+        )
+
+        return (result.absolute_row, Int(result.col))
+    }
+
+    /// 使用真实行号设置选区
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - startAbsoluteRow: 起始真实行号
+    ///   - startCol: 起始列号
+    ///   - endAbsoluteRow: 结束真实行号
+    ///   - endCol: 结束列号
+    /// - Returns: 成功返回 true，失败返回 false
+    func setSelectionAbsolute(
+        terminalId: Int,
+        startAbsoluteRow: Int64,
+        startCol: Int,
+        endAbsoluteRow: Int64,
+        endCol: Int
+    ) -> Bool {
+        guard let pool = poolHandle else { return false }
+
+        let result = rio_pool_set_selection_absolute(
+            pool,
+            terminalId,
+            startAbsoluteRow,
+            startCol,
+            endAbsoluteRow,
+            endCol
+        )
+
+        return result == 0
+    }
 }
 
 // MARK: - Helper Types

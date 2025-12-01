@@ -192,6 +192,7 @@ typedef struct {
 // 终端快照 - 一次性获取所有渲染需要的状态
 typedef struct {
     size_t display_offset;      // 滚动偏移
+    size_t scrollback_lines;    // 历史缓冲区行数
     int blinking_cursor;        // 光标是否闪烁
     size_t cursor_col;          // 光标列
     size_t cursor_row;          // 光标行（相对于可见区域）
@@ -348,6 +349,49 @@ char* rio_pool_get_selected_text(
 char* rio_pool_get_cwd(
     RioTerminalPoolHandle pool,
     size_t terminal_id
+);
+
+// =============================================================================
+// 坐标转换 API - 支持真实行号（绝对坐标系统）
+// =============================================================================
+
+/// 绝对坐标（真实行号）
+typedef struct {
+    int64_t absolute_row;  // 真实行号（可能为负数）
+    size_t col;            // 列号
+} AbsolutePosition;
+
+/// 屏幕坐标 → 真实行号
+///
+/// 参数：
+///   screen_row: 相对于当前可见区域的行号（0-based）
+///   screen_col: 列号
+/// 返回：
+///   真实行号坐标
+AbsolutePosition rio_pool_screen_to_absolute(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id,
+    size_t screen_row,
+    size_t screen_col
+);
+
+/// 使用真实行号设置选区
+///
+/// 参数：
+///   start_absolute_row: 起始真实行号
+///   start_col: 起始列号
+///   end_absolute_row: 结束真实行号
+///   end_col: 结束列号
+///
+/// 注意：Rust 内部会转换为 Grid 坐标
+/// 返回：成功返回 0，失败返回 -1
+int rio_pool_set_selection_absolute(
+    RioTerminalPoolHandle pool,
+    size_t terminal_id,
+    int64_t start_absolute_row,
+    size_t start_col,
+    int64_t end_absolute_row,
+    size_t end_col
 );
 
 /// 释放从 Rust 返回的字符串

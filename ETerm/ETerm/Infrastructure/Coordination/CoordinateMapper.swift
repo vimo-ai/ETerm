@@ -249,11 +249,16 @@ final class CoordinateMapper {
         let relativeX = screenPoint.x - panelOrigin.x - padding
         let relativeY = screenPoint.y - panelOrigin.y - padding
 
-        // 2. Y 轴翻转：Swift 坐标系 Y 向上，终端 row 0 在顶部
+        // 2. 计算网格坐标
+        // macOS NSView 坐标系：原点在左下角，Y 向上增长
+        // - relativeY = 0 表示 Panel 底部
+        // - relativeY = panelHeight 表示 Panel 顶部
+        //
+        // 终端坐标系：row = 0 表示顶部
+        // - 需要翻转：contentHeight - relativeY
         let contentHeight = panelHeight - 2 * padding
         let yFromTop = contentHeight - relativeY
 
-        // 3. 转换为网格坐标
         let col = UInt16(max(0, relativeX / cellWidth))
         let row = UInt16(max(0, yFromTop / cellHeight))
 

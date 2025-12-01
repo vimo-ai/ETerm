@@ -988,18 +988,19 @@ class TerminalWindowCoordinator: ObservableObject {
     ///
     /// - Parameters:
     ///   - terminalId: 终端 ID
-    ///   - selection: 选中范围
+    ///   - selection: 选中范围（使用真实行号）
     /// - Returns: 是否成功
     func setSelection(terminalId: UInt32, selection: TextSelection) -> Bool {
-        let (start, end) = selection.normalized()
+        let (startRow, startCol, endRow, endCol) = selection.normalized()
 
-        let success = setSelectionInternal(
+        // 使用真实行号设置选区
+        let success = globalTerminalManager?.setSelectionAbsolute(
             terminalId: Int(terminalId),
-            startRow: start.row,
-            startCol: start.col,
-            endRow: end.row,
-            endCol: end.col
-        )
+            startAbsoluteRow: startRow,
+            startCol: Int(startCol),
+            endAbsoluteRow: endRow,
+            endCol: Int(endCol)
+        ) ?? false
 
         if success {
             // 触发渲染更新
@@ -1027,17 +1028,35 @@ class TerminalWindowCoordinator: ObservableObject {
     ///
     /// - Parameters:
     ///   - terminalId: 终端 ID
-    ///   - selection: 选中范围
+    ///   - selection: 选中范围（使用真实行号）
     /// - Returns: 选中的文本，失败返回 nil
     func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
-        let (start, end) = selection.normalized()
+        let (startAbsRow, startCol, endAbsRow, endCol) = selection.normalized()
+
+        // 获取终端快照以转换坐标
+        guard let snapshot = globalTerminalManager?.getSnapshot(terminalId: Int(terminalId)) else {
+            return nil
+        }
+
+        let scrollbackLines = Int64(snapshot.scrollback_lines)
+
+        // 将真实行号转换为 Grid 坐标
+        let startGridRow = Int32(startAbsRow - scrollbackLines)
+        let endGridRow = Int32(endAbsRow - scrollbackLines)
+
+        // 将 Grid 坐标转换为 Screen 坐标（用于 getTextRange FFI）
+        // 注意：getTextRange 期望的是 UInt16，所以我们需要确保值有效
+        guard startGridRow >= Int32(Int16.min) && startGridRow <= Int32(Int16.max),
+              endGridRow >= Int32(Int16.min) && endGridRow <= Int32(Int16.max) else {
+            return nil
+        }
 
         return getTextRangeInternal(
             terminalId: Int(terminalId),
-            startRow: start.row,
-            startCol: start.col,
-            endRow: end.row,
-            endCol: end.col
+            startRow: UInt16(bitPattern: Int16(startGridRow)),
+            startCol: startCol,
+            endRow: UInt16(bitPattern: Int16(endGridRow)),
+            endCol: endCol
         )
     }
 

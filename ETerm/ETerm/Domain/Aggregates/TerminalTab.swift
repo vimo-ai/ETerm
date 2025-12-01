@@ -55,6 +55,9 @@ final class TerminalTab {
     /// Rust 终端 ID（用于渲染）
     private(set) var rustTerminalId: UInt32?
 
+    /// 滚动偏移量（用于选区跟随）
+    private(set) var displayOffset: Int = 0
+
     // MARK: - 初始化
 
     init(tabId: UUID, title: String = "Terminal", rustTerminalId: UInt32? = nil) {
@@ -176,9 +179,11 @@ final class TerminalTab {
     /// - 创建新的选中，起点和终点都是当前位置
     /// - 清除旧的选中
     ///
-    /// - Parameter at: 起点位置
-    func startSelection(at position: CursorPosition) {
-        textSelection = .single(at: position)
+    /// - Parameters:
+    ///   - absoluteRow: 起点真实行号
+    ///   - col: 起点列号
+    func startSelection(absoluteRow: Int64, col: UInt16) {
+        textSelection = .single(absoluteRow: absoluteRow, col: col)
     }
 
     /// 更新选中（鼠标拖拽 或 Shift + 方向键继续）
@@ -187,20 +192,33 @@ final class TerminalTab {
     /// - 如果没有选中，先创建选中
     /// - 更新选中的终点
     ///
-    /// - Parameter to: 终点位置
-    func updateSelection(to position: CursorPosition) {
+    /// - Parameters:
+    ///   - absoluteRow: 终点真实行号
+    ///   - col: 终点列号
+    func updateSelection(absoluteRow: Int64, col: UInt16) {
         if let selection = textSelection {
-            textSelection = selection.updateActive(to: position)
+            textSelection = selection.updateEnd(absoluteRow: absoluteRow, col: col)
         } else {
-            // 如果没有选中，创建一个从当前光标到 position 的选中
-            startSelection(at: cursorState.position)
-            textSelection = textSelection?.updateActive(to: position)
+            // 如果没有选中，先创建起点，再更新终点
+            // 注意：这种情况理论上不应该发生，因为应该先调用 startSelection
+            textSelection = .single(absoluteRow: absoluteRow, col: col)
         }
     }
 
     /// 清除选中
     func clearSelection() {
         textSelection = nil
+    }
+
+    /// 更新滚动偏移量
+    ///
+    /// 当终端滚动时调用，记录当前的滚动位置
+    /// 注意：Rust 侧的 set_selection 已经处理了 display_offset 转换，
+    ///      Swift 侧不应该再次调整选区坐标
+    ///
+    /// - Parameter newOffset: 新的 display_offset 值
+    func updateDisplayOffset(_ newOffset: Int) {
+        displayOffset = newOffset
     }
 
     /// 是否有选中
@@ -215,13 +233,15 @@ final class TerminalTab {
     /// - 选中在输入行 → 输入替换
     /// - 选中在历史区 → 输入不影响
     ///
+    /// 注意：需要外部传入 inputAbsoluteRow，因为 currentInputRow 是 Screen 坐标
+    ///
+    /// - Parameter inputAbsoluteRow: 当前输入行的真实行号
     /// - Returns: 是否在输入行
-    func isSelectionInInputLine() -> Bool {
-        guard let selection = textSelection,
-              let inputRow = currentInputRow else {
+    func isSelectionInInputLine(inputAbsoluteRow: Int64) -> Bool {
+        guard let selection = textSelection else {
             return false
         }
-        return selection.isInCurrentInputLine(inputRow: inputRow)
+        return selection.isInCurrentInputLine(inputAbsoluteRow: inputAbsoluteRow)
     }
 
     /// 获取选中的文本
@@ -249,21 +269,25 @@ final class TerminalTab {
     /// 2. 如果有选中但在历史区 → 直接插入，不删除选中
     /// 3. 没有选中 → 直接插入
     ///
-    /// 注意：实际的文本写入现在由 TerminalPoolProtocol 处理
+    /// 注意：
+    /// - 实际的文本写入现在由 TerminalPoolProtocol 处理
+    /// - 需要外部传入 inputAbsoluteRow
     ///
-    /// - Parameter text: 要插入的文本
-    func insertText(_ text: String) {
+    /// - Parameters:
+    ///   - text: 要插入的文本
+    ///   - inputAbsoluteRow: 当前输入行的真实行号
+    func insertText(_ text: String, inputAbsoluteRow: Int64) {
         // 规则1：检查选中
-        if hasSelection() && isSelectionInInputLine() {
+        if hasSelection() && isSelectionInInputLine(inputAbsoluteRow: inputAbsoluteRow) {
             // 删除选中（如果在输入行）
-            deleteSelection()
+            // 实际删除由外部 TerminalPoolProtocol 处理
         }
 
         // 文本写入现在由 TerminalPoolProtocol 处理
         // 此方法只处理选中状态
 
         // 清除选中（如果在输入行）
-        if isSelectionInInputLine() {
+        if isSelectionInInputLine(inputAbsoluteRow: inputAbsoluteRow) {
             clearSelection()
         }
     }
@@ -274,15 +298,20 @@ final class TerminalTab {
     /// - 只能删除输入行的选中
     /// - 历史区的选中不能删除
     ///
-    /// 注意：实际的删除操作现在由 TerminalPoolProtocol 处理
+    /// 注意：
+    /// - 实际的删除操作现在由 TerminalPoolProtocol 处理
+    /// - 需要外部传入 inputAbsoluteRow
+    ///
+    /// - Parameter inputAbsoluteRow: 当前输入行的真实行号
+    /// - Returns: 是否应该删除
     @discardableResult
-    func deleteSelection() -> Bool {
+    func deleteSelection(inputAbsoluteRow: Int64) -> Bool {
         guard textSelection != nil else {
             return false
         }
 
         // 只删除输入行的选中
-        guard isSelectionInInputLine() else {
+        guard isSelectionInInputLine(inputAbsoluteRow: inputAbsoluteRow) else {
             return false
         }
 
@@ -308,9 +337,11 @@ final class TerminalTab {
     /// - 内部调用 insertText（会自动处理选中替换）
     /// - 清除 preedit
     ///
-    /// - Parameter text: 确认的文本
-    func commitInput(text: String) {
-        insertText(text)
+    /// - Parameters:
+    ///   - text: 确认的文本
+    ///   - inputAbsoluteRow: 当前输入行的真实行号
+    func commitInput(text: String, inputAbsoluteRow: Int64) {
+        insertText(text, inputAbsoluteRow: inputAbsoluteRow)
         clearPreedit()
     }
 
