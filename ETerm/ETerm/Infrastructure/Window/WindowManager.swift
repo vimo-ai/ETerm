@@ -71,18 +71,32 @@ final class WindowManager: NSObject {
 
     /// 创建新窗口
     ///
-    /// - Parameter inheritCwd: 继承的工作目录（可选）
+    /// - Parameters:
+    ///   - inheritCwd: 继承的工作目录（可选）
+    ///   - frame: 窗口位置和尺寸（可选，用于恢复 session）
+    ///   - screenIdentifier: 窗口所在屏幕标识符（可选，用于恢复 session）
+    /// - Returns: 创建的窗口
     @discardableResult
-    func createWindow(inheritCwd: String? = nil) -> KeyableWindow {
-        let frame = calculateNewWindowFrame()
+    func createWindow(inheritCwd: String? = nil, frame: NSRect? = nil, screenIdentifier: String? = nil) -> KeyableWindow {
+        // 确定窗口的 frame
+        let windowFrame: NSRect
+        if let savedFrame = frame, let screenId = screenIdentifier {
+            // 恢复模式：使用保存的位置和尺寸
+            let targetScreen = SessionManager.findScreen(withIdentifier: screenId)
+            windowFrame = adjustFrameToScreen(savedFrame, screen: targetScreen)
+        } else if let savedFrame = frame {
+            // 只有 frame 没有屏幕信息，尝试使用 frame 所在的屏幕
+            windowFrame = savedFrame
+        } else {
+            // 默认模式：计算新窗口位置
+            windowFrame = calculateNewWindowFrame()
+        }
 
-        print("🏗️ [WindowManager] createWindow called with CWD: \(inheritCwd ?? "nil")")
         // 将 CWD 存入全局管理器（在创建 ContentView 之前）
         WindowCwdManager.shared.setPendingCwd(inheritCwd)
-        print("✅ [WindowManager] Set pending CWD: \(inheritCwd ?? "nil")")
 
         let window = KeyableWindow.create(
-            contentRect: frame,
+            contentRect: windowFrame,
             styleMask: [.borderless, .resizable, .miniaturizable, .closable]
         )
 
@@ -119,6 +133,48 @@ final class WindowManager: NSObject {
         window.makeKeyAndOrderFront(nil)
 
         return window
+    }
+
+    /// 调整窗口 frame 到指定屏幕
+    ///
+    /// 确保窗口完全在屏幕可见区域内
+    /// - Parameters:
+    ///   - frame: 原始窗口 frame
+    ///   - screen: 目标屏幕
+    /// - Returns: 调整后的 frame
+    private func adjustFrameToScreen(_ frame: NSRect, screen: NSScreen) -> NSRect {
+        let visibleFrame = screen.visibleFrame
+        var adjustedFrame = frame
+
+        // 确保窗口不超出屏幕右边界
+        if adjustedFrame.maxX > visibleFrame.maxX {
+            adjustedFrame.origin.x = visibleFrame.maxX - adjustedFrame.width
+        }
+
+        // 确保窗口不超出屏幕左边界
+        if adjustedFrame.origin.x < visibleFrame.origin.x {
+            adjustedFrame.origin.x = visibleFrame.origin.x
+        }
+
+        // 确保窗口不超出屏幕顶部
+        if adjustedFrame.maxY > visibleFrame.maxY {
+            adjustedFrame.origin.y = visibleFrame.maxY - adjustedFrame.height
+        }
+
+        // 确保窗口不超出屏幕底部
+        if adjustedFrame.origin.y < visibleFrame.origin.y {
+            adjustedFrame.origin.y = visibleFrame.origin.y
+        }
+
+        // 如果窗口太大，调整尺寸
+        if adjustedFrame.width > visibleFrame.width {
+            adjustedFrame.size.width = visibleFrame.width
+        }
+        if adjustedFrame.height > visibleFrame.height {
+            adjustedFrame.size.height = visibleFrame.height
+        }
+
+        return adjustedFrame
     }
 
     /// 计算新窗口位置（级联效果）
@@ -432,6 +488,17 @@ final class WindowManager: NSObject {
             // 获取窗口位置和大小
             let frame = CodableRect(rect: window.frame)
 
+            // 获取窗口所在的屏幕
+            let screenIdentifier: String?
+            let screenFrame: CodableRect?
+            if let screen = window.screen {
+                screenIdentifier = SessionManager.screenIdentifier(for: screen)
+                screenFrame = CodableRect(rect: screen.frame)
+            } else {
+                screenIdentifier = nil
+                screenFrame = nil
+            }
+
             // 获取 TerminalWindow
             let terminalWindow = coordinator.terminalWindow
 
@@ -450,7 +517,9 @@ final class WindowManager: NSObject {
             let windowState = WindowState(
                 frame: frame,
                 pages: pageStates,
-                activePageIndex: activePageIndex
+                activePageIndex: activePageIndex,
+                screenIdentifier: screenIdentifier,
+                screenFrame: screenFrame
             )
 
             windowStates.append(windowState)
@@ -563,5 +632,24 @@ extension WindowManager: NSWindowDelegate {
 
         // 清除 contentView，帮助释放 SwiftUI 视图层级
         window.contentView = nil
+
+        // 保存 session（窗口关闭时）
+        saveSession()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        // 窗口移动时自动保存 session
+        saveSession()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        // 窗口调整大小时自动保存 session
+        saveSession()
+    }
+
+    /// 保存当前所有窗口的 session
+    private func saveSession() {
+        let windowStates = captureAllWindowStates()
+        SessionManager.shared.save(windows: windowStates)
     }
 }
