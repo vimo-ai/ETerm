@@ -733,21 +733,22 @@ impl Sugarloaf<'_> {
                 .map(|state| state.lines.len())
                 .sum();
 
-            println!("🎨 [Sugarloaf Render]");
-            println!("   Total chars: {}", total_chars);
-            println!("   Style segments: {} (avg {:.1} per line)",
-                style_segments,
-                if total_lines > 0 { style_segments as f32 / total_lines as f32 } else { 0.0 }
-            );
-            println!("   Font lookups: {} ({:.1}%)",
-                font_lookup_count,
-                if total_chars > 0 { (font_lookup_count as f32 / total_chars as f32) * 100.0 } else { 0.0 }
-            );
-            println!("   Font lookup time: {}μs ({:.1}%)",
-                font_lookup_time,
-                if render_time > 0 { (font_lookup_time as f32 / render_time as f32) * 100.0 } else { 0.0 }
-            );
-            println!("   Total render time: {}μs ({}ms)", render_time, render_time / 1000);
+            // 性能日志（已注释，需要时取消注释）
+            // println!("🎨 [Sugarloaf Render]");
+            // println!("   Total chars: {}", total_chars);
+            // println!("   Style segments: {} (avg {:.1} per line)",
+            //     style_segments,
+            //     if total_lines > 0 { style_segments as f32 / total_lines as f32 } else { 0.0 }
+            // );
+            // println!("   Font lookups: {} ({:.1}%)",
+            //     font_lookup_count,
+            //     if total_chars > 0 { (font_lookup_count as f32 / total_chars as f32) * 100.0 } else { 0.0 }
+            // );
+            // println!("   Font lookup time: {}μs ({:.1}%)",
+            //     font_lookup_time,
+            //     if render_time > 0 { (font_lookup_time as f32 / render_time as f32) * 100.0 } else { 0.0 }
+            // );
+            // println!("   Total render time: {}μs ({}ms)", render_time, render_time / 1000);
         }
     }
 

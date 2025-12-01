@@ -848,12 +848,13 @@ class RioMetalView: NSView, RenderViewProtocol {
                 let maxRenderTimeMs = maxRenderTime * 1000
                 let skipRate = Double(skipCount) / Double(renderCount + skipCount) * 100
 
-                print("📊 [Performance Stats]")
-                print("   FPS: \(String(format: "%.1f", fps)) (actual renders)")
-                print("   requestRender() calls: \(requestCount) (\(String(format: "%.1f", Double(requestCount) / duration))/sec)")
-                print("   Skipped frames: \(skipCount) (\(String(format: "%.1f", skipRate))%)")
-                print("   Avg render time: \(String(format: "%.2f", avgRenderTime))ms")
-                print("   Max render time: \(String(format: "%.2f", maxRenderTimeMs))ms")
+                // 性能统计日志（已注释，需要时取消注释）
+                // print("📊 [Performance Stats]")
+                // print("   FPS: \(String(format: "%.1f", fps)) (actual renders)")
+                // print("   requestRender() calls: \(requestCount) (\(String(format: "%.1f", Double(requestCount) / duration))/sec)")
+                // print("   Skipped frames: \(skipCount) (\(String(format: "%.1f", skipRate))%)")
+                // print("   Avg render time: \(String(format: "%.2f", avgRenderTime))ms")
+                // print("   Max render time: \(String(format: "%.2f", maxRenderTimeMs))ms")
 
                 // 重置统计
                 renderCount = 0
@@ -1042,12 +1043,12 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         let totalTime = Date().timeIntervalSince(renderStart) * 1000
 
-        // 只打印慢帧（>15ms，即低于 60fps）
-        if totalTime > 15 {
-            print("🐢 [Slow Frame] Total: \(String(format: "%.2f", totalTime))ms")
-            print("   ├─ Layout Setup: \(String(format: "%.2f", layoutTime))ms (terminals: \(tabsToRender.count))")
-            print("   └─ Rust Render: \(String(format: "%.2f", rustRenderTime))ms")
-        }
+        // 慢帧日志（已注释，需要时取消注释）
+        // if totalTime > 15 {
+        //     print("🐢 [Slow Frame] Total: \(String(format: "%.2f", totalTime))ms")
+        //     print("   ├─ Layout Setup: \(String(format: "%.2f", layoutTime))ms (terminals: \(tabsToRender.count))")
+        //     print("   └─ Rust Render: \(String(format: "%.2f", rustRenderTime))ms")
+        // }
 
         // 3. 异步更新下一帧的 Snapshot 缓存（不阻塞渲染）
         let terminalIds = tabsToRender.map { Int($0.0) }
