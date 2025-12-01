@@ -1035,16 +1035,19 @@ class RioMetalView: NSView, RenderViewProtocol {
             var fgR = Float(cell.fg_r) / 255.0
             var fgG = Float(cell.fg_g) / 255.0
             var fgB = Float(cell.fg_b) / 255.0
+            var fgA = Float(cell.fg_a) / 255.0
 
             var bgR = Float(cell.bg_r) / 255.0
             var bgG = Float(cell.bg_g) / 255.0
             var bgB = Float(cell.bg_b) / 255.0
+            var bgA = Float(cell.bg_a) / 255.0
 
             var hasBg = false
             if isInverse {
-                let origFgR = fgR, origFgG = fgG, origFgB = fgB
-                fgR = bgR; fgG = bgG; fgB = bgB
-                bgR = origFgR; bgG = origFgG; bgB = origFgB
+                // 🔧 修复：INVERSE 时交换前景和背景颜色（包括 alpha）
+                let origFgR = fgR, origFgG = fgG, origFgB = fgB, origFgA = fgA
+                fgR = bgR; fgG = bgG; fgB = bgB; fgA = bgA
+                bgR = origFgR; bgG = origFgG; bgB = origFgB; bgA = origFgA
                 hasBg = true
             } else {
                 hasBg = bgR > 0.01 || bgG > 0.01 || bgB > 0.01
@@ -1057,15 +1060,12 @@ class RioMetalView: NSView, RenderViewProtocol {
             let cursorB: Float = 1.0
             let cursorA: Float = 0.8
 
+
             if hasCursor && snapshot.cursor_shape == 0 {
                 fgR = 0.0
                 fgG = 0.0
                 fgB = 0.0
             }
-
-            // 使用实际的 alpha 值（提前读取，以便搜索高亮可以覆盖）
-            var fgA = Float(cell.fg_a) / 255.0
-            var bgA = Float(cell.bg_a) / 255.0
 
             // 搜索高亮（优先级低，先处理）
             if let coordinator = coordinator,
