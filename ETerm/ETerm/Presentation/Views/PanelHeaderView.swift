@@ -120,6 +120,7 @@ final class PanelHeaderHostingView: NSView {
     private var tabs: [TabItem] = []
     private var activeTabId: UUID?
     private var isPageActive: Bool = true
+    private var isPanelActive: Bool = false  // Panel 是否接收键盘输入
 
     // Tab 标签容器
     private let tabContainer = NSView()
@@ -181,7 +182,8 @@ final class PanelHeaderHostingView: NSView {
         // 创建新的 Tab 视图
         for tab in tabs {
             let tabView = TabItemView(tabId: tab.id, title: tab.title)
-            tabView.setActive(tab.id == activeTabId)
+            // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
+            tabView.setActive(tab.id == activeTabId && isPanelActive)
 
             // 设置 Rust Terminal ID（用于 Claude 响应匹配）
             tabView.rustTerminalId = tab.rustTerminalId
@@ -247,9 +249,10 @@ final class PanelHeaderHostingView: NSView {
         // 更新激活状态，只有当 Page 也激活时才清除提醒
         for tabView in tabItemViews {
             let isActive = tabView.tabId == tabId
-            tabView.setActive(isActive)
-            // 只有 Tab 激活且 Page 也激活时，才清除提醒
-            if isActive && isPageActive {
+            // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
+            tabView.setActive(isActive && isPanelActive)
+            // 只有 Tab 激活且 Page 也激活且 Panel 也激活时，才清除提醒
+            if isActive && isPageActive && isPanelActive {
                 tabView.clearAttention()
             }
         }
@@ -268,6 +271,19 @@ final class PanelHeaderHostingView: NSView {
                 tabView.clearAttention()
                 break
             }
+        }
+    }
+
+    /// 设置 Panel 的激活状态（用于键盘输入焦点）
+    func setPanelActive(_ active: Bool) {
+        guard isPanelActive != active else { return }
+        isPanelActive = active
+
+        // 更新所有 Tab 的激活状态
+        for tabView in tabItemViews {
+            let isTabActive = tabView.tabId == activeTabId
+            // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
+            tabView.setActive(isTabActive && isPanelActive)
         }
     }
 
@@ -435,7 +451,9 @@ struct PanelHeaderControlsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Spacer 区域禁用点击，让事件穿透到下面的 TabItemView
             Spacer()
+                .allowsHitTesting(false)
 
             // 水平分割按钮
             Button(action: { onSplitHorizontal?() }) {

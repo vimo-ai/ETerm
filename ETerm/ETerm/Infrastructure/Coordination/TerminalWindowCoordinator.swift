@@ -578,6 +578,9 @@ class TerminalWindowCoordinator: ObservableObject {
             return
         }
 
+        // 设置为激活的 Panel（用于键盘输入）
+        setActivePanel(panelId)
+
         // 检查是否已经是激活的 Tab
         if panel.activeTabId == tabId {
             return
@@ -600,6 +603,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         if activePanelId != panelId {
             activePanelId = panelId
+            // 触发 UI 更新，让 Tab 高亮状态刷新
+            objectWillChange.send()
+            updateTrigger = UUID()
         }
     }
 

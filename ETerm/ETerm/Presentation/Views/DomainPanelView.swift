@@ -153,6 +153,11 @@ final class DomainPanelView: NSView {
         headerView.setPageActive(active)
     }
 
+    /// 设置 Panel 的激活状态（用于键盘输入焦点）
+    func setPanelActive(_ active: Bool) {
+        headerView.setPanelActive(active)
+    }
+
     // MARK: - Layout
 
     override func layout() {

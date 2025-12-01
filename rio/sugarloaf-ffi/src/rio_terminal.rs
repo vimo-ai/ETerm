@@ -21,9 +21,14 @@ use rio_backend::crosswords::{Crosswords, CrosswordsSize};
 use rio_backend::event::Msg;
 use teletypewriter::{create_pty_with_fork, WinsizeBuilder};
 
+use sugarloaf::{
+    FragmentStyle,
+    SugarCursor,
+    layout::{FragmentStyleDecoration, UnderlineInfo, UnderlineShape},
+};
+
 use crate::rio_event::{EventCallback, EventQueue, FFIEventListener, StringEventCallback};
 use crate::rio_machine::{send_input, send_resize, send_shutdown, Machine, State};
-use crate::sync::FairMutex;
 use crate::{global_font_metrics, SugarloafFontMetrics, SugarloafHandle};
 
 /// 历史行数
@@ -162,7 +167,7 @@ pub struct TerminalLayout {
 /// 单个终端
 pub struct RioTerminal {
     /// 终端状态
-    terminal: Arc<FairMutex<Crosswords<FFIEventListener>>>,
+    terminal: Arc<parking_lot::RwLock<Crosswords<FFIEventListener>>>,
     /// PTY 消息发送通道
     pty_sender: channel::Sender<Msg>,
     /// 事件循环线程句柄
@@ -266,7 +271,7 @@ impl RioTerminal {
         );
         terminal.grid.update_history(DEFAULT_HISTORY_LINES);
 
-        let terminal = Arc::new(FairMutex::new(terminal));
+        let terminal = Arc::new(parking_lot::RwLock::new(terminal));
 
         // 创建 Machine（传入 pty_fd 和 shell_pid 用于进程检测）
         let machine = Machine::new(terminal.clone(), pty, event_listener, terminal_id, main_fd, shell_pid)?;
@@ -363,7 +368,7 @@ impl RioTerminal {
 
         // 更新终端大小
         {
-            let mut terminal = self.terminal.lock();
+            let mut terminal = self.terminal.write();
             terminal.resize(CrosswordsSize {
                 columns: cols as usize,
                 screen_lines: rows as usize,
@@ -390,13 +395,20 @@ impl RioTerminal {
 
     /// 滚动
     pub fn scroll(&self, delta: i32) {
-        let mut terminal = self.terminal.lock();
+        let mut terminal = self.terminal.write();
         terminal.scroll_display(rio_backend::crosswords::grid::Scroll::Delta(delta));
     }
 
     /// 获取终端快照 - 照抄 Rio 的 TerminalSnapshot 创建方式
     pub fn snapshot(&self) -> TerminalSnapshot {
-        let terminal = self.terminal.lock();
+        let lock_start = std::time::Instant::now();
+        let terminal = self.terminal.read();
+        let lock_wait = lock_start.elapsed().as_micros();
+
+        if lock_wait > 1000 {
+            println!("🔒 [Render Thread] snapshot() waited {}μs ({}ms) for read lock",
+                     lock_wait, lock_wait / 1000);
+        }
 
         // 照抄 Rio: terminal.cursor() 内部处理了所有光标隐藏逻辑
         let cursor = terminal.cursor();
@@ -444,7 +456,7 @@ impl RioTerminal {
     ///
     /// 照抄 Rio: terminal.visible_rows()
     pub fn visible_rows(&self) -> Vec<Row<Square>> {
-        let terminal = self.terminal.lock();
+        let terminal = self.terminal.read();
         terminal.visible_rows()
     }
 
@@ -461,7 +473,7 @@ impl RioTerminal {
     pub fn get_row_cells(&self, absolute_row: i64) -> Vec<FFICell> {
         use rio_backend::crosswords::pos::Line;
 
-        let terminal = self.terminal.lock();
+        let terminal = self.terminal.read();
         let scrollback_lines = terminal.grid.history_size() as i64;
         let screen_lines = terminal.screen_lines() as i64;
 
@@ -472,6 +484,101 @@ impl RioTerminal {
 
         // 边界检查
         // Grid 有效范围: -scrollback_lines 到 (screen_lines - 1)
+        let min_row = -(scrollback_lines);
+        let max_row = screen_lines - 1;
+
+        if grid_row < min_row || grid_row > max_row {
+            return Vec::new();
+        }
+
+        // 直接访问 grid[Line(grid_row)]
+        let line = Line(grid_row as i32);
+        let row = &terminal.grid[line];
+        let mut cells = Vec::with_capacity(row.len());
+
+        // 获取选区（Grid 坐标）
+        let selection_range = terminal.selection
+            .as_ref()
+            .and_then(|s| s.to_range(&terminal));
+
+        for (col_idx, square) in row.inner.iter().enumerate() {
+            // 获取原始颜色
+            let (mut fg_r, mut fg_g, mut fg_b, mut fg_a) = Self::ansi_color_to_rgba(&square.fg, &terminal);
+            let (mut bg_r, mut bg_g, mut bg_b, mut bg_a) = Self::ansi_color_to_rgba(&square.bg, &terminal);
+
+            // 检查是否在选区内
+            let in_selection = if let Some(range) = &selection_range {
+                use rio_backend::crosswords::pos::{Column, Pos};
+
+                let grid_pos = Pos::new(line, Column(col_idx));
+                range.contains(grid_pos)
+            } else {
+                false
+            };
+
+            if in_selection {
+                // 设置选区背景色（淡蓝色）
+                fg_r = 255;  // 白色前景
+                fg_g = 255;
+                fg_b = 255;
+                fg_a = 255;
+                bg_r = 76;   // 0.3 * 255 ≈ 76
+                bg_g = 127;  // 0.5 * 255 ≈ 127
+                bg_b = 204;  // 0.8 * 255 ≈ 204
+                bg_a = 255;
+            }
+
+            // 检查 zerowidth 字符中是否有 VS16 (U+FE0F)
+            let has_vs16 = square
+                .zerowidth()
+                .map(|zw| zw.contains(&'\u{FE0F}'))
+                .unwrap_or(false);
+
+            // 处理背景透明度
+            let final_bg_a = if in_selection {
+                255 // 选区内的背景不透明
+            } else if square.bg == rio_backend::config::colors::AnsiColor::Named(
+                rio_backend::config::colors::NamedColor::Background,
+            ) {
+                0 // 默认背景色透明，显示窗口背景
+            } else {
+                bg_a // 使用实际的 alpha 值
+            };
+
+            cells.push(FFICell {
+                character: square.c as u32,
+                fg_r,
+                fg_g,
+                fg_b,
+                fg_a,
+                bg_r,
+                bg_g,
+                bg_b,
+                bg_a: final_bg_a,
+                flags: square.flags.bits() as u32,
+                has_vs16,
+            });
+        }
+
+        cells
+    }
+
+    /// 提取单行的 cell 数据（需要在持有锁的情况下调用）
+    ///
+    /// 这是 get_row_cells() 的内部逻辑，但不加锁
+    /// 用于在并发渲染前批量提取数据，避免锁竞争
+    fn extract_row_cells_locked(
+        terminal: &rio_backend::crosswords::Crosswords<FFIEventListener>,
+        absolute_row: i64,
+        scrollback_lines: i64,
+        screen_lines: i64,
+    ) -> Vec<FFICell> {
+        use rio_backend::crosswords::pos::Line;
+
+        // 转换绝对行号到 Grid 行号
+        let grid_row = absolute_row - scrollback_lines;
+
+        // 边界检查
         let min_row = -(scrollback_lines);
         let max_row = screen_lines - 1;
 
@@ -661,7 +768,7 @@ impl RioTerminal {
 
     /// 清除选区
     pub fn clear_selection(&self) {
-        let mut terminal = self.terminal.lock();
+        let mut terminal = self.terminal.write();
         terminal.selection = None;
     }
 
@@ -672,7 +779,7 @@ impl RioTerminal {
     /// - Screen → Grid: grid_row = screen_row - display_offset
     /// - Grid → Absolute: absolute_row = scrollback_lines + grid_row
     pub fn screen_to_absolute(&self, screen_row: usize, screen_col: usize) -> (i64, usize) {
-        let terminal = self.terminal.lock();
+        let terminal = self.terminal.read();
 
         // 获取终端状态
         let display_offset = terminal.display_offset() as i64;
@@ -709,7 +816,7 @@ impl RioTerminal {
         use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
         use rio_backend::selection::{Selection, SelectionType};
 
-        let mut terminal = self.terminal.lock();
+        let mut terminal = self.terminal.write();
         let scrollback_lines = terminal.grid.history_size() as i64;
         let screen_lines = terminal.screen_lines() as i64;
 
@@ -752,7 +859,7 @@ impl RioTerminal {
     ///
     /// 直接使用当前的 terminal.selection 获取文本
     pub fn get_selected_text(&self) -> Option<String> {
-        let terminal = self.terminal.lock();
+        let terminal = self.terminal.read();
         terminal.selection_to_string()
     }
 
@@ -792,9 +899,8 @@ impl RioTerminalPool {
 
     /// 渲染所有终端（Rust 侧完全负责）
     pub fn render_all(&self) {
-        let total_start = std::time::Instant::now();
-
         unsafe {
+            let total_start = std::time::Instant::now();
             let sugarloaf = &mut *self.sugarloaf;
 
             // 清空待渲染列表
@@ -802,9 +908,10 @@ impl RioTerminalPool {
             crate::sugarloaf_clear_objects(self.sugarloaf);
             let clear_time = clear_start.elapsed().as_micros();
 
-            // 遍历所有终端
-            let mut build_time_total = 0u128;
             let mut content_time_total = 0u128;
+            let mut build_time_total = 0u128;
+
+            // 遍历所有终端
             for (id, terminal) in &self.terminals {
                 // 获取布局
                 let layout = match terminal.layout() {
@@ -834,7 +941,6 @@ impl RioTerminalPool {
                     &snapshot,
                     content,
                     cursor_visible,
-                    self.sugarloaf,
                 );
                 content_time_total += content_start.elapsed().as_micros();
 
@@ -873,7 +979,6 @@ impl RioTerminalPool {
         snapshot: &TerminalSnapshot,
         content: &mut sugarloaf::layout::Content,
         cursor_visible: bool,
-        sugarloaf_handle: *mut SugarloafHandle,
     ) {
         use rayon::prelude::*;
 
@@ -888,19 +993,54 @@ impl RioTerminalPool {
         let cursor_row = snapshot.cursor_row;
         let cursor_col = snapshot.cursor_col;
 
-        // 🔥 阶段 1：并发提取和解析所有行的数据
         let phase1_start = std::time::Instant::now();
-        let rows_data: Vec<RowRenderData> = (0..lines_to_render)
-            .into_par_iter()
+
+        // 🔥 阶段 1：锁前置 - 一次性提取所有行的 cell 数据
+        let extract_start = std::time::Instant::now();
+
+        // 🔒 记录尝试获取读锁的时间
+        let lock_attempt_start = std::time::Instant::now();
+
+        // 加读锁一次，串行提取所有行数据（不阻塞其他读线程）
+        let terminal_lock = terminal.terminal.read();
+
+        let lock_wait_time = lock_attempt_start.elapsed().as_micros();
+
+        // 如果等待超过 1ms，打印日志
+        if lock_wait_time > 1000 {
+            println!("🔒 [Render Thread] Waited {}μs ({}ms) to acquire read lock for Phase 1",
+                     lock_wait_time, lock_wait_time / 1000);
+        }
+        let scrollback_lines = terminal_lock.grid.history_size() as i64;
+        let screen_lines_i64 = terminal_lock.screen_lines() as i64;
+
+        let all_cells: Vec<Vec<FFICell>> = (0..lines_to_render)
             .map(|row_index| {
                 // 计算绝对行号
                 let absolute_row = snapshot.scrollback_lines as i64
                     - snapshot.display_offset as i64
                     + row_index as i64;
 
-                // 获取行单元格
-                let cells = terminal.get_row_cells(absolute_row);
+                // 提取这一行的 cell 数据
+                RioTerminal::extract_row_cells_locked(
+                    &terminal_lock,
+                    absolute_row,
+                    scrollback_lines,
+                    screen_lines_i64,
+                )
+            })
+            .collect();
 
+        drop(terminal_lock);  // 立即释放锁
+        let extract_time = extract_start.elapsed().as_micros();
+
+        // 🔥 阶段 1.5：并发解析 cell 数据（无锁）
+        let parse_start = std::time::Instant::now();
+
+        let rows_data: Vec<RowRenderData> = all_cells
+            .into_par_iter()  // 并发处理
+            .enumerate()
+            .map(|(row_index, cells)| {
                 // 检查是否为光标位置报告行
                 if Self::is_cursor_position_report_line(&cells) {
                     return RowRenderData {
@@ -936,7 +1076,7 @@ impl RioTerminalPool {
                     let is_wide = cell.flags & WIDE_CHAR != 0;
                     let glyph_width = if is_wide { 2.0 } else { 1.0 };
 
-                    // 获取颜色
+                    // 获取颜色（已经在提取时转换好了）
                     let mut fg_r = cell.fg_r as f32 / 255.0;
                     let mut fg_g = cell.fg_g as f32 / 255.0;
                     let mut fg_b = cell.fg_b as f32 / 255.0;
@@ -1005,10 +1145,14 @@ impl RioTerminalPool {
                 }
             })
             .collect();
+
+        let parse_time = parse_start.elapsed().as_micros();
         let phase1_time = phase1_start.elapsed().as_micros();
 
-        // 🔥 阶段 2：串行调用 Sugarloaf API
+        // 🔥 阶段 2：直接调用 Sugarloaf API（零 FFI）
         let phase2_start = std::time::Instant::now();
+        let mut total_segments = 0;  // 统计创建的 fragment 数量
+
         for (row_index, row_data) in rows_data.iter().enumerate() {
             if row_index > 0 {
                 content.new_line();
@@ -1019,45 +1163,197 @@ impl RioTerminalPool {
                 continue;
             }
 
-            // 添加该行的所有字符
-            for char_data in &row_data.chars {
-                let c_str = match std::ffi::CString::new(char_data.char_str.as_bytes()) {
-                    Ok(s) => s,
-                    Err(_) => continue,
+            // 添加该行的所有字符（合并相同样式的连续字符）
+            if row_data.chars.is_empty() {
+                continue;
+            }
+
+            let mut merged_text = String::new();
+            let mut segment_start_idx = 0;
+
+            for (i, char_data) in row_data.chars.iter().enumerate() {
+                // 检查是否需要切分 segment
+                let should_split = if i == 0 {
+                    false  // 第一个字符不切分
+                } else {
+                    // 和前一个字符比较
+                    let prev = &row_data.chars[i - 1];
+                    !Self::char_styles_equal(prev, char_data)
                 };
 
-                unsafe {
-                    crate::sugarloaf_content_add_text_decorated(
-                        sugarloaf_handle,
-                        c_str.as_ptr(),
-                        char_data.fg_r,
-                        char_data.fg_g,
-                        char_data.fg_b,
-                        char_data.fg_a,
-                        char_data.has_bg,
-                        char_data.bg_r,
-                        char_data.bg_g,
-                        char_data.bg_b,
-                        char_data.bg_a,
-                        char_data.glyph_width,
-                        char_data.has_cursor,
-                        char_data.cursor_r,
-                        char_data.cursor_g,
-                        char_data.cursor_b,
-                        char_data.cursor_a,
-                        char_data.flags,
-                    );
+                if should_split {
+                    // 样式变化，flush 之前的 segment
+                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                    content.add_text(&merged_text, style);
+                    total_segments += 1;  // 统计 fragment
+
+                    // 开始新的 segment
+                    merged_text.clear();
+                    segment_start_idx = i;
                 }
+
+                // 累积当前字符
+                merged_text.push_str(&char_data.char_str);
+            }
+
+            // flush 最后一个 segment
+            if !merged_text.is_empty() {
+                let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                content.add_text(&merged_text, style);
+                total_segments += 1;  // 统计 fragment
             }
         }
-        let phase2_time = phase2_start.elapsed().as_micros();
 
-        // 打印耗时（只在行数 > 30 时打印，避免噪音）
+        let phase2_time = phase2_start.elapsed().as_micros();
+        let total_chars: usize = rows_data.iter().map(|r| r.chars.len()).sum();
+
+        // 只在行数较多时打印日志，减少噪音
         if lines_to_render > 30 {
+            let avg_segments_per_line = if lines_to_render > 0 {
+                total_segments as f64 / lines_to_render as f64
+            } else {
+                0.0
+            };
+
             println!("⚡ [Parallel Render] {} lines, {} cols", lines_to_render, cols_to_render);
-            println!("   Phase 1 (parallel parse): {}μs", phase1_time);
-            println!("   Phase 2 (serial API): {}μs", phase2_time);
-            println!("   Total: {}μs ({}ms)", phase1_time + phase2_time, (phase1_time + phase2_time) / 1000);
+            println!("   Phase 1 (lock + extract): {}μs ({:.1}%)",
+                extract_time,
+                extract_time as f32 / phase1_time as f32 * 100.0
+            );
+            println!("   Phase 1 (parallel parse): {}μs ({:.1}%)",
+                parse_time,
+                parse_time as f32 / phase1_time as f32 * 100.0
+            );
+            println!("   Phase 1 Total: {}μs ({}ms)", phase1_time, phase1_time / 1000);
+            println!("   Phase 2 (merged render): {}μs", phase2_time);
+            println!("   Total: {}μs ({}ms) - {} chars",
+                phase1_time + phase2_time,
+                (phase1_time + phase2_time) / 1000,
+                total_chars
+            );
+            println!("   Style segments: {} (avg {:.1} per line)",
+                total_segments,
+                avg_segments_per_line
+            );
+        }
+    }
+
+    /// 比较两个字符的样式是否相同
+    ///
+    /// 用于判断连续字符是否可以合并到同一个 fragment，
+    /// 避免为每个字符创建单独的 fragment
+    fn char_styles_equal(a: &CharRenderData, b: &CharRenderData) -> bool {
+        // 比较所有影响渲染的字段
+        a.fg_r == b.fg_r
+            && a.fg_g == b.fg_g
+            && a.fg_b == b.fg_b
+            && a.fg_a == b.fg_a
+            && a.has_bg == b.has_bg
+            && a.bg_r == b.bg_r
+            && a.bg_g == b.bg_g
+            && a.bg_b == b.bg_b
+            && a.bg_a == b.bg_a
+            && a.glyph_width == b.glyph_width
+            && a.has_cursor == b.has_cursor
+            && a.flags == b.flags
+            // 注意：cursor 颜色也需要比较，因为它影响光标显示
+            && a.cursor_r == b.cursor_r
+            && a.cursor_g == b.cursor_g
+            && a.cursor_b == b.cursor_b
+            && a.cursor_a == b.cursor_a
+    }
+
+    /// 构建 FragmentStyle（从 CharRenderData）
+    ///
+    /// 复用 lib.rs 中的样式构建逻辑，直接在 Rust 侧构建样式
+    fn build_fragment_style(char_data: &CharRenderData) -> FragmentStyle {
+        let flags = char_data.flags;
+
+        // 解析装饰（下划线、删除线等）
+        let decoration = if flags & 0x0008 != 0 {
+            // UNDERLINE
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Regular,
+            }))
+        } else if flags & 0x0800 != 0 {
+            // DOUBLE_UNDERLINE
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: true,
+                shape: UnderlineShape::Regular,
+            }))
+        } else if flags & 0x1000 != 0 {
+            // UNDERCURL
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Curly,
+            }))
+        } else if flags & 0x2000 != 0 {
+            // DOTTED_UNDERLINE
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Dotted,
+            }))
+        } else if flags & 0x4000 != 0 {
+            // DASHED_UNDERLINE
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Dashed,
+            }))
+        } else if flags & 0x0200 != 0 {
+            // STRIKEOUT
+            Some(FragmentStyleDecoration::Strikethrough)
+        } else {
+            None
+        };
+
+        // 确定字体 ID（基于粗体/斜体）
+        // FontLibrary 加载顺序: 0=regular, 1=italic, 2=bold, 3=bold_italic
+        let is_bold = flags & 0x0002 != 0;
+        let is_italic = flags & 0x0004 != 0;
+
+        let font_id = match (is_bold, is_italic) {
+            (false, false) => 0, // regular
+            (true, false) => 2,  // bold
+            (false, true) => 1,  // italic
+            (true, true) => 3,   // bold_italic
+        };
+
+        // 处理 DIM（降低透明度）
+        let final_fg_a = if flags & 0x0080 != 0 {
+            char_data.fg_a * 0.5
+        } else {
+            char_data.fg_a
+        };
+
+        // 背景色
+        let background_color = if char_data.has_bg {
+            Some([char_data.bg_r, char_data.bg_g, char_data.bg_b, char_data.bg_a])
+        } else {
+            None
+        };
+
+        // 光标（Block cursor 使用 SugarCursor::Block）
+        let cursor = if char_data.has_cursor {
+            Some(SugarCursor::Block([
+                char_data.cursor_r,
+                char_data.cursor_g,
+                char_data.cursor_b,
+                char_data.cursor_a,
+            ]))
+        } else {
+            None
+        };
+
+        FragmentStyle {
+            font_id,
+            color: [char_data.fg_r, char_data.fg_g, char_data.fg_b, final_fg_a],
+            background_color,
+            width: char_data.glyph_width,
+            cursor,
+            decoration,
+            decoration_color: Some([char_data.fg_r, char_data.fg_g, char_data.fg_b, final_fg_a]),
+            ..FragmentStyle::default()
         }
     }
 

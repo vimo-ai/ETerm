@@ -354,6 +354,10 @@ class RioContainerView: NSView {
 
                 // 设置 Page 激活状态（用于 Tab 通知逻辑）
                 existingView.setPageActive(true)  // allPanels 中的都是当前激活 Page 的
+
+                // 设置 Panel 激活状态（用于 Tab 颜色高亮）
+                let isPanelActive = (panel.panelId == coordinator.activePanelId)
+                existingView.setPanelActive(isPanelActive)
             } else {
                 // 创建新视图
                 let view = DomainPanelView(panel: panel, coordinator: coordinator)
@@ -361,6 +365,10 @@ class RioContainerView: NSView {
 
                 // 设置 Page 激活状态（用于 Tab 通知逻辑）
                 view.setPageActive(true)  // allPanels 中的都是当前激活 Page 的
+
+                // 设置 Panel 激活状态（用于 Tab 颜色高亮）
+                let isPanelActive = (panel.panelId == coordinator.activePanelId)
+                view.setPanelActive(isPanelActive)
 
                 addSubview(view)
                 panelUIViews[panel.panelId] = view
@@ -521,6 +529,11 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 坐标映射器
     private var coordinateMapper: CoordinateMapper?
+
+    /// Snapshot 缓存（避免渲染时加锁等待）
+    /// 键为 terminalId，值为 TerminalSnapshot
+    private var cachedSnapshots: [Int: TerminalSnapshot] = [:]
+    private let snapshotCacheLock = NSLock()
 
     // MARK: - CVDisplayLink（帧率限制）
 
@@ -807,7 +820,6 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 启动 CVDisplayLink
         CVDisplayLinkStart(displayLink)
-        print("✅ [CVDisplayLink] Started (synced to screen refresh rate)")
     }
 
     /// 仅在需要时渲染（由 CVDisplayLink 调用）
@@ -904,6 +916,42 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
     }
 
+    /// 获取缓存的 Snapshot（优先使用缓存，降级到实时查询）
+    private func getCachedSnapshot(terminalId: Int) -> TerminalSnapshot? {
+        // 1. 先尝试从缓存读取（无锁，快速路径）
+        snapshotCacheLock.lock()
+        let cached = cachedSnapshots[terminalId]
+        snapshotCacheLock.unlock()
+
+        if let cached = cached {
+            return cached
+        }
+
+        // 2. 缓存未命中，降级到实时查询（可能加锁等待）
+        return terminalManager.getSnapshot(terminalId: terminalId)
+    }
+
+    /// 更新 Snapshot 缓存（异步，不阻塞渲染）
+    private func updateSnapshotCache(for terminalIds: [Int]) {
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let self = self else { return }
+
+            var newSnapshots: [Int: TerminalSnapshot] = [:]
+            for terminalId in terminalIds {
+                if let snapshot = self.terminalManager.getSnapshot(terminalId: terminalId) {
+                    newSnapshots[terminalId] = snapshot
+                }
+            }
+
+            // 批量更新缓存（减少锁持有时间）
+            self.snapshotCacheLock.lock()
+            for (terminalId, snapshot) in newSnapshots {
+                self.cachedSnapshots[terminalId] = snapshot
+            }
+            self.snapshotCacheLock.unlock()
+        }
+    }
+
     /// 渲染所有 Panel（多终端支持）
     ///
     /// 🎯 新架构：Swift 只设置布局，Rust 负责所有渲染
@@ -947,7 +995,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             )
 
             // 处理 resize（只在尺寸变化时才调用，避免每帧都 resize）
-            if let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)) {
+            // ✅ 使用缓存的 Snapshot，避免加锁等待
+            if let snapshot = getCachedSnapshot(terminalId: Int(terminalId)) {
                 let physicalWidth = logicalRect.width * mapper.scale
                 let physicalHeight = logicalRect.height * mapper.scale
 
@@ -999,6 +1048,10 @@ class RioMetalView: NSView, RenderViewProtocol {
             print("   ├─ Layout Setup: \(String(format: "%.2f", layoutTime))ms (terminals: \(tabsToRender.count))")
             print("   └─ Rust Render: \(String(format: "%.2f", rustRenderTime))ms")
         }
+
+        // 3. 异步更新下一帧的 Snapshot 缓存（不阻塞渲染）
+        let terminalIds = tabsToRender.map { Int($0.0) }
+        updateSnapshotCache(for: terminalIds)
     }
 
 
@@ -1545,8 +1598,8 @@ class RioMetalView: NSView, RenderViewProtocol {
         let row = Int(gridPos.row)
         let col = Int(gridPos.col)
 
-        // 获取快照以转换坐标
-        guard let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)) else { return }
+        // 获取快照以转换坐标（使用缓存）
+        guard let snapshot = getCachedSnapshot(terminalId: Int(terminalId)) else { return }
 
         // 转换屏幕坐标为绝对行号
         let absoluteRow = Int64(snapshot.scrollback_lines) - Int64(snapshot.display_offset) + Int64(row)
@@ -1768,7 +1821,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             _ = terminalManager.scroll(terminalId: Int(terminalId), deltaLines: delta)
 
             // 同步 displayOffset（仅用于记录滚动位置）
-            if let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)),
+            // ✅ 使用缓存的 Snapshot，避免加锁等待
+            if let snapshot = getCachedSnapshot(terminalId: Int(terminalId)),
                let panel = coordinator.terminalWindow.allPanels.first(where: {
                    $0.activeTab?.rustTerminalId == terminalId
                }),
@@ -1792,7 +1846,6 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 停止 CVDisplayLink
         if let displayLink = displayLink {
             CVDisplayLinkStop(displayLink)
-            print("🛑 [CVDisplayLink] Stopped")
             self.displayLink = nil
         }
 
@@ -1807,6 +1860,11 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 清除坐标映射器
         coordinateMapper = nil
+
+        // 清除 Snapshot 缓存
+        snapshotCacheLock.lock()
+        cachedSnapshots.removeAll()
+        snapshotCacheLock.unlock()
 
         // 注意：不在这里释放 sugarloaf handle
         // 因为 GlobalTerminalManager 可能还在使用同一个 Sugarloaf 实例

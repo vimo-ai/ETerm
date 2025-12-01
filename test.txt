@@ -1,0 +1,163 @@
+项目背景
+
+  ETerm 是基于 Rio 魔改的 macOS 终端模拟器，使用 Rust (rio-backend + Sugarloaf) 处理终端逻辑和渲染，Swift 负责 UI 和窗口管理。底层渲染从 WGPU 换成了 Skia + Metal。
+
+  核心问题：Claude CLI 展开大量内容时出现严重卡顿，终端从几千字符变成几万字符时性能崩溃。
+
+  工作目录：/Users/higuaifan/Desktop/hi/小工具/english
+
+  ---
+  已完成的优化（3个重大优化）
+
+  1. 消除 Phase 2 的 FFI 调用（已完成）
+
+  问题：之前每个字符都调用一次 FFI sugarloaf_content_add_text_decorated()，导致 22,472 次 FFI 调用。
+
+  解决：直接在 Rust 侧调用 Sugarloaf API，零 FFI 调用。
+
+  文件：rio/sugarloaf-ffi/src/rio_terminal.rs
+  - 新增 build_fragment_style() 函数（第 1052 行）
+  - Phase 2 直接调用 content.add_text()（第 1029-1068 行）
+
+  收益：Phase 2 从 2-3ms → 0.1-0.3ms
+
+  ---
+  2. Phase 2 合并相同样式的 fragment（已完成）
+
+  问题：每个字符创建一个 fragment，导致 20,791 个 fragments（平均每行 110 个）。
+
+  解决：合并同一行内连续相同样式的字符到一个 fragment。
+
+  实现：
+  - 新增 char_styles_equal() 函数（第 1094 行）
+  - Phase 2 合并逻辑（第 1029-1068 行）
+
+  收益：
+  - Style segments: 20,791 → 270（减少 98%）
+  - 每行平均 segments: 110.6 → 1.4-2.0
+
+  ---
+  3. 锁前置优化（刚完成，待测试）
+
+  问题：Phase 1 在 Rayon 并发时，每次 terminal.get_row_cells() 都要加锁，94 次串行等锁导致 10 秒延迟（Claude CLI 流式输出时）。
+
+  关键发现：
+  - cat long_text.txt（1万字符）：光速，Phase 1 只需 1ms
+  - Claude CLI 流式输出大段内容：Phase 1 耗时 10 秒
+  - 根本原因：get_row_cells() 第 470 行 terminal.lock()，I/O 线程持有写锁时渲染线程等待
+
+  解决：锁前置策略
+  1. 新增 extract_row_cells_locked() 函数（第 560-653 行）
+  2. Phase 1 加锁一次，串行提取所有 94 行数据（94ms）
+  3. 立即释放锁
+  4. 并发处理已提取的数据（无锁，1ms）
+
+  文件：rio/sugarloaf-ffi/src/rio_terminal.rs（第 990-1133 行）
+
+  预期收益：Phase 1 从 10,196ms → 95ms（提升 100x）
+
+  ---
+  其他已完成的优化
+
+  4. FontMgr 复用（已完成）
+
+  将 FontMgr 提升为 Sugarloaf 的成员变量，启动时创建一次，避免每次字体查找都创建。
+
+  文件：rio/sugarloaf/src/sugarloaf.rs
+  - 结构体新增 font_mgr 字段（第 39 行）
+  - 构造函数初始化（第 153 行）
+  - render() 中复用（第 468 行）
+
+  ---
+  当前性能表现
+
+  正常场景（cat、一次性输出）
+
+  Phase 1 (parallel parse): 1ms ✅
+  Phase 2 (merged render): 0.2ms ✅
+  Style segments: 270 (avg 2.0 per line) ✅
+  flush_and_render: 20-30ms ✅
+
+  优化前的问题场景（Claude CLI 流式输出）
+
+  Phase 1: 10,196ms ❌ (锁竞争)
+  Total render: 12,575ms
+
+  优化后预期（待验证）
+
+  Phase 1 (lock + extract): 94ms
+  Phase 1 (parallel parse): 1ms
+  Phase 1 Total: 95ms ✅
+
+  ---
+  已记录但未解决的问题
+
+  Phase 1 偶发性暴涨（2秒）
+
+  文档：docs/PHASE1_PERFORMANCE_ISSUE.md
+
+  现象：Cmd+D 分屏时，Phase 1 偶尔从 1ms 暴涨到 2005ms（2秒）
+
+  可能原因（待验证）：
+  - Rayon 线程池首次初始化
+  - 内存分配器首次大量分配
+  - 系统调度问题
+
+  状态：已记录，暂未调查（优先级低于 10 秒问题）
+
+  ---
+  下一步行动
+
+  立即要做：测试锁前置优化效果
+
+  1. 编译运行 ETerm
+  2. 用 Claude CLI 发送大段文本（触发流式输出）
+  3. 观察日志中的 Phase 1 耗时：
+    - 应该看到 Phase 1 (lock + extract) 和 Phase 1 (parallel parse) 两个分项
+    - 总耗时应该从 10 秒降到 100ms 以内
+  4. 确认不再出现 10 秒卡顿
+
+  如果优化成功：
+
+  可选的进一步优化方向：
+
+  1. GPU 层优化（如果 flush_and_render 仍 > 30ms）
+    - 使用 Skia TextBlob API 批量渲染
+    - 减少 draw call 从 270 次 → 更少
+  2. 脏区渲染（如果需要更极致性能）
+    - 只渲染变化的行
+    - 需要确认 Sugarloaf 是否支持部分更新
+  3. 调查 Cmd+D 的 2 秒延迟
+    - 添加 Phase 1 内部分段日志
+    - 定位具体慢在哪一步
+
+  ---
+  重要技术细节
+
+  架构原则
+
+  - 渲染完全在 Rust 侧完成，Swift 只负责 UI 和窗口管理
+  - 不要过度优化，优先解决核心问题
+  - 用户会自己编译测试，AI 不需要编译
+
+  代码规范
+
+  - 注释用中文
+  - 只在关键指标异常时打印日志（如行数 > 30）
+  - 不要猜测，先看代码再分析
+
+  关键文件
+
+  - rio/sugarloaf-ffi/src/rio_terminal.rs：Phase 1/2 渲染逻辑
+  - rio/sugarloaf/src/sugarloaf.rs：Skia + Metal 渲染层
+  - ETerm/ETerm/Presentation/Views/RioTerminalView.swift：Swift UI 层
+
+  ---
+  性能指标参考
+
+  优秀：总渲染 < 20ms，60fps 流畅
+  **可接受**：总渲染 20-50ms，30fps 基本流畅
+  **需优化**：总渲染 > 100ms，明显卡顿
+  严重问题：总渲染 > 1000ms，用户无法接受
+
+  当前目标：确保 Claude CLI 场景下总渲染时间 < 150ms

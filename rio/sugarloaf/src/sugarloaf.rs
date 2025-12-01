@@ -34,6 +34,9 @@ pub struct Sugarloaf<'a> {
     char_font_cache: std::cell::RefCell<std::collections::HashMap<char, (Typeface, bool)>>,
     #[cfg(target_os = "macos")]
     font_size: f32,
+    /// 复用的 FontMgr 实例，避免每次字体查找时重复创建
+    #[cfg(target_os = "macos")]
+    font_mgr: FontMgr,
 }
 
 #[derive(Debug)]
@@ -145,6 +148,10 @@ impl Sugarloaf<'_> {
         #[cfg(target_os = "macos")]
         let font_size = state.style.font_size;
 
+        // 启动时创建一次 FontMgr，避免每次字体查找时重复创建
+        #[cfg(target_os = "macos")]
+        let font_mgr = FontMgr::new();
+
         let instance = Sugarloaf {
             state,
             ctx,
@@ -158,6 +165,8 @@ impl Sugarloaf<'_> {
             char_font_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
             #[cfg(target_os = "macos")]
             font_size,
+            #[cfg(target_os = "macos")]
+            font_mgr,
         };
 
         Ok(instance)
@@ -357,6 +366,8 @@ impl Sugarloaf<'_> {
     #[inline]
     #[cfg(target_os = "macos")]
     pub fn render(&mut self) {
+        let render_start = std::time::Instant::now();
+
         // Compute dimensions for rich text
         self.state.compute_dimensions_skia();
 
@@ -388,6 +399,12 @@ impl Sugarloaf<'_> {
         // Get line height from style
         let line_height = self.state.style.line_height;
 
+        // 性能统计变量（在主字体块外声明，确保作用域覆盖整个渲染过程）
+        let mut total_chars = 0usize;
+        let mut font_lookup_count = 0usize;
+        let mut font_lookup_time = 0u128;
+        let mut style_segments = 0usize;
+
         // 获取主字体 (font_id=0) 的度量信息用于行高计算
         let font_library = self.font_library.read();
         let primary_typeface = self.get_or_create_typeface(&font_library, 0);
@@ -418,6 +435,8 @@ impl Sugarloaf<'_> {
 
                         let mut x = base_x;
                         for fragment in &line.fragments {
+                            // 统计样式段数量
+                            style_segments += 1;
                             // 设置颜色
                             let color = skia_safe::Color::from_argb(
                                 (fragment.style.color[3] * 255.0) as u8,
@@ -447,6 +466,9 @@ impl Sugarloaf<'_> {
                                     continue;
                                 }
 
+                                // 统计字符总数
+                                total_chars += 1;
+
                                 // 根据 font_id 获取字体样式 (0=regular, 1=bold, 2=italic, 3=bold_italic)
                                 let styled_typeface = self.get_or_create_typeface(&font_library, fragment.style.font_id);
                                 let styled_font = styled_typeface.as_ref()
@@ -454,10 +476,11 @@ impl Sugarloaf<'_> {
                                     .unwrap_or_else(|| primary_font.clone());
 
                                 // 找到能渲染该字符的最佳字体
+                                // 如果是非 ASCII 字符，统计字体查找时间
                                 let (best_font, _is_emoji) = if next_is_vs16 {
-                                    // 有 VS16，强制使用 emoji 字体
-                                    let font_mgr = FontMgr::new();
-                                    if let Some(emoji_typeface) = font_mgr.match_family_style_character(
+                                    // 有 VS16，强制使用 emoji 字体（复用成员变量 font_mgr）
+                                    let lookup_start = std::time::Instant::now();
+                                    let result = if let Some(emoji_typeface) = self.font_mgr.match_family_style_character(
                                         "Apple Color Emoji",
                                         FontStyle::normal(),
                                         &[],
@@ -466,9 +489,20 @@ impl Sugarloaf<'_> {
                                         (Font::from_typeface(&emoji_typeface, font_size), true)
                                     } else {
                                         self.find_font_for_char_styled(&font_library, ch, font_size, &styled_font)
-                                    }
+                                    };
+                                    font_lookup_time += lookup_start.elapsed().as_micros();
+                                    font_lookup_count += 1;
+                                    result
+                                } else if (ch as u32) >= 0x80 {
+                                    // 非 ASCII 字符，需要字体查找
+                                    let lookup_start = std::time::Instant::now();
+                                    let result = self.find_font_for_char_styled(&font_library, ch, font_size, &styled_font);
+                                    font_lookup_time += lookup_start.elapsed().as_micros();
+                                    font_lookup_count += 1;
+                                    result
                                 } else {
-                                    self.find_font_for_char_styled(&font_library, ch, font_size, &styled_font)
+                                    // ASCII 字符，直接使用样式字体，无需查找
+                                    (styled_font.clone(), false)
                                 };
 
                                 // 使用终端 cell 宽度而不是字体 advance
@@ -690,6 +724,31 @@ impl Sugarloaf<'_> {
         // End frame and present
         self.ctx.end_frame(drawable);
         self.reset();
+
+        // 性能日志：只在渲染较多内容时打印，避免日志噪音
+        let render_time = render_start.elapsed().as_micros();
+        if total_chars > 1000 {
+            let total_lines: usize = self.state.rich_texts.iter()
+                .filter_map(|rt| self.state.content.get_state(&rt.id))
+                .map(|state| state.lines.len())
+                .sum();
+
+            println!("🎨 [Sugarloaf Render]");
+            println!("   Total chars: {}", total_chars);
+            println!("   Style segments: {} (avg {:.1} per line)",
+                style_segments,
+                if total_lines > 0 { style_segments as f32 / total_lines as f32 } else { 0.0 }
+            );
+            println!("   Font lookups: {} ({:.1}%)",
+                font_lookup_count,
+                if total_chars > 0 { (font_lookup_count as f32 / total_chars as f32) * 100.0 } else { 0.0 }
+            );
+            println!("   Font lookup time: {}μs ({:.1}%)",
+                font_lookup_time,
+                if render_time > 0 { (font_lookup_time as f32 / render_time as f32) * 100.0 } else { 0.0 }
+            );
+            println!("   Total render time: {}μs ({}ms)", render_time, render_time / 1000);
+        }
     }
 
     /// 为单个字符找到最佳渲染字体
@@ -735,9 +794,8 @@ impl Sugarloaf<'_> {
             }
         }
 
-        // 主字体不支持且无缓存，使用系统字体匹配
-        let font_mgr = FontMgr::new();
-        if let Some(typeface) = font_mgr.match_family_style_character(
+        // 主字体不支持且无缓存，使用系统字体匹配（复用成员变量 font_mgr）
+        if let Some(typeface) = self.font_mgr.match_family_style_character(
             "",
             FontStyle::normal(),
             &[],
@@ -773,12 +831,11 @@ impl Sugarloaf<'_> {
             }
         }
 
-        let font_mgr = FontMgr::new();
-
         // 获取字体信息
         let font_data_info = font_library.inner.get(&font_id);
         let is_emoji = font_data_info.map(|f| f.is_emoji).unwrap_or(false);
 
+        // 使用成员变量 font_mgr
         let typeface = if is_emoji {
             // 对于 emoji 字体，使用系统字体管理器查找
             // 原因：Apple Color Emoji 使用 SBIX 位图格式，需要系统级支持
@@ -787,20 +844,20 @@ impl Sugarloaf<'_> {
                 .and_then(|f| f.path.as_ref())
                 .and_then(|p| p.to_str())
                 .unwrap_or("Apple Color Emoji");
-            font_mgr.match_family_style(family_name, FontStyle::normal())
+            self.font_mgr.match_family_style(family_name, FontStyle::normal())
         } else if let Some((font_data, offset, _key)) = font_library.get_data(&font_id) {
             // 普通字体从数据加载
             let offset_usize = offset as usize;
             let font_bytes = &font_data[offset_usize..];
             let data = skia_safe::Data::new_copy(font_bytes);
-            font_mgr.new_from_data(&data, None)
+            self.font_mgr.new_from_data(&data, None)
         } else {
             // 如果没有找到数据，尝试从系统字体加载
             let family_name = font_data_info
                 .and_then(|f| f.path.as_ref())
                 .and_then(|p| p.to_str())
                 .unwrap_or("Menlo");
-            font_mgr.match_family_style(family_name, FontStyle::normal())
+            self.font_mgr.match_family_style(family_name, FontStyle::normal())
         };
 
         // 存入缓存

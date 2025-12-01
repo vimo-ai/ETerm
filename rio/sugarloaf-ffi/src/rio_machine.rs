@@ -21,7 +21,6 @@ use rio_backend::performer::handler::Processor;
 use teletypewriter::EventedPty;
 
 use crate::rio_event::{FFIEventListener, RioEvent};
-use crate::sync::FairMutex;
 
 /// 照抄 Rio: READ_BUFFER_SIZE = 1MB
 const READ_BUFFER_SIZE: usize = 0x10_0000;
@@ -134,7 +133,7 @@ pub struct Machine<T: EventedPty> {
     receiver: PeekableReceiver<Msg>,
     pty: T,
     poll: corcovado::Poll,
-    terminal: Arc<FairMutex<Crosswords<FFIEventListener>>>,
+    terminal: Arc<parking_lot::RwLock<Crosswords<FFIEventListener>>>,
     event_listener: FFIEventListener,
     route_id: usize,
     // 🔍 调试：记录上一次的前台进程和状态
@@ -151,7 +150,7 @@ where
 {
     /// 照抄 Rio: Machine::new
     pub fn new(
-        terminal: Arc<FairMutex<Crosswords<FFIEventListener>>>,
+        terminal: Arc<parking_lot::RwLock<Crosswords<FFIEventListener>>>,
         pty: T,
         event_listener: FFIEventListener,
         route_id: usize,
@@ -215,8 +214,7 @@ where
         let mut unprocessed = 0;
         let mut processed = 0;
 
-        // 照抄 Rio: Reserve the next terminal lock for PTY reading.
-        let _terminal_lease = Some(self.terminal.lease());
+        // RwLock 不需要 lease，parking_lot 的 RwLock 默认是公平的
         let mut terminal = None;
 
         loop {
@@ -225,6 +223,11 @@ where
                 // This is received on Windows/macOS when no more data is readable from the PTY.
                 Ok(0) if unprocessed == 0 => break,
                 Ok(got) => {
+                    // ⚠️ [PERFORMANCE] 注释掉频繁的进程检测（每次PTY读取都调用proc_pidpath+ps命令，导致严重卡顿）
+                    // 原因：处理64KB数据时可能触发几百次系统调用，累积耗时2-3.5秒
+                    // 且收集的数据(last_fg_process/last_process_state)从未被使用
+                    // 如需恢复：在合适的地方（如定时器或进程切换事件）调用，而非每次PTY读取
+                    /*
                     // 🎯 检测前台进程和状态
                     let fg_pid = unsafe { libc::tcgetpgrp(self.pty_fd) };
 
@@ -249,6 +252,7 @@ where
                         self.last_fg_process = Some(fg_process_trimmed);
                         self.last_process_state = Some(process_state);
                     }
+                    */
 
                     unprocessed += got
                 },
@@ -264,26 +268,55 @@ where
             }
 
             // 照抄 Rio: Attempt to lock the terminal.
+            let lock_start = std::time::Instant::now();
             let terminal = match &mut terminal {
                 Some(terminal) => terminal,
-                None => terminal.insert(match self.terminal.try_lock_unfair() {
-                    // Force block if we are at the buffer size limit.
-                    None if unprocessed >= READ_BUFFER_SIZE => self.terminal.lock_unfair(),
-                    None => continue,
-                    Some(terminal) => terminal,
-                }),
+                None => {
+                    let lock_acquired = match self.terminal.try_write() {
+                        // Force block if we are at the buffer size limit.
+                        None if unprocessed >= READ_BUFFER_SIZE => {
+                            println!("🔒 [I/O Thread] try_write failed, forcing write lock...");
+                            let t = self.terminal.write();
+                            let elapsed = lock_start.elapsed().as_micros();
+                            println!("🔒 [I/O Thread] Acquired write lock after {}μs ({}ms)", elapsed, elapsed / 1000);
+                            t
+                        }
+                        None => continue,
+                        Some(t) => {
+                            let elapsed = lock_start.elapsed().as_micros();
+                            if elapsed > 1000 {
+                                println!("🔒 [I/O Thread] Acquired write lock (try_write) after {}μs", elapsed);
+                            }
+                            t
+                        }
+                    };
+                    terminal.insert(lock_acquired)
+                }
             };
 
             // 照抄 Rio: Parse the incoming bytes.
+            let parse_start = std::time::Instant::now();
             state.parser.advance(&mut **terminal, &buf[..unprocessed]);
+            let parse_time = parse_start.elapsed().as_micros();
+
+            if parse_time > 10000 {
+                println!("🔒 [I/O Thread] parser.advance() took {}μs ({}ms) for {} bytes",
+                         parse_time, parse_time / 1000, unprocessed);
+            }
 
             processed += unprocessed;
             unprocessed = 0;
 
             // 照抄 Rio: Assure we're not blocking the terminal too long unnecessarily.
             if processed >= MAX_LOCKED_READ {
+                println!("🔒 [I/O Thread] Releasing write lock after processing {} bytes (MAX_LOCKED_READ limit)", processed);
                 break;
             }
+        }
+
+        // 释放锁时打印日志
+        if terminal.is_some() && processed > 0 {
+            println!("🔒 [I/O Thread] Releasing write lock after processing {} bytes total", processed);
         }
 
         // 照抄 Rio: Queue terminal update processing unless all processed bytes were synchronized.
@@ -424,7 +457,7 @@ where
 
                     // 照抄 Rio: Handle synchronized update timeout.
                     if events.is_empty() && self.receiver.peek().is_none() {
-                        let mut terminal = self.terminal.lock();
+                        let mut terminal = self.terminal.write();
                         state.parser.stop_sync(&mut *terminal);
 
                         // 照抄 Rio: Emit damage event if there's any damage after processing sync buffer
@@ -452,7 +485,7 @@ where
                                     self.pty.next_child_event()
                                 {
                                     // 照抄 Rio: 子进程退出
-                                    self.terminal.lock().exit();
+                                    self.terminal.write().exit();
 
                                     self.event_listener.send_event(RioEvent::Render);
 
