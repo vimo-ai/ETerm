@@ -71,7 +71,11 @@ final class EditHandler: KeyboardEventHandler {
             return .ignored
         }
 
-        coordinator.writeInput(terminalId: terminalId, data: text)
+        // 使用 Bracketed Paste Mode (CSI 2004)
+        // 告诉终端程序这是粘贴操作，而不是逐字输入
+        // 程序可以显示 "[Pasted text #N +X lines]" 而不是逐行显示
+        let bracketedText = "\u{1B}[200~" + text + "\u{1B}[201~"
+        coordinator.writeInput(terminalId: terminalId, data: bracketedText)
         return .consumed
     }
 
