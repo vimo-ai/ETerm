@@ -106,8 +106,8 @@ pub struct PlatformRenderer {
     pub disable_unfocused_render: Option<bool>,
     #[serde(default = "Option::default", rename = "disable-occluded-render")]
     pub disable_occluded_render: Option<bool>,
-    #[serde(default = "Option::default", skip_serializing)]
-    pub filters: Option<Vec<sugarloaf::Filter>>,
+    // #[serde(default = "Option::default", skip_serializing)]
+    // pub filters: Option<Vec<sugarloaf::Filter>>, // WGPU-based filters not needed
     #[serde(default = "Option::default")]
     pub strategy: Option<renderer::RendererStategy>,
 }

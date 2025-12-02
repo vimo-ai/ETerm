@@ -17,9 +17,9 @@ pub use crate::sugarloaf::{
     Colorspace, Sugarloaf, SugarloafErrors, SugarloafRenderer, SugarloafWindow,
     SugarloafWindowSize, SugarloafWithErrors,
 };
-#[cfg(feature = "wgpu-backend")]
-pub use components::filters::Filter;
-pub use components::quad::Quad;
+// #[cfg(feature = "wgpu-backend")]
+// pub use components::filters::Filter;
+pub use components::Quad; // Data structure for Skia renderer
 pub use layout::{
     Content, FragmentStyle, FragmentStyleDecoration, SugarDimensions, UnderlineInfo,
     UnderlineShape,

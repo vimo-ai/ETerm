@@ -5,7 +5,7 @@
 
 #![allow(clippy::uninlined_format_args)]
 
-use crate::components::rich_text::RichTextBrush;
+// use crate::components::RichTextBrush; // Not needed for Skia renderer
 use crate::font::FontLibrary;
 use crate::font_introspector::shape::cluster::OwnedGlyphCluster;
 use crate::font_introspector::shape::ShapeContext;
@@ -421,33 +421,34 @@ impl Content {
         }
     }
 
-    #[inline]
-    pub fn update_dimensions(
-        &mut self,
-        state_id: &usize,
-        advance_brush: &mut RichTextBrush,
-    ) {
-        let mut content = Content::new(&self.fonts);
-        if let Some(rte) = self.states.get_mut(state_id) {
-            let id = content.create_state(&rte.layout);
-            content
-                .sel(id)
-                .new_line()
-                .add_text(" ", FragmentStyle::default())
-                .build();
-            let render_data = content.get_state(&id).unwrap().lines[0].clone();
-
-            if let Some(dimension) = advance_brush.dimensions(
-                &self.fonts,
-                &render_data,
-                &mut Graphics::default(),
-                rte.layout.dimensions.scale,
-            ) {
-                rte.layout.dimensions.height = dimension.height;
-                rte.layout.dimensions.width = dimension.width;
-            }
-        }
-    }
+    // #[inline]
+    // pub fn update_dimensions(
+    //     &mut self,
+    //     state_id: &usize,
+    //     advance_brush: &mut RichTextBrush,
+    // ) {
+    //     // WGPU-based dimension calculation - not needed for Skia renderer
+    //     let mut content = Content::new(&self.fonts);
+    //     if let Some(rte) = self.states.get_mut(state_id) {
+    //         let id = content.create_state(&rte.layout);
+    //         content
+    //             .sel(id)
+    //             .new_line()
+    //             .add_text(" ", FragmentStyle::default())
+    //             .build();
+    //         let render_data = content.get_state(&id).unwrap().lines[0].clone();
+    //
+    //         if let Some(dimension) = advance_brush.dimensions(
+    //             &self.fonts,
+    //             &render_data,
+    //             &mut Graphics::default(),
+    //             rte.layout.dimensions.scale,
+    //         ) {
+    //             rte.layout.dimensions.height = dimension.height;
+    //             rte.layout.dimensions.width = dimension.width;
+    //         }
+    //     }
+    // }
 
     #[inline]
     pub fn clear_state(&mut self, id: &usize) {

@@ -570,9 +570,9 @@ impl Config {
             if let Some(disable_occluded) = renderer_overwrite.disable_occluded_render {
                 self.renderer.disable_occluded_render = disable_occluded;
             }
-            if let Some(filters) = &renderer_overwrite.filters {
-                self.renderer.filters = filters.clone();
-            }
+            // if let Some(filters) = &renderer_overwrite.filters {
+            //     self.renderer.filters = filters.clone();
+            // }
             if let Some(strategy) = &renderer_overwrite.strategy {
                 self.renderer.strategy = strategy.clone();
             }

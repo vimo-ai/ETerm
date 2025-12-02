@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-use sugarloaf::Filter;
+// use sugarloaf::Filter; // WGPU-based filters not needed
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Renderer {
@@ -15,8 +15,8 @@ pub struct Renderer {
         rename = "disable-occluded-render"
     )]
     pub disable_occluded_render: bool,
-    #[serde(default = "Vec::default")]
-    pub filters: Vec<Filter>,
+    // #[serde(default = "Vec::default")]
+    // pub filters: Vec<Filter>, // WGPU-based filters not needed
     #[serde(default = "RendererStategy::default")]
     pub strategy: RendererStategy,
 }
@@ -54,7 +54,7 @@ impl Default for Renderer {
             backend: Backend::default(),
             disable_unfocused_render: false,
             disable_occluded_render: default_disable_occluded_render(),
-            filters: Vec::default(),
+            // filters: Vec::default(), // WGPU-based filters not needed
             strategy: RendererStategy::Events,
         }
     }

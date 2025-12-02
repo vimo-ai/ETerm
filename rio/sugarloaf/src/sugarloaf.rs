@@ -88,13 +88,13 @@ impl Default for Colorspace {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-#[allow(clippy::derivable_impls)]
-impl Default for Colorspace {
-    fn default() -> Colorspace {
-        Colorspace::Srgb
-    }
-}
+// #[cfg(not(target_os = "macos"))]
+// #[allow(clippy::derivable_impls)]
+// impl Default for Colorspace {
+//     fn default() -> Colorspace {
+//         Colorspace::Srgb
+//     }
+// }
 
 impl Default for SugarloafRenderer {
     fn default() -> SugarloafRenderer {
@@ -326,13 +326,13 @@ impl Sugarloaf<'_> {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn get_font_metrics_skia(&self) -> (f32, f32, f32) {
-        let font_size = self.font_size * self.ctx.scale;
-        let cell_width = font_size * 0.6;
-        let cell_height = font_size * 1.2;
-        (cell_width, cell_height, cell_height)
-    }
+    // #[cfg(not(target_os = "macos"))]
+    // pub fn get_font_metrics_skia(&self) -> (f32, f32, f32) {
+    //     let font_size = self.font_size * self.ctx.scale;
+    //     let cell_width = font_size * 0.6;
+    //     let cell_height = font_size * 1.2;
+    //     (cell_width, cell_height, cell_height)
+    // }
 
     #[inline]
     pub fn clear(&mut self) {
@@ -956,10 +956,10 @@ impl Sugarloaf<'_> {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn render(&mut self) {
-        panic!("Skia rendering is only supported on macOS currently");
-    }
+    // #[cfg(not(target_os = "macos"))]
+    // pub fn render(&mut self) {
+    //     panic!("Skia rendering is only supported on macOS currently");
+    // }
 
     #[inline]
     pub fn set_visual_bell_overlay(&mut self, overlay: Option<Quad>) {
