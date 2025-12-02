@@ -120,35 +120,66 @@ private final class PluginContextImpl: PluginContext {
 final class KeyboardServiceImpl: KeyboardService {
     static let shared = KeyboardServiceImpl()
 
-    /// 快捷键到命令的绑定映射
-    private var bindings: [KeyStroke: (commandId: CommandID, when: String?)] = [:]
+    /// 命令绑定
+    struct CommandBinding {
+        let commandId: CommandID
+        let when: String?
+    }
+
+    /// 快捷键到命令的绑定映射（支持多个绑定）
+    private var bindings: [KeyStroke: [CommandBinding]] = [:]
 
     private init() {}
 
     // MARK: - KeyboardService 协议实现
 
     func bind(_ keyStroke: KeyStroke, to commandId: CommandID, when: String?) {
-        bindings[keyStroke] = (commandId, when)
-        print("⌨️ 绑定快捷键: \(keyStroke) -> \(commandId)")
+        // 检查冲突
+        if let existing = bindings[keyStroke], !existing.isEmpty {
+            print("⚠️ [KeyboardService] 快捷键冲突：\(keyStroke.displayString)")
+            print("   已有绑定：\(existing.map { $0.commandId }.joined(separator: ", "))")
+            print("   新绑定：\(commandId) 将被忽略")
+
+            // 发送冲突通知
+            NotificationCenter.default.post(
+                name: NSNotification.Name("KeyBindingConflict"),
+                object: KeyBindingConflict(
+                    keyStroke: keyStroke,
+                    existingCommands: existing.map { $0.commandId },
+                    newCommand: commandId
+                )
+            )
+
+            return  // 第一个绑定生效，后续被拒绝
+        }
+
+        // 添加绑定
+        bindings[keyStroke] = [CommandBinding(commandId: commandId, when: when)]
+        print("⌨️ [KeyboardService] 绑定快捷键: \(keyStroke.displayString) -> \(commandId)" + (when.map { " (when: \($0))" } ?? ""))
     }
 
     func unbind(_ keyStroke: KeyStroke) {
         bindings.removeValue(forKey: keyStroke)
-        print("⌨️ 解绑快捷键: \(keyStroke)")
+        print("⌨️ [KeyboardService] 解绑快捷键: \(keyStroke.displayString)")
     }
 
     // MARK: - 内部方法
 
-    /// 查找快捷键绑定的命令
-    /// - Parameter keyStroke: 按键
-    /// - Returns: 命令 ID（如果有绑定）
-    func findCommand(for keyStroke: KeyStroke) -> CommandID? {
+    /// 查找快捷键绑定的命令（支持 when 子句）
+    /// - Parameters:
+    ///   - keyStroke: 按键
+    ///   - context: when 子句上下文
+    /// - Returns: 命令 ID（如果有绑定且条件满足）
+    func findCommand(for keyStroke: KeyStroke, context: WhenClauseContext) -> CommandID? {
         // 查找匹配的绑定
-        for (boundKey, binding) in bindings {
+        for (boundKey, commandBindings) in bindings {
             if boundKey.matches(keyStroke) {
-                // 当前忽略 when 条件的检查
-                // 后续可以扩展为检查上下文状态
-                return binding.commandId
+                // 找到第一个满足 when 条件的绑定
+                for binding in commandBindings {
+                    if WhenClauseEvaluator.evaluate(binding.when, context: context) {
+                        return binding.commandId
+                    }
+                }
             }
         }
         return nil
@@ -157,24 +188,23 @@ final class KeyboardServiceImpl: KeyboardService {
     /// 处理按键，如果有绑定的命令则执行
     /// - Parameters:
     ///   - keyStroke: 按键
-    ///   - context: 命令上下文
+    ///   - whenContext: when 子句上下文
+    ///   - commandContext: 命令执行上下文
     /// - Returns: 是否处理了该按键
-    func handleKeyStroke(_ keyStroke: KeyStroke, context: CommandContext) -> Bool {
-        // 调试日志：打印所有 Cmd 组合键
-        if keyStroke.modifiers.contains(.command) {
-            print("🔍 [KeyboardService] Received keystroke: \(keyStroke)")
-        }
-
-        if let commandId = findCommand(for: keyStroke) {
-            print("✅ [KeyboardService] Found command: \(commandId)")
-            CommandRegistry.shared.execute(commandId, context: context)
+    func handleKeyStroke(
+        _ keyStroke: KeyStroke,
+        whenContext: WhenClauseContext,
+        commandContext: CommandContext
+    ) -> Bool {
+        if let commandId = findCommand(for: keyStroke, context: whenContext) {
+            CommandRegistry.shared.execute(commandId, context: commandContext)
             return true
         }
         return false
     }
 
     /// 获取所有快捷键绑定（用于 UI 显示）
-    func getAllBindings() -> [(KeyStroke, (commandId: CommandID, when: String?))] {
+    func getAllBindings() -> [(KeyStroke, [CommandBinding])] {
         return Array(bindings)
     }
 }

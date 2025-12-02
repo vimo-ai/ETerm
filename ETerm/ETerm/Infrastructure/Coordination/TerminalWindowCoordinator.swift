@@ -371,12 +371,10 @@ class TerminalWindowCoordinator: ObservableObject {
     func scheduleRender() {
         // 取消之前的延迟任务
         pendingRenderWorkItem?.cancel()
-//        print("[Render] 🔄 Scheduled render (debounced)")
 
         // 创建新的延迟任务
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
-//            print("[Render] ✅ Executing debounced render")
             self.renderView?.requestRender()
         }
         pendingRenderWorkItem = workItem

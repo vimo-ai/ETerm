@@ -1305,7 +1305,6 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 拦截系统快捷键
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // 如果 InlineComposer 正在显示，放行事件给文本框
-        // 只保留 Cmd+K 的处理（用于关闭 composer）
         if coordinator?.showInlineComposer == true {
             if let keyboardSystem = coordinator?.keyboardSystem {
                 let keyStroke = KeyStroke.from(event)
@@ -1318,58 +1317,18 @@ class RioMetalView: NSView, RenderViewProtocol {
             return false  // 其他事件放行给 composer 文本框
         }
 
-        // 如果有 KeyboardSystem，使用它处理
+        // 所有快捷键都通过 KeyboardSystem 处理
         if let keyboardSystem = coordinator?.keyboardSystem {
-            let keyStroke = KeyStroke.from(event)
-
-            // 需要拦截的系统快捷键
-            let interceptedShortcuts: [KeyStroke] = [
-                .cmd("k"),  // Inline AI Composer
-                .cmd("f"),  // Terminal Search
-                .cmd("w"),
-                .cmd("t"),
-                .cmd("n"),
-                .cmdShift("w"),
-                .cmdShift("t"),
-                .cmd("["),
-                .cmd("]"),
-                .cmdShift("["),
-                .cmdShift("]"),
-                .cmdShift("y"),
-                .cmd("="),
-                .cmd("+"),  // Shift+= 产生 +
-                .cmd("-"),
-                .cmd("0"),
-                .cmd("v"),
-                .cmd("c"),
-            ]
-
-            let shouldIntercept = interceptedShortcuts.contains { $0.matches(keyStroke) }
-
-            if shouldIntercept {
-                // Cmd+K 直接处理，不经过键盘系统
-                if keyStroke.matches(.cmd("k")) {
-                    showInlineComposer()
-                    return true
-                }
-
-                // Cmd+F 显示/隐藏搜索框
-                if keyStroke.matches(.cmd("f")) {
-                    coordinator?.toggleTerminalSearch()
-                    return true
-                }
-
-                let result = keyboardSystem.handleKeyDown(event)
-                switch result {
-                case .handled:
-                    return true
-                case .passToIME:
-                    return false
-                }
+            let result = keyboardSystem.handleKeyDown(event)
+            switch result {
+            case .handled:
+                return true
+            case .passToIME:
+                return false
             }
         }
 
-        return super.performKeyEquivalent(with: event)
+        return false
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1538,7 +1497,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 触发渲染
-        requestRender()
+        // requestRender()  // 🔍 临时注释：测试是否 setActivePanel 已经通过 SwiftUI 触发了渲染
 
         // 记录选中状态
         isDraggingSelection = true
@@ -1678,7 +1637,7 @@ class RioMetalView: NSView, RenderViewProtocol {
                     // 清除选区
                     activeTab.clearSelection()
                     _ = coordinator.clearSelection(terminalId: terminalId)
-                    requestRender()
+                    // requestRender()  // 🔍 注释：clearSelection 内部已经调用了 requestRender()
                 } else {
                     // 发布选中结束事件（拖拽选中）
                     let mouseLoc = self.convert(event.locationInWindow, from: nil)

@@ -113,9 +113,7 @@ struct ContentView: View {
                     .injectModelContainer()  // 注入 ModelContainer
 
             case .builtin(.shortcuts):
-                // 从 KeyboardSystem 获取所有快捷键绑定
-                let bindings = coordinator.keyboardSystem?.getAllBindings() ?? []
-                ShortcutsView(bindings: bindings)
+                ShortcutsView()
                     .frame(maxWidth: 700, maxHeight: 600)
                     .glassEffect(in: RoundedRectangle(cornerRadius: 12))
                     .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)

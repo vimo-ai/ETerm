@@ -27,7 +27,7 @@ class BubbleState: ObservableObject {
     enum Content {
         case idle
         case loading
-        case dictionary(DictionaryWord, translations: [(String, String?)])  // 单词：词典数据 + 中文翻译
+        case dictionary(DictionaryWord, wordTranslation: String?, translations: [(String, String?)])  // 单词：词典数据 + 单词翻译 + 释义翻译
         case translation(String)                                            // 短语/句子：翻译结果
         case analysis                                                       // 句子分析（翻译 + 语法），具体内容单独存储以便流式更新
         case error(String)
@@ -61,7 +61,7 @@ class BubbleState: ObservableObject {
 
     /// 获取发音 URL（仅词典模式）
     var audioURL: String? {
-        guard case .dictionary(let word, _) = content else { return nil }
+        guard case .dictionary(let word, _, _) = content else { return nil }
         return word.phonetics?.first(where: { $0.audio != nil && !$0.audio!.isEmpty })?.audio
     }
 
@@ -134,8 +134,8 @@ class BubbleState: ObservableObject {
                 // 单词 → 优先词典，失败降级翻译
                 do {
                     let word = try await DictionaryService.shared.lookup(text)
-                    // 先显示英文词典内容
-                    content = .dictionary(word, translations: [])
+                    // 先显示英文词典内容（不带翻译）
+                    content = .dictionary(word, wordTranslation: nil, translations: [])
                     currentModelTag = "词典"
 
                     // Save word to database
@@ -148,9 +148,9 @@ class BubbleState: ObservableObject {
                         sourceContext: nil  // No context for dictionary lookup
                     )
 
-                    // 异步加载中文翻译
+                    // 异步加载单词翻译和释义翻译
                     Task {
-                        await loadTranslations(for: word)
+                        await loadWordAndDefinitionTranslations(for: word)
                     }
                 } catch DictionaryError.wordNotFound {
                     // 词典查不到（专有名词等），降级翻译
@@ -216,9 +216,12 @@ class BubbleState: ObservableObject {
         DictionaryService.shared.playPronunciation(audioURL: url)
     }
 
-    /// 加载词典翻译（私有方法）
-    private func loadTranslations(for word: DictionaryWord) async {
-        // 收集所有需要翻译的释义和例句
+    /// 加载单词翻译和释义翻译（私有方法）
+    private func loadWordAndDefinitionTranslations(for word: DictionaryWord) async {
+        // 1. 先翻译单词本身
+        let wordTranslation = try? await AIService.shared.translate(word.word)
+
+        // 2. 收集所有需要翻译的释义和例句
         var definitionsToTranslate: [(String, String?)] = []
         for meaning in word.meanings {
             for definition in meaning.definitions.prefix(3) {
@@ -226,7 +229,7 @@ class BubbleState: ObservableObject {
             }
         }
 
-        // 并行翻译，每个结果返回就更新 UI
+        // 3. 并行翻译所有释义和例句
         var translations: [(String, String?)] = Array(repeating: ("", nil), count: definitionsToTranslate.count)
 
         await withTaskGroup(of: (Int, String, String?).self) { group in
@@ -240,18 +243,19 @@ class BubbleState: ObservableObject {
 
             for await (index, def, ex) in group {
                 translations[index] = (def, ex)
-                content = .dictionary(word, translations: translations)
+                // 实时更新 UI（包含单词翻译）
+                content = .dictionary(word, wordTranslation: wordTranslation, translations: translations)
                 currentModelTag = "qwen-mt-flash"
             }
         }
 
         // Save Chinese translation after loading
-        if !translations.isEmpty, let firstTranslation = translations.first?.0, !firstTranslation.isEmpty {
+        if let wordTranslation = wordTranslation, !wordTranslation.isEmpty {
             saveToVocabulary(
                 word: word.word,
                 phonetic: word.phonetic ?? word.phonetics?.first?.text,
                 definition: word.meanings.first?.definitions.first?.definition,
-                translation: firstTranslation,  // 保存第一个中文翻译
+                translation: wordTranslation,  // 保存单词的整体翻译
                 sourceContext: nil
             )
         }
@@ -263,9 +267,13 @@ class BubbleState: ObservableObject {
         pasteboard.clearContents()
 
         switch content {
-        case .dictionary(let word, let translations):
-            // 格式化词典内容（包含中文翻译）
-            var text = "\(word.word)\n"
+        case .dictionary(let word, let wordTranslation, let translations):
+            // 格式化词典内容（包含单词翻译和释义翻译）
+            var text = "\(word.word)"
+            if let wordTrans = wordTranslation {
+                text += " - \(wordTrans)"
+            }
+            text += "\n"
             if let phonetic = word.phonetic ?? word.phonetics?.first?.text {
                 text += "\(phonetic)\n"
             }
@@ -276,7 +284,7 @@ class BubbleState: ObservableObject {
                 text += "\(meaning.partOfSpeech):\n"
                 for (index, def) in meaning.definitions.prefix(3).enumerated() {
                     text += "\(index + 1). \(def.definition)\n"
-                    // 添加中文翻译
+                    // 添加释义翻译
                     if flatIndex < translations.count {
                         text += "   译: \(translations[flatIndex].0)\n"
                     }

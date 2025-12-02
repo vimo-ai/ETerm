@@ -2,23 +2,69 @@
 //  ShortcutsView.swift
 //  ETerm
 //
-//  快捷键列表视图 - 显示所有注册的键盘快捷键
+//  快捷键列表视图 - 从命令系统动态读取
 
 import SwiftUI
 
 struct ShortcutsView: View {
-    let bindings: [KeyBinding]
+    let bindings: [(KeyStroke, [KeyboardServiceImpl.CommandBinding])]
+    let commands: [Command]
+
+    init() {
+        // 从命令系统读取
+        self.bindings = KeyboardServiceImpl.shared.getAllBindings()
+        self.commands = CommandRegistry.shared.allCommands()
+    }
 
     /// 按分类分组的快捷键
-    private var groupedBindings: [(category: String, shortcuts: [(key: String, description: String)])] {
-        let grouped = Dictionary(grouping: bindings, by: { $0.category })
-        return grouped.map { (category, bindings) in
-            let shortcuts = bindings.map { binding in
-                (key: binding.keyStroke.displayString, description: binding.description)
+    private var groupedShortcuts: [(category: String, shortcuts: [(key: String, title: String, when: String?)])] {
+        // 将绑定和命令关联
+        var categoryMap: [String: [(key: String, title: String, when: String?)]] = [:]
+
+        for (keyStroke, commandBindings) in bindings {
+            for binding in commandBindings {
+                // 查找对应的命令
+                guard let command = commands.first(where: { $0.id == binding.commandId }) else {
+                    continue
+                }
+
+                // 从命令 ID 提取分类
+                let category = extractCategory(from: command.id)
+
+                if categoryMap[category] == nil {
+                    categoryMap[category] = []
+                }
+
+                categoryMap[category]?.append((
+                    key: keyStroke.displayString,
+                    title: command.title,
+                    when: binding.when
+                ))
             }
-            return (category: category, shortcuts: shortcuts)
         }
-        .sorted { $0.category < $1.category }  // 按分类名称排序
+
+        // 排序分类
+        return categoryMap.map { (category, shortcuts) in
+            (category: category, shortcuts: shortcuts.sorted { $0.title < $1.title })
+        }.sorted { $0.category < $1.category }
+    }
+
+    /// 从命令 ID 提取分类
+    private func extractCategory(from commandId: String) -> String {
+        let parts = commandId.split(separator: ".")
+        guard let category = parts.first else { return "其他" }
+
+        switch category {
+        case "page": return "窗口管理 (Page)"
+        case "tab", "panel": return "面板管理 (Tab)"
+        case "edit", "selection": return "编辑"
+        case "font": return "字体"
+        case "translation": return "AI 翻译"
+        case "sidebar": return "系统"
+        case "terminal": return "终端"
+        case "writing": return "写作助手"
+        default: return String(category).capitalized
+        }
     }
 
     var body: some View {
@@ -29,6 +75,9 @@ struct ShortcutsView: View {
                     .font(.title2)
                     .fontWeight(.semibold)
                 Spacer()
+                Text("\(bindings.count) 个快捷键")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
             .padding()
 
@@ -37,10 +86,10 @@ struct ShortcutsView: View {
             // 快捷键列表
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ForEach(groupedBindings, id: \.category) { group in
+                    ForEach(groupedShortcuts, id: \.category) { group in
                         ShortcutSection(
                             title: group.category,
-                            shortcuts: group.shortcuts
+                            shortcuts: group.shortcuts.map { (key: $0.key, description: $0.title) }
                         )
                     }
                 }
@@ -103,12 +152,6 @@ struct ShortcutRow: View {
 }
 
 #Preview {
-    // 创建示例快捷键绑定用于预览
-    let sampleBindings = [
-        KeyBinding(.cmd("c"), event: .copy, modes: [.normal], category: "编辑", description: "复制"),
-        KeyBinding(.cmd("v"), event: .paste, modes: [.normal], category: "编辑", description: "粘贴"),
-        KeyBinding(.cmd("t"), event: .createTab, modes: [.normal], category: "面板管理", description: "新建 Tab"),
-    ]
-    return ShortcutsView(bindings: sampleBindings)
+    ShortcutsView()
         .frame(width: 600, height: 500)
 }

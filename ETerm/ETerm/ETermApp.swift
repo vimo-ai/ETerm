@@ -36,6 +36,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动 Claude Socket Server（接收 Hook 调用）
         ClaudeSocketServer.shared.start()
 
+        // 注册核心命令（必须在加载插件之前，让插件可以覆盖）
+        CoreCommandsBootstrap.registerCoreCommands()
+
         // 加载内置插件
         PluginManager.shared.loadBuiltinPlugins()
 

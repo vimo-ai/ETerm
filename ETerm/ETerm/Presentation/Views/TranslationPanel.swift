@@ -323,8 +323,8 @@ struct TranslationContentView: View {
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 30)
 
-        case .dictionary(let word, let translations):
-            DictionaryView(word: word, translations: translations)
+        case .dictionary(let word, let wordTranslation, let translations):
+            DictionaryView(word: word, wordTranslation: wordTranslation, translations: translations)
 
         case .translation(let text):
             ScrollView {
@@ -408,10 +408,27 @@ struct TagView: View {
 
 struct DictionaryView: View {
     let word: DictionaryWord
+    let wordTranslation: String?
     let translations: [(String, String?)]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // 单词中文翻译
+            if let wordTrans = wordTranslation {
+                HStack(spacing: 6) {
+                    Text(word.word)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                    Text("→")
+                        .foregroundColor(.secondary)
+                    Text(wordTrans)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.green)
+                }
+                .padding(.bottom, 4)
+            }
+
             // 音标
             if let phonetic = word.phonetic ?? word.phonetics?.first?.text {
                 Text(phonetic)
