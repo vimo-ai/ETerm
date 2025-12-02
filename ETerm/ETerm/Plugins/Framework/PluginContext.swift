@@ -12,6 +12,7 @@ import Foundation
 /// - 命令服务：注册和执行命令
 /// - 事件服务：发布和订阅事件
 /// - 键盘服务：绑定快捷键
+/// - UI 服务：注册侧边栏 Tab
 protocol PluginContext: AnyObject {
     /// 命令服务
     var commands: CommandService { get }
@@ -21,4 +22,20 @@ protocol PluginContext: AnyObject {
 
     /// 键盘服务
     var keyboard: KeyboardService { get }
+
+    /// UI 服务
+    var ui: UIService { get }
+}
+
+/// UI 服务协议 - 提供 UI 扩展能力
+protocol UIService: AnyObject {
+    /// 注册侧边栏 Tab
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - tab: Tab 定义
+    func registerSidebarTab(for pluginId: String, tab: SidebarTab)
+
+    /// 注销插件的所有侧边栏 Tab
+    /// - Parameter pluginId: 插件 ID
+    func unregisterSidebarTabs(for pluginId: String)
 }

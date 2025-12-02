@@ -27,7 +27,8 @@ final class PluginManager {
         self.context = PluginContextImpl(
             commands: CommandRegistry.shared,
             events: EventBus.shared,
-            keyboard: KeyboardServiceImpl.shared
+            keyboard: KeyboardServiceImpl.shared,
+            ui: UIServiceImpl.shared
         )
     }
 
@@ -37,6 +38,9 @@ final class PluginManager {
     func loadBuiltinPlugins() {
         loadPlugin(TranslationPlugin.self)
         loadPlugin(WritingAssistantPlugin.self)
+        loadPlugin(OneLineCommandPlugin.self)
+        loadPlugin(LearningPlugin.self)  // 学习插件
+        // loadPlugin(ExampleSidebarPlugin.self)  // 示例侧边栏插件（已禁用）
         print("🔌 插件管理器已初始化")
     }
 
@@ -93,15 +97,18 @@ private final class PluginContextImpl: PluginContext {
     let commands: CommandService
     let events: EventService
     let keyboard: KeyboardService
+    let ui: UIService
 
     init(
         commands: CommandService,
         events: EventService,
-        keyboard: KeyboardService
+        keyboard: KeyboardService,
+        ui: UIService
     ) {
         self.commands = commands
         self.events = events
         self.keyboard = keyboard
+        self.ui = ui
     }
 }
 
@@ -153,10 +160,38 @@ final class KeyboardServiceImpl: KeyboardService {
     ///   - context: 命令上下文
     /// - Returns: 是否处理了该按键
     func handleKeyStroke(_ keyStroke: KeyStroke, context: CommandContext) -> Bool {
+        // 调试日志：打印所有 Cmd 组合键
+        if keyStroke.modifiers.contains(.command) {
+            print("🔍 [KeyboardService] Received keystroke: \(keyStroke)")
+        }
+
         if let commandId = findCommand(for: keyStroke) {
+            print("✅ [KeyboardService] Found command: \(commandId)")
             CommandRegistry.shared.execute(commandId, context: context)
             return true
         }
         return false
+    }
+
+    /// 获取所有快捷键绑定（用于 UI 显示）
+    func getAllBindings() -> [(KeyStroke, (commandId: CommandID, when: String?))] {
+        return Array(bindings)
+    }
+}
+
+// MARK: - UI 服务实现
+
+/// UI 服务实现
+final class UIServiceImpl: UIService {
+    static let shared = UIServiceImpl()
+
+    private init() {}
+
+    func registerSidebarTab(for pluginId: String, tab: SidebarTab) {
+        SidebarRegistry.shared.registerTab(for: pluginId, tab: tab)
+    }
+
+    func unregisterSidebarTabs(for pluginId: String) {
+        SidebarRegistry.shared.unregisterTabs(for: pluginId)
     }
 }
