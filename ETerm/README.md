@@ -25,7 +25,8 @@ english/
 │
 ├── rio/                      # Rio 终端源码（submodule，保持干净）
 └── scripts/
-    └── update_sugarloaf.sh   # 编译更新脚本
+    ├── update_sugarloaf_dev.sh     # 🚀 开发快速编译（thin LTO）
+    └── build_sugarloaf_release.sh  # 🏗️ 发布完整优化（full LTO）
 ```
 
 ## 快速开始
@@ -33,7 +34,11 @@ english/
 ### 1. 编译 Rust FFI
 
 ```bash
-./scripts/update_sugarloaf.sh
+# 日常开发（推荐）
+./scripts/update_sugarloaf_dev.sh
+
+# 正式发布
+./scripts/build_sugarloaf_release.sh
 ```
 
 ### 2. Xcode 配置
@@ -111,12 +116,23 @@ TabClick → Coordinator.handleTabClick()
 
 ## 开发指南
 
+### 编译模式说明
+
+| 脚本 | 用途 | LTO | 编译单元 | 增量编译 |
+|------|------|-----|---------|----------|
+| `update_sugarloaf_dev.sh` | 日常开发 | thin | 16 | ✅ |
+| `build_sugarloaf_release.sh` | 正式发布 | full | 1 | ❌ |
+
+**性能差异**：dev-fast 性能损失 < 5%，二进制稍大，但编译速度快 3-5 倍。
+
 ### 重新编译 Rust
 
 修改 `sugarloaf-ffi/` 后：
 
 ```bash
-./scripts/update_sugarloaf.sh
+# 日常开发
+./scripts/update_sugarloaf_dev.sh
+
 # Xcode: Cmd+Shift+K (Clean) → Cmd+B (Build)
 ```
 
@@ -181,7 +197,7 @@ match find_font(&db, emoji_font, false, true)
 **⚠️ 重要**: 当更新 Rio 子模块时，需要重新应用颜色配置：
 1. 参考 `.eterm-config/shuimo-theme.toml` 中的颜色值
 2. 修改 `rio/rio-backend/src/config/colors/defaults.rs` 中对应的 hex 值
-3. 重新编译：`./scripts/update_sugarloaf.sh`
+3. 重新编译：`./scripts/update_sugarloaf_dev.sh`
 
 **快速恢复命令**:
 ```bash
@@ -189,7 +205,7 @@ match find_font(&db, emoji_font, false, true)
 cat .eterm-config/shuimo-theme.toml
 
 # 修改 defaults.rs 后重新编译
-./scripts/update_sugarloaf.sh
+./scripts/update_sugarloaf_dev.sh
 ```
 
 ## 相关文档
