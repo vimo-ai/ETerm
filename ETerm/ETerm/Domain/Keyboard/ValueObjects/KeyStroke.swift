@@ -147,4 +147,45 @@ struct KeyStroke: Hashable {
         // 例如 Shift+2 会返回 "@" 而不是 "2"
         return actualCharacter ?? character ?? ""
     }
+
+    // MARK: - 显示字符串（用于 UI 显示）
+
+    /// 将快捷键转换为可读的显示格式（如 "⌘⇧T"）
+    var displayString: String {
+        var result = ""
+
+        // 修饰键符号
+        if modifiers.contains(.control) {
+            result += "⌃"
+        }
+        if modifiers.contains(.option) {
+            result += "⌥"
+        }
+        if modifiers.contains(.shift) {
+            result += "⇧"
+        }
+        if modifiers.contains(.command) {
+            result += "⌘"
+        }
+
+        // 特殊键名称
+        switch keyCode {
+        case 53: return result + "Esc"
+        case 36: return result + "↩"
+        case 48: return result + "⇥"
+        case 51: return result + "⌫"
+        case 123: return result + "←"
+        case 124: return result + "→"
+        case 125: return result + "↓"
+        case 126: return result + "↑"
+        default: break
+        }
+
+        // 普通字符
+        if let char = character {
+            result += char.uppercased()
+        }
+
+        return result
+    }
 }

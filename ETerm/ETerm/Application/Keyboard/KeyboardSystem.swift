@@ -94,6 +94,11 @@ final class KeyboardSystem {
         currentMode = mode
     }
 
+    /// 获取所有快捷键绑定（用于 UI 显示）
+    func getAllBindings() -> [KeyBinding] {
+        return bindingRegistry.allBindings()
+    }
+
     // MARK: - Private
 
     private func buildContext() -> KeyboardContext {

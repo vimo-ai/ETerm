@@ -4,6 +4,8 @@
 //
 //  应用层 - 全局快捷键处理器（Page 级别）
 
+import Foundation
+
 /// 全局快捷键处理器（Page 级别）
 final class GlobalShortcutHandler: KeyboardEventHandler {
     let identifier = "global.shortcut"
@@ -56,6 +58,11 @@ final class GlobalShortcutHandler: KeyboardEventHandler {
             Task { @MainActor in
                 TranslationModeStore.shared.toggle()
             }
+            return .consumed
+
+        case .toggleSidebar:
+            // 发送通知给 ContentView
+            NotificationCenter.default.post(name: NSNotification.Name("ToggleSidebar"), object: nil)
             return .consumed
 
         default:

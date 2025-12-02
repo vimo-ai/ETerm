@@ -9,12 +9,30 @@
 
 import AppKit
 import SwiftUI
+import SwiftData
 
 // MARK: - AppDelegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
 
+    // SwiftData ModelContainer
+    private(set) var modelContainer: ModelContainer!
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Initialize SwiftData ModelContainer
+        do {
+            modelContainer = try ModelContainer(
+                for: WordEntry.self, GrammarErrorRecord.self,
+                configurations: ModelConfiguration(isStoredInMemoryOnly: false)
+            )
+            print("✅ SwiftData ModelContainer initialized successfully")
+
+            // 输出当前数据统计
+            printDataStatistics()
+        } catch {
+            fatalError("Failed to initialize ModelContainer: \(error)")
+        }
+
         // 启动 Claude Socket Server（接收 Hook 调用）
         ClaudeSocketServer.shared.start()
 
@@ -54,6 +72,83 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    // MARK: - 数据统计
+
+    private func printDataStatistics() {
+        let context = modelContainer.mainContext
+
+        do {
+            // 统计单词本
+            let wordCount = try context.fetchCount(FetchDescriptor<WordEntry>())
+
+            // 统计高频单词 (Hit >= 2)
+            let frequentDescriptor = FetchDescriptor<WordEntry>(
+                predicate: #Predicate { $0.hitCount >= 2 },
+                sortBy: [SortDescriptor(\.hitCount, order: .reverse)]
+            )
+            let frequentWords = try context.fetch(frequentDescriptor)
+
+            // 统计语法错误
+            let errorCount = try context.fetchCount(FetchDescriptor<GrammarErrorRecord>())
+
+            // 按分类统计语法错误
+            let allErrors = try context.fetch(FetchDescriptor<GrammarErrorRecord>())
+            let categoryStats = Dictionary(grouping: allErrors, by: { $0.category })
+                .mapValues { $0.count }
+                .sorted { $0.value > $1.value }
+
+            // 输出统计信息
+            print("\n" + String(repeating: "=", count: 60))
+            print("📊 SwiftData 数据统计")
+            print(String(repeating: "=", count: 60))
+
+            print("\n📚 单词本:")
+            print("  总单词数: \(wordCount)")
+            print("  高频单词 (Hit ≥ 2): \(frequentWords.count)")
+
+            if !frequentWords.isEmpty {
+                print("  TOP 5 高频单词:")
+                for (index, word) in frequentWords.prefix(5).enumerated() {
+                    let lastQuery = word.lastQueryDate?.formatted(date: .omitted, time: .shortened) ?? "未知"
+                    print("    \(index + 1). \(word.word) - \(word.hitCount)次 (最近: \(lastQuery))")
+                }
+            }
+
+            print("\n📝 语法档案:")
+            print("  总错误数: \(errorCount)")
+
+            if !categoryStats.isEmpty {
+                print("  错误分类统计:")
+                for (category, count) in categoryStats.prefix(5) {
+                    let displayName = categoryDisplayName(category)
+                    print("    • \(displayName): \(count)次")
+                }
+            }
+
+            print("\n" + String(repeating: "=", count: 60) + "\n")
+
+        } catch {
+            print("❌ 读取数据统计失败: \(error)")
+        }
+    }
+
+    private func categoryDisplayName(_ category: String) -> String {
+        switch category {
+        case "tense": return "时态"
+        case "article": return "冠词"
+        case "preposition": return "介词"
+        case "subject_verb_agreement": return "主谓一致"
+        case "word_order": return "词序"
+        case "singular_plural": return "单复数"
+        case "punctuation": return "标点"
+        case "spelling": return "拼写"
+        case "word_choice": return "用词"
+        case "sentence_structure": return "句子结构"
+        case "other": return "其他"
+        default: return category
+        }
+    }
+
     // MARK: - 菜单设置
 
     private func setupMainMenu() {
@@ -87,6 +182,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let newWindowItem = NSMenuItem(title: "新建窗口", action: #selector(newWindow(_:)), keyEquivalent: "N")
         newWindowItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(newWindowItem)
+
+        fileMenu.addItem(NSMenuItem.separator())
+
+        // Cmd+Shift+O: 一行命令（禁用菜单项，由插件系统处理）
+        let oneLineCommandItem = NSMenuItem(title: "一行命令", action: nil, keyEquivalent: "O")
+        oneLineCommandItem.keyEquivalentModifierMask = [.command, .shift]
+        oneLineCommandItem.isEnabled = false  // 禁用菜单项，让插件系统处理
+        fileMenu.addItem(oneLineCommandItem)
 
         fileMenu.addItem(NSMenuItem.separator())
 

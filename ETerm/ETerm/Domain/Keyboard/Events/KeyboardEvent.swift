@@ -53,6 +53,7 @@ enum KeyboardEvent: Equatable {
     // 辅助功能
     // ─────────────────────────────────────────
     case toggleTranslationMode
+    case toggleSidebar
 
     // ─────────────────────────────────────────
     // 终端输入
