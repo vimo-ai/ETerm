@@ -218,6 +218,13 @@ impl Sugarloaf<'_> {
         operation: u8,
     ) {
         self.state.set_rich_text_font_size_based_on_action_skia(rt_id, operation);
+        #[cfg(target_os = "macos")]
+        {
+            // 更新 self.font_size 以便 macOS Skia 渲染使用
+            if let Some(state) = self.state.content.get_state(rt_id) {
+                self.font_size = state.layout.font_size;
+            }
+        }
     }
 
     #[inline]
