@@ -16,7 +16,8 @@
 
 set -euo pipefail
 
-ROOT="/Users/higuaifan/Desktop/hi/小工具/english"
+# 动态获取项目根目录（脚本在 scripts/ 目录下）
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RIO_DIR="$ROOT/rio"
 ETERM_DIR="$ROOT/ETerm"
 
