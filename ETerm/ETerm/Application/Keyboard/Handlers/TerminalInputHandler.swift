@@ -14,11 +14,7 @@ import Foundation
 /// 终端输入处理器
 ///
 /// 只处理特殊键和 Ctrl 组合键，普通字符交给 IME
-final class TerminalInputHandler: KeyboardEventHandler {
-    let identifier = "terminal.input"
-    let phase = EventPhase.terminalInput
-    let priority = 0
-
+final class TerminalInputHandler {
     private weak var coordinator: TerminalWindowCoordinator?
 
     /// 需要直接处理的特殊键 keyCode
@@ -45,21 +41,21 @@ final class TerminalInputHandler: KeyboardEventHandler {
     func handle(_ keyStroke: KeyStroke, context: KeyboardContext) -> EventHandleResult {
         guard let terminalId = context.terminalId,
               let coordinator = coordinator else {
-            return .ignored
+            return .unhandled
         }
 
         // 特殊处理：Option+Delete 分词删除
         // 发送 Ctrl+W (0x17) - Readline/Shell 标准的删除前一个单词
         if keyStroke.keyCode == 51 && keyStroke.modifiers.contains(.option) {
             coordinator.writeInput(terminalId: terminalId, data: "\u{17}")
-            return .consumed
+            return .handled
         }
 
         // 特殊处理：Cmd+Delete 删除到行首
         // 发送 Ctrl+U (0x15) - Readline/Shell 标准的删除到行首
         if keyStroke.keyCode == 51 && keyStroke.modifiers.contains(.command) {
             coordinator.writeInput(terminalId: terminalId, data: "\u{15}")
-            return .consumed
+            return .handled
         }
 
         // 判断是否应该直接处理
@@ -71,11 +67,11 @@ final class TerminalInputHandler: KeyboardEventHandler {
             if !sequence.isEmpty {
                 coordinator.writeInput(terminalId: terminalId, data: sequence)
             }
-            return .consumed
+            return .handled
         }
 
         // 普通字符：交给 IME 处理
-        return .ignored
+        return .unhandled
     }
 
     /// 判断是否应该直接处理（不经过 IME）

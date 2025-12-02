@@ -7,11 +7,7 @@
 /// IME 劫持处理器
 ///
 /// 在 IME 预编辑状态下劫持大部分按键
-final class IMEInterceptHandler: KeyboardEventHandler {
-    let identifier = "ime.intercept"
-    let phase = EventPhase.intercept
-    let priority = 100
-
+final class IMEInterceptHandler {
     private let imeCoordinator: IMECoordinator
 
     init(imeCoordinator: IMECoordinator) {
@@ -20,7 +16,7 @@ final class IMEInterceptHandler: KeyboardEventHandler {
 
     func handle(_ keyStroke: KeyStroke, context: KeyboardContext) -> EventHandleResult {
         guard imeCoordinator.isComposing else {
-            return .ignored
+            return .unhandled
         }
 
         // 允许穿透的全局快捷键
@@ -31,7 +27,7 @@ final class IMEInterceptHandler: KeyboardEventHandler {
 
         if allowedGlobalShortcuts.contains(where: { $0.matches(keyStroke) }) {
             imeCoordinator.cancelComposition()
-            return .ignored
+            return .unhandled
         }
 
         // 其他按键交给 IME
