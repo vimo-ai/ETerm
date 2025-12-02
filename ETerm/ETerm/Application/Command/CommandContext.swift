@@ -37,4 +37,20 @@ struct CommandContext {
     var activeTerminalId: UInt32? {
         coordinator?.getActiveTerminalId()
     }
+
+    /// 是否有文本选中
+    var hasSelection: Bool {
+        guard let coordinator = coordinator else { return false }
+        let activePanelId = coordinator.activePanelId
+        let panel = activePanelId.flatMap { coordinator.terminalWindow.getPanel($0) }
+        let activeTab = panel?.activeTab
+        return activeTab?.hasSelection() ?? false
+    }
+
+    /// 当前键盘模式
+    var keyboardMode: KeyboardMode {
+        // 暂时简单实现，根据是否有选中判断
+        // 未来可以从 coordinator 获取精确的 mode
+        return hasSelection ? .selection : .normal
+    }
 }

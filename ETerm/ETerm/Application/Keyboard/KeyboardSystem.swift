@@ -18,8 +18,7 @@ final class KeyboardSystem {
     // MARK: - Components
 
     let imeCoordinator: IMECoordinator
-    private let pipeline: KeyboardEventPipeline
-    private let bindingRegistry: KeyBindingRegistry
+    private var inputCoordinator: InputCoordinator!
     private weak var coordinator: TerminalWindowCoordinator?
 
     // MARK: - State
@@ -31,98 +30,24 @@ final class KeyboardSystem {
     init(coordinator: TerminalWindowCoordinator) {
         self.coordinator = coordinator
         self.imeCoordinator = IMECoordinator()
-        self.pipeline = KeyboardEventPipeline()
-        self.bindingRegistry = KeyBindingRegistry()
-
-        setupHandlers()
-    }
-
-    private func setupHandlers() {
-        guard let coordinator = coordinator else { return }
-
-        // Phase 0: IME 劫持
-        pipeline.register(IMEInterceptHandler(imeCoordinator: imeCoordinator))
-
-        // Phase 1: 全局快捷键（Page）
-        pipeline.register(GlobalShortcutHandler(coordinator: coordinator, bindingRegistry: bindingRegistry))
-
-        // Phase 2: Panel 快捷键（Tab）
-        pipeline.register(PanelShortcutHandler(coordinator: coordinator, bindingRegistry: bindingRegistry))
-
-        // Phase 3: 编辑（复制粘贴）
-        pipeline.register(EditHandler(coordinator: coordinator, bindingRegistry: bindingRegistry))
-
-        // Phase 4: 终端输入（兜底）
-        pipeline.register(TerminalInputHandler(coordinator: coordinator))
+        self.inputCoordinator = InputCoordinator(coordinator: coordinator, imeCoordinator: imeCoordinator)
     }
 
     // MARK: - Public API
 
     /// 处理键盘事件
     func handleKeyDown(_ event: NSEvent) -> KeyEventResult {
-        let keyStroke = KeyStroke.from(event)
-
-        // 优先检查命令系统的快捷键绑定
-        let commandContext = CommandContext(coordinator: coordinator, window: nil)
-        if KeyboardServiceImpl.shared.handleKeyStroke(keyStroke, context: commandContext) {
-            return .handled
-        }
-
-        // 如果命令系统未处理，走原有的键盘处理流程
-        let context = buildContext()
-        let result = pipeline.process(keyStroke, context: context)
-
-        switch result {
-        case .handled:
-            return .handled
-
-        case .intercepted(let action):
-            switch action {
-            case .passToIME:
-                return .passToIME
-            }
-
-        case .unhandled:
-            // 未被任何 Handler 处理的按键，交给 IME 系统
-            // 这样普通字符输入可以通过 interpretKeyEvents 进入输入法
-            return .passToIME
-        }
+        return inputCoordinator.handleKeyDown(event)
     }
 
     /// 设置键盘模式
     func setMode(_ mode: KeyboardMode) {
         currentMode = mode
+        inputCoordinator.setMode(mode)
     }
 
     /// 获取所有快捷键绑定（用于 UI 显示）
-    func getAllBindings() -> [KeyBinding] {
-        return bindingRegistry.allBindings()
-    }
-
-    // MARK: - Private
-
-    private func buildContext() -> KeyboardContext {
-        guard let coordinator = coordinator else {
-            return KeyboardContext(
-                mode: currentMode,
-                activePanelId: nil,
-                activeTabId: nil,
-                hasSelection: false,
-                terminalId: nil
-            )
-        }
-
-        let activePanelId = coordinator.activePanelId
-        let panel = activePanelId.flatMap { coordinator.terminalWindow.getPanel($0) }
-        let activeTab = panel?.activeTab
-        let terminalId = activeTab?.rustTerminalId
-
-        return KeyboardContext(
-            mode: currentMode,
-            activePanelId: activePanelId,
-            activeTabId: activeTab?.tabId,
-            hasSelection: activeTab?.hasSelection() ?? false,
-            terminalId: terminalId
-        )
+    func getAllBindings() -> [(KeyStroke, [KeyboardServiceImpl.CommandBinding])] {
+        return KeyboardServiceImpl.shared.getAllBindings()
     }
 }
