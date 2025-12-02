@@ -8,7 +8,6 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @StateObject private var configManager = AIConfigManager.shared
 
     @State private var apiKey: String = ""
@@ -37,13 +36,6 @@ struct SettingsView: View {
                     .fontWeight(.semibold)
 
                 Spacer()
-
-                Button(action: { dismiss() }) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
             }
             .padding()
 
@@ -135,7 +127,6 @@ struct SettingsView: View {
                 .padding()
             }
         }
-        .frame(width: 650, height: 550)
         .onAppear(perform: loadConfig)
     }
 
