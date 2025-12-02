@@ -198,11 +198,29 @@ class BubbleState: ObservableObject {
                         content = .analysis
                     }
                     currentModelTag = "qwen3-max"
+
+                    // 保存短语/句子到数据库（用于复合名词等）
+                    saveToVocabulary(
+                        word: text,
+                        phonetic: nil,
+                        definition: finalGrammar.isEmpty ? nil : finalGrammar,
+                        translation: finalTranslation,
+                        sourceContext: nil
+                    )
                 } else {
                     // 降级到普通翻译
                     let result = try await AIService.shared.translate(text)
                     content = .translation(result)
                     currentModelTag = "qwen-mt-flash"
+
+                    // 保存翻译结果到数据库
+                    saveToVocabulary(
+                        word: text,
+                        phonetic: nil,
+                        definition: nil,
+                        translation: result,
+                        sourceContext: nil
+                    )
                 }
             }
         } catch {
