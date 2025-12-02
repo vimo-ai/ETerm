@@ -49,13 +49,17 @@ final class TerminalInputHandler: KeyboardEventHandler {
         }
 
         // 特殊处理：Option+Delete 分词删除
+        // 发送 Ctrl+W (0x17) - Readline/Shell 标准的删除前一个单词
         if keyStroke.keyCode == 51 && keyStroke.modifiers.contains(.option) {
-            return handleWordDelete(terminalId: terminalId, coordinator: coordinator)
+            coordinator.writeInput(terminalId: terminalId, data: "\u{17}")
+            return .consumed
         }
 
-        // 特殊处理：Cmd+Delete 删除整行（光标前到行首）
+        // 特殊处理：Cmd+Delete 删除到行首
+        // 发送 Ctrl+U (0x15) - Readline/Shell 标准的删除到行首
         if keyStroke.keyCode == 51 && keyStroke.modifiers.contains(.command) {
-            return handleDeleteToLineStart(terminalId: terminalId, coordinator: coordinator)
+            coordinator.writeInput(terminalId: terminalId, data: "\u{15}")
+            return .consumed
         }
 
         // 判断是否应该直接处理
@@ -94,109 +98,5 @@ final class TerminalInputHandler: KeyboardEventHandler {
 
         // 其他情况（普通字符、Shift+字符）交给 IME
         return false
-    }
-
-    // MARK: - 删除操作
-
-    /// 处理 Cmd+Delete 删除整行（光标前到行首）
-    ///
-    /// 实现逻辑：
-    /// 1. 获取光标当前列位置
-    /// 2. 计算需要删除的字符数（光标前所有内容）
-    /// 3. 发送对应数量的 Backspace 序列到终端
-    ///
-    /// - Parameters:
-    ///   - terminalId: 终端 ID
-    ///   - coordinator: 终端协调器
-    /// - Returns: 处理结果
-    private func handleDeleteToLineStart(
-        terminalId: UInt32,
-        coordinator: TerminalWindowCoordinator
-    ) -> EventHandleResult {
-        // 获取终端管理器
-        let terminalManager = GlobalTerminalManager.shared
-
-        // 获取终端快照
-        guard let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)) else {
-            // 降级：发送单个 Delete
-            coordinator.writeInput(terminalId: terminalId, data: "\u{7F}")
-            return .consumed
-        }
-
-        let col = Int(snapshot.cursor_col)
-
-        // 光标在行首，无需删除
-        guard col > 0 else {
-            return .consumed
-        }
-
-        // 生成删除序列（删除光标前所有字符）
-        let deleteSequence = String(repeating: "\u{7F}", count: col)
-        coordinator.writeInput(terminalId: terminalId, data: deleteSequence)
-
-        return .consumed
-    }
-
-    /// 处理 Option+Delete 分词删除
-    ///
-    /// 实现逻辑：
-    /// 1. 获取光标所在行的文本
-    /// 2. 使用 WordBoundaryDetector 找到光标前一个词的边界
-    /// 3. 计算需要删除的字符数
-    /// 4. 发送对应数量的 Backspace 序列到终端
-    ///
-    /// - Parameters:
-    ///   - terminalId: 终端 ID
-    ///   - coordinator: 终端协调器
-    /// - Returns: 处理结果
-    private func handleWordDelete(
-        terminalId: UInt32,
-        coordinator: TerminalWindowCoordinator
-    ) -> EventHandleResult {
-        // 获取终端管理器
-        let terminalManager = GlobalTerminalManager.shared
-
-        // 获取终端快照
-        guard let snapshot = terminalManager.getSnapshot(terminalId: Int(terminalId)) else {
-            // 降级：发送单个 Delete
-            coordinator.writeInput(terminalId: terminalId, data: "\u{7F}")
-            return .consumed
-        }
-
-        let row = Int(snapshot.cursor_row)
-        let col = Int(snapshot.cursor_col)
-
-        // 光标在行首，无法删除
-        guard col > 0 else {
-            return .consumed
-        }
-
-        // 获取当前行的文本（转换为绝对行号）
-        let absoluteRow = Int64(snapshot.scrollback_lines) + Int64(row)
-        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), absoluteRow: absoluteRow, maxCells: 500)
-        let lineText = cells.map { cell in
-            guard let scalar = UnicodeScalar(cell.character) else { return " " }
-            return String(Character(scalar))
-        }.joined()
-
-        // 使用 WordBoundaryDetector 查找光标前一个位置的词边界
-        let detector = WordBoundaryDetector()
-        guard let boundary = detector.findBoundary(in: lineText, at: col - 1) else {
-            // 降级：发送单个 Delete
-            coordinator.writeInput(terminalId: terminalId, data: "\u{7F}")
-            return .consumed
-        }
-
-        // 计算需要删除的字符数（从词的起始到光标位置）
-        let deleteCount = col - boundary.startIndex
-        guard deleteCount > 0 else {
-            return .consumed
-        }
-
-        // 生成删除序列（多个 Backspace）
-        let deleteSequence = String(repeating: "\u{7F}", count: deleteCount)
-        coordinator.writeInput(terminalId: terminalId, data: deleteSequence)
-
-        return .consumed
     }
 }
