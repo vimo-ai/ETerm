@@ -195,8 +195,18 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 创建新的 Tab 并分配终端
     func createNewTab(in panelId: UUID) -> TerminalTab? {
+        // 获取当前 Panel 的激活 Tab 的 CWD（用于继承）
+        var inheritedCwd: String? = nil
+        if let panel = terminalWindow.getPanel(panelId),
+           let activeTab = panel.activeTab,
+           let terminalId = activeTab.rustTerminalId {
+            inheritedCwd = getCwd(terminalId: Int(terminalId))
+            print("🔍 [CreateNewTab] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
+        }
+
         // 使用较大的默认尺寸 (120x40) 以减少初始 Reflow 的影响
-        let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh")
+        print("📝 [CreateNewTab] Creating terminal with inherited CWD: \(inheritedCwd ?? "nil")")
+        let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh", cwd: inheritedCwd)
         guard terminalId >= 0 else {
             return nil
         }
@@ -269,6 +279,85 @@ class TerminalWindowCoordinator: ObservableObject {
         // 这里只做最小清理，防止任何野指针访问
         pendingRenderWorkItem?.cancel()
         pendingRenderWorkItem = nil
+    }
+
+    // MARK: - Layout Synchronization (新架构：三层分离)
+
+    /// 同步布局到 Rust 层
+    ///
+    /// 这是布局变化的统一入口，只在以下情况调用：
+    /// - 窗口 resize
+    /// - DPI 变化
+    /// - 创建/关闭 Tab/Page
+    /// - 切换 Page/Tab
+    /// - 分栏/合并 Panel
+    ///
+    /// 调用时机：布局变化时主动触发，而非每帧调用
+    func syncLayoutToRust() {
+        guard let poolHandle = globalTerminalManager?.poolHandleForRender,
+              let mapper = coordinateMapper,
+              let fontMetrics = fontMetrics else {
+            print("⚠️ [syncLayoutToRust] Missing required dependencies")
+            return
+        }
+
+        // 计算内容区域（需要 bounds）
+        // 从 RioMetalView 获取 bounds（通过 renderView 协议）
+        // 这是一个类型转换，安全且不会产生循环依赖
+        guard let metalView = renderView as? RioMetalView else {
+            print("⚠️ [syncLayoutToRust] renderView is not RioMetalView")
+            return
+        }
+
+        let contentBounds = metalView.bounds
+
+        // 从 AR 获取所有需要渲染的终端
+        let tabsToRender = terminalWindow.getActiveTabsForRendering(
+            containerBounds: contentBounds,
+            headerHeight: headerHeight
+        )
+
+        print("🔄 [syncLayoutToRust] Syncing layout for \(tabsToRender.count) terminals")
+
+        // 清空 Rust 侧的 active_terminals 集合
+        rio_pool_clear_active_terminals(poolHandle)
+
+        // 设置每个终端的布局
+        for (terminalId, contentBounds) in tabsToRender {
+            // 坐标转换：Swift 坐标 → Rust 逻辑坐标
+            let logicalRect = mapper.swiftToRust(rect: contentBounds)
+
+            // 设置布局到 Rust 侧
+            _ = rio_terminal_set_layout(
+                poolHandle,
+                Int32(terminalId),
+                Float(logicalRect.origin.x),
+                Float(logicalRect.origin.y),
+                Float(logicalRect.width),
+                Float(logicalRect.height),
+                true  // visible
+            )
+
+            // 处理 resize（只在尺寸变化时）
+            if let snapshot = globalTerminalManager?.getSnapshot(terminalId: Int(terminalId)) {
+                let physicalWidth = logicalRect.width * mapper.scale
+                let physicalHeight = logicalRect.height * mapper.scale
+
+                let cellWidth = CGFloat(fontMetrics.cell_width)
+                let lineHeight = CGFloat(fontMetrics.line_height)
+
+                let cols = UInt16(max(1, min(physicalWidth / cellWidth, CGFloat(UInt16.max - 1))))
+                let rows = UInt16(max(1, min(physicalHeight / lineHeight, CGFloat(UInt16.max - 1))))
+
+                // 只在尺寸真的变化时才调用 resize
+                if cols != snapshot.columns || rows != snapshot.screen_lines {
+                    print("📐 [syncLayoutToRust] Resizing terminal \(terminalId): \(snapshot.columns)x\(snapshot.screen_lines) -> \(cols)x\(rows)")
+                    _ = globalTerminalManager?.resize(terminalId: Int(terminalId), cols: cols, rows: rows)
+                }
+            }
+        }
+
+        print("✅ [syncLayoutToRust] Layout sync complete")
     }
 
     // MARK: - Render Scheduling
@@ -588,6 +677,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 调用 AR 的方法切换 Tab
         if panel.setActiveTab(tabId) {
+            // 同步布局到 Rust（Tab 切换可能改变显示的终端）
+            syncLayoutToRust()
+
             // 触发渲染更新
             objectWillChange.send()
             updateTrigger = UUID()
@@ -622,6 +714,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 复用统一的 Tab 移除逻辑，确保在最后一个 Tab 关闭时可以移除 Panel
         _ = removeTab(tabId, from: panelId, closeTerminal: true)
+
+        // 同步布局到 Rust（关闭 Tab）
+        syncLayoutToRust()
     }
 
     /// 用户重命名 Tab
@@ -686,6 +781,9 @@ class TerminalWindowCoordinator: ObservableObject {
                     activePanelId = newActivePanelId
                 }
 
+                // 同步布局到 Rust（关闭 Panel）
+                syncLayoutToRust()
+
                 objectWillChange.send()
                 updateTrigger = UUID()
                 scheduleRender()
@@ -726,6 +824,9 @@ class TerminalWindowCoordinator: ObservableObject {
                 activePanelId = terminalWindow.allPanels.first?.panelId
             }
 
+            // 同步布局到 Rust（关闭 Panel）
+            syncLayoutToRust()
+
             objectWillChange.send()
             updateTrigger = UUID()
             scheduleRender()
@@ -745,6 +846,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 设置为激活的 Panel
         setActivePanel(panelId)
+
+        // 同步布局到 Rust（新增 Tab）
+        syncLayoutToRust()
 
         objectWillChange.send()
         updateTrigger = UUID()
@@ -785,6 +889,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
             // 设置新 Panel 为激活状态
             setActivePanel(newPanelId)
+
+            // 同步布局到 Rust（分栏改变了布局）
+            syncLayoutToRust()
 
             objectWillChange.send()
             updateTrigger = UUID()
@@ -876,7 +983,10 @@ class TerminalWindowCoordinator: ObservableObject {
             }
         }
 
-        // 4. 触发 UI 更新
+        // 4. 同步布局到 Rust（拖拽改变了布局）
+        syncLayoutToRust()
+
+        // 5. 触发 UI 更新
         objectWillChange.send()
         updateTrigger = UUID()
         scheduleRender()
@@ -920,6 +1030,21 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         return activeTab.rustTerminalId
+    }
+
+    /// 获取当前激活的 Tab 的工作目录
+    func getActiveTabCwd() -> String? {
+        guard let terminalId = getActiveTerminalId() else {
+            return nil
+        }
+
+        // 使用 GlobalTerminalManager 获取 CWD
+        if let manager = globalTerminalManager {
+            return manager.getCwd(terminalId: Int(terminalId))
+        }
+
+        // Fallback：如果没有 GlobalTerminalManager，返回 Home 目录
+        return NSHomeDirectory()
     }
 
     /// 根据滚轮事件位置获取应滚动的终端 ID（鼠标所在 Panel 的激活 Tab）
@@ -1066,6 +1191,13 @@ class TerminalWindowCoordinator: ObservableObject {
         let getTabsTime = (CFAbsoluteTimeGetCurrent() - getTabsStart) * 1000
 //        print("[Render] ⏱️ Get tabs to render (\(tabsToRender.count) tabs): \(String(format: "%.2f", getTabsTime))ms")
 
+        // 🧹 清除渲染缓冲区（在渲染新内容前）
+        // 这确保切换 Page 时旧内容不会残留
+        // 注意：GlobalTerminalManager 使用单独的 Sugarloaf，不需要清除
+        if globalTerminalManager == nil {
+            terminalPool.clear()
+        }
+
         // 渲染每个 Tab（支持 TerminalPoolWrapper 和 EventDrivenTerminalPoolWrapper）
         // 🎯 PTY 读取现在在 CVDisplayLink 回调中统一处理
         // 不再在这里调用 readAllOutputs()，避免重复读取
@@ -1155,13 +1287,21 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Returns: 新创建的 Page ID
     @discardableResult
     func createPage(title: String? = nil) -> UUID? {
+        // 获取当前激活终端的 CWD（用于继承）
+        var inheritedCwd: String? = nil
+        if let terminalId = getActiveTerminalId() {
+            inheritedCwd = getCwd(terminalId: Int(terminalId))
+            print("🔍 [CreatePage] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
+        }
+
         let newPage = terminalWindow.createPage(title: title)
 
-        // 为新 Page 的初始 Tab 创建终端
+        // 为新 Page 的初始 Tab 创建终端（继承 CWD）
         for panel in newPage.allPanels {
             for tab in panel.tabs {
                 if tab.rustTerminalId == nil {
-                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
+                    print("📝 [CreatePage] Creating terminal with inherited CWD: \(inheritedCwd ?? "nil")")
+                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: inheritedCwd)
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
                     }
@@ -1174,6 +1314,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 更新激活的 Panel
         activePanelId = newPage.allPanels.first?.panelId
+
+        // 同步布局到 Rust（新增 Page）
+        syncLayoutToRust()
 
         // 触发 UI 更新
         objectWillChange.send()
@@ -1197,11 +1340,14 @@ class TerminalWindowCoordinator: ObservableObject {
         // Step 2: 更新激活的 Panel
         activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
 
-        // Step 3: 触发 UI 更新
+        // Step 3: 同步布局到 Rust（Page 切换改变了显示的终端）
+        syncLayoutToRust()
+
+        // Step 4: 触发 UI 更新
         objectWillChange.send()
         updateTrigger = UUID()
 
-        // Step 4: 请求渲染（防抖）
+        // Step 5: 请求渲染（防抖）
         scheduleRender()
 
         return true
@@ -1251,6 +1397,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 更新激活的 Panel
         activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+
+        // 同步布局到 Rust（关闭 Page）
+        syncLayoutToRust()
 
         // 触发 UI 更新
         objectWillChange.send()
@@ -1305,6 +1454,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
 
+        // 同步布局到 Rust（Page 切换）
+        syncLayoutToRust()
+
         objectWillChange.send()
         updateTrigger = UUID()
         scheduleRender()
@@ -1320,6 +1472,9 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+
+        // 同步布局到 Rust（Page 切换）
+        syncLayoutToRust()
 
         objectWillChange.send()
         updateTrigger = UUID()

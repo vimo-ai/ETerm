@@ -71,6 +71,9 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 提交所有累积的渲染内容
     func flush()
 
+    /// 清除所有渲染对象（切换 Page 时使用）
+    func clear()
+
     // MARK: - 光标和选区
 
     /// 获取光标位置
@@ -103,6 +106,7 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func setRenderCallback(_ callback: @escaping () -> Void) {}
     func render(terminalId: Int, x: Float, y: Float, width: Float, height: Float, cols: UInt16, rows: UInt16) -> Bool { false }
     func flush() {}
+    func clear() {}
     func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
     func clearSelection(terminalId: Int) -> Bool { false }
     func getInputRow(terminalId: Int) -> UInt16? { nil }

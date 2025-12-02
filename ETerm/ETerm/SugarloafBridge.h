@@ -456,4 +456,12 @@ int rio_terminal_set_layout(
 /// - pool_handle: Terminal pool handle
 void rio_pool_render_all(RioTerminalPoolHandle pool_handle);
 
+/// Clear active terminals set (called before setting new layouts)
+///
+/// Clears the set of active terminals, so only newly set terminals will be rendered
+///
+/// Parameters:
+/// - pool_handle: Terminal pool handle
+void rio_pool_clear_active_terminals(RioTerminalPoolHandle pool_handle);
+
 #endif /* SugarloafBridge_h */

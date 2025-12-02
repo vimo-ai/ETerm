@@ -64,8 +64,13 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
 
     // MARK: - Properties
 
-    private var poolHandle: RioTerminalPoolHandle?
+    private var _poolHandle: RioTerminalPoolHandle?
     private let sugarloafHandle: SugarloafHandle
+
+    /// 获取 Pool Handle（用于直接调用 FFI）
+    var poolHandle: RioTerminalPoolHandle? {
+        return _poolHandle
+    }
 
     /// 事件队列
     private var eventQueue: [RioSwiftEvent] = []
@@ -91,13 +96,13 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
 
     init(sugarloafHandle: SugarloafHandle) {
         self.sugarloafHandle = sugarloafHandle
-        self.poolHandle = rio_pool_new(sugarloafHandle)
+        self._poolHandle = rio_pool_new(sugarloafHandle)
 
         setupEventCallback()
     }
 
     deinit {
-        if let pool = poolHandle {
+        if let pool = _poolHandle {
             rio_pool_free(pool)
         }
     }
@@ -105,7 +110,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     // MARK: - Event Callback Setup
 
     private func setupEventCallback() {
-        guard let pool = poolHandle else { return }
+        guard let pool = _poolHandle else { return }
 
         // 保存 self 的弱引用给 C 回调使用
         let contextPtr = Unmanaged.passUnretained(self).toOpaque()
@@ -227,7 +232,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     // MARK: - TerminalPoolProtocol
 
     func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int {
-        guard let pool = poolHandle else { return -1 }
+        guard let pool = _poolHandle else { return -1 }
 
         let terminalId = rio_pool_create_terminal(pool, cols, rows, shell)
 
@@ -242,7 +247,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func closeTerminal(_ terminalId: Int) -> Bool {
-        guard let pool = poolHandle else { return false }
+        guard let pool = _poolHandle else { return false }
 
         let result = rio_pool_close_terminal(pool, terminalId)
 
@@ -256,12 +261,12 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func getTerminalCount() -> Int {
-        guard let pool = poolHandle else { return 0 }
+        guard let pool = _poolHandle else { return 0 }
         return Int(rio_pool_count(pool))
     }
 
     func writeInput(terminalId: Int, data: String) -> Bool {
-        guard let pool = poolHandle else { return false }
+        guard let pool = _poolHandle else { return false }
         return rio_pool_write_input(pool, terminalId, data) != 0
     }
 
@@ -271,12 +276,12 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func resize(terminalId: Int, cols: UInt16, rows: UInt16) -> Bool {
-        guard let pool = poolHandle else { return false }
+        guard let pool = _poolHandle else { return false }
         return rio_pool_resize(pool, terminalId, cols, rows) != 0
     }
 
     func scroll(terminalId: Int, deltaLines: Int32) -> Bool {
-        guard let pool = poolHandle else { return false }
+        guard let pool = _poolHandle else { return false }
         return rio_pool_scroll(pool, terminalId, deltaLines) != 0
     }
 
@@ -293,8 +298,13 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
         // 新版不需要 flush
     }
 
+    func clear() {
+        // 清除 Sugarloaf 的所有渲染对象
+        sugarloaf_clear_objects(sugarloafHandle)
+    }
+
     func getCursorPosition(terminalId: Int) -> CursorPosition? {
-        guard let pool = poolHandle else { return nil }
+        guard let pool = _poolHandle else { return nil }
 
         var col: UInt16 = 0
         var row: UInt16 = 0
@@ -304,7 +314,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func clearSelection(terminalId: Int) -> Bool {
-        guard let pool = poolHandle else { return false }
+        guard let pool = _poolHandle else { return false }
         return rio_pool_clear_selection(pool, terminalId) != 0
     }
 
@@ -321,7 +331,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
 
     /// 获取终端快照
     func getSnapshot(terminalId: Int) -> TerminalSnapshot? {
-        guard let pool = poolHandle else { return nil }
+        guard let pool = _poolHandle else { return nil }
 
         var snapshot = TerminalSnapshot()
         let result = rio_pool_get_snapshot(pool, terminalId, &snapshot)
@@ -331,7 +341,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
 
     /// 获取光标位置（元组版本）
     func getCursor(terminalId: Int) -> (col: UInt16, row: UInt16)? {
-        guard let pool = poolHandle else { return nil }
+        guard let pool = _poolHandle else { return nil }
 
         var col: UInt16 = 0
         var row: UInt16 = 0
@@ -345,7 +355,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 当前工作目录路径，失败返回 nil
     func getCwd(terminalId: Int) -> String? {
-        guard let pool = poolHandle else { return nil }
+        guard let pool = _poolHandle else { return nil }
 
         let cStr = rio_pool_get_cwd(pool, terminalId)
         guard let cStr = cStr else { return nil }
@@ -364,7 +374,7 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
     ///   - cwd: 工作目录路径
     /// - Returns: 终端 ID，失败返回 -1
     func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int {
-        guard let pool = poolHandle else { return -1 }
+        guard let pool = _poolHandle else { return -1 }
 
         print("🔧 [RioTerminalPoolWrapper] Calling FFI: rio_pool_create_terminal_with_cwd(cwd: \(cwd))")
         let terminalId = rio_pool_create_terminal_with_cwd(pool, cols, rows, shell, cwd)

@@ -898,6 +898,8 @@ pub struct RioTerminalPool {
     event_queue: EventQueue,
     /// Sugarloaf 句柄
     sugarloaf: *mut SugarloafHandle,
+    /// 激活的终端 ID（需要渲染的）
+    active_terminals: std::collections::HashSet<usize>,
 }
 
 impl RioTerminalPool {
@@ -906,6 +908,7 @@ impl RioTerminalPool {
             terminals: HashMap::new(),
             event_queue: EventQueue::new(),
             sugarloaf,
+            active_terminals: std::collections::HashSet::new(),
         }
     }
 
@@ -923,16 +926,22 @@ impl RioTerminalPool {
             let mut content_time_total = 0u128;
             let mut build_time_total = 0u128;
 
-            // 遍历所有终端
-            for (id, terminal) in &self.terminals {
+            // 🎯 只渲染 active_terminals 集合中的终端
+            // 遍历激活的终端
+            for &id in &self.active_terminals {
+                let terminal = match self.terminals.get(&id) {
+                    Some(t) => t,
+                    None => continue,
+                };
+
                 // 获取布局
                 let layout = match terminal.layout() {
-                    Some(l) if l.visible => l,
-                    _ => continue,  // 没有布局或不可见，跳过
+                    Some(l) => l,
+                    None => continue,
                 };
 
                 // 获取 RichText ID（使用终端 ID 作为 richTextId）
-                let rich_text_id = *id;
+                let rich_text_id = id;
 
                 // 获取快照
                 let snapshot = terminal.snapshot();
@@ -1974,8 +1983,16 @@ pub extern "C" fn rio_terminal_set_layout(
             return -1;
         }
 
-        let pool = unsafe { &*pool_handle };
-        if let Some(terminal) = pool.get(terminal_id as usize) {
+        let pool = unsafe { &mut *pool_handle };
+        let terminal_id_usize = terminal_id as usize;
+
+        // 先检查终端是否存在
+        if !pool.terminals.contains_key(&terminal_id_usize) {
+            return -1;
+        }
+
+        // 设置布局
+        if let Some(terminal) = pool.terminals.get(&terminal_id_usize) {
             terminal.set_layout(TerminalLayout {
                 x,
                 y,
@@ -1983,10 +2000,29 @@ pub extern "C" fn rio_terminal_set_layout(
                 height,
                 visible,
             });
-            0
-        } else {
-            -1
         }
+
+        // 🎯 更新激活终端集合
+        if visible && width > 0.0 && height > 0.0 {
+            pool.active_terminals.insert(terminal_id_usize);
+        } else {
+            pool.active_terminals.remove(&terminal_id_usize);
+        }
+
+        0
+    })
+}
+
+/// 清空激活终端集合（在设置新布局前调用）
+#[no_mangle]
+pub extern "C" fn rio_pool_clear_active_terminals(pool_handle: *mut RioTerminalPool) {
+    catch_panic!((), {
+        if pool_handle.is_null() {
+            return;
+        }
+
+        let pool = unsafe { &mut *pool_handle };
+        pool.active_terminals.clear();
     })
 }
 
