@@ -1304,6 +1304,12 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 拦截系统快捷键
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // 检查当前焦点是否在文本输入框（如设置页面）
+        if let firstResponder = window?.firstResponder as? NSText {
+            // 如果是 NSText（TextField/SecureField），不拦截，让系统处理
+            return false
+        }
+
         // 如果 InlineComposer 正在显示，放行事件给文本框
         if coordinator?.showInlineComposer == true {
             if let keyboardSystem = coordinator?.keyboardSystem {

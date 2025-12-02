@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @StateObject private var configManager = AIConfigManager.shared
@@ -55,6 +56,17 @@ struct SettingsView: View {
 
                                 SecureField("请输入 DashScope API Key", text: $apiKey)
                                     .textFieldStyle(.roundedBorder)
+                                    .focusable(true)
+                                    .onPasteCommand(of: [.plainText]) { providers in
+                                        providers.first?.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { (data, error) in
+                                            if let data = data as? Data,
+                                               let string = String(data: data, encoding: .utf8) {
+                                                DispatchQueue.main.async {
+                                                    apiKey = string
+                                                }
+                                            }
+                                        }
+                                    }
                             }
 
                             // Base URL
@@ -65,6 +77,7 @@ struct SettingsView: View {
 
                                 TextField("https://dashscope.aliyuncs.com/compatible-mode/v1", text: $baseURL)
                                     .textFieldStyle(.roundedBorder)
+                                    .focusable(true)
                             }
 
                             Divider()
@@ -289,6 +302,7 @@ struct ModelField: View {
 
             TextField(placeholder, text: $model)
                 .textFieldStyle(.roundedBorder)
+                .focusable(true)
         }
     }
 }
