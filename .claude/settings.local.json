@@ -55,7 +55,9 @@
       "Bash(system_profiler:*)",
       "Bash(cargo test:*)",
       "Bash(chmod:*)",
-      "Bash(/Users/higuaifan/Desktop/hi/小工具/english/test_search.swift)"
+      "Bash(/Users/higuaifan/Desktop/hi/小工具/english/test_search.swift)",
+      "mcp__mcp-router__memex__search_history",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
