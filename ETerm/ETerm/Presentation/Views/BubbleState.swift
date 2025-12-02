@@ -9,6 +9,7 @@
 import SwiftUI
 import Combine
 import AppKit
+import SwiftData
 
 @MainActor
 class BubbleState: ObservableObject {
@@ -137,6 +138,16 @@ class BubbleState: ObservableObject {
                     content = .dictionary(word, translations: [])
                     currentModelTag = "词典"
 
+                    // Save word to database
+                    let phonetic = word.phonetic ?? word.phonetics?.first?.text
+                    let definition = word.meanings.first?.definitions.first?.definition
+                    saveToVocabulary(
+                        word: text,
+                        phonetic: phonetic,
+                        definition: definition,
+                        sourceContext: nil  // No context for dictionary lookup
+                    )
+
                     // 异步加载中文翻译
                     Task {
                         await loadTranslations(for: word)
@@ -233,6 +244,17 @@ class BubbleState: ObservableObject {
                 currentModelTag = "qwen-mt-flash"
             }
         }
+
+        // Save Chinese translation after loading
+        if !translations.isEmpty, let firstTranslation = translations.first?.0, !firstTranslation.isEmpty {
+            saveToVocabulary(
+                word: word.word,
+                phonetic: word.phonetic ?? word.phonetics?.first?.text,
+                definition: word.meanings.first?.definitions.first?.definition,
+                translation: firstTranslation,  // 保存第一个中文翻译
+                sourceContext: nil
+            )
+        }
     }
 
     /// 复制内容到剪贴板
@@ -299,6 +321,58 @@ class BubbleState: ObservableObject {
             return "词典"
         default:
             return currentModelTag
+        }
+    }
+
+    // MARK: - Vocabulary Saving
+
+    /// Save word to vocabulary database
+    func saveToVocabulary(
+        word: String,
+        phonetic: String?,
+        definition: String?,
+        translation: String? = nil,
+        sourceContext: String?
+    ) {
+        Task { @MainActor in
+            guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+                  let modelContainer = appDelegate.modelContainer else {
+                print("❌ ModelContainer not available")
+                return
+            }
+
+            let modelContext = ModelContext(modelContainer)
+
+            do {
+                // Normalize word (lowercase)
+                let normalizedWord = word.lowercased().trimmingCharacters(in: .whitespaces)
+
+                // Check if word already exists
+                let descriptor = FetchDescriptor<WordEntry>(
+                    predicate: #Predicate { $0.word == normalizedWord }
+                )
+
+                if let existing = try modelContext.fetch(descriptor).first {
+                    // Already exists, increment hit count
+                    existing.recordQuery(context: sourceContext, definition: definition, translation: translation)
+                    print("📚 Word already exists, Hit +1: \(word) (total: \(existing.hitCount) times)")
+                } else {
+                    // New word
+                    let entry = WordEntry(
+                        word: normalizedWord,
+                        phonetic: phonetic,
+                        context: sourceContext,
+                        definition: definition,
+                        translation: translation
+                    )
+                    modelContext.insert(entry)
+                    print("📚 New word recorded: \(word)")
+                }
+
+                try modelContext.save()
+            } catch {
+                print("❌ Failed to save word: \(error)")
+            }
         }
     }
 }

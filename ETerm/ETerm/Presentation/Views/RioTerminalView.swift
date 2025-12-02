@@ -513,6 +513,13 @@ class RioMetalView: NSView, RenderViewProtocol {
     weak var coordinator: TerminalWindowCoordinator?
 
     private var sugarloaf: SugarloafHandle?
+
+    /// 公开 bounds 供 Coordinator 访问（用于布局同步）
+    /// 注意：NSView.bounds 是 public，这里只是明确声明以便 Coordinator 使用
+    override var bounds: NSRect {
+        get { super.bounds }
+        set { super.bounds = newValue }
+    }
     /// 多终端支持：每个终端一个独立的 richTextId
     private var richTextIds: [Int: Int] = [:]
 
@@ -690,7 +697,10 @@ class RioMetalView: NSView, RenderViewProtocol {
             needsLayout = true
             layoutSubtreeIfNeeded()
 
-            // 7. 重新渲染
+            // 7. 同步布局到 Rust（DPI 变化）
+            coordinator?.syncLayoutToRust()
+
+            // 8. 重新渲染
             requestRender()
         }
     }
@@ -730,6 +740,9 @@ class RioMetalView: NSView, RenderViewProtocol {
             let mapper = CoordinateMapper(scale: scale, containerBounds: bounds)
             coordinateMapper = mapper
             coordinator?.setCoordinateMapper(mapper)
+
+            // 同步布局到 Rust（窗口 resize）
+            coordinator?.syncLayoutToRust()
 
             requestRender()
         }
@@ -784,6 +797,12 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 启动 CVDisplayLink
         setupDisplayLink()
+
+        // 初始化时同步一次布局
+        // 延迟执行，确保 fontMetrics 已经更新
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.coordinator?.syncLayoutToRust()
+        }
 
         // 初始渲染
         requestRender()
@@ -955,9 +974,12 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 渲染所有 Panel（多终端支持）
     ///
-    /// 🎯 新架构：Swift 只设置布局，Rust 负责所有渲染
-    /// 1. 设置每个终端的布局（位置、尺寸）
-    /// 2. 调用 Rust 统一渲染函数
+    /// 🎯 新架构三层分离：
+    /// - 高层数据层：TerminalWindowCoordinator 管理布局信息
+    /// - 同步层：布局变化时主动调用 syncLayoutToRust()
+    /// - 渲染层：每帧只负责纯渲染，不管布局
+    ///
+    /// 这个方法是渲染层，只调用 rio_pool_render_all()
     private func render() {
         // 关键检查：如果已清理或未初始化，不执行渲染
         guard isInitialized,
@@ -965,62 +987,15 @@ class RioMetalView: NSView, RenderViewProtocol {
               let coordinator = coordinator else { return }
 
         guard let poolHandle = terminalManager.poolHandleForRender else { return }
-        guard let mapper = coordinateMapper else { return }
 
-        let renderStart = Date()
-
+        // 确保 RichText 已创建（第一次渲染时）
         // 从 coordinator 获取所有需要渲染的终端
         let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
             containerBounds: bounds,
             headerHeight: 30.0
         )
 
-        // 如果没有终端，跳过渲染
-        if tabsToRender.isEmpty { return }
-
-        // 1. 设置每个终端的布局（Swift 只负责这一步）
-        let layoutStart = Date()
-        for (terminalId, contentBounds) in tabsToRender {
-            // 坐标转换：Swift 坐标 → Rust 逻辑坐标（Y 轴翻转）
-            let logicalRect = mapper.swiftToRust(rect: contentBounds)
-
-            // 设置布局到 Rust 侧
-            _ = rio_terminal_set_layout(
-                poolHandle,
-                Int32(terminalId),
-                Float(logicalRect.origin.x),
-                Float(logicalRect.origin.y),
-                Float(logicalRect.width),
-                Float(logicalRect.height),
-                true  // visible
-            )
-
-            // 处理 resize（只在尺寸变化时才调用，避免每帧都 resize）
-            // ✅ 使用缓存的 Snapshot，避免加锁等待
-            if let snapshot = getCachedSnapshot(terminalId: Int(terminalId)) {
-                let physicalWidth = logicalRect.width * mapper.scale
-                let physicalHeight = logicalRect.height * mapper.scale
-
-                let safeCellWidth: CGFloat
-                let safeLineHeight: CGFloat
-                if let metrics = coordinator.fontMetrics {
-                    safeCellWidth = CGFloat(metrics.cell_width)
-                    safeLineHeight = CGFloat(metrics.line_height)
-                } else {
-                    safeCellWidth = 16.8
-                    safeLineHeight = 33.6
-                }
-
-                let cols = UInt16(max(1, min(physicalWidth / safeCellWidth, CGFloat(UInt16.max - 1))))
-                let rows = UInt16(max(1, min(physicalHeight / safeLineHeight, CGFloat(UInt16.max - 1))))
-
-                // 只在尺寸真的变化时才调用 resize（避免无谓的 PTY 操作）
-                if cols != snapshot.columns || rows != snapshot.screen_lines {
-                    _ = terminalManager.resize(terminalId: Int(terminalId), cols: cols, rows: rows)
-                }
-            }
-
-            // 确保 RichText 已创建
+        for (terminalId, _) in tabsToRender {
             if richTextIds[Int(terminalId)] == nil {
                 let richTextId = Int(sugarloaf_create_rich_text(sugarloaf))
                 richTextIds[Int(terminalId)] = richTextId
@@ -1034,25 +1009,10 @@ class RioMetalView: NSView, RenderViewProtocol {
                 }
             }
         }
-        let layoutTime = Date().timeIntervalSince(layoutStart) * 1000
 
-        // 2. 调用 Rust 统一渲染（一次 FFI 调用完成所有渲染）
-        let rustRenderStart = Date()
+        // 纯渲染：调用 Rust 统一渲染函数
+        // 布局已经由 syncLayoutToRust() 在布局变化时设置好了
         rio_pool_render_all(poolHandle)
-        let rustRenderTime = Date().timeIntervalSince(rustRenderStart) * 1000
-
-        let totalTime = Date().timeIntervalSince(renderStart) * 1000
-
-        // 慢帧日志（已注释，需要时取消注释）
-        // if totalTime > 15 {
-        //     print("🐢 [Slow Frame] Total: \(String(format: "%.2f", totalTime))ms")
-        //     print("   ├─ Layout Setup: \(String(format: "%.2f", layoutTime))ms (terminals: \(tabsToRender.count))")
-        //     print("   └─ Rust Render: \(String(format: "%.2f", rustRenderTime))ms")
-        // }
-
-        // 3. 异步更新下一帧的 Snapshot 缓存（不阻塞渲染）
-        let terminalIds = tabsToRender.map { Int($0.0) }
-        updateSnapshotCache(for: terminalIds)
     }
 
 

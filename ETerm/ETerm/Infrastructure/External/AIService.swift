@@ -31,11 +31,13 @@ struct GrammarFix: Codable {
     let original: String
     let corrected: String
     let errorType: String
+    let category: String  // Grammar error category (English identifier)
 
     enum CodingKeys: String, CodingKey {
         case original
         case corrected
         case errorType = "error_type"
+        case category
     }
 }
 
@@ -320,13 +322,40 @@ final class AIService {
     // MARK: - Private helpers
 
     private func getFixes(_ text: String) async throws -> [GrammarFix] {
-        let system = "你是一位语法检查专家。请以 JSON 返回语法错误修正，错误类型用中文。"
+        let system = """
+        你是语法检查专家。请返回 JSON 格式的语法错误修正。
+
+        分类规则（category 必须从以下选择一个）：
+        - tense (时态)
+        - article (冠词)
+        - preposition (介词)
+        - subject_verb_agreement (主谓一致)
+        - word_order (词序)
+        - singular_plural (单复数)
+        - punctuation (标点)
+        - spelling (拼写)
+        - word_choice (用词)
+        - sentence_structure (句子结构)
+        - other (其他)
+        """
+
         let user = """
         文本：
         \(text)
 
         返回 JSON：
-        { "fixes": [ { "original": "...", "corrected": "...", "error_type": "..." } ] }
+        {
+          "fixes": [
+            {
+              "original": "错误的文本片段",
+              "corrected": "修正后的文本",
+              "error_type": "错误类型的中文描述",
+              "category": "分类标识（从上面列表选择，必须是英文）"
+            }
+          ]
+        }
+
+        如果没有语法错误，返回空数组：{"fixes": []}
         """
 
         let json = try await chatText(

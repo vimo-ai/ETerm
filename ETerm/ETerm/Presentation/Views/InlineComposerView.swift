@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AppKit
+import SwiftData
 
 // MARK: - Theme (Shuimo-inspired)
 private enum ComposerTheme {
@@ -823,10 +824,45 @@ struct InlineComposerView: View {
                 let result = try await AIService.shared.performAnalysis(text, plan: plan)
                 self.analysisResult = result
                 self.isLoading = false
+
+                // Save grammar errors to database
+                if let fixes = result.fixes, !fixes.isEmpty {
+                    saveGrammarErrors(fixes: fixes, context: text)
+                }
             } catch {
                 self.isLoading = false
                 self.suggestion = "❌ Error: \(error.localizedDescription)"
                 print("写作检查失败: \(error)")
+            }
+        }
+    }
+
+    /// Save grammar errors to database
+    private func saveGrammarErrors(fixes: [GrammarFix], context: String) {
+        Task { @MainActor in
+            guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+                  let modelContainer = appDelegate.modelContainer else {
+                print("❌ ModelContainer not available")
+                return
+            }
+
+            let modelContext = ModelContext(modelContainer)
+
+            do {
+                for fix in fixes {
+                    let record = GrammarErrorRecord(
+                        original: fix.original,
+                        corrected: fix.corrected,
+                        errorType: fix.errorType,
+                        category: fix.category,
+                        context: context
+                    )
+                    modelContext.insert(record)
+                }
+                try modelContext.save()
+                print("📝 Saved \(fixes.count) grammar error(s)")
+            } catch {
+                print("❌ Failed to save grammar errors: \(error)")
             }
         }
     }

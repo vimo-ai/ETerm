@@ -530,7 +530,6 @@ extension PageBarHostingView {
 struct PageBarControlsView: View {
     @ObservedObject private var translationMode = TranslationModeStore.shared
     var onAddPage: (() -> Void)?
-    @State private var showSettings = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -549,17 +548,17 @@ struct PageBarControlsView: View {
             .buttonStyle(.plain)
             .padding(.trailing, 6)
 
-            // 设置按钮
-            Button(action: { showSettings = true }) {
-                Image(systemName: "gearshape")
+            // 侧边栏按钮（原设置按钮）
+            Button(action: {
+                // 发送通知打开侧边栏
+                NotificationCenter.default.post(name: NSNotification.Name("ToggleSidebar"), object: nil)
+            }) {
+                Image(systemName: "sidebar.left")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
             .padding(.trailing, 6)
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
-            }
 
             StatusTabView(
                 text: translationMode.statusText,
