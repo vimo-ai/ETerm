@@ -1289,13 +1289,9 @@ impl RioTerminalPool {
         // 安全地访问 sugarloaf 实例
         let sugarloaf = unsafe { &*sugarloaf_ptr };
 
-        // 检查哪些行需要更新（缓存未命中）
-        let lines_to_extract: Vec<usize> = (0..lines_to_render)
-            .filter(|&row_index| {
-                let hash = row_hashes[row_index];
-                !sugarloaf.has_cached_layout(hash)
-            })
-            .collect();
+        // 提取所有行（移除缓存过滤，避免行内容消失）
+        // Sugarloaf 层已有布局缓存，此处始终填充 fragments 确保渲染正确
+        let lines_to_extract: Vec<usize> = (0..lines_to_render).collect();
 
         let filter_time = filter_start.elapsed().as_micros();
         let extract_count = lines_to_extract.len();
@@ -1572,14 +1568,8 @@ impl RioTerminalPool {
                     let row_hash = row_hashes[row_index];
                     content.set_line_content_hash(row_index, row_hash);
                 }
-            } else {
-                // 缓存命中：只设置 hash，不填充内容（使用缓存的布局）
-                #[cfg(target_os = "macos")]
-                {
-                    let row_hash = row_hashes[row_index];
-                    content.set_line_content_hash(row_index, row_hash);
-                }
             }
+            // Note: 移除了缓存命中的 else 分支，现在所有行都会被提取和填充
         }
 
         let phase2_time = phase2_start.elapsed().as_micros();
