@@ -103,6 +103,10 @@ pub struct Sugarloaf<'a> {
     /// 布局计算结果缓存（脏区优化）
     #[cfg(target_os = "macos")]
     layout_cache: std::cell::RefCell<LineLayoutCache>,
+    /// Font 对象缓存池 - Key: (typeface_id, font_size_bits)
+    /// 避免每个字符都创建 Font 对象，显著减少渲染循环的对象创建开销
+    #[cfg(target_os = "macos")]
+    font_cache: std::cell::RefCell<std::collections::HashMap<(usize, u32), Font>>,
 }
 
 #[derive(Debug)]
@@ -235,6 +239,8 @@ impl Sugarloaf<'_> {
             font_mgr,
             #[cfg(target_os = "macos")]
             layout_cache: std::cell::RefCell::new(LineLayoutCache::new()),
+            #[cfg(target_os = "macos")]
+            font_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         };
 
         Ok(instance)
@@ -257,6 +263,7 @@ impl Sugarloaf<'_> {
             self.typeface_cache.borrow_mut().clear();
             self.char_font_cache.borrow_mut().clear();
             self.layout_cache.borrow_mut().clear();
+            self.font_cache.borrow_mut().clear();
         }
     }
 
@@ -445,10 +452,11 @@ impl Sugarloaf<'_> {
         self.ctx.scale = scale;
         self.state.compute_layout_rescale_skia(scale);
 
-        // Clear layout cache when rescaling
+        // Clear layout cache and font cache when rescaling
         #[cfg(target_os = "macos")]
         {
             self.layout_cache.borrow_mut().clear();
+            self.font_cache.borrow_mut().clear();
         }
 
         // TODO: Handle background image rescale when implemented
@@ -460,6 +468,28 @@ impl Sugarloaf<'_> {
     #[inline]
     pub fn reset(&mut self) {
         self.state.reset();
+    }
+
+    /// 从缓存中获取 Font 对象，如果不存在则创建并缓存
+    /// 使用 typeface 的指针地址作为唯一标识，结合 font_size 作为缓存 key
+    #[cfg(target_os = "macos")]
+    fn get_or_create_font(&self, typeface: &Typeface, font_size: f32) -> Font {
+        // 使用 typeface 的内存地址作为唯一标识
+        let typeface_id = typeface as *const _ as usize;
+        let font_size_bits = font_size.to_bits();
+        let cache_key = (typeface_id, font_size_bits);
+
+        let mut cache = self.font_cache.borrow_mut();
+
+        // 尝试从缓存获取
+        if let Some(font) = cache.get(&cache_key) {
+            return font.clone();
+        }
+
+        // 缓存未命中，创建新的 Font 对象
+        let font = Font::from_typeface(typeface, font_size);
+        cache.insert(cache_key, font.clone());
+        font
     }
 
     #[inline]
@@ -492,8 +522,18 @@ impl Sugarloaf<'_> {
         }
 
         let font_size = self.font_size * scale;
+
+        // 预先创建 Paint 对象，在渲染循环中复用，避免重复创建
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
+
+        let mut bg_paint = Paint::default();
+
+        let mut cursor_paint = Paint::default();
+        cursor_paint.set_anti_alias(true);
+
+        let mut deco_paint = Paint::default();
+        deco_paint.set_anti_alias(true);
 
         // Get line height from style
         let line_height = self.state.style.line_height;
@@ -602,8 +642,8 @@ impl Sugarloaf<'_> {
                                 // 统计字符总数
                                 total_chars += 1;
 
-                                // 从缓存的 Typeface 创建 Font（快速操作）
-                                let font = Font::from_typeface(typeface, font_size);
+                                // 从缓存获取 Font 对象，避免重复创建
+                                let font = self.get_or_create_font(typeface, font_size);
 
                                 // 使用终端 cell 宽度而不是字体 advance
                                 let char_cell_advance = cell_width * fragment_cell_width;
@@ -613,7 +653,6 @@ impl Sugarloaf<'_> {
                                 // 绘制背景（如果有）
                                 if let Some(bg) = fragment.style.background_color {
                                     if bg[3] > 0.01 {
-                                        let mut bg_paint = Paint::default();
                                         bg_paint.set_color(skia_safe::Color::from_argb(
                                             (bg[3] * 255.0) as u8,
                                             (bg[0] * 255.0) as u8,
@@ -629,13 +668,11 @@ impl Sugarloaf<'_> {
 
                                 // 绘制光标（如果有）
                                 if let Some(cursor) = fragment.style.cursor {
-                                    let mut cursor_paint = Paint::default();
-                                    cursor_paint.set_anti_alias(true);
-
                                     let cell_top = y - baseline_offset;
 
                                     match cursor {
                                         crate::SugarCursor::Block(color) => {
+                                            cursor_paint.set_style(skia_safe::PaintStyle::Fill);
                                             cursor_paint.set_color(skia_safe::Color::from_argb(
                                                 (color[3] * 255.0) as u8,
                                                 (color[0] * 255.0) as u8,
@@ -648,20 +685,21 @@ impl Sugarloaf<'_> {
                                             );
                                         }
                                         crate::SugarCursor::HollowBlock(color) => {
+                                            cursor_paint.set_style(skia_safe::PaintStyle::Stroke);
+                                            cursor_paint.set_stroke_width(1.0);
                                             cursor_paint.set_color(skia_safe::Color::from_argb(
                                                 (color[3] * 255.0) as u8,
                                                 (color[0] * 255.0) as u8,
                                                 (color[1] * 255.0) as u8,
                                                 (color[2] * 255.0) as u8,
                                             ));
-                                            cursor_paint.set_style(skia_safe::PaintStyle::Stroke);
-                                            cursor_paint.set_stroke_width(1.0);
                                             canvas.draw_rect(
                                                 skia_safe::Rect::from_xywh(x + 0.5, cell_top + 0.5, char_cell_advance - 1.0, cell_height - 1.0),
                                                 &cursor_paint,
                                             );
                                         }
                                         crate::SugarCursor::Caret(color) => {
+                                            cursor_paint.set_style(skia_safe::PaintStyle::Fill);
                                             cursor_paint.set_color(skia_safe::Color::from_argb(
                                                 (color[3] * 255.0) as u8,
                                                 (color[0] * 255.0) as u8,
@@ -674,6 +712,7 @@ impl Sugarloaf<'_> {
                                             );
                                         }
                                         crate::SugarCursor::Underline(color) => {
+                                            cursor_paint.set_style(skia_safe::PaintStyle::Fill);
                                             cursor_paint.set_color(skia_safe::Color::from_argb(
                                                 (color[3] * 255.0) as u8,
                                                 (color[0] * 255.0) as u8,
@@ -694,9 +733,6 @@ impl Sugarloaf<'_> {
 
                                 // 绘制装饰（下划线、删除线）
                                 if let Some(decoration) = fragment.style.decoration {
-                                    let mut deco_paint = Paint::default();
-                                    deco_paint.set_anti_alias(true);
-
                                     // 使用 decoration_color 或默认使用前景色
                                     let deco_color = fragment.style.decoration_color.unwrap_or(fragment.style.color);
                                     deco_paint.set_color(skia_safe::Color::from_argb(
@@ -705,6 +741,9 @@ impl Sugarloaf<'_> {
                                         (deco_color[1] * 255.0) as u8,
                                         (deco_color[2] * 255.0) as u8,
                                     ));
+                                    // 重置样式为 Fill，因为某些装饰可能会修改为 Stroke
+                                    deco_paint.set_style(skia_safe::PaintStyle::Fill);
+                                    deco_paint.set_path_effect(None);
 
                                     let cell_top = y - baseline_offset;
 
@@ -818,11 +857,14 @@ impl Sugarloaf<'_> {
                 (cache_hits as f32 / total_lines as f32) * 100.0
             } else { 0.0 };
 
+            let font_cache_size = self.font_cache.borrow().len();
+
             println!("🎨 [Sugarloaf Render]");
             println!("   Total chars: {}", total_chars);
             println!("   Total lines: {}", total_lines);
-            println!("   💾 Cache: {} hits, {} misses (hit rate: {:.1}%)",
+            println!("   💾 Layout cache: {} hits, {} misses (hit rate: {:.1}%)",
                 cache_hits, cache_misses, hit_rate);
+            println!("   🔤 Font cache: {} fonts cached", font_cache_size);
             println!("   ⏱️  Render time: {}μs ({}ms)", render_time, render_time / 1000);
         }
     }
