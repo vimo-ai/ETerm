@@ -34,15 +34,17 @@ struct KeyStroke: Hashable {
         let keyCode = event.keyCode
         let modifiers = KeyModifiers.from(event.modifierFlags)
 
-        // 对于 Cmd+Shift 组合键，使用 keyCode 映射获取基础字符
+        // 对于 Cmd+Shift 和 Option 组合键，使用 keyCode 映射获取基础字符
         // 因为 charactersIgnoringModifiers 在 Shift 时会返回 Shift 后的字符（如 ! 而不是 1）
+        // Option+数字 在某些键盘布局下会产生特殊字符（如 Option+2 = ™）
         // 但纯 Shift 组合（如 Shift+2 输入 @）不应该被映射
         var character: String?
 
         let isCmdShift = modifiers.contains(.command) && modifiers.contains(.shift)
+        let isOption = modifiers.contains(.option)
 
-        if isCmdShift, let baseChar = keyCodeToChar[keyCode] {
-            // Cmd+Shift 组合键：使用 keyCode 映射（用于 Cmd+Shift+1~9 切换 Page）
+        if (isCmdShift || isOption), let baseChar = keyCodeToChar[keyCode] {
+            // Cmd+Shift 或 Option 组合键：使用 keyCode 映射（用于快捷键匹配）
             character = baseChar
         } else {
             // 其他情况：使用 charactersIgnoringModifiers
@@ -75,6 +77,11 @@ struct KeyStroke: Hashable {
     /// Ctrl + 字符
     static func ctrl(_ char: String) -> KeyStroke {
         KeyStroke(keyCode: 0, character: char.lowercased(), actualCharacter: nil, modifiers: .control)
+    }
+
+    /// Option + 字符
+    static func option(_ char: String) -> KeyStroke {
+        KeyStroke(keyCode: 0, character: char.lowercased(), actualCharacter: nil, modifiers: .option)
     }
 
     /// 纯字符（无修饰键）
@@ -122,6 +129,26 @@ struct KeyStroke: Hashable {
     // MARK: - 转换为终端序列
 
     func toTerminalSequence() -> String {
+        // Option+Arrow 组合键（按单词移动）
+        // macOS 终端标准：Option+Left/Right 用于按单词移动光标
+        if modifiers.contains(.option) {
+            switch keyCode {
+            case 123: return "\u{1B}b"    // Option+Left: ESC+b (向左移动一个单词)
+            case 124: return "\u{1B}f"    // Option+Right: ESC+f (向右移动一个单词)
+            default: break
+            }
+        }
+
+        // Cmd+Arrow 组合键（跳到行首/行尾）
+        // macOS 终端标准：Cmd+Left/Right 用于跳到行首/行尾
+        if modifiers.contains(.command) {
+            switch keyCode {
+            case 123: return "\u{01}"     // Cmd+Left: Ctrl+A (跳到行首)
+            case 124: return "\u{05}"     // Cmd+Right: Ctrl+E (跳到行尾)
+            default: break
+            }
+        }
+
         // 特殊键处理
         switch keyCode {
         case 36: return "\r"           // Return

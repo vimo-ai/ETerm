@@ -92,6 +92,17 @@ final class TerminalInputHandler {
             return true
         }
 
+        // 4. Cmd+Arrow 组合键（跳到行首/行尾）
+        // 确保 Cmd+Left/Right 能够被正确处理
+        if keyStroke.modifiers.contains(.command) {
+            switch keyStroke.keyCode {
+            case 123, 124:  // Left Arrow, Right Arrow
+                return true
+            default:
+                break
+            }
+        }
+
         // 其他情况（普通字符、Shift+字符）交给 IME
         return false
     }
