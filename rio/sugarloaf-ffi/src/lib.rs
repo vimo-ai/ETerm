@@ -644,6 +644,33 @@ fn is_emoji_like(ch: char) -> bool {
     (0x1F1E0..=0x1F1FF).contains(&code)
 }
 
+/// Check if layout cache contains a specific content hash (macOS only)
+///
+/// Returns true if the cache has a layout for this hash, false otherwise.
+/// This is used to optimize rendering by skipping extraction of cached lines.
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub extern "C" fn sugarloaf_has_cached_layout(
+    handle: *mut SugarloafHandle,
+    content_hash: u64,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let handle = unsafe { &*handle };
+    handle.instance.has_cached_layout(content_hash)
+}
+
+#[cfg(not(target_os = "macos"))]
+#[no_mangle]
+pub extern "C" fn sugarloaf_has_cached_layout(
+    _handle: *mut SugarloafHandle,
+    _content_hash: u64,
+) -> bool {
+    false
+}
+
 /// Build content
 #[no_mangle]
 pub extern "C" fn sugarloaf_content_build(handle: *mut SugarloafHandle) {

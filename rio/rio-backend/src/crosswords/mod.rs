@@ -433,6 +433,9 @@ where
     keyboard_mode_idx: usize,
     inactive_keyboard_mode_stack: [u8; KEYBOARD_MODE_STACK_MAX_DEPTH],
     inactive_keyboard_mode_idx: usize,
+
+    /// Search state for this terminal.
+    pub search_state: Option<crate::event::SearchState>,
 }
 
 impl<U: EventListener> Crosswords<U> {
@@ -484,6 +487,7 @@ impl<U: EventListener> Crosswords<U> {
             keyboard_mode_idx: 0,
             inactive_keyboard_mode_stack: Default::default(),
             inactive_keyboard_mode_idx: 0,
+            search_state: None,
         }
     }
 
@@ -3087,6 +3091,151 @@ impl<T: EventListener> Dimensions for Crosswords<T> {
 
     fn square_height(&self) -> f32 {
         self.graphics.cell_height
+    }
+}
+
+// ============================================================================
+// Search API Implementation
+// ============================================================================
+
+/// Information returned from a search operation.
+#[derive(Debug, Clone)]
+pub struct SearchInfo {
+    pub total_count: usize,
+    pub current_index: usize,
+    pub scroll_to_row: Option<i64>,
+}
+
+/// Errors that can occur during search operations.
+#[derive(Debug)]
+pub enum SearchError {
+    InvalidPattern,
+}
+
+impl<U: EventListener> Crosswords<U> {
+    /// Start a new search with the given pattern.
+    pub fn start_search(
+        &mut self,
+        pattern: &str,
+        is_regex: bool,
+        case_sensitive: bool,
+        max_lines: Option<usize>,
+    ) -> Result<SearchInfo, SearchError> {
+        // Process pattern: escape if not regex
+        let pattern = if is_regex {
+            pattern.to_string()
+        } else {
+            regex::escape(pattern)
+        };
+
+        // Create case-insensitive pattern if needed
+        let pattern = if !case_sensitive && !pattern.chars().any(|c| c.is_uppercase()) {
+            pattern
+        } else if !case_sensitive {
+            // Convert to case-insensitive regex
+            format!("(?i){}", pattern)
+        } else {
+            pattern
+        };
+
+        // Create RegexSearch
+        let mut regex = search::RegexSearch::new(&pattern)
+            .map_err(|_| SearchError::InvalidPattern)?;
+
+        // Find all matches
+        let all_matches = self.find_all_matches(&mut regex, max_lines);
+
+        if all_matches.is_empty() {
+            self.search_state = None;
+            return Ok(SearchInfo {
+                total_count: 0,
+                current_index: 0,
+                scroll_to_row: None,
+            });
+        }
+
+        // Get the row to scroll to
+        let scroll_to_row = Some(all_matches[0].start().row.0 as i64);
+
+        // Set search state
+        self.search_state = Some(crate::event::SearchState {
+            all_matches: all_matches.clone(),
+            focused_index: 0,
+            dfas: Some(regex),
+            direction: Direction::Right,
+            history: std::collections::VecDeque::from([pattern]),
+            history_index: Some(0),
+            origin: Pos::default(),
+            display_offset_delta: 0,
+            focused_match: Some(all_matches[0].clone()),
+        });
+
+        Ok(SearchInfo {
+            total_count: all_matches.len(),
+            current_index: 1,
+            scroll_to_row,
+        })
+    }
+
+    /// Move to the next match in the search results.
+    pub fn search_goto_next(&mut self) -> Option<usize> {
+        let state = self.search_state.as_mut()?;
+        if state.all_matches.is_empty() {
+            return None;
+        }
+
+        state.focused_index = (state.focused_index + 1) % state.all_matches.len();
+        state.focused_match = Some(state.all_matches[state.focused_index].clone());
+
+        Some(state.focused_index + 1)
+    }
+
+    /// Move to the previous match in the search results.
+    pub fn search_goto_prev(&mut self) -> Option<usize> {
+        let state = self.search_state.as_mut()?;
+        if state.all_matches.is_empty() {
+            return None;
+        }
+
+        if state.focused_index == 0 {
+            state.focused_index = state.all_matches.len() - 1;
+        } else {
+            state.focused_index -= 1;
+        }
+        state.focused_match = Some(state.all_matches[state.focused_index].clone());
+
+        Some(state.focused_index + 1)
+    }
+
+    /// Clear the current search.
+    pub fn clear_search(&mut self) {
+        self.search_state = None;
+    }
+
+    /// Internal method: find all matches within the specified line limit.
+    fn find_all_matches(
+        &self,
+        regex: &mut search::RegexSearch,
+        max_lines: Option<usize>,
+    ) -> Vec<search::Match> {
+        let max_lines = max_lines.unwrap_or(1000);
+        let mut matches = Vec::new();
+
+        let total_lines = self.grid.total_lines();
+        let search_lines = max_lines.min(total_lines);
+
+        let start = Pos::new(Line(0), Column(0));
+        let end = Pos::new(
+            Line(search_lines as i32 - 1),
+            self.grid.last_column(),
+        );
+
+        let mut iter = search::RegexIter::new(start, end, Direction::Right, self, regex);
+        while let Some(m) = iter.next() {
+            matches.push(m);
+        }
+
+        matches
     }
 }
 

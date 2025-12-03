@@ -325,6 +325,7 @@ impl<P: EventLoopProxy<EventPayload>> EventListener for EventProxy<P> {
 }
 
 /// Regex search state.
+#[derive(Debug)]
 pub struct SearchState {
     /// Search direction.
     pub direction: Direction,
@@ -340,6 +341,12 @@ pub struct SearchState {
 
     /// Focused match during active search.
     pub focused_match: Option<Match>,
+
+    /// All matched ranges (for rendering highlights).
+    pub all_matches: Vec<Match>,
+
+    /// Current focused index in all_matches (0-based).
+    pub focused_index: usize,
 
     /// Search regex and history.
     ///
@@ -397,6 +404,8 @@ impl Default for SearchState {
             direction: Direction::Right,
             display_offset_delta: Default::default(),
             focused_match: Default::default(),
+            all_matches: Default::default(),
+            focused_index: Default::default(),
             history_index: Default::default(),
             history: Default::default(),
             origin: Default::default(),
