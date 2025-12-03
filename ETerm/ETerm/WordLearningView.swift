@@ -226,7 +226,9 @@ struct WordLearningView: View {
                     }
                 }
 
-                let translated = try await AIService.shared.translateDictionaryContent(definitions: definitionsToTranslate)
+                // 从插件配置读取翻译模型
+                let pluginConfig = TranslationPluginConfigManager.shared.config
+                let translated = try await AIService.shared.translateDictionaryContent(definitions: definitionsToTranslate, model: pluginConfig.translationModel)
 
                 await MainActor.run {
                     translations = translated

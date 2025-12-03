@@ -146,7 +146,10 @@ struct SentenceUnderstandingView: View {
 
         Task {
             do {
-                try await AIService.shared.analyzeSentence(text) { trans, grammar in
+                // 从插件配置读取模型
+                let pluginConfig = TranslationPluginConfigManager.shared.config
+
+                try await AIService.shared.analyzeSentence(text, model: pluginConfig.analysisModel) { trans, grammar in
                     self.translation = trans
                     self.grammarAnalysis = grammar
                     self.isLoading = false

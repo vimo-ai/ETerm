@@ -131,7 +131,10 @@ struct WritingAssistantView: View {
 
         Task {
             do {
-                try await AIService.shared.checkWriting(text) { result in
+                // 从插件配置读取模型
+                let pluginConfig = TranslationPluginConfigManager.shared.config
+
+                try await AIService.shared.checkWriting(text, model: pluginConfig.analysisModel) { result in
                     self.suggestions = result
                     self.isLoading = false
                 }
