@@ -40,6 +40,23 @@ final class Page {
         self.panelRegistry = [initialPanel.panelId: initialPanel]
     }
 
+    /// 创建空 Page（用于恢复 Session）
+    ///
+    /// - Parameter title: 页面标题
+    private init(title: String) {
+        self.pageId = UUID()
+        self.title = title
+        // 临时使用空布局，会在恢复过程中填充
+        let dummyId = UUID()
+        self.rootLayout = .leaf(panelId: dummyId)
+        self.panelRegistry = [:]
+    }
+
+    /// 创建用于恢复的空 Page
+    static func createEmptyForRestore(title: String) -> Page {
+        return Page(title: title)
+    }
+
     // MARK: - Title Management
 
     /// 重命名页面
@@ -105,6 +122,31 @@ final class Page {
     /// 检查布局是否包含指定 Panel
     func containsPanel(_ panelId: UUID) -> Bool {
         return rootLayout.contains(panelId)
+    }
+
+    /// 添加已有的 Panel（用于恢复 Session）
+    ///
+    /// - Parameter panel: 已创建的 Panel
+    func addExistingPanel(_ panel: EditorPanel) {
+        panelRegistry[panel.panelId] = panel
+    }
+
+    /// 设置根布局（用于恢复 Session）
+    ///
+    /// - Parameter layout: 完整的布局树
+    func setRootLayout(_ layout: PanelLayout) {
+        rootLayout = layout
+    }
+
+    /// 设置分割布局（用于恢复 Session）
+    ///
+    /// - Parameters:
+    ///   - firstLayout: 第一个子布局
+    ///   - secondLayout: 第二个子布局
+    ///   - direction: 分割方向
+    ///   - ratio: 分割比例
+    func setSplitLayout(firstLayout: PanelLayout, secondLayout: PanelLayout, direction: SplitDirection, ratio: CGFloat) {
+        rootLayout = .split(direction: direction, first: firstLayout, second: secondLayout, ratio: ratio)
     }
 
     /// 移除指定 Panel

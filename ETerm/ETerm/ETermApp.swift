@@ -43,12 +43,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         PluginManager.shared.loadBuiltinPlugins()
 
         // 尝试恢复 Session
+        print("🚀 [ETermApp] Starting session restoration...")
         if let session = SessionManager.shared.load(), !session.windows.isEmpty {
+            print("✅ [ETermApp] Found session with \(session.windows.count) window(s), restoring...")
             // 恢复每个窗口
-            for windowState in session.windows {
+            for (index, windowState) in session.windows.enumerated() {
+                print("🔨 [ETermApp] Restoring window[\(index)]...")
                 restoreWindow(from: windowState)
             }
+            print("✅ [ETermApp] Session restoration completed")
         } else {
+            print("ℹ️ [ETermApp] No session found, creating default window")
             // 没有 Session，创建默认窗口
             WindowManager.shared.createWindow()
         }
@@ -250,12 +255,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func restoreWindow(from windowState: WindowState) {
         let frame = windowState.frame.cgRect
 
-        // 使用保存的位置、尺寸和屏幕信息创建窗口
-        // TODO: 未来可以扩展恢复完整的 Page/Panel/Tab 布局
-        WindowManager.shared.createWindow(
-            inheritCwd: nil,
-            frame: frame,
-            screenIdentifier: windowState.screenIdentifier
+        // 创建窗口（传入完整的 WindowState 用于恢复）
+        WindowManager.shared.createWindowWithState(
+            windowState: windowState,
+            frame: frame
         )
     }
 

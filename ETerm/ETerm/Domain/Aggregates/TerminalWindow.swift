@@ -36,6 +36,16 @@ final class TerminalWindow {
         scanAndInitNextTerminalNumber()
     }
 
+    /// 使用已有的 Page 初始化（用于恢复 Session）
+    init(initialPage: Page) {
+        self.windowId = UUID()
+        self.pages = [initialPage]
+        self.activePageId = initialPage.pageId
+
+        // 初始化计数器
+        scanAndInitNextTerminalNumber()
+    }
+
     // MARK: - Active Page Access
 
     /// 获取当前激活的 Page
@@ -53,12 +63,29 @@ final class TerminalWindow {
         return title
     }
 
+    /// 获取当前的终端计数器（用于保存Session）
+    func getNextTerminalNumber() -> Int {
+        return nextTerminalNumber
+    }
+
+    /// 设置终端计数器（用于恢复Session）
+    func setNextTerminalNumber(_ number: Int) {
+        nextTerminalNumber = number
+        print("🔢 [TerminalWindow] Restored nextTerminalNumber: \(nextTerminalNumber)")
+    }
+
     /// 扫描现有 Tab 初始化计数器
+    ///
+    /// 策略：找到所有已使用的编号，下次生成时使用最大编号+1
+    /// 注意：这样会导致编号跳号（如关闭"终端 2"后，新建会得到"终端 4"）
+    /// 这是自增ID的正常行为，确保编号不会重复
     private func scanAndInitNextTerminalNumber() {
         var maxNumber = 0
         for page in pages {
             for panel in page.allPanels {
                 for tab in panel.tabs {
+                    // 尝试从 "终端 N" 格式中提取编号
+                    // 如果 Tab 被重命名（如 "SSH Server"），则跳过
                     if let title = tab.title.components(separatedBy: " ").last,
                        let number = Int(title) {
                         maxNumber = max(maxNumber, number)
@@ -67,6 +94,7 @@ final class TerminalWindow {
             }
         }
         nextTerminalNumber = maxNumber + 1
+        print("🔢 [TerminalWindow] Scanned terminal numbers, next will be: \(nextTerminalNumber)")
     }
 
     // MARK: - Page Management

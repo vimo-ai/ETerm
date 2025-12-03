@@ -28,14 +28,16 @@ struct WindowState: Codable {
     let activePageIndex: Int
     let screenIdentifier: String?  // 屏幕唯一标识符（通过 UUID 或屏幕序号）
     let screenFrame: CodableRect?  // 创建时所在屏幕的尺寸（用于验证）
+    let nextTerminalNumber: Int  // 下一个终端编号（用于恢复计数器）
 
     // 兼容旧版本的初始化器
-    init(frame: CodableRect, pages: [PageState], activePageIndex: Int, screenIdentifier: String? = nil, screenFrame: CodableRect? = nil) {
+    init(frame: CodableRect, pages: [PageState], activePageIndex: Int, screenIdentifier: String? = nil, screenFrame: CodableRect? = nil, nextTerminalNumber: Int = 1) {
         self.frame = frame
         self.pages = pages
         self.activePageIndex = activePageIndex
         self.screenIdentifier = screenIdentifier
         self.screenFrame = screenFrame
+        self.nextTerminalNumber = nextTerminalNumber
     }
 }
 
@@ -122,16 +124,58 @@ final class SessionManager {
     ///
     /// - Returns: Session 状态，如果不存在或解析失败返回 nil
     func load() -> SessionState? {
+        print("🔍 [SessionManager] load() called")
+
         guard let data = userDefaults.data(forKey: sessionKey) else {
+            print("❌ [SessionManager] No session data found in UserDefaults")
             return nil
         }
+
+        print("✅ [SessionManager] Found session data: \(data.count) bytes")
 
         do {
             let decoder = JSONDecoder()
             let session = try decoder.decode(SessionState.self, from: data)
+            print("✅ [SessionManager] Successfully decoded session:")
+            print("   - Version: \(session.version)")
+            print("   - Windows count: \(session.windows.count)")
+            for (index, window) in session.windows.enumerated() {
+                print("   - Window[\(index)]:")
+                print("     - Pages: \(window.pages.count)")
+                print("     - Active page index: \(window.activePageIndex)")
+                for (pageIndex, page) in window.pages.enumerated() {
+                    print("     - Page[\(pageIndex)]: \"\(page.title)\"")
+                    printLayoutState(page.layout, indent: "       ")
+                }
+            }
             return session
         } catch {
+            print("❌ [SessionManager] Failed to decode session: \(error)")
             return nil
+        }
+    }
+
+    /// 递归打印布局状态（用于调试）
+    private func printLayoutState(_ layout: PanelLayoutState, indent: String) {
+        switch layout {
+        case .leaf(let panelId, let tabs, let activeTabIndex):
+            print("\(indent)Leaf Panel (\(panelId))")
+            print("\(indent)  Tabs: \(tabs.count), Active: \(activeTabIndex)")
+            for (index, tab) in tabs.enumerated() {
+                print("\(indent)  Tab[\(index)]: \"\(tab.title)\" CWD=\"\(tab.cwd)\"")
+            }
+        case .horizontal(let ratio, let first, let second):
+            print("\(indent)Horizontal Split (ratio: \(ratio))")
+            print("\(indent)  First:")
+            printLayoutState(first, indent: indent + "    ")
+            print("\(indent)  Second:")
+            printLayoutState(second, indent: indent + "    ")
+        case .vertical(let ratio, let first, let second):
+            print("\(indent)Vertical Split (ratio: \(ratio))")
+            print("\(indent)  First:")
+            printLayoutState(first, indent: indent + "    ")
+            print("\(indent)  Second:")
+            printLayoutState(second, indent: indent + "    ")
         }
     }
 

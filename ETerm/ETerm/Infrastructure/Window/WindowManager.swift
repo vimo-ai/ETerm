@@ -69,6 +69,175 @@ final class WindowManager: NSObject {
 
     // MARK: - 窗口创建
 
+    /// 创建新窗口（用于恢复 Session）
+    ///
+    /// - Parameters:
+    ///   - windowState: 窗口状态（包含完整的 Pages/Panels/Tabs 布局）
+    ///   - frame: 窗口位置和尺寸
+    /// - Returns: 创建的窗口
+    @discardableResult
+    func createWindowWithState(windowState: WindowState, frame: NSRect) -> KeyableWindow {
+        // 确定窗口的 frame
+        let windowFrame: NSRect
+        if let screenId = windowState.screenIdentifier {
+            // 恢复模式：使用保存的位置和尺寸
+            let targetScreen = SessionManager.findScreen(withIdentifier: screenId)
+            windowFrame = adjustFrameToScreen(frame, screen: targetScreen)
+        } else {
+            windowFrame = frame
+        }
+
+        let window = KeyableWindow.create(
+            contentRect: windowFrame,
+            styleMask: [.borderless, .resizable, .miniaturizable, .closable]
+        )
+
+        // 创建 TerminalWindow（从 WindowState 恢复完整结构）
+        let terminalWindow = restoreTerminalWindow(from: windowState)
+        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+
+        // 设置内容视图，传入 Coordinator
+        let contentView = ContentView(coordinator: coordinator)
+        let hostingView = NSHostingView(rootView: contentView)
+        window.contentView = hostingView
+
+        // 重新配置圆角（因为替换了 contentView）
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = 10
+        hostingView.layer?.masksToBounds = true
+
+        // 设置最小尺寸
+        window.minSize = NSSize(width: 400, height: 300)
+
+        // 监听窗口关闭
+        window.delegate = self
+
+        // 注册 Coordinator（在窗口有 windowNumber 之后）
+        coordinators[window.windowNumber] = coordinator
+
+        // 添加到列表
+        windows.append(window)
+
+        // 显示窗口
+        window.makeKeyAndOrderFront(nil)
+
+        return window
+    }
+
+    /// 从 WindowState 恢复 TerminalWindow
+    private func restoreTerminalWindow(from windowState: WindowState) -> TerminalWindow {
+        // 创建所有 Pages
+        var pages: [Page] = []
+
+        for pageState in windowState.pages {
+            // 创建空 Page（用于恢复）
+            let page = Page.createEmptyForRestore(title: pageState.title)
+
+            // 递归恢复 Panel 布局
+            if let restoredLayout = restorePanelLayout(pageState.layout, to: page) {
+                // 设置恢复的布局到 Page
+                page.setRootLayout(restoredLayout)
+
+                // 设置激活的 Panel（从 activePanelId 恢复）
+                if let activePanelId = UUID(uuidString: pageState.activePanelId) {
+                    // 激活指定的 Panel（Coordinator 会在创建后设置）
+                    // 这里只需要确保 Panel 存在即可
+                    _ = page.getPanel(activePanelId)
+                }
+
+                pages.append(page)
+            }
+        }
+
+        // 创建 TerminalWindow
+        guard let firstPage = pages.first else {
+            // 如果恢复失败，创建一个默认的 TerminalWindow
+            let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+            let initialPanel = EditorPanel(initialTab: initialTab)
+            return TerminalWindow(initialPanel: initialPanel)
+        }
+
+        let terminalWindow = TerminalWindow(initialPage: firstPage)
+
+        // 添加其他 Pages
+        for page in pages.dropFirst() {
+            terminalWindow.addExistingPage(page)
+        }
+
+        // 切换到激活的 Page
+        let activePageIndex = max(0, min(windowState.activePageIndex, pages.count - 1))
+        _ = terminalWindow.switchToPage(pages[activePageIndex].pageId)
+
+        // 恢复终端计数器（不再扫描，直接使用保存的值）
+        terminalWindow.setNextTerminalNumber(windowState.nextTerminalNumber)
+
+        return terminalWindow
+    }
+
+    /// 递归恢复 Panel 布局
+    ///
+    /// - Parameters:
+    ///   - layoutState: 布局状态
+    ///   - page: 目标 Page
+    /// - Returns: 恢复后的 PanelLayout
+    @discardableResult
+    private func restorePanelLayout(_ layoutState: PanelLayoutState, to page: Page) -> PanelLayout? {
+        switch layoutState {
+        case .leaf(_, let tabStates, let activeTabIndex):
+            print("🔨 [WindowManager] Restoring leaf panel with \(tabStates.count) tabs")
+            // 恢复叶子节点（Panel）
+            // 创建所有 Tabs（此时还不创建终端，等 Coordinator 初始化后再创建）
+            var tabs: [TerminalTab] = []
+            for (index, tabState) in tabStates.enumerated() {
+                print("🔨 [WindowManager] Creating Tab[\(index)]: title=\"\(tabState.title)\", cwd=\"\(tabState.cwd)\"")
+                let tab = TerminalTab(tabId: UUID(), title: tabState.title)
+                // 保存 CWD 到 Tab 的临时属性（用于后续创建终端）
+                tab.setPendingCwd(tabState.cwd)
+                tabs.append(tab)
+            }
+
+            // 创建 Panel
+            guard let firstTab = tabs.first else {
+                return nil
+            }
+
+            let panel = EditorPanel(initialTab: firstTab)
+
+            // 添加其他 Tabs
+            for tab in tabs.dropFirst() {
+                panel.addTab(tab)
+            }
+
+            // 设置激活的 Tab
+            if activeTabIndex >= 0 && activeTabIndex < tabs.count {
+                _ = panel.setActiveTab(tabs[activeTabIndex].tabId)
+            }
+
+            // 将 Panel 添加到 Page
+            page.addExistingPanel(panel)
+
+            return .leaf(panelId: panel.panelId)
+
+        case .horizontal(let ratio, let first, let second):
+            // 恢复水平分割（递归）
+            guard let firstLayout = restorePanelLayout(first, to: page),
+                  let secondLayout = restorePanelLayout(second, to: page) else {
+                return nil
+            }
+
+            return .split(direction: .horizontal, first: firstLayout, second: secondLayout, ratio: ratio)
+
+        case .vertical(let ratio, let first, let second):
+            // 恢复垂直分割（递归）
+            guard let firstLayout = restorePanelLayout(first, to: page),
+                  let secondLayout = restorePanelLayout(second, to: page) else {
+                return nil
+            }
+
+            return .split(direction: .vertical, first: firstLayout, second: secondLayout, ratio: ratio)
+        }
+    }
+
     /// 创建新窗口
     ///
     /// - Parameters:
@@ -513,13 +682,17 @@ final class WindowManager: NSObject {
             // 确定激活的 Page 索引
             let activePageIndex = terminalWindow.pages.firstIndex { $0.pageId == terminalWindow.activePageId } ?? 0
 
+            // 获取终端计数器
+            let nextTerminalNumber = terminalWindow.getNextTerminalNumber()
+
             // 创建窗口状态
             let windowState = WindowState(
                 frame: frame,
                 pages: pageStates,
                 activePageIndex: activePageIndex,
                 screenIdentifier: screenIdentifier,
-                screenFrame: screenFrame
+                screenFrame: screenFrame,
+                nextTerminalNumber: nextTerminalNumber
             )
 
             windowStates.append(windowState)
@@ -617,6 +790,10 @@ extension WindowManager: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? KeyableWindow else { return }
 
+        // 🔑 关键：先保存 Session，再移除窗口
+        // 否则保存时窗口已经从列表移除，会保存空 Session
+        saveSession()
+
         // 关键：在注销 Coordinator 之前，先调用 cleanup() 清理终端
         // 这样可以确保在对象开始释放之前完成清理
         if let coordinator = coordinators[window.windowNumber] {
@@ -632,9 +809,6 @@ extension WindowManager: NSWindowDelegate {
 
         // 清除 contentView，帮助释放 SwiftUI 视图层级
         window.contentView = nil
-
-        // 保存 session（窗口关闭时）
-        saveSession()
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -648,8 +822,17 @@ extension WindowManager: NSWindowDelegate {
     }
 
     /// 保存当前所有窗口的 session
-    private func saveSession() {
+    func saveSession() {
+        print("💾 [WindowManager] saveSession called, windows count: \(windows.count)")
         let windowStates = captureAllWindowStates()
+        print("💾 [WindowManager] Captured \(windowStates.count) window states")
+        for (index, state) in windowStates.enumerated() {
+            print("💾 [WindowManager] Window[\(index)]: \(state.pages.count) pages")
+            for (pageIndex, page) in state.pages.enumerated() {
+                print("💾 [WindowManager]   Page[\(pageIndex)]: '\(page.title)'")
+            }
+        }
         SessionManager.shared.save(windows: windowStates)
+        print("💾 [WindowManager] Session saved")
     }
 }

@@ -224,6 +224,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         panel.addTab(newTab)
 
+        // 保存 Session
+        WindowManager.shared.saveSession()
+
         return newTab
     }
     
@@ -297,7 +300,7 @@ class TerminalWindowCoordinator: ObservableObject {
         guard let poolHandle = globalTerminalManager?.poolHandleForRender,
               let mapper = coordinateMapper,
               let fontMetrics = fontMetrics else {
-            print("⚠️ [syncLayoutToRust] Missing required dependencies")
+//            print("⚠️ [syncLayoutToRust] Missing required dependencies")
             return
         }
 
@@ -305,7 +308,7 @@ class TerminalWindowCoordinator: ObservableObject {
         // 从 RioMetalView 获取 bounds（通过 renderView 协议）
         // 这是一个类型转换，安全且不会产生循环依赖
         guard let metalView = renderView as? RioMetalView else {
-            print("⚠️ [syncLayoutToRust] renderView is not RioMetalView")
+//            print("⚠️ [syncLayoutToRust] renderView is not RioMetalView")
             return
         }
 
@@ -317,7 +320,7 @@ class TerminalWindowCoordinator: ObservableObject {
             headerHeight: headerHeight
         )
 
-        print("🔄 [syncLayoutToRust] Syncing layout for \(tabsToRender.count) terminals")
+//        print("🔄 [syncLayoutToRust] Syncing layout for \(tabsToRender.count) terminals")
 
         // 清空 Rust 侧的 active_terminals 集合
         rio_pool_clear_active_terminals(poolHandle)
@@ -351,13 +354,13 @@ class TerminalWindowCoordinator: ObservableObject {
 
                 // 只在尺寸真的变化时才调用 resize
                 if cols != snapshot.columns || rows != snapshot.screen_lines {
-                    print("📐 [syncLayoutToRust] Resizing terminal \(terminalId): \(snapshot.columns)x\(snapshot.screen_lines) -> \(cols)x\(rows)")
+//                    print("📐 [syncLayoutToRust] Resizing terminal \(terminalId): \(snapshot.columns)x\(snapshot.screen_lines) -> \(cols)x\(rows)")
                     _ = globalTerminalManager?.resize(terminalId: Int(terminalId), cols: cols, rows: rows)
                 }
             }
         }
 
-        print("✅ [syncLayoutToRust] Layout sync complete")
+//        print("✅ [syncLayoutToRust] Layout sync complete")
     }
 
     // MARK: - Render Scheduling
@@ -499,8 +502,11 @@ class TerminalWindowCoordinator: ObservableObject {
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
                 if tab.rustTerminalId == nil {
-                    // 使用 createTerminalInternal 以支持 CWD 继承
-                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
+                    // 检查是否有待恢复的 CWD（用于 Session 恢复）
+                    let cwdToUse = tab.takePendingCwd()
+
+                    // 使用 createTerminalInternal 以支持 CWD 继承/恢复
+                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: cwdToUse)
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
                     }
@@ -630,29 +636,55 @@ class TerminalWindowCoordinator: ObservableObject {
         }
     }
 
-    /// 为所有 Tab 创建终端
+    /// 为所有 Tab 创建终端（只创建当前激活Page的终端）
     private func createTerminalsForAllTabs() {
-        // print("🔵 [Coordinator] createTerminalsForAllTabs called, panels: \(terminalWindow.allPanels.count)")
-        for panel in terminalWindow.allPanels {
-            // print("🔵 [Coordinator] Panel \(panel.panelId), tabs: \(panel.tabs.count)")
-            for tab in panel.tabs {
+        print("🟢 [Coordinator] createTerminalsForAllTabs called (only active page)")
+        ensureTerminalsForActivePage()
+    }
+
+    /// 确保指定Page的所有终端都已创建（延迟创建）
+    private func ensureTerminalsForPage(_ page: Page) {
+        print("🟢 [Coordinator] Ensuring terminals for page '\(page.title)'")
+
+        for (panelIndex, panel) in page.allPanels.enumerated() {
+            print("🟢 [Coordinator]   Panel[\(panelIndex)] \(panel.panelId), tabs: \(panel.tabs.count)")
+
+            for (tabIndex, tab) in panel.tabs.enumerated() {
                 // 如果 Tab 还没有终端，创建一个
                 if tab.rustTerminalId == nil {
-                    // print("🔵 [Coordinator] Creating terminal for tab \(tab.tabId)...")
-                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh")
-                    // print("🔵 [Coordinator] createTerminalInternal returned: \(terminalId)")
+                    print("🟢 [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) has no terminal, checking pendingCwd...")
+                    // 检查是否有待恢复的 CWD（用于 Session 恢复）
+                    let cwdToUse = tab.takePendingCwd()
+
+                    if let cwd = cwdToUse {
+                        print("✅ [Coordinator]     Tab[\(tabIndex)] has pendingCwd: \"\(cwd)\"")
+                    } else {
+                        print("⚠️ [Coordinator]     Tab[\(tabIndex)] has NO pendingCwd, will use default")
+                    }
+
+                    print("🟢 [Coordinator]     Creating terminal for tab[\(tabIndex)]...")
+                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: cwdToUse)
+                    print("🟢 [Coordinator]     createTerminalInternal returned: \(terminalId)")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
-                        // print("🟢 [Coordinator] Terminal created with ID: \(terminalId)")
+                        print("✅ [Coordinator]     Terminal created with ID: \(terminalId)")
                     } else {
-                        // print("🔴 [Coordinator] Failed to create terminal!")
+                        print("❌ [Coordinator]     Failed to create terminal!")
                     }
                 } else {
-                    // print("🔵 [Coordinator] Tab \(tab.tabId) already has terminal \(tab.rustTerminalId!)")
+                    print("ℹ️ [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) already has terminal \(tab.rustTerminalId!)")
                 }
             }
         }
-        // print("🟢 [Coordinator] createTerminalsForAllTabs completed")
+    }
+
+    /// 确保当前激活Page的终端都已创建
+    private func ensureTerminalsForActivePage() {
+        guard let activePage = terminalWindow.activePage else {
+            print("⚠️ [Coordinator] No active page")
+            return
+        }
+        ensureTerminalsForPage(activePage)
     }
 
 
@@ -715,6 +747,8 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 同步布局到 Rust（关闭 Tab）
         syncLayoutToRust()
+
+        // 注意：removeTab 已经包含了 saveSession()，这里不需要重复保存
     }
 
     /// 用户重命名 Tab
@@ -785,6 +819,10 @@ class TerminalWindowCoordinator: ObservableObject {
                 objectWillChange.send()
                 updateTrigger = UUID()
                 scheduleRender()
+
+                // 保存 Session
+                WindowManager.shared.saveSession()
+
                 return .closedPanel
             }
             return .nothingToClose
@@ -828,6 +866,9 @@ class TerminalWindowCoordinator: ObservableObject {
             objectWillChange.send()
             updateTrigger = UUID()
             scheduleRender()
+
+            // 保存 Session
+            WindowManager.shared.saveSession()
         }
     }
 
@@ -894,6 +935,9 @@ class TerminalWindowCoordinator: ObservableObject {
             objectWillChange.send()
             updateTrigger = UUID()
             scheduleRender()
+
+            // 保存 Session
+            WindowManager.shared.saveSession()
         }
     }
 
@@ -1321,6 +1365,9 @@ class TerminalWindowCoordinator: ObservableObject {
         updateTrigger = UUID()
         scheduleRender()
 
+        // 保存 Session
+        WindowManager.shared.saveSession()
+
         return newPage.pageId
     }
 
@@ -1335,17 +1382,22 @@ class TerminalWindowCoordinator: ObservableObject {
             return false
         }
 
-        // Step 2: 更新激活的 Panel
+        // Step 2: 延迟创建终端（Lazy Loading）
+        if let activePage = terminalWindow.activePage {
+            ensureTerminalsForPage(activePage)
+        }
+
+        // Step 3: 更新激活的 Panel
         activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
 
-        // Step 3: 同步布局到 Rust（Page 切换改变了显示的终端）
+        // Step 4: 同步布局到 Rust（Page 切换改变了显示的终端）
         syncLayoutToRust()
 
-        // Step 4: 触发 UI 更新
+        // Step 5: 触发 UI 更新
         objectWillChange.send()
         updateTrigger = UUID()
 
-        // Step 5: 请求渲染（防抖）
+        // Step 6: 请求渲染（防抖）
         scheduleRender()
 
         return true
@@ -1404,6 +1456,9 @@ class TerminalWindowCoordinator: ObservableObject {
         updateTrigger = UUID()
         scheduleRender()
 
+        // 保存 Session
+        WindowManager.shared.saveSession()
+
         return true
     }
 
@@ -1422,6 +1477,9 @@ class TerminalWindowCoordinator: ObservableObject {
         // 触发 UI 更新
         objectWillChange.send()
         updateTrigger = UUID()
+
+        // 保存 Session
+        WindowManager.shared.saveSession()
 
         return true
     }
@@ -1579,6 +1637,9 @@ class TerminalWindowCoordinator: ObservableObject {
         updateTrigger = UUID()
         scheduleRender()
 
+        // 保存 Session
+        WindowManager.shared.saveSession()
+
         return true
     }
 
@@ -1647,5 +1708,57 @@ class TerminalWindowCoordinator: ObservableObject {
         if !showTerminalSearch {
             clearSearch()
         }
+    }
+
+    // MARK: - Divider Ratio Management
+
+    /// 更新分隔线比例
+    ///
+    /// - Parameters:
+    ///   - layoutPath: 从根节点到分割节点的路径（0=first, 1=second）
+    ///   - newRatio: 新的比例值（0.1 到 0.9）
+    func updateDividerRatio(layoutPath: [Int], newRatio: CGFloat) {
+        // 更新 Domain 层的布局
+        terminalWindow.updateDividerRatio(path: layoutPath, newRatio: newRatio)
+
+        // 同步布局到 Rust（重新计算所有 Panel 的 bounds）
+        syncLayoutToRust()
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+
+        // 保存 Session
+        WindowManager.shared.saveSession()
+    }
+
+    /// 获取指定路径的分割比例
+    ///
+    /// - Parameter layoutPath: 从根节点到分割节点的路径
+    /// - Returns: 当前比例，失败返回 nil
+    func getRatioAtPath(_ layoutPath: [Int]) -> CGFloat? {
+        return getRatioAtPath(layoutPath, in: terminalWindow.rootLayout)
+    }
+
+    /// 递归查找指定路径的比例
+    private func getRatioAtPath(_ path: [Int], in layout: PanelLayout) -> CGFloat? {
+        // 空路径表示根节点
+        if path.isEmpty {
+            if case .split(_, _, _, let ratio) = layout {
+                return ratio
+            }
+            return nil
+        }
+
+        // 继续向下查找
+        guard case .split(_, let first, let second, _) = layout else {
+            return nil
+        }
+
+        // 递归到子节点
+        let nextPath = Array(path.dropFirst())
+        let nextLayout = path[0] == 0 ? first : second
+        return getRatioAtPath(nextPath, in: nextLayout)
     }
 }
