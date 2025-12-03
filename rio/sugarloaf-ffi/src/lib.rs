@@ -82,6 +82,7 @@ impl SugarloafHandle {
         self.instance.clear();
     }
 
+    #[allow(dead_code)] // Legacy wrapper method
     fn render(&mut self) {
         self.instance.render();
     }
@@ -1047,18 +1048,16 @@ pub extern "C" fn rio_terminal_render_to_richtext(
 
                 // Handle INVERSE flag
                 let is_inverse = cell.flags & INVERSE != 0;
-                let mut has_bg = false;
-
-                if is_inverse {
+                let has_bg = if is_inverse {
                     // Swap foreground and background (including alpha)
                     std::mem::swap(&mut fg_r, &mut bg_r);
                     std::mem::swap(&mut fg_g, &mut bg_g);
                     std::mem::swap(&mut fg_b, &mut bg_b);
                     std::mem::swap(&mut fg_a, &mut bg_a);
-                    has_bg = true;
+                    true
                 } else {
-                    has_bg = bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01;
-                }
+                    bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01
+                };
 
                 // Handle cursor
                 let has_cursor = cursor_visible

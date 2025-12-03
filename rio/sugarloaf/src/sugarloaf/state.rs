@@ -6,7 +6,7 @@
 use crate::font::FontLibrary;
 use crate::layout::RootStyle;
 use crate::layout::RichTextLayout;
-use crate::sugarloaf::graphics::Graphics;
+// use crate::sugarloaf::graphics::Graphics; // Unused after WGPU cleanup
 use crate::{Content, Object, Quad, SugarDimensions};
 use crate::sugarloaf::primitives::RichText;
 use std::collections::HashSet;
@@ -60,6 +60,7 @@ impl SugarState {
     }
 
     #[inline]
+    #[allow(dead_code)] // WGPU legacy method
     pub fn new_layer(&mut self) {}
 
     #[inline]
@@ -79,6 +80,7 @@ impl SugarState {
     }
 
     #[inline]
+    #[allow(dead_code)] // Reserved for future use
     pub fn set_font_features(&mut self, font_features: &Option<Vec<String>>) {
         let found_font_features = SugarState::found_font_features(font_features);
         self.content.set_font_features(found_font_features);

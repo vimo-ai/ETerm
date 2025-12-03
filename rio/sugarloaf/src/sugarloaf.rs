@@ -1,3 +1,13 @@
+//! # Sugarloaf - Skia 渲染引擎 (macOS only)
+//!
+//! 架构说明: 参见 `sugarloaf/RENDERING_ARCHITECTURE.md`
+//!
+//! 当前实现: 纯 Skia 渲染，通过 CAMetalLayer 使用 Metal backend
+//!
+//! TODO: 待清理项 (第二阶段):
+//! - [ ] 未使用的 Skia 高级特性 (阴影、复杂滤镜等)
+//! - [ ] 冗余的性能优化代码
+
 pub mod graphics;
 pub mod primitives;
 pub mod state;
@@ -408,9 +418,9 @@ impl Sugarloaf<'_> {
 
         // 性能统计变量（在主字体块外声明，确保作用域覆盖整个渲染过程）
         let mut total_chars = 0usize;
-        let mut font_lookup_count = 0usize;
-        let mut font_lookup_time = 0u128;
-        let mut style_segments = 0usize;
+        let mut _font_lookup_count = 0usize;
+        let mut _font_lookup_time = 0u128;
+        let mut _style_segments = 0usize;
 
         // 获取主字体 (font_id=0) 的度量信息用于行高计算
         let font_library = self.font_library.read();
@@ -443,7 +453,7 @@ impl Sugarloaf<'_> {
                         let mut x = base_x;
                         for fragment in &line.fragments {
                             // 统计样式段数量
-                            style_segments += 1;
+                            _style_segments += 1;
                             // 设置颜色
                             let color = skia_safe::Color::from_argb(
                                 (fragment.style.color[3] * 255.0) as u8,
@@ -497,15 +507,15 @@ impl Sugarloaf<'_> {
                                     } else {
                                         self.find_font_for_char_styled(&font_library, ch, font_size, &styled_font)
                                     };
-                                    font_lookup_time += lookup_start.elapsed().as_micros();
-                                    font_lookup_count += 1;
+                                    _font_lookup_time += lookup_start.elapsed().as_micros();
+                                    _font_lookup_count += 1;
                                     result
                                 } else if (ch as u32) >= 0x80 {
                                     // 非 ASCII 字符，需要字体查找
                                     let lookup_start = std::time::Instant::now();
                                     let result = self.find_font_for_char_styled(&font_library, ch, font_size, &styled_font);
-                                    font_lookup_time += lookup_start.elapsed().as_micros();
-                                    font_lookup_count += 1;
+                                    _font_lookup_time += lookup_start.elapsed().as_micros();
+                                    _font_lookup_count += 1;
                                     result
                                 } else {
                                     // ASCII 字符，直接使用样式字体，无需查找
@@ -733,9 +743,9 @@ impl Sugarloaf<'_> {
         self.reset();
 
         // 性能日志：只在渲染较多内容时打印，避免日志噪音
-        let render_time = render_start.elapsed().as_micros();
+        let _render_time = render_start.elapsed().as_micros();
         if total_chars > 1000 {
-            let total_lines: usize = self.state.rich_texts.iter()
+            let _total_lines: usize = self.state.rich_texts.iter()
                 .filter_map(|rt| self.state.content.get_state(&rt.id))
                 .map(|state| state.lines.len())
                 .sum();
@@ -761,6 +771,7 @@ impl Sugarloaf<'_> {
 
     /// 为单个字符找到最佳渲染字体
     /// 使用 Skia 的系统字体匹配机制自动查找支持该字符的字体
+    #[allow(dead_code)] // Reserved for future use
     #[cfg(target_os = "macos")]
     fn find_font_for_char(
         &self,

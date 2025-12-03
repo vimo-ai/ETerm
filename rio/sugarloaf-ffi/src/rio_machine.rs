@@ -149,10 +149,14 @@ pub struct Machine<T: EventedPty> {
     event_listener: FFIEventListener,
     route_id: usize,
     // 🔍 调试：记录上一次的前台进程和状态
+    #[allow(dead_code)] // Debug fields
     last_fg_process: Option<String>,
+    #[allow(dead_code)] // Debug fields
     last_process_state: Option<String>,
     // 🔍 调试：PTY 文件描述符和 shell PID
+    #[allow(dead_code)] // Debug fields
     pty_fd: i32,
+    #[allow(dead_code)] // Debug fields
     shell_pid: u32,
 }
 
@@ -188,6 +192,7 @@ where
     }
 
     /// 获取进程状态 (R=Running, S=Sleeping, etc.)
+    #[allow(dead_code)] // Debug utility
     fn get_process_state(pid: i32) -> String {
         #[cfg(target_os = "macos")]
         {

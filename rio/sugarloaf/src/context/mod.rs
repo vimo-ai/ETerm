@@ -3,7 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 //
-// Hybrid Context: Skia for rendering, WGPU fields kept for compatibility
+//! # Context - Skia 渲染上下文 (macOS only)
+//!
+//! 历史: 原为 Skia + WGPU 混合架构，WGPU 部分已于 2025-12 清理
+//!
+//! 当前状态: 仅保留 Skia 相关字段和方法
+//!
+//! 注释的 WGPU 代码将在长期稳定后删除
 
 use crate::sugarloaf::{SugarloafWindow, SugarloafWindowSize};
 
@@ -61,7 +67,7 @@ pub struct Context<'a> {
 impl Context<'_> {
     pub fn new<'a>(
         sugarloaf_window: SugarloafWindow,
-        renderer_config: crate::SugarloafRenderer,
+        _renderer_config: crate::SugarloafRenderer,
     ) -> Context<'a> {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 

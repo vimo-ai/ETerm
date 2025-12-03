@@ -331,6 +331,7 @@ impl Default for EventQueue {
 #[derive(Clone)]
 pub struct FFIEventListener {
     queue: EventQueue,
+    #[allow(dead_code)] // Reserved for future multi-terminal routing
     route_id: usize,
 }
 

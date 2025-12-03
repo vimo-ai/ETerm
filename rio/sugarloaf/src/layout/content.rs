@@ -2,6 +2,14 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
+//
+//! # Content - 文本内容管理和布局
+//!
+//! 负责文本塑形 (HarfBuzz) 和字形缓存
+//!
+//! TODO: 待清理项 (第二阶段):
+//! - [ ] 缓存策略是否过度复杂 (LRU cache)
+//! - [ ] 是否有未使用的预计算逻辑
 
 #![allow(clippy::uninlined_format_args)]
 
@@ -13,7 +21,7 @@ use crate::font_introspector::text::Script;
 use crate::font_introspector::{shape::cluster::GlyphCluster, FontRef};
 use crate::layout::render_data::RenderData;
 use crate::layout::RichTextLayout;
-use crate::Graphics;
+// use crate::Graphics; // Unused after WGPU cleanup
 use lru::LruCache;
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;

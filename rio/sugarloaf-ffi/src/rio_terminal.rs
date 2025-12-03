@@ -185,6 +185,7 @@ pub struct RioTerminal {
     /// 事件循环线程句柄
     _event_loop_handle: JoinHandle<(Machine<teletypewriter::Pty>, State)>,
     /// 事件队列
+    #[allow(dead_code)] // Stored for future event handling
     event_queue: EventQueue,
     /// 终端 ID
     id: usize,
@@ -236,7 +237,7 @@ impl RioTerminal {
             Self::pixel_dimensions(cols, rows, &font_metrics);
 
         // 创建 PTY（使用 working_dir）
-        let mut pty = if let Some(ref wd) = working_dir {
+        let pty = if let Some(ref _wd) = working_dir {
             // 使用 create_pty_with_spawn 支持工作目录
             teletypewriter::create_pty_with_spawn(shell, vec![], &working_dir, cols, rows)?
         } else {
@@ -796,7 +797,7 @@ impl RioTerminal {
         // 获取终端状态
         let display_offset = terminal.display_offset() as i64;
         let scrollback_lines = terminal.grid.history_size() as i64;
-        let screen_lines = terminal.screen_lines() as i64;
+        let _screen_lines = terminal.screen_lines() as i64; // Reserved for future use
 
         // CoordinateMapper 已经翻转过了（row=0 是顶部）
         // 直接转换为 Grid 坐标
@@ -1110,17 +1111,15 @@ impl RioTerminalPool {
 
                     // 处理 INVERSE
                     let is_inverse = cell.flags & INVERSE != 0;
-                    let mut has_bg = false;
-
-                    if is_inverse {
+                    let has_bg = if is_inverse {
                         std::mem::swap(&mut fg_r, &mut bg_r);
                         std::mem::swap(&mut fg_g, &mut bg_g);
                         std::mem::swap(&mut fg_b, &mut bg_b);
                         std::mem::swap(&mut fg_a, &mut bg_a);
-                        has_bg = true;
+                        true
                     } else {
-                        has_bg = bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01;
-                    }
+                        bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01
+                    };
 
                     // 处理光标
                     let has_cursor = cursor_visible
