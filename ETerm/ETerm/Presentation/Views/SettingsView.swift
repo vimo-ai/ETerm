@@ -13,9 +13,6 @@ struct SettingsView: View {
 
     @State private var apiKey: String = ""
     @State private var baseURL: String = ""
-    @State private var dispatcherModel: String = ""
-    @State private var analysisModel: String = ""
-    @State private var translationModel: String = ""
 
     @State private var testStatus: TestStatus = .idle
     @State private var showTestResult = false
@@ -78,18 +75,6 @@ struct SettingsView: View {
                                 TextField("https://dashscope.aliyuncs.com/compatible-mode/v1", text: $baseURL)
                                     .textFieldStyle(.roundedBorder)
                                     .focusable(true)
-                            }
-
-                            Divider()
-
-                            // 模型配置
-                            Text("模型配置")
-                                .font(.headline)
-
-                            VStack(alignment: .leading, spacing: 12) {
-                                ModelField(label: "调度模型", model: $dispatcherModel, placeholder: "qwen-flash")
-                                ModelField(label: "分析模型", model: $analysisModel, placeholder: "qwen3-max")
-                                ModelField(label: "翻译模型", model: $translationModel, placeholder: "qwen-mt-flash")
                             }
 
                             Divider()
@@ -173,18 +158,12 @@ struct SettingsView: View {
         let config = configManager.config
         apiKey = config.apiKey
         baseURL = config.baseURL
-        dispatcherModel = config.dispatcherModel
-        analysisModel = config.analysisModel
-        translationModel = config.translationModel
     }
 
     private func saveConfig() {
         configManager.config = AIConfig(
             apiKey: apiKey,
-            baseURL: baseURL,
-            dispatcherModel: dispatcherModel,
-            analysisModel: analysisModel,
-            translationModel: translationModel
+            baseURL: baseURL
         )
 
         // 重新初始化 AI 服务
@@ -205,9 +184,6 @@ struct SettingsView: View {
         let defaultConfig = AIConfig.default
         apiKey = defaultConfig.apiKey
         baseURL = defaultConfig.baseURL
-        dispatcherModel = defaultConfig.dispatcherModel
-        analysisModel = defaultConfig.analysisModel
-        translationModel = defaultConfig.translationModel
     }
 
     private func testConnection() {
@@ -219,10 +195,7 @@ struct SettingsView: View {
                 // 创建临时配置进行测试
                 let tempConfig = AIConfig(
                     apiKey: apiKey,
-                    baseURL: baseURL,
-                    dispatcherModel: dispatcherModel,
-                    analysisModel: analysisModel,
-                    translationModel: translationModel
+                    baseURL: baseURL
                 )
 
                 // 临时保存配置
@@ -282,27 +255,6 @@ struct SettingsSectionView<Content: View>: View {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(NSColor.controlBackgroundColor))
             )
-        }
-    }
-}
-
-// MARK: - 模型配置字段
-
-struct ModelField: View {
-    let label: String
-    @Binding var model: String
-    let placeholder: String
-
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .frame(width: 80, alignment: .leading)
-
-            TextField(placeholder, text: $model)
-                .textFieldStyle(.roundedBorder)
-                .focusable(true)
         }
     }
 }

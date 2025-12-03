@@ -52,10 +52,10 @@ final class TranslationController: NSObject {
         return p
     }()
 
-    /// 翻译内容窗口
-    private lazy var translationWindow: TranslationWindow = {
-        TranslationWindow(state: state)
-    }()
+    /// 翻译内容窗口（已废弃，改用 InfoWindow）
+    // private lazy var translationWindow: TranslationWindow = {
+    //     TranslationWindow(state: state)
+    // }()
 
     /// 来源视图
     private weak var sourceView: NSView?
@@ -122,11 +122,11 @@ final class TranslationController: NSObject {
         switch mode {
         case .hidden:
             hintPopover.performClose(nil)
-            translationWindow.orderOut(nil)
+            InfoWindowRegistry.shared.hideContent(id: "translation")
 
         case .hint:
             // 显示 hint popover
-            translationWindow.orderOut(nil)
+            InfoWindowRegistry.shared.hideContent(id: "translation")
             showHintPopover()
 
         case .expanded:
@@ -144,7 +144,7 @@ final class TranslationController: NSObject {
     }
 
     private func showTranslationWindow() {
-        translationWindow.orderFront(nil)
+        InfoWindowRegistry.shared.showContent(id: "translation")
     }
 
     // MARK: - Actions
@@ -171,9 +171,11 @@ struct HintButtonView: View {
     }
 }
 
-// MARK: - Translation Window
+// MARK: - Translation Window（已废弃，改用 InfoWindow）
 
 /// 独立翻译窗口
+/// 已废弃：现在使用全局 InfoWindow 替代
+/*
 final class TranslationWindow: NSPanel {
 
     private let bubbleState: BubbleState
@@ -259,6 +261,7 @@ final class TranslationWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
+*/
 
 // MARK: - Translation Content View
 

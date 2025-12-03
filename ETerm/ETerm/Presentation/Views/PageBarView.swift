@@ -278,7 +278,10 @@ final class PageBarHostingView: NSView {
 
     private func setupHostingView() {
         // 只使用 SwiftUI 渲染红绿灯和添加按钮，Page 标签用 AppKit
-        let controlsView = PageBarControlsView(onAddPage: onAddPage)
+        // 使用闭包捕获 self，确保能访问到后续设置的 onAddPage
+        let controlsView = PageBarControlsView(onAddPage: { [weak self] in
+            self?.onAddPage?()
+        })
         let hosting = NSHostingView(rootView: controlsView)
         hosting.translatesAutoresizingMaskIntoConstraints = true
         addSubview(hosting)

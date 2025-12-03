@@ -94,19 +94,33 @@ struct CustomSidebar: View {
                         action: { selectedItem = .builtin(.plugins) }
                     )
 
-                    // 插件注册的 Tab
-                    if !registry.allTabs.isEmpty {
+                    // 插件注册的 Tab（分组显示）
+                    if !registry.allTabGroups.isEmpty {
                         Divider()
                             .padding(.vertical, 8)
 
-                        ForEach(registry.allTabs) { tab in
-                            SidebarItemRow(
-                                title: tab.title,
-                                icon: tab.icon,
-                                shortcut: nil,  // 插件 Tab 暂无快捷键
-                                isSelected: selectedItem == .plugin(tab.id),
-                                action: { selectedItem = .plugin(tab.id) }
-                            )
+                        ForEach(registry.allTabGroups) { group in
+                            VStack(alignment: .leading, spacing: 4) {
+                                // 插件标题（不可点击）
+                                Text(group.pluginName)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, 8)
+                                    .padding(.bottom, 4)
+
+                                // 该插件的 Tabs
+                                ForEach(group.tabs) { tab in
+                                    SidebarItemRow(
+                                        title: tab.title,
+                                        icon: tab.icon,
+                                        shortcut: nil,
+                                        isSelected: selectedItem == .plugin(tab.id),
+                                        action: { selectedItem = .plugin(tab.id) },
+                                        isSubItem: true
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -130,10 +144,34 @@ struct SidebarItemRow: View {
     let shortcut: String?  // 快捷键（如 ","）
     let isSelected: Bool
     let action: () -> Void
+    let isSubItem: Bool  // 是否为子项（缩进显示）
+
+    // 为了向后兼容，提供默认值
+    init(
+        title: String,
+        icon: String,
+        shortcut: String?,
+        isSelected: Bool,
+        action: @escaping () -> Void,
+        isSubItem: Bool = false
+    ) {
+        self.title = title
+        self.icon = icon
+        self.shortcut = shortcut
+        self.isSelected = isSelected
+        self.action = action
+        self.isSubItem = isSubItem
+    }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
+                // 子项缩进
+                if isSubItem {
+                    Spacer()
+                        .frame(width: 12)
+                }
+
                 Image(systemName: icon)
                     .font(.system(size: 14))
                     .foregroundColor(isSelected ? .white : .primary)
@@ -162,7 +200,7 @@ struct SidebarItemRow: View {
                     )
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, isSubItem ? 8 : 12)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 6)

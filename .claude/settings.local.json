@@ -57,7 +57,11 @@
       "Bash(chmod:*)",
       "Bash(/Users/higuaifan/Desktop/hi/小工具/english/test_search.swift)",
       "mcp__mcp-router__memex__search_history",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(defaults read:*)",
+      "Bash(plutil:*)",
+      "Bash(python3:*)",
+      "Bash(swift:*)"
     ],
     "deny": [],
     "ask": []

@@ -390,15 +390,20 @@ class RioContainerView: NSView {
         // 从布局树计算分割线位置
         let dividers = calculateDividers(
             layout: coordinator.terminalWindow.rootLayout,
-            bounds: contentBounds
+            bounds: contentBounds,
+            path: []
         )
 
         // 创建分割线视图
-        for (frame, direction) in dividers {
+        for (frame, direction, layoutPath, splitBounds) in dividers {
             let view = DividerView(frame: frame)
             view.direction = direction
-            // 分割线在 renderView 之上，但在 panelUIViews 之下
-            addSubview(view, positioned: .above, relativeTo: renderView)
+            view.layoutPath = layoutPath
+            view.coordinator = coordinator
+            view.splitBounds = splitBounds
+            // 分割线必须在 panelUIViews 之上才能接收鼠标事件
+            // 使用 positioned: .below, relativeTo: pageBarView 确保在 pageBar 下面但在其他所有视图之上
+            addSubview(view, positioned: .below, relativeTo: pageBarView)
             dividerViews.append(view)
         }
     }
@@ -406,14 +411,15 @@ class RioContainerView: NSView {
     /// 递归计算分割线位置
     private func calculateDividers(
         layout: PanelLayout,
-        bounds: CGRect
-    ) -> [(frame: CGRect, direction: SplitDirection)] {
+        bounds: CGRect,
+        path: [Int]
+    ) -> [(frame: CGRect, direction: SplitDirection, layoutPath: [Int], splitBounds: CGRect)] {
         switch layout {
         case .leaf:
             return []
 
         case .split(let direction, let first, let second, let ratio):
-            var result: [(CGRect, SplitDirection)] = []
+            var result: [(CGRect, SplitDirection, [Int], CGRect)] = []
             let dividerThickness: CGFloat = 1.0
 
             switch direction {
@@ -427,7 +433,8 @@ class RioContainerView: NSView {
                     width: dividerHitAreaWidth,
                     height: bounds.height
                 )
-                result.append((frame, direction))
+                // 添加当前分割线（path 指向当前分割节点，splitBounds 是整个分割区域）
+                result.append((frame, direction, path, bounds))
 
                 let firstBounds = CGRect(
                     x: bounds.minX,
@@ -441,8 +448,9 @@ class RioContainerView: NSView {
                     width: bounds.width * (1 - ratio) - dividerThickness / 2,
                     height: bounds.height
                 )
-                result += calculateDividers(layout: first, bounds: firstBounds)
-                result += calculateDividers(layout: second, bounds: secondBounds)
+                // 递归处理子节点（path + 0 for first, path + 1 for second）
+                result += calculateDividers(layout: first, bounds: firstBounds, path: path + [0])
+                result += calculateDividers(layout: second, bounds: secondBounds, path: path + [1])
 
             case .vertical:
                 let firstHeight = bounds.height * ratio - dividerThickness / 2
@@ -455,7 +463,8 @@ class RioContainerView: NSView {
                     width: bounds.width,
                     height: dividerHitAreaWidth
                 )
-                result.append((frame, direction))
+                // 添加当前分割线（path 指向当前分割节点，splitBounds 是整个分割区域）
+                result.append((frame, direction, path, bounds))
 
                 let firstBounds = CGRect(
                     x: bounds.minX,
@@ -469,8 +478,9 @@ class RioContainerView: NSView {
                     width: bounds.width,
                     height: secondHeight
                 )
-                result += calculateDividers(layout: first, bounds: firstBounds)
-                result += calculateDividers(layout: second, bounds: secondBounds)
+                // 递归处理子节点（path + 0 for first, path + 1 for second）
+                result += calculateDividers(layout: first, bounds: firstBounds, path: path + [0])
+                result += calculateDividers(layout: second, bounds: secondBounds, path: path + [1])
             }
 
             return result
@@ -1739,9 +1749,21 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 默认每次滚动 1 行（根据方向确定正负）
+        // 根据实际滚动量计算行数，提供更流畅的滚动体验
         let deltaY = event.scrollingDeltaY
-        let delta = Int32(deltaY == 0 ? 0 : (deltaY > 0 ? 1 : -1))
+
+        // 根据滚动类型调整滚动速度
+        let scrollLines: Int32
+        if event.hasPreciseScrollingDeltas {
+            // 精确滚动（触控板）：每 10 像素滚动 1 行
+            let scrollSensitivity: CGFloat = 10.0
+            scrollLines = Int32(round(deltaY / scrollSensitivity))
+        } else {
+            // 普通滚轮：使用 deltaY 的实际值，并放大 3 倍以提升流畅度
+            scrollLines = Int32(deltaY * 3)
+        }
+
+        let delta = scrollLines
 
         if delta != 0 {
             _ = terminalManager.scroll(terminalId: Int(terminalId), deltaLines: delta)

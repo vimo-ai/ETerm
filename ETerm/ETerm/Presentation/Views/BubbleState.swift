@@ -45,9 +45,6 @@ class BubbleState: ObservableObject {
     @Published var analysisTranslation: String = ""
     /// 流式句子分析 - 语法
     @Published var analysisGrammar: String = ""
-    /// 控制流式更新的节流间隔，避免视图频繁重建导致闪烁
-    private let analysisUpdateMinInterval: TimeInterval = 0.05  // ~20fps
-    private var lastAnalysisUpdate: Date = .distantPast
 
     // MARK: - Computed Properties
 
@@ -125,9 +122,11 @@ class BubbleState: ObservableObject {
         currentModelTag = ""
         analysisTranslation = ""
         analysisGrammar = ""
-        lastAnalysisUpdate = .distantPast
 
         let text = originalText
+
+        // 从插件配置读取模型
+        let pluginConfig = TranslationPluginConfigManager.shared.config
 
         do {
             if isSingleWord {
@@ -154,9 +153,9 @@ class BubbleState: ObservableObject {
                     }
                 } catch DictionaryError.wordNotFound {
                     // 词典查不到（专有名词等），降级翻译
-                    let result = try await AIService.shared.translate(text)
+                    let result = try await AIService.shared.translate(text, model: pluginConfig.translationModel)
                     content = .translation(result)
-                    currentModelTag = "qwen-mt-flash"
+                    currentModelTag = pluginConfig.translationModel
                 }
             } else {
                 // 句子/短语 → 句子分析（翻译 + 语法）
@@ -165,18 +164,12 @@ class BubbleState: ObservableObject {
                 var finalTranslation = ""
                 var finalGrammar = ""
 
-                try await AIService.shared.analyzeSentence(text) { trans, gram in
+                try await AIService.shared.analyzeSentence(text, model: pluginConfig.analysisModel) { trans, gram in
                     receivedStreaming = true
                     finalTranslation = trans
                     finalGrammar = gram
 
-                    let now = Date()
-                    // 节流：降低 UI 刷新频率，避免闪烁
-                    guard now.timeIntervalSince(self.lastAnalysisUpdate) >= self.analysisUpdateMinInterval else {
-                        return
-                    }
-                    self.lastAnalysisUpdate = now
-
+                    // 批量更新已在 AIService 层处理，此处直接更新 UI
                     withTransaction(Transaction(animation: nil)) {
                         self.analysisTranslation = trans
                         self.analysisGrammar = gram
@@ -185,7 +178,7 @@ class BubbleState: ObservableObject {
                     // 首次收到内容时切换到分析模式，后续仅更新字符串，避免视图重建闪烁
                     if !didShowAnalysis {
                         self.content = .analysis
-                        self.currentModelTag = "qwen3-max"
+                        self.currentModelTag = pluginConfig.analysisModel
                         didShowAnalysis = true
                     }
                 }
@@ -197,7 +190,7 @@ class BubbleState: ObservableObject {
                         self.analysisGrammar = finalGrammar
                         content = .analysis
                     }
-                    currentModelTag = "qwen3-max"
+                    currentModelTag = pluginConfig.analysisModel
 
                     // 保存短语/句子到数据库（用于复合名词等）
                     saveToVocabulary(
@@ -209,9 +202,9 @@ class BubbleState: ObservableObject {
                     )
                 } else {
                     // 降级到普通翻译
-                    let result = try await AIService.shared.translate(text)
+                    let result = try await AIService.shared.translate(text, model: pluginConfig.translationModel)
                     content = .translation(result)
-                    currentModelTag = "qwen-mt-flash"
+                    currentModelTag = pluginConfig.translationModel
 
                     // 保存翻译结果到数据库
                     saveToVocabulary(
@@ -236,8 +229,11 @@ class BubbleState: ObservableObject {
 
     /// 加载单词翻译和释义翻译（私有方法）
     private func loadWordAndDefinitionTranslations(for word: DictionaryWord) async {
+        // 从插件配置读取翻译模型
+        let pluginConfig = TranslationPluginConfigManager.shared.config
+
         // 1. 先翻译单词本身
-        let wordTranslation = try? await AIService.shared.translate(word.word)
+        let wordTranslation = try? await AIService.shared.translate(word.word, model: pluginConfig.translationModel)
 
         // 2. 收集所有需要翻译的释义和例句
         var definitionsToTranslate: [(String, String?)] = []
@@ -253,8 +249,8 @@ class BubbleState: ObservableObject {
         await withTaskGroup(of: (Int, String, String?).self) { group in
             for (index, item) in definitionsToTranslate.enumerated() {
                 group.addTask {
-                    let def = try? await AIService.shared.translate(item.0)
-                    let ex = item.1 != nil ? (try? await AIService.shared.translate(item.1!)) : nil
+                    let def = try? await AIService.shared.translate(item.0, model: pluginConfig.translationModel)
+                    let ex = item.1 != nil ? (try? await AIService.shared.translate(item.1!, model: pluginConfig.translationModel)) : nil
                     return (index, def ?? "", ex)
                 }
             }
@@ -263,7 +259,7 @@ class BubbleState: ObservableObject {
                 translations[index] = (def, ex)
                 // 实时更新 UI（包含单词翻译）
                 content = .dictionary(word, wordTranslation: wordTranslation, translations: translations)
-                currentModelTag = "qwen-mt-flash"
+                currentModelTag = pluginConfig.translationModel
             }
         }
 

@@ -9,6 +9,32 @@ import SwiftUI
 import AppKit
 import SwiftData
 
+// MARK: - Grammar Category Mapping
+
+private struct GrammarCategory {
+    let name: String
+    let icon: String
+    let color: Color
+
+    static let mapping: [String: GrammarCategory] = [
+        "tense": GrammarCategory(name: "时态错误", icon: "⏰", color: Color(red: 0x4a/255, green: 0x99/255, blue: 0x92/255)),
+        "article": GrammarCategory(name: "冠词错误", icon: "📘", color: Color(red: 0x00/255, green: 0x7a/255, blue: 0xcc/255)),
+        "preposition": GrammarCategory(name: "介词错误", icon: "📗", color: Color(red: 0x73/255, green: 0xc9/255, blue: 0x91/255)),
+        "subject_verb_agreement": GrammarCategory(name: "主谓一致", icon: "📙", color: Color(red: 0xfc/255, green: 0xa1/255, blue: 0x04/255)),
+        "word_order": GrammarCategory(name: "词序错误", icon: "🔄", color: Color(red: 0x9b/255, green: 0x59/255, blue: 0xb6/255)),
+        "singular_plural": GrammarCategory(name: "单复数错误", icon: "🔢", color: Color(red: 0x3d/255, green: 0x98/255, blue: 0xd3/255)),
+        "punctuation": GrammarCategory(name: "标点错误", icon: "❗️", color: Color(red: 0xe7/255, green: 0x4c/255, blue: 0x3c/255)),
+        "spelling": GrammarCategory(name: "拼写错误", icon: "✏️", color: Color(red: 0xe6/255, green: 0x74/255, blue: 0x94/255)),
+        "word_choice": GrammarCategory(name: "用词错误", icon: "💭", color: Color(red: 0x95/255, green: 0xa5/255, blue: 0xa6/255)),
+        "sentence_structure": GrammarCategory(name: "句子结构", icon: "🏗️", color: Color(red: 0x34/255, green: 0x98/255, blue: 0xdb/255)),
+        "other": GrammarCategory(name: "其他错误", icon: "📝", color: Color(red: 0x7f/255, green: 0x8c/255, blue: 0x8d/255))
+    ]
+
+    static func get(_ category: String) -> GrammarCategory {
+        mapping[category] ?? GrammarCategory(name: "其他错误", icon: "📝", color: Color(red: 0x7f/255, green: 0x8c/255, blue: 0x8d/255))
+    }
+}
+
 // MARK: - Theme (Shuimo-inspired)
 private enum ComposerTheme {
     static let accent = Color(red: 0x4a/255, green: 0x99/255, blue: 0x92/255)
@@ -581,27 +607,70 @@ struct InlineComposerView: View {
 
                             // 详细结果
                             if let result = analysisResult {
-                                // 语法修复详情
+                                // 语法修复详情 - 按 category 分组
                                 if let fixes = result.fixes, !fixes.isEmpty {
+                                    // 按 category 分组
+                                    let groupedFixes = Dictionary(grouping: fixes) { $0.category }
+                                    // 按分类排序（可选，使用预定义顺序）
+                                    let sortedCategories = groupedFixes.keys.sorted { cat1, cat2 in
+                                        let order = ["tense", "article", "preposition", "subject_verb_agreement",
+                                                   "word_order", "singular_plural", "punctuation", "spelling",
+                                                   "word_choice", "sentence_structure", "other"]
+                                        let idx1 = order.firstIndex(of: cat1) ?? order.count
+                                        let idx2 = order.firstIndex(of: cat2) ?? order.count
+                                        return idx1 < idx2
+                                    }
+
                                     resultSection(title: "语法修复", icon: "exclamationmark.triangle") {
-                                        ForEach(Array(fixes.enumerated()), id: \.offset) { _, fix in
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                HStack {
-                                                    Text("❌")
-                                                    Text(fix.original)
-                                                        .strikethrough()
-                                                        .foregroundColor(ComposerTheme.danger)
+                                        ForEach(sortedCategories, id: \.self) { categoryKey in
+                                            if let categoryFixes = groupedFixes[categoryKey] {
+                                                let grammarCat = GrammarCategory.get(categoryKey)
+
+                                                VStack(alignment: .leading, spacing: 8) {
+                                                    // 分类标题
+                                                    HStack(spacing: 6) {
+                                                        Text(grammarCat.icon)
+                                                            .font(.system(size: 14))
+                                                        Text(grammarCat.name)
+                                                            .font(.system(size: 13, weight: .semibold))
+                                                            .foregroundColor(grammarCat.color)
+                                                        Text("(\(categoryFixes.count)条)")
+                                                            .font(.system(size: 11))
+                                                            .foregroundColor(.secondary)
+                                                    }
+                                                    .padding(.bottom, 4)
+
+                                                    // 该分类下的所有错误
+                                                    ForEach(Array(categoryFixes.enumerated()), id: \.offset) { _, fix in
+                                                        HStack(alignment: .top, spacing: 8) {
+                                                            Text("├─")
+                                                                .font(.system(size: 11, design: .monospaced))
+                                                                .foregroundColor(.secondary)
+
+                                                            VStack(alignment: .leading, spacing: 4) {
+                                                                HStack(spacing: 4) {
+                                                                    Text(fix.original)
+                                                                        .strikethrough()
+                                                                        .foregroundColor(ComposerTheme.danger)
+                                                                    Text("→")
+                                                                        .foregroundColor(.secondary)
+                                                                    Text(fix.corrected)
+                                                                        .foregroundColor(ComposerTheme.success)
+                                                                }
+                                                                .font(.system(size: 12))
+
+                                                                if !fix.errorType.isEmpty {
+                                                                    Text(fix.errorType)
+                                                                        .font(.system(size: 10))
+                                                                        .foregroundColor(.secondary.opacity(0.8))
+                                                                }
+                                                            }
+                                                        }
+                                                        .padding(.leading, 8)
+                                                    }
                                                 }
-                                                HStack {
-                                                    Text("✅")
-                                                    Text(fix.corrected)
-                                                        .foregroundColor(ComposerTheme.success)
-                                                }
-                                                Text("错误类型: \(fix.errorType)")
-                                                    .font(.system(size: 11))
-                                                    .foregroundColor(.secondary)
+                                                .padding(.vertical, 6)
                                             }
-                                            .padding(.vertical, 4)
                                         }
                                     }
                                 }
@@ -813,15 +882,18 @@ struct InlineComposerView: View {
 
         Task { @MainActor in
             do {
+                // 从插件配置读取模型
+                let pluginConfig = TranslationPluginConfigManager.shared.config
+
                 // Stage 1: Dispatcher - 流式显示 reasoning
-                let plan = try await AIService.shared.analyzeDispatcher(text) { updatedReasoning in
+                let plan = try await AIService.shared.analyzeDispatcher(text, model: pluginConfig.dispatcherModel) { updatedReasoning in
                     self.reasoning = updatedReasoning
                 }
                 // 保存分析计划，UI 可以显示
                 self.currentPlan = plan
 
                 // Stage 2: 并行执行具体分析
-                let result = try await AIService.shared.performAnalysis(text, plan: plan)
+                let result = try await AIService.shared.performAnalysis(text, plan: plan, model: pluginConfig.analysisModel)
                 self.analysisResult = result
                 self.isLoading = false
 
@@ -876,7 +948,10 @@ struct InlineComposerView: View {
 
         Task { @MainActor in
             do {
-                let points = try await AIService.shared.getDetailedExplanation(text)
+                // 从插件配置读取模型
+                let pluginConfig = TranslationPluginConfigManager.shared.config
+
+                let points = try await AIService.shared.getDetailedExplanation(text, model: pluginConfig.analysisModel)
                 self.detailedExplanation = points
                 self.showDetailedExplanation = true
                 self.isLoadingDetail = false
@@ -897,8 +972,11 @@ struct InlineComposerView: View {
 
         Task { @MainActor in
             do {
+                // 从插件配置读取模型
+                let pluginConfig = TranslationPluginConfigManager.shared.config
+
                 var hasReceivedContent = false
-                try await AIService.shared.checkWriting(text) { result in
+                try await AIService.shared.checkWriting(text, model: pluginConfig.analysisModel) { result in
                     if !hasReceivedContent {
                         hasReceivedContent = true
                         self.isLoading = false
