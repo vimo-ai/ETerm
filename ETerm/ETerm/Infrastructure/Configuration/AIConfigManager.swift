@@ -13,17 +13,11 @@ import Combine
 struct AIConfig: Codable, Equatable {
     var apiKey: String
     var baseURL: String
-    var dispatcherModel: String
-    var analysisModel: String
-    var translationModel: String
 
     static var `default`: AIConfig {
         AIConfig(
             apiKey: "",
-            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            dispatcherModel: "qwen-flash",
-            analysisModel: "qwen3-max",
-            translationModel: "qwen-mt-flash"
+            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
     }
 
@@ -34,10 +28,7 @@ struct AIConfig: Codable, Equatable {
 
         return AIConfig(
             apiKey: apiKey,
-            baseURL: baseURL,
-            dispatcherModel: "qwen-flash",
-            analysisModel: "qwen3-max",
-            translationModel: "qwen-mt-flash"
+            baseURL: baseURL
         )
     }
 
@@ -113,18 +104,18 @@ final class AIConfigManager: ObservableObject {
             throw DashScopeError.missingAPIKey
         }
 
-        // 创建临时客户端测试
+        // 创建临时客户端测试（使用默认模型）
         let testConfig = DashScopeClient.Configuration(
             apiKey: config.apiKey,
             baseURL: url,
-            defaultModel: config.analysisModel
+            defaultModel: "qwen-flash"
         )
 
         let client = DashScopeClient(configuration: testConfig)
 
-        // 发送一个简单的测试请求
+        // 发送一个简单的测试请求（使用默认模型）
         let testMessage = DashScopeMessage(role: "user", content: "hi")
-        _ = try await client.chat(messages: [testMessage], model: config.dispatcherModel)
+        _ = try await client.chat(messages: [testMessage], model: "qwen-flash")
 
         return true
     }
