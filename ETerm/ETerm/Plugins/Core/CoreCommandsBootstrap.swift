@@ -42,7 +42,7 @@ final class CoreCommandsBootstrap {
             ) { context in
                 context.coordinator?.switchToPage(i)
             })
-            keyboard.bind(.cmdShift("\(i + 1)"), to: "page.switchTo.\(i)", when: nil)
+            keyboard.bind(.ctrl("\(i + 1)"), to: "page.switchTo.\(i)", when: nil)
         }
 
         // 上一个/下一个 Page
@@ -53,7 +53,7 @@ final class CoreCommandsBootstrap {
         ) { context in
             context.coordinator?.switchToPreviousPage()
         })
-        keyboard.bind(.cmdShift("["), to: "page.previous", when: nil)
+        keyboard.bind(.ctrl("["), to: "page.previous", when: nil)
 
         commands.register(Command(
             id: "page.next",
@@ -62,7 +62,7 @@ final class CoreCommandsBootstrap {
         ) { context in
             context.coordinator?.switchToNextPage()
         })
-        keyboard.bind(.cmdShift("]"), to: "page.next", when: nil)
+        keyboard.bind(.ctrl("]"), to: "page.next", when: nil)
 
         // 新建/关闭 Page
         commands.register(Command(
@@ -72,7 +72,7 @@ final class CoreCommandsBootstrap {
         ) { context in
             context.coordinator?.createPage()
         })
-        keyboard.bind(.cmdShift("t"), to: "page.create", when: nil)
+        keyboard.bind(.ctrl("t"), to: "page.create", when: nil)
 
         commands.register(Command(
             id: "page.close",
@@ -81,7 +81,7 @@ final class CoreCommandsBootstrap {
         ) { context in
             context.coordinator?.closeCurrentPage()
         })
-        keyboard.bind(.cmdShift("w"), to: "page.close", when: nil)
+        keyboard.bind(.ctrl("w"), to: "page.close", when: nil)
 
         // ─────────────────────────────────────────
         // Tab 管理（Panel 级别）

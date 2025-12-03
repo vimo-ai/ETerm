@@ -23,7 +23,7 @@ final class ExampleSidebarPlugin: Plugin {
         ) {
             AnyView(ExampleView1())
         }
-        context.ui.registerSidebarTab(for: Self.id, tab: tab1)
+        context.ui.registerSidebarTab(for: Self.id, pluginName: Self.name, tab: tab1)
 
         // 注册第二个 Tab
         let tab2 = SidebarTab(
@@ -33,7 +33,7 @@ final class ExampleSidebarPlugin: Plugin {
         ) {
             AnyView(ExampleView2())
         }
-        context.ui.registerSidebarTab(for: Self.id, tab: tab2)
+        context.ui.registerSidebarTab(for: Self.id, pluginName: Self.name, tab: tab2)
 
         print("✅ [\(Self.name)] 已注册 2 个侧边栏 Tab")
     }

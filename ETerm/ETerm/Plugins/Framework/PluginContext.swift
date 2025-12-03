@@ -5,6 +5,7 @@
 //  插件层 - 插件上下文
 
 import Foundation
+import SwiftUI
 
 /// 插件上下文 - 聚合插件所需的系统能力
 ///
@@ -32,10 +33,19 @@ protocol UIService: AnyObject {
     /// 注册侧边栏 Tab
     /// - Parameters:
     ///   - pluginId: 插件 ID
+    ///   - pluginName: 插件名称
     ///   - tab: Tab 定义
-    func registerSidebarTab(for pluginId: String, tab: SidebarTab)
+    func registerSidebarTab(for pluginId: String, pluginName: String, tab: SidebarTab)
 
     /// 注销插件的所有侧边栏 Tab
     /// - Parameter pluginId: 插件 ID
     func unregisterSidebarTabs(for pluginId: String)
+
+    /// 注册信息窗口内容
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - id: 内容 ID（唯一标识）
+    ///   - title: 内容标题
+    ///   - viewProvider: 视图提供者
+    func registerInfoContent(for pluginId: String, id: String, title: String, viewProvider: @escaping () -> AnyView)
 }

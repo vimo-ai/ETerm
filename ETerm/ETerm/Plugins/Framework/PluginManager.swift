@@ -5,6 +5,7 @@
 //  插件层 - 插件管理器
 
 import Foundation
+import SwiftUI
 
 /// 插件管理器 - 负责插件的加载、激活和停用
 ///
@@ -36,10 +37,10 @@ final class PluginManager {
 
     /// 加载所有内置插件
     func loadBuiltinPlugins() {
-        loadPlugin(TranslationPlugin.self)
+        loadPlugin(EnglishLearningPlugin.self)  // 英语学习插件（统一了翻译、单词本、语法档案）
         loadPlugin(WritingAssistantPlugin.self)
         loadPlugin(OneLineCommandPlugin.self)
-        loadPlugin(LearningPlugin.self)  // 学习插件
+        loadPlugin(ClaudeMonitorPlugin.self)    // Claude 监控插件
         // loadPlugin(ExampleSidebarPlugin.self)  // 示例侧边栏插件（已禁用）
         print("🔌 插件管理器已初始化")
     }
@@ -217,11 +218,15 @@ final class UIServiceImpl: UIService {
 
     private init() {}
 
-    func registerSidebarTab(for pluginId: String, tab: SidebarTab) {
-        SidebarRegistry.shared.registerTab(for: pluginId, tab: tab)
+    func registerSidebarTab(for pluginId: String, pluginName: String, tab: SidebarTab) {
+        SidebarRegistry.shared.registerTab(for: pluginId, pluginName: pluginName, tab: tab)
     }
 
     func unregisterSidebarTabs(for pluginId: String) {
         SidebarRegistry.shared.unregisterTabs(for: pluginId)
+    }
+
+    func registerInfoContent(for pluginId: String, id: String, title: String, viewProvider: @escaping () -> AnyView) {
+        InfoWindowRegistry.shared.registerContent(id: id, title: title, viewProvider: viewProvider)
     }
 }
