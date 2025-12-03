@@ -1074,7 +1074,9 @@ impl RioTerminalPool {
 
                 // 🔑 使用终端 damage tracking API
                 let damage_start = std::time::Instant::now();
-                let terminal_lock = terminal.terminal.write();
+                // ⚠️ 临时注释：避免搜索时锁竞争导致卡死
+                // 由于 damage tracking 已禁用，这个写锁完全没必要
+                // let terminal_lock = terminal.terminal.write();
 
                 // 🚨 临时禁用 damage tracking，总是使用 Full 模式诊断问题
                 let damage = rio_backend::crosswords::TermDamage::Full;
@@ -1092,7 +1094,7 @@ impl RioTerminalPool {
                     rio_backend::crosswords::TermDamage::Full => {
                         // 全量更新：清空并重建所有内容
                         full_damage_count += 1;
-                        drop(terminal_lock);  // 释放锁
+                        // drop(terminal_lock);  // 释放锁（已注释，因为 terminal_lock 已注释）
 
                         // 选中 RichText 并渲染
                         let content = sugarloaf.instance.content();
@@ -1116,7 +1118,7 @@ impl RioTerminalPool {
                             .collect();
 
                         let damaged_count = damaged_line_numbers.len();
-                        drop(terminal_lock);  // 释放锁
+                        // drop(terminal_lock);  // 释放锁（已注释，因为 terminal_lock 已注释）
 
                         // 选中 RichText
                         let content = sugarloaf.instance.content();
