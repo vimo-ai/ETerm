@@ -106,9 +106,13 @@ pub struct FragmentData {
 pub struct BuilderLine {
     pub fragments: Vec<FragmentData>,
     pub render_data: RenderData,
+    /// Grid 内容的 hash 值（用于缓存查找）
+    #[cfg(target_os = "macos")]
+    pub content_hash: u64,
 }
 
-#[derive(Default, Clone, PartialEq)]
+
+#[derive(Default, Clone, PartialEq, Debug)]
 #[repr(C)]
 pub enum BuilderStateUpdate {
     #[default]
@@ -178,6 +182,16 @@ impl BuilderState {
         self.lines.clear();
         self.vars.clear();
         self.last_update = BuilderStateUpdate::Full;
+
+        // 🔍 Debug: Track clear() calls
+        #[cfg(debug_assertions)]
+        {
+            static CLEAR_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let count = CLEAR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count < 5 {
+                println!("🧹 [BuilderState::clear] Called (count: {}), last_update set to Full", count + 1);
+            }
+        }
     }
     #[inline]
     pub fn rescale(&mut self, scale_factor: f32) {
@@ -549,6 +563,18 @@ impl Content {
         self
     }
 
+    /// 标记指定行为脏，用于增量渲染
+    #[inline]
+    pub fn mark_line_dirty(&mut self, line_idx: usize) -> &mut Content {
+        if let Some(selector) = self.selector {
+            if let Some(state) = self.states.get_mut(&selector) {
+                state.mark_line_dirty(line_idx);
+            }
+        }
+
+        self
+    }
+
     #[inline]
     pub fn add_text(&mut self, text: &str, style: FragmentStyle) -> &mut Content {
         if let Some(selector) = self.selector {
@@ -597,6 +623,23 @@ impl Content {
             }
         }
 
+        self
+    }
+
+    /// 设置行的内容 hash（用于缓存查找）
+    #[cfg(target_os = "macos")]
+    pub fn set_line_content_hash(
+        &mut self,
+        line_idx: usize,
+        content_hash: u64,
+    ) -> &mut Content {
+        if let Some(selector) = self.selector {
+            if let Some(state) = self.states.get_mut(&selector) {
+                if let Some(line) = state.lines.get_mut(line_idx) {
+                    line.content_hash = content_hash;
+                }
+            }
+        }
         self
     }
 
@@ -829,7 +872,9 @@ impl Content {
             let state_id = selector;
 
             if let Some(state) = self.states.get_mut(&state_id) {
-                state.mark_dirty();
+                // ⚠️ Removed unconditional mark_dirty() call here!
+                // Dirty tracking should be done by callers when content actually changes
+                // (e.g., clear(), add_text(), etc.)
                 for line_number in 0..state.lines.len() {
                     self.process_line(state_id, line_number);
                 }

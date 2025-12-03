@@ -18,6 +18,7 @@ pub use content::{
     BuilderLine, BuilderState, BuilderStateUpdate, Content, FragmentStyle,
     FragmentStyleDecoration, UnderlineInfo, UnderlineShape, WordCache,
 };
+
 pub use render_data::Run;
 
 /// Index of a span in sequential order of submission to a paragraph content.

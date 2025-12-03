@@ -28,6 +28,59 @@ use state::SugarState;
 #[cfg(target_os = "macos")]
 use skia_safe::{Color4f, Font, FontMgr, FontStyle, Paint, Point, Typeface};
 
+// ========== 脏区渲染优化：布局缓存数据结构 ==========
+
+/// 缓存单行的布局计算结果
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+struct CachedLineLayout {
+    /// 字符列表
+    chars: Vec<char>,
+    /// 每个字符对应的 Typeface（字体查找结果）
+    typefaces: Vec<Typeface>,
+    /// 每个字符的 X 坐标（相对于行起始位置）
+    positions: Vec<f32>,
+    /// 字体大小（用于创建 Font）
+    #[allow(dead_code)]
+    font_size: f32,
+    /// cell 宽度
+    #[allow(dead_code)]
+    cell_width: f32,
+}
+
+/// 行级布局缓存（优化版：直接使用 content hash 作为 key）
+#[cfg(target_os = "macos")]
+struct LineLayoutCache {
+    /// Key: content_hash (u64), Value: 缓存的布局结果
+    entries: std::collections::HashMap<u64, CachedLineLayout>,
+}
+
+#[cfg(target_os = "macos")]
+impl LineLayoutCache {
+    fn new() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
+    /// 根据 content hash 获取缓存的布局
+    fn get(&self, content_hash: u64) -> Option<&CachedLineLayout> {
+        self.entries.get(&content_hash)
+    }
+
+    /// 根据 content hash 存储布局
+    fn set(&mut self, content_hash: u64, layout: CachedLineLayout) {
+        self.entries.insert(content_hash, layout);
+    }
+
+    /// 清空缓存
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+// ========== 主要渲染结构体 ==========
+
 pub struct Sugarloaf<'a> {
     pub ctx: Context<'a>,
     state: state::SugarState,
@@ -47,6 +100,9 @@ pub struct Sugarloaf<'a> {
     /// 复用的 FontMgr 实例，避免每次字体查找时重复创建
     #[cfg(target_os = "macos")]
     font_mgr: FontMgr,
+    /// 布局计算结果缓存（脏区优化）
+    #[cfg(target_os = "macos")]
+    layout_cache: std::cell::RefCell<LineLayoutCache>,
 }
 
 #[derive(Debug)]
@@ -177,6 +233,8 @@ impl Sugarloaf<'_> {
             font_size,
             #[cfg(target_os = "macos")]
             font_mgr,
+            #[cfg(target_os = "macos")]
+            layout_cache: std::cell::RefCell::new(LineLayoutCache::new()),
         };
 
         Ok(instance)
@@ -198,6 +256,7 @@ impl Sugarloaf<'_> {
             self.font_library = font_library.inner.clone();
             self.typeface_cache.borrow_mut().clear();
             self.char_font_cache.borrow_mut().clear();
+            self.layout_cache.borrow_mut().clear();
         }
     }
 
@@ -288,6 +347,22 @@ impl Sugarloaf<'_> {
         self.state.content()
     }
 
+    /// Check if layout cache contains a specific content hash (macOS only)
+    ///
+    /// Returns true if the cache has a layout for this hash, false otherwise.
+    /// This is used to optimize rendering by skipping extraction of cached lines.
+    #[inline]
+    #[cfg(target_os = "macos")]
+    pub fn has_cached_layout(&self, content_hash: u64) -> bool {
+        self.layout_cache.borrow().get(content_hash).is_some()
+    }
+
+    #[inline]
+    #[cfg(not(target_os = "macos"))]
+    pub fn has_cached_layout(&self, _content_hash: u64) -> bool {
+        false
+    }
+
     #[inline]
     pub fn set_objects(&mut self, objects: Vec<Object>) {
         self.state.compute_objects(objects);
@@ -369,6 +444,13 @@ impl Sugarloaf<'_> {
     pub fn rescale(&mut self, scale: f32) {
         self.ctx.scale = scale;
         self.state.compute_layout_rescale_skia(scale);
+
+        // Clear layout cache when rescaling
+        #[cfg(target_os = "macos")]
+        {
+            self.layout_cache.borrow_mut().clear();
+        }
+
         // TODO: Handle background image rescale when implemented
     }
 
@@ -422,6 +504,11 @@ impl Sugarloaf<'_> {
         let mut _font_lookup_time = 0u128;
         let mut _style_segments = 0usize;
 
+        // 缓存统计
+        let mut cache_hits = 0usize;
+        let mut cache_misses = 0usize;
+        let mut total_lines = 0usize;
+
         // 获取主字体 (font_id=0) 的度量信息用于行高计算
         let font_library = self.font_library.read();
         let primary_typeface = self.get_or_create_typeface(&font_library, 0);
@@ -450,7 +537,39 @@ impl Sugarloaf<'_> {
                     for (line_idx, line) in builder_state.lines.iter().enumerate() {
                         let y = base_y + (line_idx as f32) * cell_height + baseline_offset;
 
-                        let mut x = base_x;
+                        // 🔥 使用 content_hash 查找缓存
+                        let content_hash = line.content_hash;
+
+                        // 更新统计
+                        total_lines += 1;
+
+                        let layout = {
+                            let cache = self.layout_cache.borrow();
+                            if let Some(cached_layout) = cache.get(content_hash) {
+                                // 缓存命中
+                                cache_hits += 1;
+                                cached_layout.clone()
+                            } else {
+                                // 缓存未命中，需要重新计算
+                                drop(cache);  // 释放借用，避免冲突
+                                cache_misses += 1;
+
+                                let new_layout = self.generate_line_layout(
+                                    line,
+                                    &font_library,
+                                    font_size,
+                                    cell_width,
+                                    &primary_font,
+                                );
+
+                                // 存入缓存
+                                self.layout_cache.borrow_mut().set(content_hash, new_layout.clone());
+                                new_layout
+                            }
+                        };
+
+                        // 使用缓存的布局数据渲染
+                        let mut char_idx = 0;
                         for fragment in &line.fragments {
                             // 统计样式段数量
                             _style_segments += 1;
@@ -466,73 +585,29 @@ impl Sugarloaf<'_> {
                             // 获取 fragment 的 cell 宽度（1.0 = 单宽，2.0 = 双宽）
                             let fragment_cell_width = fragment.style.width;
 
-                            // 逐字符渲染，确保每个字符使用正确的 fallback 字体
-                            // 支持 VS16 (U+FE0F) emoji 选择器
-                            let chars: Vec<char> = fragment.content.chars().collect();
-                            let mut i = 0;
-                            while i < chars.len() {
-                                let ch = chars[i];
+                            // 🎯 使用缓存的布局数据渲染，跳过耗时的字体查找
+                            let fragment_chars: Vec<char> = fragment.content.chars()
+                                .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}' && c != '\u{20E3}')
+                                .collect();
 
-                                // 检查下一个字符是否是 VS16 (U+FE0F) 或 VS15 (U+FE0E)
-                                let next_is_vs16 = chars.get(i + 1) == Some(&'\u{FE0F}');
-                                let next_is_vs15 = chars.get(i + 1) == Some(&'\u{FE0E}');
-
-                                // 跳过变体选择器本身（不需要渲染）
-                                if ch == '\u{FE0F}' || ch == '\u{FE0E}' {
-                                    i += 1;
-                                    continue;
+                            for _ in 0..fragment_chars.len() {
+                                if char_idx >= layout.chars.len() {
+                                    break;
                                 }
+
+                                let ch = layout.chars[char_idx];
+                                let typeface = &layout.typefaces[char_idx];
+                                let x = base_x + layout.positions[char_idx];
 
                                 // 统计字符总数
                                 total_chars += 1;
 
-                                // 根据 font_id 获取字体样式 (0=regular, 1=bold, 2=italic, 3=bold_italic)
-                                let styled_typeface = self.get_or_create_typeface(&font_library, fragment.style.font_id);
-                                let styled_font = styled_typeface.as_ref()
-                                    .map(|tf| Font::from_typeface(tf, font_size))
-                                    .unwrap_or_else(|| primary_font.clone());
-
-                                // 找到能渲染该字符的最佳字体
-                                // 如果是非 ASCII 字符，统计字体查找时间
-                                let (best_font, _is_emoji) = if next_is_vs16 {
-                                    // 有 VS16，强制使用 emoji 字体（复用成员变量 font_mgr）
-                                    let lookup_start = std::time::Instant::now();
-                                    let result = if let Some(emoji_typeface) = self.font_mgr.match_family_style_character(
-                                        "Apple Color Emoji",
-                                        FontStyle::normal(),
-                                        &[],
-                                        ch as i32,
-                                    ) {
-                                        (Font::from_typeface(&emoji_typeface, font_size), true)
-                                    } else {
-                                        self.find_font_for_char_styled(&font_library, ch, font_size, &styled_font)
-                                    };
-                                    _font_lookup_time += lookup_start.elapsed().as_micros();
-                                    _font_lookup_count += 1;
-                                    result
-                                } else if (ch as u32) >= 0x80 {
-                                    // 非 ASCII 字符，需要字体查找
-                                    let lookup_start = std::time::Instant::now();
-                                    let result = self.find_font_for_char_styled(&font_library, ch, font_size, &styled_font);
-                                    _font_lookup_time += lookup_start.elapsed().as_micros();
-                                    _font_lookup_count += 1;
-                                    result
-                                } else {
-                                    // ASCII 字符，直接使用样式字体，无需查找
-                                    (styled_font.clone(), false)
-                                };
+                                // 从缓存的 Typeface 创建 Font（快速操作）
+                                let font = Font::from_typeface(typeface, font_size);
 
                                 // 使用终端 cell 宽度而不是字体 advance
-                                // 这样可以保证等宽布局，中文字符占 2 个 cell
                                 let char_cell_advance = cell_width * fragment_cell_width;
-
-                                // 测量字形实际宽度，用于居中绘制
                                 let ch_str = ch.to_string();
-                                // let (glyph_width, _) = best_font.measure_str(&ch_str, None);
-
-                                // 🔧 注释掉居中偏移 - 等宽字体已经在字体设计层面处理了字符居中
-                                // 二次居中会导致字符缝隙和位置偏移
-                                // let center_offset = (char_cell_advance - glyph_width) / 2.0;
                                 let center_offset = 0.0;
 
                                 // 绘制背景（如果有）
@@ -615,7 +690,7 @@ impl Sugarloaf<'_> {
                                 }
 
                                 // 绘制字符（居中）
-                                canvas.draw_str(&ch_str, Point::new(x + center_offset, y), &best_font, &paint);
+                                canvas.draw_str(&ch_str, Point::new(x + center_offset, y), &font, &paint);
 
                                 // 绘制装饰（下划线、删除线）
                                 if let Some(decoration) = fragment.style.decoration {
@@ -717,14 +792,8 @@ impl Sugarloaf<'_> {
                                     }
                                 }
 
-                                x += char_cell_advance;
-
-                                // 如果下一个是变体选择器，跳过它
-                                if next_is_vs16 || next_is_vs15 {
-                                    i += 2;
-                                } else {
-                                    i += 1;
-                                }
+                                // 更新字符索引（使用缓存的布局，无需更新 x）
+                                char_idx += 1;
                             }
                         }
                     }
@@ -743,29 +812,100 @@ impl Sugarloaf<'_> {
         self.reset();
 
         // 性能日志：只在渲染较多内容时打印，避免日志噪音
-        let _render_time = render_start.elapsed().as_micros();
-        if total_chars > 1000 {
-            let _total_lines: usize = self.state.rich_texts.iter()
-                .filter_map(|rt| self.state.content.get_state(&rt.id))
-                .map(|state| state.lines.len())
-                .sum();
+        let render_time = render_start.elapsed().as_micros();
+        if total_chars > 100 {  // 降低阈值，方便查看
+            let hit_rate = if total_lines > 0 {
+                (cache_hits as f32 / total_lines as f32) * 100.0
+            } else { 0.0 };
 
-            // 性能日志（已注释，需要时取消注释）
-            // println!("🎨 [Sugarloaf Render]");
-            // println!("   Total chars: {}", total_chars);
-            // println!("   Style segments: {} (avg {:.1} per line)",
-            //     style_segments,
-            //     if total_lines > 0 { style_segments as f32 / total_lines as f32 } else { 0.0 }
-            // );
-            // println!("   Font lookups: {} ({:.1}%)",
-            //     font_lookup_count,
-            //     if total_chars > 0 { (font_lookup_count as f32 / total_chars as f32) * 100.0 } else { 0.0 }
-            // );
-            // println!("   Font lookup time: {}μs ({:.1}%)",
-            //     font_lookup_time,
-            //     if render_time > 0 { (font_lookup_time as f32 / render_time as f32) * 100.0 } else { 0.0 }
-            // );
-            // println!("   Total render time: {}μs ({}ms)", render_time, render_time / 1000);
+            println!("🎨 [Sugarloaf Render]");
+            println!("   Total chars: {}", total_chars);
+            println!("   Total lines: {}", total_lines);
+            println!("   💾 Cache: {} hits, {} misses (hit rate: {:.1}%)",
+                cache_hits, cache_misses, hit_rate);
+            println!("   ⏱️  Render time: {}μs ({}ms)", render_time, render_time / 1000);
+        }
+    }
+
+    /// 生成单行的布局计算结果（字符、字体、位置）
+    /// 这是脏区渲染优化的核心：缓存耗时的字体查找和布局计算
+    #[cfg(target_os = "macos")]
+    fn generate_line_layout(
+        &self,
+        line: &crate::layout::BuilderLine,
+        font_library: &crate::font::FontLibraryData,
+        font_size: f32,
+        cell_width: f32,
+        primary_font: &Font,
+    ) -> CachedLineLayout {
+        let mut chars = Vec::new();
+        let mut typefaces = Vec::new();
+        let mut positions = Vec::new();
+
+        let mut x = 0.0;
+
+        for fragment in &line.fragments {
+            let styled_typeface = self.get_or_create_typeface(font_library, fragment.style.font_id);
+            let styled_font = styled_typeface
+                .as_ref()
+                .map(|tf| Font::from_typeface(tf, font_size))
+                .unwrap_or_else(|| primary_font.clone());
+
+            let fragment_cell_width = fragment.style.width;
+            let chars_vec: Vec<char> = fragment.content.chars().collect();
+            let mut i = 0;
+
+            while i < chars_vec.len() {
+                let ch = chars_vec[i];
+
+                let next_is_vs16 = chars_vec.get(i + 1) == Some(&'\u{FE0F}');
+                let next_is_vs15 = chars_vec.get(i + 1) == Some(&'\u{FE0E}');
+                let is_keycap_sequence = next_is_vs16 && chars_vec.get(i + 2) == Some(&'\u{20E3}');
+
+                if ch == '\u{FE0F}' || ch == '\u{FE0E}' || ch == '\u{20E3}' {
+                    i += 1;
+                    continue;
+                }
+
+                let (best_font, _is_emoji) = if is_keycap_sequence || next_is_vs16 {
+                    if let Some(emoji_typeface) = self.font_mgr.match_family_style_character(
+                        "Apple Color Emoji",
+                        FontStyle::normal(),
+                        &[],
+                        ch as i32,
+                    ) {
+                        (Font::from_typeface(&emoji_typeface, font_size), true)
+                    } else {
+                        self.find_font_for_char_styled(font_library, ch, font_size, &styled_font)
+                    }
+                } else if (ch as u32) >= 0x80 {
+                    self.find_font_for_char_styled(font_library, ch, font_size, &styled_font)
+                } else {
+                    (styled_font.clone(), false)
+                };
+
+                chars.push(ch);
+                typefaces.push(best_font.typeface());
+                positions.push(x);
+
+                x += cell_width * fragment_cell_width;
+
+                if is_keycap_sequence {
+                    i += 3;
+                } else if next_is_vs16 || next_is_vs15 {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        CachedLineLayout {
+            chars,
+            typefaces,
+            positions,
+            font_size,
+            cell_width,
         }
     }
 
