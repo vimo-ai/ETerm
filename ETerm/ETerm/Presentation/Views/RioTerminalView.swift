@@ -15,6 +15,7 @@ import AppKit
 import Combine
 import Metal
 import QuartzCore
+import PanelLayoutKit
 
 // MARK: - RioTerminalView
 
@@ -52,25 +53,7 @@ struct RioTerminalView: View {
 
             // Terminal Search Overlay (Cmd+F)
             if coordinator.showTerminalSearch {
-                VStack {
-                    HStack {
-                        Spacer()
-                        TerminalSearchView(
-                            searchText: $coordinator.searchText,
-                            isVisible: $coordinator.showTerminalSearch,
-                            matchCount: coordinator.searchMatches.count,
-                            onClose: {
-                                coordinator.clearSearch()
-                            }
-                        )
-                        .padding(.trailing, 20)
-                        .padding(.top, 50)  // 在 PageBar 下方
-                    }
-                    Spacer()
-                }
-                .onChange(of: coordinator.searchText) {
-                    coordinator.performSearch()
-                }
+                TerminalSearchOverlay(coordinator: coordinator)
             }
         }
     }
@@ -1155,36 +1138,7 @@ class RioMetalView: NSView, RenderViewProtocol {
                 fgB = 0.0
             }
 
-            // 搜索高亮（优先级低，先处理）
-            if let coordinator = coordinator,
-               !coordinator.searchMatches.isEmpty {
-                // 计算当前行的真实行号
-                let scrollbackLines = Int64(snapshot.scrollback_lines)
-                let displayOffset = Int64(snapshot.display_offset)
-                let currentAbsoluteRow = scrollbackLines - displayOffset + Int64(rowIndex)
-
-                // 检查当前单元格是否在搜索匹配项中
-                let isInSearchMatch = coordinator.searchMatches.contains { match in
-                    match.absoluteRow == currentAbsoluteRow &&
-                    colIndex >= match.startCol &&
-                    colIndex <= match.endCol
-                }
-
-                if isInSearchMatch {
-                    // #b58900 金黄色背景（Solarized yellow，柔和的搜索高亮）
-                    hasBg = true
-                    bgR = Float(0xb5) / 255.0  // 181/255 ≈ 0.710
-                    bgG = Float(0x89) / 255.0  // 137/255 ≈ 0.537
-                    bgB = Float(0x00) / 255.0  // 0/255 = 0.0
-                    bgA = 1.0  // 强制不透明（修复 ll 命令等带颜色文本的背景色不显示问题）
-
-                    // 黑色前景（在金黄色背景上确保可读性）
-                    fgR = 0.0
-                    fgG = 0.0
-                    fgB = 0.0
-                    fgA = 1.0
-                }
-            }
+            // 搜索高亮现在由 Rust 侧实现，无需在 Swift 侧处理
 
             sugarloaf_content_add_text_decorated(
                 content,
@@ -1924,5 +1878,102 @@ extension RioMetalView: NSTextInputClient {
         // 发送到终端
         guard let terminalId = coordinator?.getActiveTerminalId() else { return }
         _ = terminalManager.writeInput(terminalId: Int(terminalId), data: committedText)
+    }
+}
+
+// MARK: - Terminal Search Overlay
+
+struct TerminalSearchOverlay: View {
+    @ObservedObject var coordinator: TerminalWindowCoordinator
+    @State private var searchText: String = ""
+
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+
+                // 搜索框
+                HStack(spacing: 8) {
+                    // 搜索图标
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 12))
+
+                    // 搜索输入框
+                    TextField("搜索...", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .frame(width: 200)
+                        .onSubmit {
+                            if !searchText.isEmpty {
+                                coordinator.startSearch(pattern: searchText)
+                            }
+                        }
+
+                    // 匹配数量和导航
+                    if let searchInfo = coordinator.currentTabSearchInfo {
+                        HStack(spacing: 4) {
+                            Text("\(searchInfo.currentIndex)/\(searchInfo.totalCount)")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+
+                            // 上一个
+                            Button(action: {
+                                coordinator.searchPrev()
+                            }) {
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 10))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(searchInfo.totalCount == 0)
+
+                            // 下一个
+                            Button(action: {
+                                coordinator.searchNext()
+                            }) {
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 10))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(searchInfo.totalCount == 0)
+                        }
+                    }
+
+                    // 关闭按钮
+                    Button(action: {
+                        coordinator.clearSearch()
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+                )
+                .padding(.trailing, 20)
+                .padding(.top, 50)  // 在 PageBar 下方
+            }
+            Spacer()
+        }
+        .onChange(of: coordinator.activePanelId) {
+            // Tab 切换时，更新搜索框内容
+            if let searchInfo = coordinator.currentTabSearchInfo {
+                searchText = searchInfo.pattern
+            } else {
+                searchText = ""
+            }
+        }
+        .onAppear {
+            // 从当前 Tab 的搜索信息恢复文本
+            if let searchInfo = coordinator.currentTabSearchInfo {
+                searchText = searchInfo.pattern
+            }
+        }
     }
 }

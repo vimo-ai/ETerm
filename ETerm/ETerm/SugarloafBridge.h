@@ -464,4 +464,60 @@ void rio_pool_render_all(RioTerminalPoolHandle pool_handle);
 /// - pool_handle: Terminal pool handle
 void rio_pool_clear_active_terminals(RioTerminalPoolHandle pool_handle);
 
+// =============================================================================
+// Search API
+// =============================================================================
+
+/// Search result information
+typedef struct {
+    int32_t total_count;    // Total match count, -1=error, -2=terminal not found
+    int32_t current_index;  // Current index (1-based), 0=no matches
+    int64_t scroll_to_row;  // Row to scroll to, -1=no scroll needed
+} FFISearchInfo;
+
+/// Start a new search
+///
+/// Parameters:
+/// - pool: Terminal pool handle
+/// - terminal_id: Terminal ID
+/// - pattern: Search pattern (UTF-8 string)
+/// - pattern_len: Length of pattern in bytes
+/// - is_regex: Whether pattern is a regular expression
+/// - case_sensitive: Whether search is case-sensitive
+///
+/// Returns:
+/// - FFISearchInfo with search results
+FFISearchInfo rio_terminal_start_search(
+    RioTerminalPoolHandle pool,
+    int32_t terminal_id,
+    const char* pattern,
+    size_t pattern_len,
+    bool is_regex,
+    bool case_sensitive
+);
+
+/// Move to next match
+///
+/// Returns:
+/// - Current index (1-based), 0=no matches, -1=error, -2=terminal not found
+int32_t rio_terminal_search_next(
+    RioTerminalPoolHandle pool,
+    int32_t terminal_id
+);
+
+/// Move to previous match
+///
+/// Returns:
+/// - Current index (1-based), 0=no matches, -1=error, -2=terminal not found
+int32_t rio_terminal_search_prev(
+    RioTerminalPoolHandle pool,
+    int32_t terminal_id
+);
+
+/// Clear current search
+void rio_terminal_clear_search(
+    RioTerminalPoolHandle pool,
+    int32_t terminal_id
+);
+
 #endif /* SugarloafBridge_h */
