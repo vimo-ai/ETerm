@@ -396,161 +396,234 @@ rio/sugarloaf-ffi/src/
 
 ---
 
-## 4. 重构路径
+## 4. 重构路径（调整版）
 
-### Phase 0: 准备工作
+### 调整说明
+
+**顺序调整原因**：
+1. **推迟清理工作** - Phase 1-2（死代码清理、Swift 管理层合并）推迟到最后，避免干扰核心重构
+2. **先验证架构** - 先实现 Render Domain 验证 Overlay 分离的可行性
+3. **数据契约先行** - TerminalState 定义优先于 Terminal 和 Render 的具体实现
+4. **独立测试** - Render 和 Terminal 可以用 Mock 数据独立测试
+
+---
+
+### Phase 0: 准备工作 ✅
 
 **目标**：建立基线，确保可回退
 
-**任务**：
-- [ ] 创建 `refactor/ddd-architecture` 分支
-- [ ] 确保现有测试通过
-- [ ] 记录当前性能基准
+**完成情况**：
+- [x] 创建 `refactor/ddd-architecture` 分支
+- [x] WIP commit（commit: 93dfab4）
 
-### Phase 1: 清理明确的死代码
+---
 
-**目标**：减少代码噪音，不改变行为
+### Phase 1: 定义核心数据契约
 
-**Rust 侧删除**：
+**目标**：建立领域结构，定义 TerminalState 接口
 
-| 文件 | 删除内容 |
-|------|----------|
-| `rio_terminal.rs` | `#[cfg(not(target_os = "macos"))]` 分支 |
-| `sugarloaf.rs` | `#[cfg(not(target_os = "macos"))]` 分支 |
-| 多个文件 | `DEBUG_PERFORMANCE` 常量和 `perf_log!` 宏调用 |
-
-**Swift 侧删除**：
-
-| 文件 | 删除内容 |
-|------|----------|
-| `RioMetalView.swift` | `renderLine()` 方法 |
-| `RioMetalView.swift` | `isCursorPositionReportLine()` 方法 |
-| `RioMetalView.swift` | `isInSelection()` 方法 |
-| `RioMetalView.swift` | `cachedSnapshots` 及相关方法 |
-
-**验证**：编译通过，功能不变
-
-### Phase 2: 合并 Swift 管理层
-
-**目标**：消除 `RioTerminalPoolWrapper`，统一到 `GlobalTerminalManager`
+**为什么先做**：
+- TerminalState 是 Terminal Domain 和 Render Domain 的数据契约
+- 定义好接口后，两个 Domain 可以并行开发
+- 接口定义是纯数据结构，风险低
 
 **任务**：
-- [ ] 将 `RioTerminalPoolWrapper` 的必要功能迁移到 `GlobalTerminalManager`
-- [ ] 更新所有引用点
-- [ ] 删除 `RioTerminalPoolWrapper.swift`
-- [ ] 简化 `TerminalPoolProtocol`，移除废弃方法
+- [ ] 创建新的目录结构（domain/, render/, compositor/, app/）
+- [ ] 定义 `TerminalState`（只读快照，包含 grid/cursor/selection/search 等所有状态）
+- [ ] 定义 `GridView`、`RowView`（延迟加载，支持 row_hash 查询）
+- [ ] 定义 `Frame`、`BaseLayer`、`Overlay` 枚举
+- [ ] 编写基本的构造和访问测试
 
-**验证**：编译通过，功能不变
+**验收标准**：
+- [ ] 编译通过
+- [ ] TerminalState 可以用 Mock 数据构造
+- [ ] GridView 支持 row_hash() 和 row() 查询
+- [ ] Overlay 枚举包含 Cursor/Selection/SearchMatch/Hint 等类型
 
-### Phase 3: 建立新领域结构
+**关键设计点**：
+- TerminalState 必须是 Clone 的（跨线程传递）
+- GridView 应该是零拷贝或共享引用（性能考虑）
+- Overlay 应该是简单的几何数据（Rect + Color）
 
-**目标**：创建新的目录结构和空模块
+---
 
-**任务**：
-- [ ] 创建 `domain/` 目录及 `mod.rs`
-- [ ] 创建 `render/` 目录及 `mod.rs`
-- [ ] 创建 `compositor/` 目录及 `mod.rs`
-- [ ] 创建 `app/` 目录及 `mod.rs`
+### Phase 2: 实现 Render Domain
 
-**验证**：编译通过（空模块）
+**目标**：实现 State → Frame 的渲染逻辑，验证 Overlay 架构
 
-### Phase 4: 实现 Terminal Domain
-
-**目标**：实现充血的 Terminal 聚合根
-
-**任务**：
-- [ ] 定义 `TerminalState`、`GridView`、`RowView` 值对象
-- [ ] 定义 `TerminalEvent` 事件类型
-- [ ] 实现 `Terminal` 聚合根
-  - [ ] 封装 PTY + Crosswords
-  - [ ] 实现 `tick()` 方法
-  - [ ] 实现 `state()` 方法
-  - [ ] 实现选区相关方法
-  - [ ] 实现搜索相关方法
-
-**验证**：单元测试通过
-
-### Phase 5: 实现 Render Domain
-
-**目标**：实现带缓存的渲染上下文
+**为什么先做**：
+- Overlay 分离是架构的核心创新，需要先验证可行性
+- Render 是纯函数（state → frame），容易测试
+- 缓存策略是性能关键，需要尽早验证
 
 **任务**：
-- [ ] 定义 `Frame`、`BaseLayer`、`Overlay` 值对象
-- [ ] 实现 `LineCache`（唯一缓存）
 - [ ] 实现 `RenderContext`
-  - [ ] `render(state) -> Frame`
-  - [ ] 内部管理缓存
-  - [ ] Overlay 收集逻辑
+  - [ ] render(state) -> Frame 主方法
+  - [ ] render_base(grid) -> BaseLayer（遍历行，查缓存，渲染，blit）
+  - [ ] 收集 Overlays（cursor/selection/search/...）
+- [ ] 实现单一 LineCache（hash → SkImage）
+- [ ] 实现 Overlay → Rect 转换逻辑
+- [ ] 单元测试
 
-**验证**：单元测试通过
+**验收标准**：
+- [ ] 可以用 Mock TerminalState 渲染出 Frame
+- [ ] Base Layer 不包含任何状态混入（光标、选区、搜索等）
+- [ ] 缓存有效（相同 hash 不重复渲染）
+- [ ] 状态变化（如光标移动）不导致 Base Layer 缓存失效
 
-### Phase 6: 实现 Compositor Domain
+**关键测试**：
+- [ ] test_overlay_separation - 验证 Base 和 Overlay 分离
+- [ ] test_cache_hit - 验证缓存命中
+- [ ] test_cursor_change_no_cache_invalidation - 光标移动不失效缓存
+- [ ] test_selection_change_no_cache_invalidation - 选区变化不失效缓存
+
+---
+
+### Phase 3: 实现 Terminal Domain
+
+**目标**：实现 Terminal 聚合根，产出 TerminalState
+
+**任务**：
+- [ ] 实现 `Terminal` 聚合根
+  - [ ] 封装 Pty（teletypewriter）、Crosswords、Parser（copa）
+  - [ ] tick() 方法（驱动 PTY，返回事件）
+  - [ ] state() 方法（产出 TerminalState 快照）
+  - [ ] write(data) 方法（用户输入）
+  - [ ] resize(size) 方法
+  - [ ] 光标/选区/搜索/滚动等所有终端行为
+- [ ] 实现 Mock PTY（用于测试）
+- [ ] 单元测试（用 Mock PTY 喂 ANSI 序列）
+
+**验收标准**：
+- [ ] 可以创建 Terminal 实例
+- [ ] 可以喂入 ANSI 序列，state() 返回正确的 TerminalState
+- [ ] 选区、搜索、滚动等行为正确
+- [ ] 所有单元测试通过（不依赖真实 PTY）
+
+**关键测试**：
+- [ ] test_ansi_parsing - 喂 ANSI 序列，验证 grid 状态
+- [ ] test_search - 搜索功能，验证 SearchView
+- [ ] test_selection - 选区功能，验证 SelectionView
+- [ ] test_state_snapshot - 验证 state() 产出正确快照
+
+---
+
+### Phase 4: 集成 Terminal + Render
+
+**目标**：验证完整的 Terminal → State → Render → Frame 链路
+
+**任务**：
+- [ ] 编写端到端测试
+- [ ] 验证各种场景：
+  - [ ] 普通文本渲染
+  - [ ] 光标移动 + 渲染
+  - [ ] 选区 + 渲染
+  - [ ] 搜索高亮 + 渲染
+  - [ ] 滚动 + 渲染
+  - [ ] 缓存有效性
+
+**验收标准**：
+- [ ] Terminal 产出的 state 可以被 Render 正确渲染
+- [ ] Overlay 正确显示（光标、选区、搜索等）
+- [ ] 缓存策略有效（性能可接受）
+
+---
+
+### Phase 5: 实现 Compositor Domain
 
 **目标**：实现多终端合成
 
 **任务**：
 - [ ] 实现 `Compositor`
-  - [ ] `composite([(Rect, Frame)]) -> FinalImage`
-  - [ ] Base layer blit
-  - [ ] Overlay 绘制
+  - [ ] composite([(Rect, Frame)]) -> FinalImage
+  - [ ] 合成多个 Terminal 的 Frame 到最终窗口
 
-**验证**：单元测试通过
+**验收标准**：
+- [ ] 可以合成多个 Frame
+- [ ] 布局正确
 
-### Phase 7: 实现 Application Layer
+---
 
-**目标**：实现顶层协调器
+### Phase 6: 实现 Application Layer + FFI
+
+**目标**：实现顶层协调器和 FFI 接口
 
 **任务**：
 - [ ] 实现 `TerminalApp`
   - [ ] 管理 Terminal 集合
-  - [ ] `tick()` 方法
-  - [ ] `render()` 方法
-- [ ] 实现新的 FFI 接口（v2）
+  - [ ] tick() 驱动所有终端
+  - [ ] render(layouts) 渲染所有终端
+- [ ] 实现新的 FFI 接口
 
-**验证**：FFI 可调用
+**验收标准**：
+- [ ] FFI 可以从 Swift 调用
+- [ ] 功能完整（创建、关闭、输入、渲染）
 
-### Phase 8: Swift 侧适配
+---
 
-**目标**：Swift 侧切换到新 FFI
+### Phase 7: Swift 侧适配
+
+**目标**：Swift 侧切换到新架构
 
 **任务**：
-- [ ] 实现新的 FFI 调用封装
-- [ ] 添加 feature flag 切换新旧架构
-- [ ] 更新 `GlobalTerminalManager` 使用新接口
-- [ ] 简化 `TerminalWindowCoordinator`
+- [ ] 实现新的 FFI 封装
+- [ ] 更新 GlobalTerminalManager
+- [ ] 简化 TerminalWindowCoordinator
+- [ ] 测试功能完整性
 
-**验证**：feature flag 开启后功能正常
+**验收标准**：
+- [ ] 新架构功能正常
+- [ ] 所有 UI 场景工作正常
 
-### Phase 9: 清理旧代码
+---
+
+### Phase 8: 清理旧代码（推迟到最后）
 
 **目标**：删除被替代的代码
 
-**Rust 侧删除**：
+**为什么最后做**：
+- 新架构已验证可行
+- Swift 侧已适配完成
+- 可以安全删除旧代码
 
-| 文件 | 说明 |
-|------|------|
-| `rio_terminal.rs` | 整个文件（旧的 RioTerminal/RioTerminalPool） |
-| `rio_machine.rs` | 整个文件（合并到 Terminal） |
-| `rio_event.rs` | 简化或删除 |
+**Rust 侧清理**：
+- [ ] 删除 `rio_terminal.rs`（旧的 RioTerminal/RioTerminalPool）
+- [ ] 删除 `rio_machine.rs`（合并到 Terminal）
+- [ ] 删除或简化 `rio_event.rs`
+- [ ] 删除 `#[cfg(not(target_os = "macos"))]` 分支
+- [ ] 删除 `DEBUG_PERFORMANCE` 和 `perf_log!` 宏
 
 **Sugarloaf 清理**：
+- [ ] 删除 `fragments_cache`
+- [ ] 删除 `layout_cache`
+- [ ] 重命名 `raster_cache` 为 `line_cache`
 
-| 内容 | 说明 |
-|------|------|
-| `fragments_cache` | 删除，由 RenderContext.LineCache 替代 |
-| `layout_cache` | 删除，由 RenderContext.LineCache 替代 |
-| 保留 `raster_cache` | 重命名为 LineCache，移入 RenderContext |
+**Swift 侧清理**：
+- [ ] 删除 `RioTerminalPoolWrapper`
+- [ ] 删除 `RioMetalView` 中废弃的渲染方法
+- [ ] 删除 snapshot 缓存相关代码
+- [ ] 简化 `TerminalPoolProtocol`
 
-**验证**：编译通过，所有测试通过
+**验收标准**：
+- [ ] 编译通过
+- [ ] 所有测试通过
+- [ ] 功能不变
 
-### Phase 10: 性能验证与优化
+---
 
-**目标**：确保新架构性能不低于旧架构
+### Phase 9: 性能验证与优化
+
+**目标**：确保新架构性能达标
 
 **任务**：
 - [ ] 性能基准测试
 - [ ] 对比 Phase 0 的基线
 - [ ] 必要的优化
+
+**验收标准**：
+- [ ] 渲染性能 >= 旧架构
+- [ ] 内存占用合理
+- [ ] 缓存命中率 >= 80%
 
 ---
 
