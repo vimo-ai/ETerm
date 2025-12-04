@@ -26,7 +26,7 @@ use raw_window_handle::{
 use state::SugarState;
 
 #[cfg(target_os = "macos")]
-use skia_safe::{Color4f, Font, FontMgr, FontStyle, Paint, Point, Typeface};
+use skia_safe::{Color4f, Font, FontMgr, FontStyle, Paint, Point, Surface, Typeface};
 
 // ========== 脏区渲染优化：布局缓存数据结构 ==========
 
@@ -103,10 +103,12 @@ pub struct Sugarloaf<'a> {
     /// 布局计算结果缓存（脏区优化）
     #[cfg(target_os = "macos")]
     layout_cache: std::cell::RefCell<LineLayoutCache>,
-    /// Font 对象缓存池 - Key: (typeface_id, font_size_bits)
-    /// 避免每个字符都创建 Font 对象，显著减少渲染循环的对象创建开销
+    /// Off-screen surface for persistent buffer rendering (macOS only)
     #[cfg(target_os = "macos")]
-    font_cache: std::cell::RefCell<std::collections::HashMap<(usize, u32), Font>>,
+    off_screen_surface: Option<Surface>,
+    /// Off-screen surface size (width, height)
+    #[cfg(target_os = "macos")]
+    off_screen_size: (i32, i32),
 }
 
 #[derive(Debug)]
@@ -240,7 +242,9 @@ impl Sugarloaf<'_> {
             #[cfg(target_os = "macos")]
             layout_cache: std::cell::RefCell::new(LineLayoutCache::new()),
             #[cfg(target_os = "macos")]
-            font_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+            off_screen_surface: None,
+            #[cfg(target_os = "macos")]
+            off_screen_size: (0, 0),
         };
 
         Ok(instance)
@@ -263,7 +267,6 @@ impl Sugarloaf<'_> {
             self.typeface_cache.borrow_mut().clear();
             self.char_font_cache.borrow_mut().clear();
             self.layout_cache.borrow_mut().clear();
-            self.font_cache.borrow_mut().clear();
         }
     }
 
@@ -444,6 +447,14 @@ impl Sugarloaf<'_> {
     #[inline]
     pub fn resize(&mut self, width: u32, height: u32) {
         self.ctx.resize(width, height);
+
+        // Clear off-screen surface on resize - it will be recreated with new size
+        #[cfg(target_os = "macos")]
+        {
+            self.off_screen_surface = None;
+            self.off_screen_size = (0, 0);
+        }
+
         // TODO: Handle background image resize when implemented
     }
 
@@ -452,11 +463,10 @@ impl Sugarloaf<'_> {
         self.ctx.scale = scale;
         self.state.compute_layout_rescale_skia(scale);
 
-        // Clear layout cache and font cache when rescaling
+        // Clear layout cache when rescaling
         #[cfg(target_os = "macos")]
         {
             self.layout_cache.borrow_mut().clear();
-            self.font_cache.borrow_mut().clear();
         }
 
         // TODO: Handle background image rescale when implemented
@@ -470,26 +480,44 @@ impl Sugarloaf<'_> {
         self.state.reset();
     }
 
-    /// 从缓存中获取 Font 对象，如果不存在则创建并缓存
-    /// 使用 typeface 的指针地址作为唯一标识，结合 font_size 作为缓存 key
+    /// 确保 off-screen surface 存在且尺寸正确
+    /// 如果不存在或尺寸不匹配，则创建新的 off-screen surface
     #[cfg(target_os = "macos")]
-    fn get_or_create_font(&self, typeface: &Typeface, font_size: f32) -> Font {
-        // 使用 typeface 的内存地址作为唯一标识
-        let typeface_id = typeface as *const _ as usize;
-        let font_size_bits = font_size.to_bits();
-        let cache_key = (typeface_id, font_size_bits);
-
-        let mut cache = self.font_cache.borrow_mut();
-
-        // 尝试从缓存获取
-        if let Some(font) = cache.get(&cache_key) {
-            return font.clone();
+    fn ensure_off_screen_surface(&mut self, width: i32, height: i32) {
+        // 检查是否需要重建
+        if let Some(ref _surface) = self.off_screen_surface {
+            if self.off_screen_size == (width, height) {
+                return; // 尺寸匹配，复用
+            }
         }
 
-        // 缓存未命中，创建新的 Font 对象
-        let font = Font::from_typeface(typeface, font_size);
-        cache.insert(cache_key, font.clone());
-        font
+        // 创建新的 off-screen surface
+        let image_info = skia_safe::ImageInfo::new(
+            (width, height),
+            skia_safe::ColorType::BGRA8888,
+            skia_safe::AlphaType::Opaque,  // 使用 Opaque 而非 Premul，避免透明问题
+            None,
+        );
+
+        // 尝试创建 GPU surface（需要 DirectContext）
+        // 如果失败则回退到 raster surface
+        self.off_screen_surface = skia_safe::surfaces::raster(&image_info, None, None);
+        self.off_screen_size = (width, height);
+
+        if self.off_screen_surface.is_some() {
+            tracing::info!("Created off-screen surface: {}x{}", width, height);
+        } else {
+            tracing::error!("Failed to create off-screen surface: {}x{}", width, height);
+        }
+    }
+
+    /// 创建 Font 对象（移除了 cache，因为 typeface 地址不稳定导致 cache 无效）
+    #[cfg(target_os = "macos")]
+    fn get_or_create_font(&self, typeface: &Typeface, font_size: f32) -> Font {
+        // 直接创建 Font，不使用 cache
+        // 原因：typeface 来自 layout cache 的 Vec<Typeface>，每次 clone 地址都变
+        // 使用指针地址作为 cache key 会导致几乎 100% miss
+        Font::from_typeface(typeface, font_size)
     }
 
     #[inline]
@@ -857,14 +885,330 @@ impl Sugarloaf<'_> {
                 (cache_hits as f32 / total_lines as f32) * 100.0
             } else { 0.0 };
 
-            let font_cache_size = self.font_cache.borrow().len();
-
             println!("🎨 [Sugarloaf Render]");
             println!("   Total chars: {}", total_chars);
             println!("   Total lines: {}", total_lines);
             println!("   💾 Layout cache: {} hits, {} misses (hit rate: {:.1}%)",
                 cache_hits, cache_misses, hit_rate);
-            println!("   🔤 Font cache: {} fonts cached", font_cache_size);
+            println!("   ⏱️  Render time: {}μs ({}ms)", render_time, render_time / 1000);
+        }
+    }
+
+    /// 带脏区信息的渲染（使用 off-screen surface 作为持久缓冲区）
+    ///
+    /// damaged_lines: None = Full damage (重绘所有), Some(lines) = Partial (只绘制指定行)
+    ///
+    /// 架构：
+    /// 1. 确保 off-screen surface 存在且尺寸正确
+    /// 2. 根据 damage 类型渲染到 off-screen surface
+    /// 3. 将 off-screen surface blit 到 drawable
+    #[cfg(target_os = "macos")]
+    pub fn render_with_damage(&mut self, damaged_lines: Option<&[usize]>) {
+        let render_start = std::time::Instant::now();
+
+        // Compute dimensions for rich text
+        self.state.compute_dimensions_skia();
+
+        let scale = self.ctx.scale;
+        let width = (self.ctx.size.width * scale) as i32;
+        let height = (self.ctx.size.height * scale) as i32;
+
+        // 确保 off-screen surface 存在且尺寸正确
+        self.ensure_off_screen_surface(width, height);
+
+        // 检查 off-screen surface 是否存在
+        if self.off_screen_surface.is_none() {
+            tracing::warn!("Failed to get off-screen surface, falling back to direct rendering");
+            return self.render();
+        }
+
+        // 获取 off-screen canvas
+        // Safety: 我们需要同时访问 off_screen_surface (可变) 和 self 的其他字段 (不可变)
+        // 这是安全的因为 off_screen_surface 与其他字段不重叠
+        let off_canvas = unsafe {
+            let off_screen_ptr = self.off_screen_surface.as_mut().unwrap() as *mut Surface;
+            (*off_screen_ptr).canvas()
+        };
+
+        // 根据 damage 类型处理
+        let is_full_damage = damaged_lines.is_none();
+        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 1.0));
+
+        if is_full_damage {
+            // Full damage: 清空整个 off-screen surface
+            off_canvas.clear(clear_color);
+        } else if let Some(lines) = damaged_lines {
+            // Partial damage: 只清除 damaged 行的矩形区域
+            // 需要先计算行高等度量信息
+            let font_library = self.font_library.read();
+            let primary_typeface = self.get_or_create_typeface(&font_library, 0);
+
+            if let Some(ref typeface) = primary_typeface {
+                let font_size = self.font_size * scale;
+                let line_height = self.state.style.line_height;
+                let primary_font = Font::from_typeface(typeface, font_size);
+                let (_, metrics) = primary_font.metrics();
+                let raw_cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height;
+                let cell_height = (raw_cell_height * scale).round() / scale;
+
+                // 清除 damaged 行（必须用 Src blend mode 完全覆盖，否则会叠加）
+                let mut clear_paint = Paint::default();
+                clear_paint.set_color4f(clear_color, None);
+                clear_paint.set_blend_mode(skia_safe::BlendMode::Src);
+
+                for &line_idx in lines {
+                    // 假设所有 rich_text 的 base_y 都相同（单终端场景）
+                    // 如果是多终端，需要根据每个 rich_text 的位置计算
+                    // 这里我们简化处理，只考虑第一个 rich_text
+                    if let Some(rich_text) = self.state.rich_texts.first() {
+                        let base_y = rich_text.position[1] * scale;
+                        let y = base_y + (line_idx as f32) * cell_height;
+                        let rect = skia_safe::Rect::from_xywh(0.0, y, width as f32, cell_height);
+                        off_canvas.draw_rect(rect, &clear_paint);
+                    }
+                }
+            }
+            drop(font_library);
+        }
+
+        // Render quads (backgrounds, borders, etc.)
+        for quad in &self.state.quads {
+            self.render_quad(off_canvas, quad, scale);
+        }
+
+        let font_size = self.font_size * scale;
+
+        // 预先创建 Paint 对象，在渲染循环中复用
+        let mut paint = Paint::default();
+        paint.set_anti_alias(true);
+
+        let mut bg_paint = Paint::default();
+
+        let mut cursor_paint = Paint::default();
+        cursor_paint.set_anti_alias(true);
+
+        let mut deco_paint = Paint::default();
+        deco_paint.set_anti_alias(true);
+
+        // Get line height from style
+        let line_height = self.state.style.line_height;
+
+        // 性能统计变量
+        let mut total_chars = 0usize;
+        let mut cache_hits = 0usize;
+        let mut cache_misses = 0usize;
+        let mut total_lines = 0usize;
+
+        // 获取主字体的度量信息
+        let font_library = self.font_library.read();
+        let primary_typeface = self.get_or_create_typeface(&font_library, 0);
+
+        if let Some(ref typeface) = primary_typeface {
+            let primary_font = Font::from_typeface(typeface, font_size);
+            let (_, metrics) = primary_font.metrics();
+            let raw_cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height;
+            let cell_height = (raw_cell_height * scale).round() / scale;
+            let baseline_offset = -metrics.ascent;
+
+            let (raw_cell_width, _) = primary_font.measure_str("M", None);
+            let cell_width = (raw_cell_width * scale).round() / scale;
+
+            // 创建 damaged_set 用于快速查找
+            let damaged_set: Option<std::collections::HashSet<usize>> = damaged_lines.map(|lines| {
+                lines.iter().copied().collect()
+            });
+
+            // 渲染 rich text 到 off-screen canvas（根据 damage 类型决定渲染哪些行）
+            for rich_text in &self.state.rich_texts {
+                if let Some(builder_state) = self.state.content.get_state(&rich_text.id) {
+                    let base_x = rich_text.position[0] * scale;
+                    let base_y = rich_text.position[1] * scale;
+
+                    for (line_idx, line) in builder_state.lines.iter().enumerate() {
+                        // 🎯 Partial damage: 只渲染 damaged 行
+                        if let Some(ref set) = damaged_set {
+                            if !set.contains(&line_idx) {
+                                continue; // 跳过未受损的行
+                            }
+                        }
+
+                        let y = base_y + (line_idx as f32) * cell_height + baseline_offset;
+
+                        let content_hash = line.content_hash;
+                        total_lines += 1;
+
+                        let layout = {
+                            let cache = self.layout_cache.borrow();
+                            if let Some(cached_layout) = cache.get(content_hash) {
+                                cache_hits += 1;
+                                cached_layout.clone()
+                            } else {
+                                drop(cache);
+                                cache_misses += 1;
+
+                                let new_layout = self.generate_line_layout(
+                                    line,
+                                    &font_library,
+                                    font_size,
+                                    cell_width,
+                                    &primary_font,
+                                );
+
+                                self.layout_cache.borrow_mut().set(content_hash, new_layout.clone());
+                                new_layout
+                            }
+                        };
+
+                        // 使用缓存的布局数据渲染（复用现有的渲染代码）
+                        let mut char_idx = 0;
+                        for fragment in &line.fragments {
+                            let color = skia_safe::Color::from_argb(
+                                (fragment.style.color[3] * 255.0) as u8,
+                                (fragment.style.color[0] * 255.0) as u8,
+                                (fragment.style.color[1] * 255.0) as u8,
+                                (fragment.style.color[2] * 255.0) as u8,
+                            );
+                            paint.set_color(color);
+
+                            let fragment_cell_width = fragment.style.width;
+
+                            let fragment_chars: Vec<char> = fragment.content.chars()
+                                .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}' && c != '\u{20E3}')
+                                .collect();
+
+                            for _ in 0..fragment_chars.len() {
+                                if char_idx >= layout.chars.len() {
+                                    break;
+                                }
+
+                                let ch = layout.chars[char_idx];
+                                let typeface = &layout.typefaces[char_idx];
+                                let x = base_x + layout.positions[char_idx];
+
+                                total_chars += 1;
+
+                                let font = self.get_or_create_font(typeface, font_size);
+                                let char_cell_advance = cell_width * fragment_cell_width;
+                                let ch_str = ch.to_string();
+
+                                // 绘制背景（如果有）
+                                if let Some(bg) = fragment.style.background_color {
+                                    if bg[3] > 0.01 {
+                                        bg_paint.set_color(skia_safe::Color::from_argb(
+                                            (bg[3] * 255.0) as u8,
+                                            (bg[0] * 255.0) as u8,
+                                            (bg[1] * 255.0) as u8,
+                                            (bg[2] * 255.0) as u8,
+                                        ));
+                                        off_canvas.draw_rect(
+                                            skia_safe::Rect::from_xywh(x, y - baseline_offset, char_cell_advance, cell_height),
+                                            &bg_paint,
+                                        );
+                                    }
+                                }
+
+                                // 绘制光标（如果有）
+                                if let Some(cursor) = fragment.style.cursor {
+                                    let cell_top = y - baseline_offset;
+
+                                    match cursor {
+                                        crate::SugarCursor::Block(color) => {
+                                            cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                                            cursor_paint.set_color(skia_safe::Color::from_argb(
+                                                (color[3] * 255.0) as u8,
+                                                (color[0] * 255.0) as u8,
+                                                (color[1] * 255.0) as u8,
+                                                (color[2] * 255.0) as u8,
+                                            ));
+                                            off_canvas.draw_rect(
+                                                skia_safe::Rect::from_xywh(x, cell_top, char_cell_advance, cell_height),
+                                                &cursor_paint,
+                                            );
+                                        }
+                                        crate::SugarCursor::Caret(color) => {
+                                            cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                                            cursor_paint.set_color(skia_safe::Color::from_argb(
+                                                (color[3] * 255.0) as u8,
+                                                (color[0] * 255.0) as u8,
+                                                (color[1] * 255.0) as u8,
+                                                (color[2] * 255.0) as u8,
+                                            ));
+                                            off_canvas.draw_rect(
+                                                skia_safe::Rect::from_xywh(x, cell_top, 2.0, cell_height),
+                                                &cursor_paint,
+                                            );
+                                        }
+                                        _ => {} // 其他光标类型暂时忽略
+                                    }
+                                }
+
+                                // 绘制字符
+                                off_canvas.draw_str(&ch_str, Point::new(x, y), &font, &paint);
+
+                                char_idx += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        drop(font_library);
+
+        // Render visual bell overlay if present
+        if let Some(bell_overlay) = self.state.visual_bell_overlay {
+            self.render_quad(off_canvas, &bell_overlay, scale);
+        }
+
+        // 获取 drawable 并 blit off-screen surface
+        let frame = self.ctx.begin_frame();
+        if frame.is_none() {
+            return;
+        }
+
+        let (mut surface, drawable) = frame.unwrap();
+        let canvas = surface.canvas();
+
+        // Blit off-screen surface 到 drawable
+        // Safety: 再次通过指针访问 off_screen_surface 来获取 image snapshot
+        let image = unsafe {
+            let off_screen_ptr = self.off_screen_surface.as_mut().unwrap() as *mut Surface;
+            (*off_screen_ptr).image_snapshot()
+        };
+        // 使用 Src blend mode 确保完全覆盖，不与 drawable 混合
+        let mut blit_paint = Paint::default();
+        blit_paint.set_blend_mode(skia_safe::BlendMode::Src);
+        canvas.draw_image(&image, (0, 0), Some(&blit_paint));
+
+        // End frame and present
+        self.ctx.end_frame(drawable);
+        self.reset();
+
+        // 性能日志
+        let render_time = render_start.elapsed().as_micros();
+        if total_chars > 100 {
+            let hit_rate = if total_lines > 0 {
+                (cache_hits as f32 / total_lines as f32) * 100.0
+            } else { 0.0 };
+
+            let damage_type = if is_full_damage {
+                "Full"
+            } else if let Some(lines) = damaged_lines {
+                if lines.is_empty() {
+                    "None (all cached)"
+                } else {
+                    "Partial"
+                }
+            } else {
+                "Unknown"
+            };
+
+            let damaged_count = damaged_lines.map(|l| l.len()).unwrap_or(0);
+
+            println!("🎨 [Sugarloaf Render - Off-screen] Damage: {} ({})", damage_type, damaged_count);
+            println!("   Total chars: {}", total_chars);
+            println!("   Total lines rendered: {}", total_lines);
+            println!("   💾 Layout cache: {} hits, {} misses (hit rate: {:.1}%)",
+                cache_hits, cache_misses, hit_rate);
             println!("   ⏱️  Render time: {}μs ({}ms)", render_time, render_time / 1000);
         }
     }

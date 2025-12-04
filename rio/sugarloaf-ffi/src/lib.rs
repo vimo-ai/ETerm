@@ -71,6 +71,9 @@ pub struct SugarloafHandle {
     scale: f32,
     /// 待渲染的 objects 列表（多终端渲染累积）
     pending_objects: Vec<Object>,
+    /// Damaged 行的列表，None = Full damage (macOS only)
+    #[cfg(target_os = "macos")]
+    damaged_lines: Option<Vec<usize>>,
 }
 
 impl SugarloafHandle {
@@ -249,6 +252,8 @@ pub extern "C" fn sugarloaf_new(
             current_font_size: font_size,
             scale,
             pending_objects: Vec::new(),
+            #[cfg(target_os = "macos")]
+            damaged_lines: None,
         });
         Box::into_raw(handle)
     })
@@ -767,10 +772,55 @@ pub extern "C" fn sugarloaf_add_rich_text(
     handle.pending_objects.push(rich_text_obj);
 }
 
+/// 设置本帧的 damage 信息（macOS only）
+///
+/// # 参数
+/// - lines_ptr: 指向 usize 数组的指针，包含 damaged 行号
+/// - lines_count: 数组长度，0 表示 Full damage
+///
+/// # 说明
+/// 此函数必须在每帧 sugarloaf_flush_and_render 之前调用。
+/// 如果不调用此函数，默认为 Full damage。
+#[no_mangle]
+#[cfg(target_os = "macos")]
+pub extern "C" fn sugarloaf_set_damage(
+    handle: *mut SugarloafHandle,
+    lines_ptr: *const usize,
+    lines_count: usize,
+) {
+    if handle.is_null() {
+        return;
+    }
+    let handle = unsafe { &mut *handle };
+
+    if lines_count == 0 || lines_ptr.is_null() {
+        // Full damage
+        handle.damaged_lines = None;
+    } else {
+        // Partial damage
+        let lines = unsafe {
+            std::slice::from_raw_parts(lines_ptr, lines_count)
+        };
+        handle.damaged_lines = Some(lines.to_vec());
+    }
+}
+
+#[no_mangle]
+#[cfg(not(target_os = "macos"))]
+pub extern "C" fn sugarloaf_set_damage(
+    _handle: *mut SugarloafHandle,
+    _lines_ptr: *const usize,
+    _lines_count: usize,
+) {
+    // No-op on non-macOS platforms
+}
+
 /// 统一提交所有 objects 并渲染（每帧结束时调用）
 ///
 /// 将 pending_objects 中累积的所有 RichText 一次性提交给 Sugarloaf，
 /// 然后触发 GPU 渲染。渲染完成后清空 pending_objects。
+///
+/// 🎯 使用 off-screen surface + damage tracking 优化渲染
 #[no_mangle]
 pub extern "C" fn sugarloaf_flush_and_render(handle: *mut SugarloafHandle) {
     if handle.is_null() {
@@ -782,8 +832,18 @@ pub extern "C" fn sugarloaf_flush_and_render(handle: *mut SugarloafHandle) {
     // 提交所有累积的 objects
     handle.instance.set_objects(handle.pending_objects.clone());
 
-    // 触发 GPU 渲染
-    handle.instance.render();
+    // 触发 GPU 渲染（使用 off-screen surface 优化）
+    #[cfg(target_os = "macos")]
+    {
+        // 获取 damage 信息并传递给 render_with_damage
+        let damaged = handle.damaged_lines.take(); // take 并重置为 None
+        handle.instance.render_with_damage(damaged.as_deref());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        handle.instance.render();
+    }
 
     // 清空缓冲区
     handle.pending_objects.clear();

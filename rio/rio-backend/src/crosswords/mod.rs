@@ -551,12 +551,20 @@ impl<U: EventListener> Crosswords<U> {
             self.damage.damage_line(previous_line);
         }
 
-        // Always damage current cursor.
-        // self.damage_cursor();
+        // Always damage current cursor line
+        self.damage_cursor();
+
+        // 检测选中变化并标记受影响的行
+        let current_selection = self.selection.as_ref().and_then(|s| s.to_range(self));
+        let display_offset = self.grid.display_offset();
+
+        if current_selection != self.damage.last_selection {
+            // 选中变化了，标记受影响的行
+            self.update_selection_damage(current_selection, display_offset);
+        }
 
         // NOTE: damage which changes all the content when the display offset is non-zero (e.g.
         // scrolling) is handled via full damage.
-        let display_offset = self.grid.display_offset();
         TermDamage::Partial(TermDamageIterator::new(&self.damage.lines, display_offset))
     }
 

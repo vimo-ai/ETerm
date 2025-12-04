@@ -413,6 +413,20 @@ impl RioTerminal {
     }
 
     /// 获取终端快照 - 照抄 Rio 的 TerminalSnapshot 创建方式
+    /// 返回 None 表示获取锁失败（搜索正在进行），调用者应跳过本帧渲染
+    pub fn try_snapshot(&self) -> Option<TerminalSnapshot> {
+        // 使用 try_read 避免阻塞渲染线程
+        let terminal = match self.terminal.try_read() {
+            Some(t) => t,
+            None => {
+                perf_log!("⚠️ [Render Thread] try_snapshot() failed to acquire lock, skipping frame");
+                return None;
+            }
+        };
+        Some(self.snapshot_inner(&terminal))
+    }
+
+    /// 获取终端快照 - 照抄 Rio 的 TerminalSnapshot 创建方式
     pub fn snapshot(&self) -> TerminalSnapshot {
         let lock_start = std::time::Instant::now();
         let terminal = self.terminal.read();
@@ -422,6 +436,11 @@ impl RioTerminal {
             perf_log!("🔒 [Render Thread] snapshot() waited {}μs ({}ms) for read lock",
                       lock_wait, lock_wait / 1000);
         }
+        self.snapshot_inner(&terminal)
+    }
+
+    /// 内部快照实现
+    fn snapshot_inner<U: rio_backend::event::EventListener>(&self, terminal: &rio_backend::crosswords::Crosswords<U>) -> TerminalSnapshot {
 
         // 照抄 Rio: terminal.cursor() 内部处理了所有光标隐藏逻辑
         let cursor = terminal.cursor();
@@ -1048,6 +1067,12 @@ impl RioTerminalPool {
             let mut no_damage_count = 0;
             let mut total_damaged_lines = 0;
 
+            // 🎯 收集所有终端的 damaged 行信息（用于 sugarloaf_set_damage）
+            // 对于多终端场景，如果任何一个终端有 Full damage，则整个帧都是 Full damage
+            // 否则，收集所有终端的 damaged 行（需要考虑终端在窗口中的位置）
+            let mut has_full_damage = false;
+            let mut all_damaged_lines: Vec<usize> = Vec::new();
+
             // 🎯 只渲染 active_terminals 集合中的终端
             // 遍历激活的终端
             for &id in &self.active_terminals {
@@ -1074,13 +1099,19 @@ impl RioTerminalPool {
 
                 // 🔑 使用终端 damage tracking API
                 let damage_start = std::time::Instant::now();
-                // ⚠️ 临时注释：避免搜索时锁竞争导致卡死
-                // 由于 damage tracking 已禁用，这个写锁完全没必要
-                // let terminal_lock = terminal.terminal.write();
 
-                // 🚨 临时禁用 damage tracking，总是使用 Full 模式诊断问题
-                let damage = rio_backend::crosswords::TermDamage::Full;
-                // let damage = terminal_lock.damage();
+                // 🎯 重新启用 damage tracking
+                // 需要立即 collect，因为 damage() 返回的 iterator 借用 terminal_lock
+                let (is_full, damaged_line_numbers) = {
+                    let mut terminal_lock = terminal.terminal.write();
+                    match terminal_lock.damage() {
+                        rio_backend::crosswords::TermDamage::Full => (true, Vec::new()),
+                        rio_backend::crosswords::TermDamage::Partial(iter) => {
+                            let lines: Vec<usize> = iter.map(|d| d.line).collect();
+                            (false, lines)
+                        }
+                    }
+                };
 
                 let damage_time = damage_start.elapsed().as_micros();
                 damage_time_total += damage_time;
@@ -1090,17 +1121,48 @@ impl RioTerminalPool {
                 // 获取 sugarloaf 原始指针（在渲染期间不会修改）
                 let sugarloaf_ptr = &sugarloaf.instance as *const _;
 
-                match damage {
-                    rio_backend::crosswords::TermDamage::Full => {
-                        // 全量更新：清空并重建所有内容
-                        full_damage_count += 1;
-                        // drop(terminal_lock);  // 释放锁（已注释，因为 terminal_lock 已注释）
+                if is_full {
+                    // 全量更新：清空并重建所有内容
+                    full_damage_count += 1;
+                    has_full_damage = true; // 标记为 Full damage
 
-                        // 选中 RichText 并渲染
-                        let content = sugarloaf.instance.content();
-                        content.sel(rich_text_id);
-                        content.clear();  // 标记 Full 更新
+                    // 选中 RichText 并渲染
+                    let content = sugarloaf.instance.content();
+                    content.sel(rich_text_id);
+                    content.clear();  // 标记 Full 更新
 
+                    Self::render_terminal_content(
+                        terminal,
+                        &snapshot,
+                        content,
+                        cursor_visible,
+                        sugarloaf_ptr,
+                    );
+
+                    perf_log!("🔄 [Terminal {}] Full damage update", id);
+                } else {
+                    // 增量更新：标记受损行，但仍需渲染所有行
+                    let damaged_count = damaged_line_numbers.len();
+
+                    // 选中 RichText 并清空（必须每帧清空以确保行号对应）
+                    let content = sugarloaf.instance.content();
+                    content.sel(rich_text_id);
+                    content.clear();  // ✅ Partial damage 也需要 clear，否则行号会错乱
+
+                    if damaged_count > 0 {
+                        partial_damage_count += 1;
+                        total_damaged_lines += damaged_count;
+
+                        // 🎯 收集 damaged 行信息（用于 Partial damage 渲染）
+                        all_damaged_lines.extend(damaged_line_numbers.iter().copied());
+
+                        // 🔑 标记受损的行为脏（只这些行会重新计算布局）
+                        for &line_num in &damaged_line_numbers {
+                            content.mark_line_dirty(line_num);
+                        }
+
+                        // ⚠️ 仍需渲染所有行（content 每帧都要重新填充）
+                        // 但只有受损行会重新计算布局，其他行使用缓存
                         Self::render_terminal_content(
                             terminal,
                             &snapshot,
@@ -1109,56 +1171,21 @@ impl RioTerminalPool {
                             sugarloaf_ptr,
                         );
 
-                        perf_log!("🔄 [Terminal {}] Full damage update", id);
-                    }
-                    rio_backend::crosswords::TermDamage::Partial(damaged_lines) => {
-                        // 增量更新：标记受损行，但仍需渲染所有行
-                        let damaged_line_numbers: Vec<usize> = damaged_lines
-                            .map(|line_damage| line_damage.line)
-                            .collect();
+                        perf_log!("🎯 [Terminal {}] Partial damage: {} lines (recompute only these)", id, damaged_count);
+                    } else {
+                        // 无损坏，完全使用缓存
+                        no_damage_count += 1;
 
-                        let damaged_count = damaged_line_numbers.len();
-                        // drop(terminal_lock);  // 释放锁（已注释，因为 terminal_lock 已注释）
+                        // 但仍需渲染所有行内容（只是不重新计算布局）
+                        Self::render_terminal_content(
+                            terminal,
+                            &snapshot,
+                            content,
+                            cursor_visible,
+                            sugarloaf_ptr,
+                        );
 
-                        // 选中 RichText
-                        let content = sugarloaf.instance.content();
-                        content.sel(rich_text_id);
-
-                        if damaged_count > 0 {
-                            partial_damage_count += 1;
-                            total_damaged_lines += damaged_count;
-
-                            // 🔑 标记受损的行为脏（只这些行会重新计算布局）
-                            for &line_num in &damaged_line_numbers {
-                                content.mark_line_dirty(line_num);
-                            }
-
-                            // ⚠️ 仍需渲染所有行（content 每帧都要重新填充）
-                            // 但只有受损行会重新计算布局，其他行使用缓存
-                            Self::render_terminal_content(
-                                terminal,
-                                &snapshot,
-                                content,
-                                cursor_visible,
-                                sugarloaf_ptr,
-                            );
-
-                            perf_log!("🎯 [Terminal {}] Partial damage: {} lines (recompute only these)", id, damaged_count);
-                        } else {
-                            // 无损坏，完全使用缓存
-                            no_damage_count += 1;
-
-                            // 但仍需渲染所有行内容（只是不重新计算布局）
-                            Self::render_terminal_content(
-                                terminal,
-                                &snapshot,
-                                content,
-                                cursor_visible,
-                                sugarloaf_ptr,
-                            );
-
-                            perf_log!("✨ [Terminal {}] No damage, using cached layouts", id);
-                        }
+                        perf_log!("✨ [Terminal {}] No damage, using cached layouts", id);
                     }
                 }
 
@@ -1180,6 +1207,28 @@ impl RioTerminalPool {
                     layout.x,
                     layout.y,
                 );
+            }
+
+            // 🎯 设置 damage 信息（macOS only）
+            #[cfg(target_os = "macos")]
+            {
+                if has_full_damage {
+                    // Full damage: 传递空数组
+                    crate::sugarloaf_set_damage(self.sugarloaf, std::ptr::null(), 0);
+                } else if !all_damaged_lines.is_empty() {
+                    // Partial damage: 传递 damaged 行数组
+                    // 去重（如果多个终端有相同行号）
+                    all_damaged_lines.sort_unstable();
+                    all_damaged_lines.dedup();
+                    crate::sugarloaf_set_damage(
+                        self.sugarloaf,
+                        all_damaged_lines.as_ptr(),
+                        all_damaged_lines.len(),
+                    );
+                } else {
+                    // No damage: 传递空数组（实际上意味着 Full damage）
+                    crate::sugarloaf_set_damage(self.sugarloaf, std::ptr::null(), 0);
+                }
             }
 
             // 统一渲染
@@ -1280,7 +1329,8 @@ impl RioTerminalPool {
             (s.all_matches.clone(), s.focused_index)
         });
 
-        drop(terminal_lock);  // 立即释放锁
+        // 注意：保持 terminal_lock 持有，直到 cells 提取完成
+        // 避免 hash 计算和 cells 提取之间的竞态条件
         let hash_time = hash_start.elapsed().as_micros();
 
         perf_log!("⚡ [hash_grid_row] Computed {} row hashes in {}μs", lines_to_render, hash_time);
@@ -1289,7 +1339,7 @@ impl RioTerminalPool {
         let filter_start = std::time::Instant::now();
 
         // 安全地访问 sugarloaf 实例
-        let sugarloaf = unsafe { &*sugarloaf_ptr };
+        let _sugarloaf = unsafe { &*sugarloaf_ptr };
 
         // 提取所有行（移除缓存过滤，避免行内容消失）
         // Sugarloaf 层已有布局缓存，此处始终填充 fragments 确保渲染正确
@@ -1304,8 +1354,8 @@ impl RioTerminalPool {
         };
 
         // 🔥 阶段 1.5：只提取需要更新的行
+        // 复用上面的 terminal_lock，避免释放锁后 grid 内容被修改
         let extract_start = std::time::Instant::now();
-        let terminal_lock = terminal.terminal.read();
 
         let extracted_cells: std::collections::HashMap<usize, Vec<FFICell>> = lines_to_extract
             .iter()
@@ -2837,15 +2887,107 @@ pub extern "C" fn rio_terminal_start_search(
     };
 
     if let Some(terminal) = pool.terminals.get_mut(&(terminal_id as usize)) {
-        let mut term_lock = terminal.terminal.write();
+        // ⚠️ 优化：分离搜索和存储，减少写锁持有时间
+        // 1. 用读锁执行搜索（耗时操作）
+        let search_result = {
+            let term_read = terminal.terminal.read();
 
-        match term_lock.start_search(pattern, is_regex, case_sensitive, Some(1000)) {
-            Ok(info) => FFISearchInfo {
-                total_count: info.total_count as i32,
-                current_index: info.current_index as i32,
-                scroll_to_row: info.scroll_to_row.unwrap_or(-1),
-            },
-            Err(_) => FFISearchInfo {
+            // 处理 pattern（手动转义正则特殊字符）
+            let pattern_str = if is_regex {
+                pattern.to_string()
+            } else {
+                // 转义正则特殊字符
+                let mut escaped = String::with_capacity(pattern.len() * 2);
+                for c in pattern.chars() {
+                    match c {
+                        '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' => {
+                            escaped.push('\\');
+                            escaped.push(c);
+                        }
+                        _ => escaped.push(c),
+                    }
+                }
+                escaped
+            };
+            let pattern_str = if !case_sensitive && !pattern_str.chars().any(|c| c.is_uppercase()) {
+                pattern_str
+            } else if !case_sensitive {
+                format!("(?i){}", pattern_str)
+            } else {
+                pattern_str
+            };
+
+            // 创建正则表达式
+            match rio_backend::crosswords::search::RegexSearch::new(&pattern_str) {
+                Ok(mut regex) => {
+                    // 在读锁下执行搜索
+                    let max_lines = 1000usize;
+                    let total_lines = term_read.grid.total_lines();
+                    let search_lines = max_lines.min(total_lines);
+
+                    let start = rio_backend::crosswords::pos::Pos::new(
+                        rio_backend::crosswords::pos::Line(0),
+                        rio_backend::crosswords::pos::Column(0),
+                    );
+                    let end = rio_backend::crosswords::pos::Pos::new(
+                        rio_backend::crosswords::pos::Line(search_lines as i32 - 1),
+                        term_read.grid.last_column(),
+                    );
+
+                    let mut matches = Vec::new();
+                    let mut iter = rio_backend::crosswords::search::RegexIter::new(
+                        start, end,
+                        rio_backend::crosswords::pos::Direction::Right,
+                        &*term_read,
+                        &mut regex
+                    );
+                    while let Some(m) = iter.next() {
+                        matches.push(m);
+                    }
+
+                    Some((matches, regex, pattern_str))
+                }
+                Err(_) => None,
+            }
+        };
+        // 读锁在这里释放
+
+        // 2. 用写锁快速存储结果
+        match search_result {
+            Some((all_matches, regex, pattern_str)) => {
+                let mut term_write = terminal.terminal.write();
+
+                if all_matches.is_empty() {
+                    term_write.search_state = None;
+                    FFISearchInfo {
+                        total_count: 0,
+                        current_index: 0,
+                        scroll_to_row: -1,
+                    }
+                } else {
+                    let scroll_to_row = all_matches[0].start().row.0 as i64;
+                    let total_count = all_matches.len();
+
+                    term_write.search_state = Some(rio_backend::event::SearchState {
+                        all_matches: all_matches.clone(),
+                        focused_index: 0,
+                        dfas: Some(regex),
+                        direction: rio_backend::crosswords::pos::Direction::Right,
+                        history: std::collections::VecDeque::from([pattern_str]),
+                        history_index: Some(0),
+                        origin: rio_backend::crosswords::pos::Pos::default(),
+                        display_offset_delta: 0,
+                        focused_match: Some(all_matches[0].clone()),
+                    });
+
+                    FFISearchInfo {
+                        total_count: total_count as i32,
+                        current_index: 1,
+                        scroll_to_row,
+                    }
+                }
+            }
+            None => FFISearchInfo {
                 total_count: -1,
                 current_index: -1,
                 scroll_to_row: -1,
