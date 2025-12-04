@@ -83,6 +83,13 @@ struct RowRenderData {
     is_cursor_report: bool,
 }
 
+/// Fragments Cache - 缓存已解析的行数据
+#[derive(Debug, Clone)]
+struct CachedFragments {
+    /// 已解析的字符渲染数据
+    chars: Vec<CharRenderData>,
+}
+
 // ============================================================================
 // 终端快照 - 照抄 Rio 的 TerminalSnapshot
 // ============================================================================
@@ -1034,6 +1041,9 @@ pub struct RioTerminalPool {
     sugarloaf: *mut SugarloafHandle,
     /// 激活的终端 ID（需要渲染的）
     active_terminals: std::collections::HashSet<usize>,
+    /// Fragments Cache - 缓存已解析的行数据（所有终端共享）
+    #[cfg(target_os = "macos")]
+    fragments_cache: std::cell::RefCell<HashMap<u64, CachedFragments>>,
 }
 
 impl RioTerminalPool {
@@ -1043,6 +1053,8 @@ impl RioTerminalPool {
             event_queue: EventQueue::new(),
             sugarloaf,
             active_terminals: std::collections::HashSet::new(),
+            #[cfg(target_os = "macos")]
+            fragments_cache: std::cell::RefCell::new(HashMap::new()),
         }
     }
 
@@ -1131,6 +1143,17 @@ impl RioTerminalPool {
                     content.sel(rich_text_id);
                     content.clear();  // 标记 Full 更新
 
+                    #[cfg(target_os = "macos")]
+                    Self::render_terminal_content(
+                        terminal,
+                        &snapshot,
+                        content,
+                        cursor_visible,
+                        sugarloaf_ptr,
+                        &self.fragments_cache,
+                    );
+
+                    #[cfg(not(target_os = "macos"))]
                     Self::render_terminal_content(
                         terminal,
                         &snapshot,
@@ -1163,6 +1186,17 @@ impl RioTerminalPool {
 
                         // ⚠️ 仍需渲染所有行（content 每帧都要重新填充）
                         // 但只有受损行会重新计算布局，其他行使用缓存
+                        #[cfg(target_os = "macos")]
+                        Self::render_terminal_content(
+                            terminal,
+                            &snapshot,
+                            content,
+                            cursor_visible,
+                            sugarloaf_ptr,
+                            &self.fragments_cache,
+                        );
+
+                        #[cfg(not(target_os = "macos"))]
                         Self::render_terminal_content(
                             terminal,
                             &snapshot,
@@ -1177,6 +1211,17 @@ impl RioTerminalPool {
                         no_damage_count += 1;
 
                         // 但仍需渲染所有行内容（只是不重新计算布局）
+                        #[cfg(target_os = "macos")]
+                        Self::render_terminal_content(
+                            terminal,
+                            &snapshot,
+                            content,
+                            cursor_visible,
+                            sugarloaf_ptr,
+                            &self.fragments_cache,
+                        );
+
+                        #[cfg(not(target_os = "macos"))]
                         Self::render_terminal_content(
                             terminal,
                             &snapshot,
@@ -1276,6 +1321,434 @@ impl RioTerminalPool {
         snapshot: &TerminalSnapshot,
         content: &mut sugarloaf::layout::Content,
         cursor_visible: bool,
+        _sugarloaf_ptr: *const sugarloaf::Sugarloaf,
+        fragments_cache: &std::cell::RefCell<HashMap<u64, CachedFragments>>,
+    ) {
+        use rayon::prelude::*;
+
+        // Flag constants
+        const INVERSE: u32 = 0x0001;
+        const WIDE_CHAR: u32 = 0x0020;
+        const WIDE_CHAR_SPACER: u32 = 0x0040;
+        const LEADING_WIDE_CHAR_SPACER: u32 = 0x0400;
+
+        let lines_to_render = snapshot.screen_lines;
+        let cols_to_render = snapshot.columns;
+        let cursor_row = snapshot.cursor_row;
+        let cursor_col = snapshot.cursor_col;
+
+        let phase1_start = std::time::Instant::now();
+
+        // 🔥 阶段 0：计算所有行的 hash（持有锁）
+        let hash_start = std::time::Instant::now();
+        let lock_attempt_start = std::time::Instant::now();
+
+        let terminal_lock = terminal.terminal.read();
+        let lock_wait_time = lock_attempt_start.elapsed().as_micros();
+
+        if lock_wait_time > 1000 {
+            perf_log!("🔒 [Render Thread] Waited {}μs ({}ms) to acquire read lock",
+                      lock_wait_time, lock_wait_time / 1000);
+        }
+
+        let scrollback_lines = terminal_lock.grid.history_size() as i64;
+        let screen_lines_i64 = terminal_lock.screen_lines() as i64;
+
+        // 计算所有行的 hash
+        let row_hashes: Vec<u64> = (0..lines_to_render)
+            .map(|row_index| {
+                let absolute_row = snapshot.scrollback_lines as i64
+                    - snapshot.display_offset as i64
+                    + row_index as i64;
+
+                let hash = RioTerminal::hash_grid_row(
+                    &terminal_lock,
+                    absolute_row,
+                    scrollback_lines,
+                    screen_lines_i64,
+                );
+
+                // 🐛 Debug: 打印前5行和后5行的 absolute_row 和 hash
+                if row_index < 5 || row_index >= lines_to_render - 5 {
+                    perf_log!("  [Row {}] absolute_row={}, hash={:016x} (scrollback={}, display_offset={})",
+                        row_index, absolute_row, hash, snapshot.scrollback_lines, snapshot.display_offset);
+                }
+
+                hash
+            })
+            .collect();
+
+        // Clone search state data for concurrent rendering
+        let search_data = terminal_lock.search_state.as_ref().map(|s| {
+            (s.all_matches.clone(), s.focused_index)
+        });
+
+        // 注意：保持 terminal_lock 持有，直到 cells 提取完成
+        // 避免 hash 计算和 cells 提取之间的竞态条件
+        let hash_time = hash_start.elapsed().as_micros();
+
+        perf_log!("⚡ [hash_grid_row] Computed {} row hashes in {}μs", lines_to_render, hash_time);
+
+        // 🔥 阶段 1：查询 cache，筛选需要提取的行（cache miss）
+        let filter_start = std::time::Instant::now();
+
+        let mut cache_hits = 0;
+        let mut cache_misses = 0;
+
+        let lines_to_extract: Vec<usize> = (0..lines_to_render)
+            .filter(|&row_index| {
+                let hash = row_hashes[row_index];
+                if fragments_cache.borrow().contains_key(&hash) {
+                    cache_hits += 1;
+                    false  // cache hit，不需要提取
+                } else {
+                    cache_misses += 1;
+                    true   // cache miss，需要提取
+                }
+            })
+            .collect();
+
+        let filter_time = filter_start.elapsed().as_micros();
+
+        // 🔥 阶段 1.5：只提取 cache miss 的行
+        let extract_start = std::time::Instant::now();
+
+        let extracted_cells: HashMap<usize, Vec<FFICell>> = lines_to_extract
+            .iter()
+            .map(|&row_index| {
+                let absolute_row = snapshot.scrollback_lines as i64
+                    - snapshot.display_offset as i64
+                    + row_index as i64;
+
+                let cells = RioTerminal::extract_row_cells_locked(
+                    &terminal_lock,
+                    absolute_row,
+                    scrollback_lines,
+                    screen_lines_i64,
+                );
+
+                (row_index, cells)
+            })
+            .collect();
+
+        drop(terminal_lock);
+        let extract_time = extract_start.elapsed().as_micros();
+
+        perf_log!("⚡ [Fragments Cache] {} hits, {} misses (hit rate: {:.1}%)",
+            cache_hits, cache_misses,
+            if cache_hits + cache_misses > 0 {
+                cache_hits as f32 / (cache_hits + cache_misses) as f32 * 100.0
+            } else {
+                0.0
+            }
+        );
+        perf_log!("⚡ [Extract] {} / {} lines in {}μs (filter: {}μs)",
+                  cache_misses, lines_to_render, extract_time, filter_time);
+
+        // 🔥 阶段 2：并发解析 cell 数据（无锁，只处理 cache miss 的行）
+        let parse_start = std::time::Instant::now();
+
+        let parsed_rows: HashMap<usize, RowRenderData> = extracted_cells
+            .into_par_iter()  // 并发处理
+            .map(|(row_index, cells)| {
+                let search_data = search_data.clone();
+                // 检查是否为光标位置报告行
+                if Self::is_cursor_position_report_line(&cells) {
+                    return (row_index, RowRenderData {
+                        chars: Vec::new(),
+                        is_cursor_report: true,
+                    });
+                }
+
+                // 解析该行的所有字符
+                let mut char_data_vec = Vec::with_capacity(cols_to_render);
+
+                for (col_index, cell) in cells.iter().enumerate().take(cols_to_render) {
+                    // 跳过占位符
+                    let is_spacer = cell.flags & (WIDE_CHAR_SPACER | LEADING_WIDE_CHAR_SPACER);
+                    if is_spacer != 0 {
+                        continue;
+                    }
+
+                    // 获取字符
+                    let scalar = match std::char::from_u32(cell.character) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+
+                    // 添加 VS16 标记
+                    let char_str = if cell.has_vs16 {
+                        format!("{}\u{FE0F}", scalar)
+                    } else {
+                        scalar.to_string()
+                    };
+
+                    // 确定宽度
+                    let is_wide = cell.flags & WIDE_CHAR != 0;
+                    let glyph_width = if is_wide { 2.0 } else { 1.0 };
+
+                    // 获取颜色（已经在提取时转换好了）
+                    let mut fg_r = cell.fg_r as f32 / 255.0;
+                    let mut fg_g = cell.fg_g as f32 / 255.0;
+                    let mut fg_b = cell.fg_b as f32 / 255.0;
+                    let mut fg_a = cell.fg_a as f32 / 255.0;
+
+                    let mut bg_r = cell.bg_r as f32 / 255.0;
+                    let mut bg_g = cell.bg_g as f32 / 255.0;
+                    let mut bg_b = cell.bg_b as f32 / 255.0;
+                    let mut bg_a = cell.bg_a as f32 / 255.0;
+
+                    // 处理 INVERSE
+                    let is_inverse = cell.flags & INVERSE != 0;
+                    let mut has_bg = if is_inverse {
+                        std::mem::swap(&mut fg_r, &mut bg_r);
+                        std::mem::swap(&mut fg_g, &mut bg_g);
+                        std::mem::swap(&mut fg_b, &mut bg_b);
+                        std::mem::swap(&mut fg_a, &mut bg_a);
+                        true
+                    } else {
+                        bg_r > 0.01 || bg_g > 0.01 || bg_b > 0.01
+                    };
+
+                    // 处理搜索高亮
+                    if let Some((ref all_matches, focused_index)) = search_data {
+                        // 计算当前单元格的绝对行号
+                        let absolute_row = snapshot.scrollback_lines as i64
+                            - snapshot.display_offset as i64
+                            + row_index as i64;
+
+                        // 检查当前单元格是否在任何搜索匹配范围内
+                        for (idx, match_range) in all_matches.iter().enumerate() {
+                            let match_start_row = match_range.start().row.0 as i64;
+                            let match_end_row = match_range.end().row.0 as i64;
+                            let match_start_col = match_range.start().col.0;
+                            let match_end_col = match_range.end().col.0;
+
+                            // 检查行是否在匹配范围内
+                            if absolute_row >= match_start_row && absolute_row <= match_end_row {
+                                let in_match = if match_start_row == match_end_row {
+                                    // 单行匹配：检查列范围
+                                    col_index >= match_start_col && col_index <= match_end_col
+                                } else if absolute_row == match_start_row {
+                                    // 匹配的起始行：从 match_start_col 开始
+                                    col_index >= match_start_col
+                                } else if absolute_row == match_end_row {
+                                    // 匹配的结束行：到 match_end_col 结束
+                                    col_index <= match_end_col
+                                } else {
+                                    // 中间行：全部高亮
+                                    true
+                                };
+
+                                if in_match {
+                                    // 应用高亮颜色
+                                    if idx == focused_index {
+                                        // 聚焦匹配颜色（金黄色）
+                                        bg_r = 0xDA as f32 / 255.0;
+                                        bg_g = 0xA5 as f32 / 255.0;
+                                        bg_b = 0x20 as f32 / 255.0;
+                                    } else {
+                                        // 普通匹配颜色（浅黄色）
+                                        bg_r = 0xFF as f32 / 255.0;
+                                        bg_g = 0xFF as f32 / 255.0;
+                                        bg_b = 0x00 as f32 / 255.0;
+                                    }
+                                    bg_a = 1.0;
+                                    has_bg = true;
+                                    // 确保文字可见（黑色前景）
+                                    fg_r = 0.0;
+                                    fg_g = 0.0;
+                                    fg_b = 0.0;
+                                    fg_a = 1.0;
+                                    break;  // 找到匹配，跳出循环
+                                }
+                            }
+                        }
+                    }
+
+                    // 处理光标
+                    let has_cursor = cursor_visible
+                        && row_index == cursor_row
+                        && col_index == cursor_col;
+
+                    let cursor_r = 1.0;
+                    let cursor_g = 1.0;
+                    let cursor_b = 1.0;
+                    let cursor_a = 0.8;
+
+                    // Block cursor 反转颜色
+                    if has_cursor && snapshot.cursor_shape == 0 {
+                        fg_r = 0.0;
+                        fg_g = 0.0;
+                        fg_b = 0.0;
+                    }
+
+                    char_data_vec.push(CharRenderData {
+                        char_str,
+                        fg_r,
+                        fg_g,
+                        fg_b,
+                        fg_a,
+                        has_bg,
+                        bg_r,
+                        bg_g,
+                        bg_b,
+                        bg_a,
+                        glyph_width,
+                        has_cursor: has_cursor && snapshot.cursor_shape == 0,
+                        cursor_r,
+                        cursor_g,
+                        cursor_b,
+                        cursor_a,
+                        flags: cell.flags,
+                    });
+                }
+
+                (row_index, RowRenderData {
+                    chars: char_data_vec,
+                    is_cursor_report: false,
+                })
+            })
+            .collect();
+
+        let parse_time = parse_start.elapsed().as_micros();
+        let phase1_time = phase1_start.elapsed().as_micros();
+
+        // 🔥 阶段 3：填充 fragments（cache hit 从缓存获取，cache miss 使用新解析的数据并缓存）
+        let phase2_start = std::time::Instant::now();
+        let mut total_segments = 0;  // 统计创建的 fragment 数量
+
+        for row_index in 0..lines_to_render {
+            if row_index > 0 {
+                content.new_line();
+            }
+
+            let hash = row_hashes[row_index];
+
+            // 先尝试从 cache 获取（确保借用在使用前就被释放）
+            let cached_chars = fragments_cache.borrow().get(&hash).map(|cached| cached.chars.clone());
+
+            let row_data = if let Some(chars) = cached_chars {
+                // Cache hit: 复用
+                Some(RowRenderData {
+                    chars,
+                    is_cursor_report: false,
+                })
+            } else if let Some(parsed) = parsed_rows.get(&row_index) {
+                // Cache miss: 使用新解析的数据，并缓存
+                if !parsed.is_cursor_report && !parsed.chars.is_empty() {
+                    fragments_cache.borrow_mut().insert(hash, CachedFragments {
+                        chars: parsed.chars.clone(),
+                    });
+                }
+                Some(parsed.clone())
+            } else {
+                None
+            };
+
+            if let Some(row_data) = row_data {
+                // 跳过光标报告行
+                if row_data.is_cursor_report {
+                    continue;
+                }
+
+                // 添加该行的所有字符（合并相同样式的连续字符）
+                if row_data.chars.is_empty() {
+                    // 设置 hash 后继续
+                    content.set_line_content_hash(row_index, hash);
+                    continue;
+                }
+
+                let mut merged_text = String::new();
+                let mut segment_start_idx = 0;
+
+                for (i, char_data) in row_data.chars.iter().enumerate() {
+                    // 检查是否需要切分 segment
+                    let should_split = if i == 0 {
+                        false  // 第一个字符不切分
+                    } else {
+                        // 和前一个字符比较
+                        let prev = &row_data.chars[i - 1];
+                        !Self::char_styles_equal(prev, char_data)
+                    };
+
+                    if should_split {
+                        // 样式变化，flush 之前的 segment
+                        let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                        content.add_text(&merged_text, style);
+                        total_segments += 1;  // 统计 fragment
+
+                        // 开始新的 segment
+                        merged_text.clear();
+                        segment_start_idx = i;
+                    }
+
+                    // 累积当前字符
+                    merged_text.push_str(&char_data.char_str);
+                }
+
+                // flush 最后一个 segment
+                if !merged_text.is_empty() {
+                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                    content.add_text(&merged_text, style);
+                    total_segments += 1;  // 统计 fragment
+                }
+
+                // 🔑 设置行的 content hash（用于缓存查找）
+                content.set_line_content_hash(row_index, hash);
+            }
+        }
+
+        let phase2_time = phase2_start.elapsed().as_micros();
+        let total_chars: usize = parsed_rows.values().map(|r| r.chars.len()).sum();
+
+        // 只在行数较多时打印日志，减少噪音
+        if lines_to_render > 30 {
+            let avg_segments_per_line = if lines_to_render > 0 {
+                total_segments as f64 / lines_to_render as f64
+            } else {
+                0.0
+            };
+
+            perf_log!("⚡ [Optimized Render] {} lines, {} cols", lines_to_render, cols_to_render);
+            perf_log!("   Phase 1 (hash): {}μs", hash_time);
+            perf_log!("   Phase 1 (filter): {}μs - {} / {} lines ({:.1}% cache hit)",
+                filter_time, cache_misses, lines_to_render,
+                if cache_hits + cache_misses > 0 {
+                    cache_hits as f32 / (cache_hits + cache_misses) as f32 * 100.0
+                } else {
+                    0.0
+                }
+            );
+            perf_log!("   Phase 2 (extract): {}μs ({:.1}%)",
+                extract_time,
+                extract_time as f32 / phase1_time as f32 * 100.0
+            );
+            perf_log!("   Phase 2 (parallel parse): {}μs ({:.1}%)",
+                parse_time,
+                parse_time as f32 / phase1_time as f32 * 100.0
+            );
+            perf_log!("   Phase 2 Total: {}μs ({}ms)", phase1_time, phase1_time / 1000);
+            perf_log!("   Phase 3 (merged render): {}μs", phase2_time);
+            perf_log!("   Total: {}μs ({}ms) - {} chars parsed",
+                hash_time + phase1_time + phase2_time,
+                (hash_time + phase1_time + phase2_time) / 1000,
+                total_chars
+            );
+            perf_log!("   Style segments: {} (avg {:.1} per line)",
+                total_segments,
+                avg_segments_per_line
+            );
+            perf_log!("   Cache size: {} entries", fragments_cache.borrow().len());
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn render_terminal_content(
+        terminal: &RioTerminal,
+        snapshot: &TerminalSnapshot,
+        content: &mut sugarloaf::layout::Content,
+        cursor_visible: bool,
         sugarloaf_ptr: *const sugarloaf::Sugarloaf,
     ) {
         use rayon::prelude::*;
@@ -1315,12 +1788,20 @@ impl RioTerminalPool {
                     - snapshot.display_offset as i64
                     + row_index as i64;
 
-                RioTerminal::hash_grid_row(
+                let hash = RioTerminal::hash_grid_row(
                     &terminal_lock,
                     absolute_row,
                     scrollback_lines,
                     screen_lines_i64,
-                )
+                );
+
+                // 🐛 Debug: 打印前5行和后5行的 absolute_row 和 hash
+                if row_index < 5 || row_index >= lines_to_render - 5 {
+                    perf_log!("  [Row {}] absolute_row={}, hash={:016x} (scrollback={}, display_offset={})",
+                        row_index, absolute_row, hash, snapshot.scrollback_lines, snapshot.display_offset);
+                }
+
+                hash
             })
             .collect();
 
@@ -2159,6 +2640,13 @@ impl RioTerminalPool {
             .set_callback(callback, string_callback, context);
     }
 
+    /// 清空 Fragments Cache（在字体、颜色方案变化时调用）
+    #[cfg(target_os = "macos")]
+    pub fn clear_fragments_cache(&self) {
+        self.fragments_cache.borrow_mut().clear();
+        perf_log!("🗑️  [Fragments Cache] Cleared cache");
+    }
+
     /// 创建终端
     pub fn create_terminal(&mut self, cols: u16, rows: u16, shell: &str) -> i32 {
         self.create_terminal_with_cwd(cols, rows, shell, None)
@@ -2682,6 +3170,18 @@ pub extern "C" fn rio_pool_get_selected_text(
             }
         } else {
             ptr::null_mut()
+        }
+    })
+}
+
+/// 清空 Fragments Cache（在字体、颜色方案变化时调用）
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub extern "C" fn rio_pool_clear_fragments_cache(pool: *mut RioTerminalPool) {
+    catch_panic!((), {
+        if !pool.is_null() {
+            let pool = unsafe { &*pool };
+            pool.clear_fragments_cache();
         }
     })
 }
