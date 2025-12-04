@@ -1,36 +1,50 @@
-//! Terminal Domain
+//! Terminal Domain - 终端领域
 //!
-//! 职责：管理终端状态，处理 PTY I/O
+//! DDD 分层架构：
+//! - **aggregates/** - 聚合根（Terminal）
+//! - **events/** - 领域事件（TerminalEvent）
+//! - **state.rs** - 核心状态契约（TerminalState）
+//! - **views/** - 视图层（GridView, CursorView, SelectionView, SearchView）
+//! - **primitives/** - 基础类型（GridPoint）
 //!
-//! 核心原则：
-//! - 不知道渲染的存在，只产出状态
-//! - 充血模型（Terminal 聚合根包含所有行为）
-//! - 状态是只读快照（TerminalState），跨线程安全
-//!
-//! 核心概念：
-//! - `Terminal`: 聚合根，包含所有终端行为（tick, write, resize, scroll, selection, search 等）
-//! - `TerminalState`: 值对象，只读快照，包含 grid/cursor/selection/search 等所有状态
-//! - `GridView`: 值对象，网格视图，支持行哈希和延迟加载
-//! - `RowView`: 值对象，行视图，延迟加载 cells
-//! - `TerminalEvent`: 事件，Bell/Title/Exit 等
-//!
-//! 设计原则（参考 ARCHITECTURE_REFACTOR.md Phase 1）：
+//! 设计原则：
+//! - Terminal 是充血模型，包含所有终端行为
+//! - TerminalState 是只读快照，可安全跨线程传递
+//! - Views 是零拷贝视图（Arc 共享）
 //! - 复用基础设施（teletypewriter/Crosswords/copa）
-//! - 封装而非重写
-//! - 提供清晰的充血模型接口
-//!
 
-pub mod point;
+// 聚合根
+#[cfg(feature = "new_architecture")]
+pub mod aggregates;
+
+// 事件
+#[cfg(feature = "new_architecture")]
+pub mod events;
+
+// 核心状态契约
+#[cfg(feature = "new_architecture")]
 pub mod state;
-pub mod cursor;
-pub mod grid;
-pub mod selection;
-pub mod search;
 
-// Re-export key types
-pub use point::{AbsolutePoint, Absolute, GridPoint, Screen, ScreenPoint};
+// 视图层
+#[cfg(feature = "new_architecture")]
+pub mod views;
+
+// 基础类型
+#[cfg(feature = "new_architecture")]
+pub mod primitives;
+
+// Re-exports for convenience
+#[cfg(feature = "new_architecture")]
+pub use aggregates::{Terminal, TerminalId};
+
+#[cfg(feature = "new_architecture")]
+pub use events::TerminalEvent;
+
+#[cfg(feature = "new_architecture")]
 pub use state::TerminalState;
-pub use cursor::CursorView;
-pub use grid::{GridView, RowView, GridData};
-pub use selection::{SelectionView, SelectionPoint, SelectionType};
-pub use search::{SearchView, MatchRange};
+
+#[cfg(feature = "new_architecture")]
+pub use views::{GridView, RowView, GridData, CursorView, SelectionView, SelectionPoint, SelectionType, SearchView, MatchRange};
+
+#[cfg(feature = "new_architecture")]
+pub use primitives::{GridPoint, Absolute, AbsolutePoint, Screen, ScreenPoint};

@@ -5,7 +5,7 @@
 //! - **简洁**：只包含匹配结果，不包含搜索逻辑
 //! - **独立**：不依赖具体的搜索实现
 
-use crate::domain::point::AbsolutePoint;
+use crate::domain::primitives::AbsolutePoint;
 
 /// 搜索视图 - 包含所有匹配结果
 ///

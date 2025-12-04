@@ -9,10 +9,7 @@
 //! Phase 1 Step 3: 添加 Selection 支持
 //! Phase 1 Step 4: 添加 Search 支持
 
-use super::cursor::CursorView;
-use super::grid::GridView;
-use super::selection::SelectionView;
-use super::search::SearchView;
+use super::views::{CursorView, GridView, SelectionView, SearchView};
 
 /// Terminal State - Read-only Snapshot
 ///
@@ -95,11 +92,10 @@ impl TerminalState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::grid::GridData;
-    use super::super::point::AbsolutePoint;
-    use super::super::selection::SelectionType;
-    use super::super::search::MatchRange;
-    use rio_backend::crosswords::pos::{Line, Column, Pos};
+    use crate::domain::views::GridData;
+    use crate::domain::primitives::AbsolutePoint;
+    use crate::domain::views::SelectionType;
+    use crate::domain::views::MatchRange;
     use rio_backend::ansi::CursorShape;
     use std::sync::Arc;
 

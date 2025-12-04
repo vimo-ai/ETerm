@@ -12,6 +12,15 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "new_architecture")]
+use rio_backend::crosswords::Crosswords;
+#[cfg(feature = "new_architecture")]
+use rio_backend::crosswords::grid::Dimensions;
+#[cfg(feature = "new_architecture")]
+use rio_backend::crosswords::pos::{Line, Column};
+#[cfg(feature = "new_architecture")]
+use rio_backend::event::EventListener;
+
 /// Grid View - Zero-copy Grid Snapshot
 ///
 /// 设计要点：
@@ -140,6 +149,47 @@ impl RowView {
     // pub fn cells(&self) -> &[CellData] { ... }
 }
 
+/// Cell Data - 单个字符的数据
+#[cfg(feature = "new_architecture")]
+#[derive(Debug, Clone)]
+pub struct CellData {
+    pub c: char,
+    pub fg: rio_backend::config::colors::AnsiColor,
+    pub bg: rio_backend::config::colors::AnsiColor,
+    pub flags: u16,
+}
+
+#[cfg(feature = "new_architecture")]
+impl Default for CellData {
+    fn default() -> Self {
+        use rio_backend::config::colors::{AnsiColor, NamedColor};
+        Self {
+            c: ' ',
+            fg: AnsiColor::Named(NamedColor::Foreground),
+            bg: AnsiColor::Named(NamedColor::Background),
+            flags: 0,
+        }
+    }
+}
+
+/// Row Data - 单行的数据
+#[cfg(feature = "new_architecture")]
+#[derive(Debug, Clone)]
+pub struct RowData {
+    pub cells: Vec<CellData>,
+    pub content_hash: u64,
+}
+
+#[cfg(feature = "new_architecture")]
+impl RowData {
+    pub fn empty(columns: usize) -> Self {
+        Self {
+            cells: vec![CellData::default(); columns],
+            content_hash: 0,
+        }
+    }
+}
+
 /// Grid Data - Underlying Grid Storage
 ///
 /// 设计要点：
@@ -155,15 +205,15 @@ impl RowView {
 pub struct GridData {
     /// 列数
     columns: usize,
-    /// 行数（可见区域）
+    /// 行数（总行数：历史缓冲区 + 屏幕行）
     lines: usize,
     /// 滚动偏移
     display_offset: usize,
     /// 行哈希列表（预计算）
     row_hashes: Vec<u64>,
-    // TODO: Phase 1 暂不存储实际 cells，因为需要定义 CellData
-    // 后续会添加：
-    // cells: Vec<Vec<CellData>>,
+    /// 行数据（包含实际的 cells）
+    #[cfg(feature = "new_architecture")]
+    rows: Vec<RowData>,
 }
 
 impl GridData {
@@ -186,7 +236,9 @@ impl GridData {
             columns,
             lines,
             display_offset,
-            row_hashes,
+            row_hashes: row_hashes.clone(),
+            #[cfg(feature = "new_architecture")]
+            rows: vec![RowData::empty(columns); lines],
         }
     }
 
@@ -198,6 +250,86 @@ impl GridData {
             lines,
             display_offset: 0,
             row_hashes: vec![0; lines],
+            #[cfg(feature = "new_architecture")]
+            rows: vec![RowData::empty(columns); lines],
+        }
+    }
+
+    /// 从 Crosswords 构造 GridData
+    #[cfg(feature = "new_architecture")]
+    pub fn from_crosswords<T: EventListener>(crosswords: &Crosswords<T>) -> Self {
+        let grid = &crosswords.grid;
+        let display_offset = grid.display_offset();
+
+        let columns = grid.columns();
+        let screen_lines = grid.screen_lines();
+        let history_size = grid.history_size();
+
+        // 计算总行数（历史 + 屏幕）
+        let total_lines = grid.total_lines();
+
+        // 收集所有行数据
+        let mut rows = Vec::with_capacity(total_lines);
+        let mut row_hashes = Vec::with_capacity(total_lines);
+
+        // 遍历所有行（从历史缓冲区开始）
+        // Crosswords 的 Line 是 i32，Line(0) 是屏幕顶部，负数是历史缓冲区
+        for line_index in 0..total_lines {
+            // 计算相对于屏幕顶部的行号
+            let line = Line((line_index as i32) - (history_size as i32));
+
+            // 获取该行数据
+            let row_data = Self::convert_row::<T>(grid, line, columns);
+            row_hashes.push(row_data.content_hash);
+            rows.push(row_data);
+        }
+
+        Self {
+            columns,
+            lines: total_lines,
+            display_offset,
+            row_hashes,
+            rows,
+        }
+    }
+
+    /// 转换 Crosswords 的一行到 RowData
+    #[cfg(feature = "new_architecture")]
+    fn convert_row<T>(
+        grid: &rio_backend::crosswords::grid::Grid<rio_backend::crosswords::square::Square>,
+        line: Line,
+        columns: usize,
+    ) -> RowData {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut cells = Vec::with_capacity(columns);
+        let mut hasher = DefaultHasher::new();
+
+        // 遍历该行的所有列
+        for col_index in 0..columns {
+            let col = Column(col_index);
+            let square = &grid[line][col];
+
+            // 转换 cell 数据
+            let cell = CellData {
+                c: square.c,
+                fg: square.fg,
+                bg: square.bg,
+                flags: square.flags.bits(),
+            };
+
+            // 计算 hash（只基于字符内容）
+            cell.c.hash(&mut hasher);
+
+            cells.push(cell);
+        }
+
+        let content_hash = hasher.finish();
+
+        RowData {
+            cells,
+            content_hash,
         }
     }
 }

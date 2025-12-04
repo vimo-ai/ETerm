@@ -9,7 +9,7 @@
 //! - rio-backend/Selection: 可变状态，包含复杂的选区操作逻辑
 //! - SelectionView: 只读视图，只包含渲染所需的最小信息
 
-use crate::domain::point::AbsolutePoint;
+use crate::domain::primitives::AbsolutePoint;
 
 /// 选区类型
 ///

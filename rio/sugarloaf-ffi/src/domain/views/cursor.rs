@@ -9,7 +9,7 @@
 //! - 渲染光标
 //! - 判断光标是否在选区内
 
-use crate::domain::point::AbsolutePoint;
+use crate::domain::primitives::AbsolutePoint;
 use rio_backend::ansi::CursorShape;
 
 /// Cursor View - Read-only Cursor Snapshot
