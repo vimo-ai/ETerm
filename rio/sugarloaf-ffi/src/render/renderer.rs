@@ -1,6 +1,6 @@
 use crate::domain::TerminalState;
 use super::cache::{LineCache, GlyphLayout, MockImage, CacheResult};
-use super::hash::{compute_text_hash, compute_state_hash_for_line};
+use super::cache::{compute_text_hash, compute_state_hash_for_line};
 
 /// 渲染引擎（管理缓存 + 渲染流程）
 pub struct Renderer {
