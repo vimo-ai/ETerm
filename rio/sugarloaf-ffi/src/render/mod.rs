@@ -38,7 +38,11 @@
 //! - Step 4: 渲染流程（Mock 版本）
 //! - Step 5: 关键测试（验证架构）
 
-// Phase 2: 实现各个模块
-// TODO: 添加 context.rs - RenderContext
-// TODO: 添加 cache.rs - LineCache（两层缓存）
-// TODO: 添加 renderer.rs - Renderer（渲染引擎）
+pub mod context;
+pub mod cache;
+pub mod hash;
+pub mod renderer;
+
+pub use context::RenderContext;
+pub use cache::{LineCache, GlyphLayout, MockImage};
+pub use renderer::Renderer;

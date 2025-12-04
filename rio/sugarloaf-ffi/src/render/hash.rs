@@ -1,0 +1,262 @@
+use std::hash::Hasher;
+use std::collections::hash_map::DefaultHasher;
+use crate::domain::{TerminalState, SelectionView, SearchView, MatchRange};
+
+/// 计算文本内容的 hash（不包含状态）
+pub fn compute_text_hash(line: usize, state: &TerminalState) -> u64 {
+    // 使用预计算的行哈希（已包含文本内容和样式）
+    state.grid.row_hash(line).unwrap_or(0)
+}
+
+/// 计算状态的 hash（剪枝优化：只包含影响本行的状态）
+pub fn compute_state_hash_for_line(line: usize, state: &TerminalState) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    // 1. 光标在本行？
+    if state.cursor.position.line == line {
+        hasher.write_usize(state.cursor.position.col);
+        // 注意：cursor.shape 暂时不 hash，简化 Mock 实现
+    }
+
+    // 2. 选区覆盖本行？
+    if let Some(sel) = &state.selection {
+        if line_in_selection(line, sel) {
+            let (start_col, end_col) = selection_range_on_line(line, sel);
+            hasher.write_usize(start_col);
+            hasher.write_usize(end_col);
+            hasher.write_u8(sel.ty as u8);
+        }
+    }
+
+    // 3. 搜索覆盖本行？
+    if let Some(search) = &state.search {
+        for (i, m) in search.matches.iter().enumerate() {
+            if line_in_match(line, m) {
+                let (start_col, end_col) = match_range_on_line(line, m);
+                hasher.write_usize(start_col);
+                hasher.write_usize(end_col);
+                let is_focused = i == search.focused_index;
+                hasher.write_u8(is_focused as u8);
+            }
+        }
+    }
+
+    hasher.finish()
+}
+
+/// 判断选区是否覆盖本行
+fn line_in_selection(line: usize, sel: &SelectionView) -> bool {
+    line >= sel.start.line && line <= sel.end.line
+}
+
+/// 获取选区在本行的范围
+fn selection_range_on_line(line: usize, sel: &SelectionView) -> (usize, usize) {
+    let start_col = if line == sel.start.line { sel.start.col } else { 0 };
+    let end_col = if line == sel.end.line { sel.end.col } else { usize::MAX };
+    (start_col, end_col)
+}
+
+/// 判断匹配是否覆盖本行
+fn line_in_match(line: usize, m: &MatchRange) -> bool {
+    line >= m.start.line && line <= m.end.line
+}
+
+/// 获取匹配在本行的范围
+fn match_range_on_line(line: usize, m: &MatchRange) -> (usize, usize) {
+    let start_col = if line == m.start.line { m.start.col } else { 0 };
+    let end_col = if line == m.end.line { m.end.col } else { usize::MAX };
+    (start_col, end_col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{AbsolutePoint, SelectionType, GridView, GridData, CursorView};
+    use rio_backend::ansi::CursorShape;
+    use std::sync::Arc;
+
+    /// 创建 Mock TerminalState
+    fn create_mock_state(cursor_line: usize, cursor_col: usize) -> TerminalState {
+        // 创建每行有唯一 hash 的 GridData
+        let row_hashes: Vec<u64> = (0..24).map(|i| 1000 + i as u64).collect();
+        let grid_data = Arc::new(GridData::new_mock(80, 24, 0, row_hashes));
+        let grid = GridView::new(grid_data);
+
+        let cursor = CursorView {
+            position: AbsolutePoint::new(cursor_line, cursor_col),
+            shape: CursorShape::Block,
+        };
+
+        TerminalState {
+            grid,
+            cursor,
+            selection: None,
+            search: None,
+        }
+    }
+
+    #[test]
+    fn test_text_hash_excludes_state() {
+        // 创建两个状态，光标位置不同，但文本相同
+        let state1 = create_mock_state(5, 0);
+        let state2 = create_mock_state(5, 10);
+
+        let line = 10;
+
+        // text_hash 应该相同（只依赖文本内容）
+        let hash1 = compute_text_hash(line, &state1);
+        let hash2 = compute_text_hash(line, &state2);
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_state_hash_includes_cursor() {
+        let mut state = create_mock_state(10, 0);
+
+        let line = 10;
+
+        // 光标在本行第 0 列
+        let hash1 = compute_state_hash_for_line(line, &state);
+
+        // 光标移动到本行第 5 列
+        state.cursor.position = AbsolutePoint::new(10, 5);
+        let hash2 = compute_state_hash_for_line(line, &state);
+
+        // state_hash 应该不同
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_state_hash_pruning() {
+        let mut state = create_mock_state(5, 0);
+
+        let line = 10;
+
+        // 光标在第 5 行
+        let hash1 = compute_state_hash_for_line(line, &state);
+
+        // 光标移动到第 6 行（不影响第 10 行）
+        state.cursor.position = AbsolutePoint::new(6, 0);
+        let hash2 = compute_state_hash_for_line(line, &state);
+
+        // state_hash 应该相同（剪枝优化）
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_cursor_on_different_line_no_impact() {
+        let line = 10;
+
+        // 光标在第 5 行
+        let state1 = create_mock_state(5, 0);
+        let hash1 = compute_state_hash_for_line(line, &state1);
+
+        // 光标在第 6 行
+        let state2 = create_mock_state(6, 0);
+        let hash2 = compute_state_hash_for_line(line, &state2);
+
+        // 光标在第 7 行
+        let state3 = create_mock_state(7, 10);
+        let hash3 = compute_state_hash_for_line(line, &state3);
+
+        // 所有 hash 应该相同（光标不在本行，不影响 state_hash）
+        assert_eq!(hash1, hash2);
+        assert_eq!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_selection_affects_covered_lines() {
+        let mut state = create_mock_state(0, 0);
+
+        let line = 5;
+
+        // 无选区
+        let hash1 = compute_state_hash_for_line(line, &state);
+
+        // 添加选区（覆盖第 5 行）
+        state.selection = Some(SelectionView::new(
+            AbsolutePoint::new(5, 10),
+            AbsolutePoint::new(5, 20),
+            SelectionType::Simple,
+        ));
+        let hash2 = compute_state_hash_for_line(line, &state);
+
+        // state_hash 应该不同
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_selection_no_impact_on_other_lines() {
+        let mut state = create_mock_state(0, 0);
+
+        let line = 10;
+
+        // 无选区
+        let hash1 = compute_state_hash_for_line(line, &state);
+
+        // 添加选区（不覆盖第 10 行）
+        state.selection = Some(SelectionView::new(
+            AbsolutePoint::new(5, 0),
+            AbsolutePoint::new(6, 10),
+            SelectionType::Simple,
+        ));
+        let hash2 = compute_state_hash_for_line(line, &state);
+
+        // state_hash 应该相同（剪枝优化）
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_search_affects_covered_lines() {
+        let mut state = create_mock_state(0, 0);
+
+        let line = 5;
+
+        // 无搜索
+        let hash1 = compute_state_hash_for_line(line, &state);
+
+        // 添加搜索匹配（覆盖第 5 行）
+        state.search = Some(SearchView::new(
+            vec![MatchRange::new(
+                AbsolutePoint::new(5, 10),
+                AbsolutePoint::new(5, 15),
+            )],
+            0,
+        ));
+        let hash2 = compute_state_hash_for_line(line, &state);
+
+        // state_hash 应该不同
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_search_focus_change_affects_hash() {
+        let mut state = create_mock_state(0, 0);
+
+        let line = 5;
+
+        // 两个匹配，焦点在第一个
+        state.search = Some(SearchView::new(
+            vec![
+                MatchRange::new(AbsolutePoint::new(5, 0), AbsolutePoint::new(5, 5)),
+                MatchRange::new(AbsolutePoint::new(5, 10), AbsolutePoint::new(5, 15)),
+            ],
+            0,
+        ));
+        let hash1 = compute_state_hash_for_line(line, &state);
+
+        // 焦点移动到第二个
+        state.search = Some(SearchView::new(
+            vec![
+                MatchRange::new(AbsolutePoint::new(5, 0), AbsolutePoint::new(5, 5)),
+                MatchRange::new(AbsolutePoint::new(5, 10), AbsolutePoint::new(5, 15)),
+            ],
+            1,
+        ));
+        let hash2 = compute_state_hash_for_line(line, &state);
+
+        // state_hash 应该不同（焦点改变）
+        assert_ne!(hash1, hash2);
+    }
+}
