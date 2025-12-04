@@ -655,6 +655,11 @@ impl Sugarloaf<'_> {
             self.render_quad(canvas, quad, scale);
         }
 
+        // Render images (pre-rasterized SkImages)
+        for image_obj in &self.state.images {
+            self.render_image(canvas, image_obj, scale);
+        }
+
         let font_size = self.font_size * scale;
 
         // 预先创建 Paint 对象，在渲染循环中复用，避免重复创建
@@ -1075,6 +1080,11 @@ impl Sugarloaf<'_> {
         // Render quads (backgrounds, borders, etc.)
         for quad in &self.state.quads {
             self.render_quad(off_canvas, quad, scale);
+        }
+
+        // Render images (pre-rasterized SkImages)
+        for image_obj in &self.state.images {
+            self.render_image(off_canvas, image_obj, scale);
         }
 
         let font_size = self.font_size * scale;
@@ -1636,6 +1646,15 @@ impl Sugarloaf<'_> {
                 canvas.draw_rect(rect, &paint);
             }
         }
+    }
+
+    /// Render a pre-rasterized image at the specified position
+    fn render_image(&self, canvas: &skia_safe::Canvas, image_obj: &crate::sugarloaf::primitives::ImageObject, scale: f32) {
+        let x = image_obj.position[0] * scale;
+        let y = image_obj.position[1] * scale;
+
+        // Draw the image directly at the position
+        canvas.draw_image(&image_obj.image, (x, y), None);
     }
 
     // #[cfg(not(target_os = "macos"))]

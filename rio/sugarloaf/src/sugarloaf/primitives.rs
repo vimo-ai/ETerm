@@ -41,10 +41,29 @@ pub struct RichText {
     pub lines: Option<RichTextLinesRange>,
 }
 
+/// Image object (pre-rasterized SkImage)
+#[derive(Clone, Debug)]
+pub struct ImageObject {
+    /// Render position (x, y) in logical pixels
+    pub position: [f32; 2],
+    /// Skia image object
+    pub image: skia_safe::Image,
+}
+
+// Manual PartialEq implementation for ImageObject since skia_safe::Image doesn't implement PartialEq
+impl PartialEq for ImageObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.position == other.position
+            && self.image.width() == other.image.width()
+            && self.image.height() == other.image.height()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Object {
     Quad(Quad),
     RichText(RichText),
+    Image(ImageObject),
 }
 
 pub enum CornerType {
