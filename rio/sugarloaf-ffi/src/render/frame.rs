@@ -1,0 +1,380 @@
+//! Frame - 渲染输出数据结构
+//!
+//! 核心概念：
+//! - **Frame**: 渲染输出 = Base Layer + Overlays
+//! - **BaseLayer**: 纯内容图像（不含状态）
+//! - **Overlay**: 叠加层（光标、选区、搜索高亮等）
+//!
+//! Overlay 分离架构的核心思想：
+//!
+//! ```text
+//! ┌─────────────────────────────────────┐
+//! │          最终 Surface               │
+//! ├─────────────────────────────────────┤
+//! │  Overlay N: 搜索高亮 (半透明矩形)    │  ← 状态层（每帧重绘）
+//! │  Overlay 2: 选区 (半透明矩形)        │  ← 状态层（每帧重绘）
+//! │  Overlay 1: 光标 (Block/Caret/...)  │  ← 状态层（每帧重绘）
+//! ├─────────────────────────────────────┤
+//! │  Base Layer: 纯内容 Image           │  ← 内容层（高缓存命中率）
+//! │  (hash → Image, 不含任何状态)        │
+//! └─────────────────────────────────────┘
+//! ```
+//!
+//! 设计收益：
+//! - **高缓存命中率**：BaseLayer 只包含文本内容，很少变化
+//! - **状态分离**：光标、选区等状态不污染 BaseLayer 缓存
+//! - **灵活扩展**：新增 Overlay 类型不影响现有缓存
+//! - **高效渲染**：Overlay 是简单几何图形，重绘成本低
+//!
+//! Phase 1 设计原则：
+//! - 先定义数据结构（类型、方法）
+//! - 暂不包含真实图像数据（等 Phase 2 集成 Skia）
+//! - 使用简单的占位类型（width/height、RGB float）
+//! - 完善的文档和测试
+
+use rio_backend::ansi::CursorShape;
+
+/// Frame - 渲染输出
+///
+/// 代表一帧完整的渲染输出，由基础内容层和叠加层组成。
+///
+/// # 架构说明
+///
+/// Frame 采用 Overlay 分离架构：
+/// - **base**: 纯内容层（文本内容，不含状态）
+/// - **overlays**: 状态叠加层（光标、选区、搜索高亮等）
+///
+/// # 渲染流程
+///
+/// ```text
+/// TerminalState
+///     ↓
+/// RenderContext::render()
+///     ↓
+/// Frame { base, overlays }
+///     ↓
+/// Compositor::composite()
+///     ↓
+/// Final Surface
+/// ```
+///
+/// # Phase 1 说明
+///
+/// 当前版本是数据结构定义阶段：
+/// - BaseLayer 暂时只包含尺寸信息（width/height）
+/// - Phase 2 会添加真实的图像数据（SkImage）
+#[derive(Debug, Clone)]
+pub struct Frame {
+    /// 基础内容层（纯文本，不含状态）
+    pub base: BaseLayer,
+    /// 叠加层列表（光标、选区、搜索高亮等）
+    pub overlays: Vec<Overlay>,
+}
+
+/// BaseLayer - 基础内容层
+///
+/// 包含纯文本内容的图像，不包含任何状态信息（光标、选区等）。
+///
+/// # 设计原则
+///
+/// - **纯内容**：只包含文本内容，不混入状态
+/// - **高缓存命中率**：内容很少变化（只有打字、滚动时才变）
+/// - **状态无关**：光标移动、选区变化不影响 BaseLayer
+///
+/// # Phase 1 说明
+///
+/// 当前版本只包含尺寸信息：
+/// - `width`: 图像宽度（像素）
+/// - `height`: 图像高度（像素）
+///
+/// Phase 2 会添加：
+/// - `image: SkImage`: 真实的 Skia 图像对象
+/// - 或使用 `SkSurface` 等其他 Skia 类型
+#[derive(Debug, Clone)]
+pub struct BaseLayer {
+    /// 图像宽度（像素）
+    pub width: u32,
+    /// 图像高度（像素）
+    pub height: u32,
+    // TODO(Phase 2): 添加真实的图像数据
+    // pub image: SkImage,
+}
+
+/// Overlay - 叠加层
+///
+/// 代表需要叠加在 BaseLayer 上的状态元素。
+///
+/// # 设计原则
+///
+/// - **简单几何**：每个 Overlay 是简单的几何图形（矩形、线条等）
+/// - **每帧重绘**：Overlay 每帧重新计算和绘制，成本低
+/// - **状态分离**：不污染 BaseLayer 缓存
+///
+/// # 当前支持的 Overlay 类型
+///
+/// - **Cursor**: 光标（Block、Beam、Underline 等）
+///
+/// # 后续 Step 会添加
+///
+/// - **Selection**: 选区（半透明矩形）
+/// - **SearchMatch**: 搜索高亮（半透明矩形）
+/// - **DirtyHint**: 脏区域提示（调试用）
+#[derive(Debug, Clone, PartialEq)]
+pub enum Overlay {
+    /// 光标叠加层
+    ///
+    /// 包含光标的位置和形状。颜色由渲染器根据主题配置决定（Phase 2 实现）。
+    ///
+    /// # 字段说明
+    ///
+    /// - `row`: 光标所在行（0-based）
+    /// - `col`: 光标所在列（0-based）
+    /// - `shape`: 光标形状（Block、Beam、Underline 等）
+    Cursor {
+        row: usize,
+        col: usize,
+        shape: CursorShape,
+    },
+    // TODO(Step 3): 添加 Selection Overlay
+    // Selection {
+    //     start_row: usize,
+    //     start_col: usize,
+    //     end_row: usize,
+    //     end_col: usize,
+    //     color_r: f32,
+    //     color_g: f32,
+    //     color_b: f32,
+    //     alpha: f32,
+    // },
+    // TODO(Step 4): 添加 SearchMatch Overlay
+    // SearchMatch {
+    //     row: usize,
+    //     col: usize,
+    //     length: usize,
+    //     color_r: f32,
+    //     color_g: f32,
+    //     color_b: f32,
+    //     alpha: f32,
+    // },
+}
+
+impl Frame {
+    /// 创建新的 Frame
+    ///
+    /// # 参数
+    ///
+    /// - `base`: 基础内容层
+    /// - `overlays`: 叠加层列表
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// let base = BaseLayer::new(800, 600);
+    /// let overlays = vec![
+    ///     Overlay::Cursor { row: 10, col: 5, shape: CursorShape::Block },
+    /// ];
+    /// let frame = Frame::new(base, overlays);
+    /// ```
+    pub fn new(base: BaseLayer, overlays: Vec<Overlay>) -> Self {
+        Self { base, overlays }
+    }
+
+    /// 获取 Overlay 数量
+    ///
+    /// 用于统计、调试和性能分析。
+    #[inline]
+    pub fn overlay_count(&self) -> usize {
+        self.overlays.len()
+    }
+
+    /// 判断是否有 Overlay
+    #[inline]
+    pub fn has_overlays(&self) -> bool {
+        !self.overlays.is_empty()
+    }
+}
+
+impl BaseLayer {
+    /// 创建新的 BaseLayer
+    ///
+    /// # 参数
+    ///
+    /// - `width`: 图像宽度（像素）
+    /// - `height`: 图像高度（像素）
+    ///
+    /// # Phase 1 说明
+    ///
+    /// 当前只存储尺寸信息，Phase 2 会接受真实的图像对象。
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// let base = BaseLayer::new(800, 600);
+    /// assert_eq!(base.width, 800);
+    /// assert_eq!(base.height, 600);
+    /// ```
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
+    /// 获取图像尺寸（宽度, 高度）
+    #[inline]
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试：验证可以构造 Frame
+    #[test]
+    fn test_frame_construction() {
+        let base = BaseLayer::new(800, 600);
+        let overlays = vec![];
+        let frame = Frame::new(base, overlays);
+
+        // 验证基本属性
+        assert_eq!(frame.base.width, 800);
+        assert_eq!(frame.base.height, 600);
+        assert_eq!(frame.overlay_count(), 0);
+        assert!(!frame.has_overlays());
+    }
+
+    /// 测试：验证可以添加光标 overlay
+    #[test]
+    fn test_frame_with_cursor_overlay() {
+        let base = BaseLayer::new(1024, 768);
+        let cursor = Overlay::Cursor {
+            row: 10,
+            col: 5,
+            shape: CursorShape::Block,
+        };
+        let overlays = vec![cursor];
+        let frame = Frame::new(base, overlays);
+
+        // 验证 overlay
+        assert_eq!(frame.overlay_count(), 1);
+        assert!(frame.has_overlays());
+
+        // 验证 cursor overlay 的内容
+        match &frame.overlays[0] {
+            Overlay::Cursor { row, col, shape } => {
+                assert_eq!(*row, 10);
+                assert_eq!(*col, 5);
+                assert_eq!(*shape, CursorShape::Block);
+            }
+        }
+    }
+
+    /// 测试：验证 overlay 计数
+    #[test]
+    fn test_frame_overlay_count() {
+        let base = BaseLayer::new(800, 600);
+
+        // 0 个 overlay
+        let frame0 = Frame::new(base.clone(), vec![]);
+        assert_eq!(frame0.overlay_count(), 0);
+        assert!(!frame0.has_overlays());
+
+        // 1 个 overlay
+        let cursor1 = Overlay::Cursor {
+            row: 0,
+            col: 0,
+            shape: CursorShape::Beam,
+        };
+        let frame1 = Frame::new(base.clone(), vec![cursor1]);
+        assert_eq!(frame1.overlay_count(), 1);
+        assert!(frame1.has_overlays());
+
+        // 3 个 overlays
+        let cursor2 = Overlay::Cursor {
+            row: 1,
+            col: 1,
+            shape: CursorShape::Underline,
+        };
+        let cursor3 = Overlay::Cursor {
+            row: 2,
+            col: 2,
+            shape: CursorShape::Block,
+        };
+        let frame3 = Frame::new(
+            base,
+            vec![
+                Overlay::Cursor {
+                    row: 0,
+                    col: 0,
+                    shape: CursorShape::Beam,
+                },
+                cursor2,
+                cursor3,
+            ],
+        );
+        assert_eq!(frame3.overlay_count(), 3);
+        assert!(frame3.has_overlays());
+    }
+
+    /// 测试：验证 BaseLayer 尺寸
+    #[test]
+    fn test_base_layer_dimensions() {
+        let base1 = BaseLayer::new(800, 600);
+        assert_eq!(base1.width, 800);
+        assert_eq!(base1.height, 600);
+        assert_eq!(base1.dimensions(), (800, 600));
+
+        let base2 = BaseLayer::new(1920, 1080);
+        assert_eq!(base2.width, 1920);
+        assert_eq!(base2.height, 1080);
+        assert_eq!(base2.dimensions(), (1920, 1080));
+    }
+
+    /// 测试：验证不同光标形状
+    #[test]
+    fn test_overlay_cursor_shapes() {
+        let shapes = vec![
+            CursorShape::Block,
+            CursorShape::Beam,
+            CursorShape::Underline,
+            CursorShape::Hidden,
+        ];
+
+        for (idx, shape) in shapes.iter().enumerate() {
+            let cursor = Overlay::Cursor {
+                row: idx,
+                col: idx,
+                shape: *shape,
+            };
+
+            match cursor {
+                Overlay::Cursor { shape: s, .. } => {
+                    assert_eq!(s, *shape);
+                }
+            }
+        }
+    }
+
+    /// 测试：验证 Overlay 的 PartialEq
+    #[test]
+    fn test_overlay_equality() {
+        let cursor1 = Overlay::Cursor {
+            row: 10,
+            col: 5,
+            shape: CursorShape::Block,
+        };
+        let cursor2 = Overlay::Cursor {
+            row: 10,
+            col: 5,
+            shape: CursorShape::Block,
+        };
+        let cursor3 = Overlay::Cursor {
+            row: 10,
+            col: 6,
+            shape: CursorShape::Block,
+        }; // 不同的 col
+
+        assert_eq!(cursor1, cursor2);
+        assert_ne!(cursor1, cursor3);
+    }
+}

@@ -12,6 +12,22 @@ mod sync;
 pub use sync::*;
 
 // ============================================================================
+// 新架构模块（DDD 分层架构，使用 feature flag 隔离）
+// ============================================================================
+
+#[cfg(feature = "new_architecture")]
+pub mod domain;
+
+#[cfg(feature = "new_architecture")]
+pub mod render;
+
+#[cfg(feature = "new_architecture")]
+pub mod compositor;
+
+#[cfg(feature = "new_architecture")]
+pub mod app;
+
+// ============================================================================
 // 新的 Rio 风格实现
 // ============================================================================
 

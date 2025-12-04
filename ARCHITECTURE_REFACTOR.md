@@ -427,8 +427,32 @@ rio/sugarloaf-ffi/src/
 - 定义好接口后，两个 Domain 可以并行开发
 - 接口定义是纯数据结构，风险低
 
+#### 第一步：创建最小骨架 ✅
+
+**完成情况**：
+- [x] 创建新的目录结构（domain/, render/, compositor/, app/）
+- [x] 在 Cargo.toml 添加 `new_architecture` feature flag
+- [x] 在 lib.rs 声明模块（使用 `#[cfg(feature = "new_architecture")]`）
+- [x] 编写空模块（每个 mod.rs 只有清晰的文档注释）
+- [x] 验证编译通过（cargo check）
+
+**创建的文件**：
+```
+src/
+├── domain/mod.rs       - Terminal Domain（终端逻辑）
+├── render/mod.rs       - Render Domain（渲染逻辑）
+├── compositor/mod.rs   - Compositor Domain（合成逻辑）
+└── app/mod.rs          - Application Layer（协调层）
+```
+
+**验证结果**：
+- 编译通过（cargo check 成功）
+- 无错误，只有 2 个现有的警告（不影响新模块）
+- Feature flag 正常工作（模块暂未启用）
+
+#### 第二步：定义核心数据结构（待完成）
+
 **任务**：
-- [ ] 创建新的目录结构（domain/, render/, compositor/, app/）
 - [ ] 定义 `TerminalState`（只读快照，包含 grid/cursor/selection/search 等所有状态）
 - [ ] 定义 `GridView`、`RowView`（延迟加载，支持 row_hash 查询）
 - [ ] 定义 `Frame`、`BaseLayer`、`Overlay` 枚举
