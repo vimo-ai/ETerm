@@ -164,6 +164,52 @@ impl Terminal {
         self.rows
     }
 
+    /// 写入数据到终端（ANSI 序列）
+    ///
+    /// # 参数
+    /// - `data`: 要写入的字节数据（通常是 ANSI 转义序列）
+    ///
+    /// # 说明
+    /// 这个方法会：
+    /// 1. 将数据喂给 Processor 进行 ANSI 解析
+    /// 2. Processor 调用 Crosswords (Handler trait) 更新内部 Grid 状态
+    /// 3. 可能产生事件（通过 EventCollector）
+    pub fn write(&mut self, data: &[u8]) {
+        use rio_backend::performer::handler::{Processor, StdSyncHandler};
+
+        // 创建临时 Processor（在真实实现中会作为 Terminal 的字段）
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        let mut crosswords = self.crosswords.write();
+
+        // 使用 processor 解析数据，Crosswords 实现了 Handler
+        processor.advance(&mut *crosswords, data);
+    }
+
+    /// 调整终端大小
+    ///
+    /// # 参数
+    /// - `cols`: 新的列数
+    /// - `rows`: 新的行数
+    pub fn resize(&mut self, cols: usize, rows: usize) {
+        // 更新内部尺寸
+        self.cols = cols;
+        self.rows = rows;
+
+        // 创建新的 Dimensions
+        let new_size = SimpleDimensions {
+            columns: cols,
+            screen_lines: rows,
+            history_size: 10_000, // 保持历史大小不变
+        };
+
+        // 调整 Crosswords 的大小（传值而不是引用）
+        let mut crosswords = self.crosswords.write();
+        crosswords.resize(new_size);
+
+        // 注意：这里暂时不处理真实 PTY 的 resize
+        // 真实 PTY 的 resize 会在 Phase 3 Step 4 (tick) 实现
+    }
+
     /// 获取终端状态快照
     pub fn state(&self) -> TerminalState {
         let crosswords = self.crosswords.read();
@@ -276,5 +322,85 @@ mod tests {
         // Clone 应该是低成本的（Arc 共享）
         assert_eq!(state1.grid.columns(), state2.grid.columns());
         assert_eq!(state1.grid.lines(), state2.grid.lines());
+    }
+
+    #[test]
+    fn test_write_ansi_sequence() {
+        let mut terminal = Terminal::new_for_test(TerminalId(1), 80, 24);
+
+        // 写入简单文本 "Hello"
+        terminal.write(b"Hello");
+
+        // 获取状态
+        let state = terminal.state();
+
+        // 验证第一行包含 "Hello"
+        // 注意：Crosswords 初始创建时，屏幕第一行就是索引 0（没有历史缓冲区）
+        let grid = &state.grid;
+
+        if let Some(row) = grid.row(0) {
+            let cells = row.cells();
+            assert_eq!(cells[0].c, 'H');
+            assert_eq!(cells[1].c, 'e');
+            assert_eq!(cells[2].c, 'l');
+            assert_eq!(cells[3].c, 'l');
+            assert_eq!(cells[4].c, 'o');
+        } else {
+            panic!("Failed to get first screen line");
+        }
+    }
+
+    #[test]
+    fn test_write_with_newline() {
+        let mut terminal = Terminal::new_for_test(TerminalId(1), 80, 24);
+
+        // 写入 "Hello\r\nWorld"（CRLF，终端标准换行）
+        terminal.write(b"Hello\r\nWorld");
+
+        let state = terminal.state();
+        let grid = &state.grid;
+
+        // 验证第一行是 "Hello"
+        if let Some(row1) = grid.row(0) {
+            let cells = row1.cells();
+            assert_eq!(cells[0].c, 'H');
+            assert_eq!(cells[4].c, 'o');
+        } else {
+            panic!("Failed to get first line");
+        }
+
+        // 验证第二行是 "World"
+        if let Some(row2) = grid.row(1) {
+            let cells = row2.cells();
+            assert_eq!(cells[0].c, 'W');
+            assert_eq!(cells[4].c, 'd');
+        } else {
+            panic!("Failed to get second line");
+        }
+    }
+
+    #[test]
+    fn test_resize() {
+        let mut terminal = Terminal::new_for_test(TerminalId(1), 80, 24);
+
+        // 初始状态
+        assert_eq!(terminal.cols(), 80);
+        assert_eq!(terminal.rows(), 24);
+
+        let state_before = terminal.state();
+        assert_eq!(state_before.grid.columns(), 80);
+
+        // Resize
+        terminal.resize(100, 30);
+
+        // 验证新尺寸
+        assert_eq!(terminal.cols(), 100);
+        assert_eq!(terminal.rows(), 30);
+
+        let state_after = terminal.state();
+        assert_eq!(state_after.grid.columns(), 100);
+        // 注意：Crosswords 初始创建时只有 screen_lines，没有历史缓冲区
+        // resize 后也应该只有 screen_lines
+        assert_eq!(state_after.grid.lines(), 30);
     }
 }

@@ -144,9 +144,12 @@ impl RowView {
         self.data.columns
     }
 
-    // TODO: Phase 1 暂不实现 cells() 方法，因为需要定义 CellView
-    // 后续会添加：
-    // pub fn cells(&self) -> &[CellData] { ... }
+    /// 获取行的所有 cell 数据
+    #[cfg(feature = "new_architecture")]
+    #[inline]
+    pub fn cells(&self) -> &[CellData] {
+        &self.data.rows[self.line].cells
+    }
 }
 
 /// Cell Data - 单个字符的数据
