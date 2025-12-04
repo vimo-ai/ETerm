@@ -96,7 +96,8 @@ impl TerminalState {
 mod tests {
     use super::*;
     use super::super::grid::GridData;
-    use super::super::selection::{SelectionPoint, SelectionType};
+    use super::super::point::AbsolutePoint;
+    use super::super::selection::SelectionType;
     use super::super::search::MatchRange;
     use rio_backend::crosswords::pos::{Line, Column, Pos};
     use rio_backend::ansi::CursorShape;
@@ -110,7 +111,7 @@ mod tests {
         let grid = GridView::new(grid_data);
 
         // 创建 CursorView
-        let cursor_pos = Pos::new(Line(0), Column(0));
+        let cursor_pos = AbsolutePoint::new(0, 0);
         let cursor_shape = CursorShape::Block;
         let cursor = CursorView::new(cursor_pos, cursor_shape);
 
@@ -120,7 +121,7 @@ mod tests {
         // 验证基本属性
         assert_eq!(state.grid.columns(), 80);
         assert_eq!(state.grid.lines(), 24);
-        assert_eq!(state.cursor.pos, cursor_pos);
+        assert_eq!(state.cursor.position, cursor_pos);
         assert_eq!(state.cursor.shape, cursor_shape);
         assert!(state.cursor.is_visible());
         assert!(state.selection.is_none());
@@ -134,7 +135,7 @@ mod tests {
         let grid_data = Arc::new(GridData::empty(80, 24));
         let grid = GridView::new(grid_data);
         let cursor = CursorView::new(
-            Pos::new(Line(0), Column(0)),
+            AbsolutePoint::new(0, 0),
             CursorShape::Block,
         );
 
@@ -157,13 +158,13 @@ mod tests {
 
         // 创建 CursorView
         let cursor = CursorView::new(
-            Pos::new(Line(5), Column(10)),
+            AbsolutePoint::new(5, 10),
             CursorShape::Block,
         );
 
         // 创建 SelectionView
-        let start = SelectionPoint::new(0, 0);
-        let end = SelectionPoint::new(5, 20);
+        let start = AbsolutePoint::new(0, 0);
+        let end = AbsolutePoint::new(5, 20);
         let selection = SelectionView::new(start, end, SelectionType::Simple);
 
         // 构造带选区的 TerminalState
@@ -186,14 +187,14 @@ mod tests {
 
         // 创建 CursorView
         let cursor = CursorView::new(
-            Pos::new(Line(5), Column(10)),
+            AbsolutePoint::new(5, 10),
             CursorShape::Block,
         );
 
         // 创建 SearchView
         let matches = vec![
-            MatchRange::new(0, 0, 0, 5),
-            MatchRange::new(2, 10, 2, 15),
+            MatchRange::new(AbsolutePoint::new(0, 0), AbsolutePoint::new(0, 5)),
+            MatchRange::new(AbsolutePoint::new(2, 10), AbsolutePoint::new(2, 15)),
         ];
         let search = SearchView::new(matches, 0);
 

@@ -9,6 +9,8 @@
 //! - rio-backend/Selection: 可变状态，包含复杂的选区操作逻辑
 //! - SelectionView: 只读视图，只包含渲染所需的最小信息
 
+use crate::domain::point::AbsolutePoint;
+
 /// 选区类型
 ///
 /// 对应 rio-backend 的 SelectionType，但去掉 Semantic 类型
@@ -23,27 +25,11 @@ pub enum SelectionType {
     Lines,
 }
 
-/// 选区端点
+/// 选区端点（兼容性导出）
 ///
 /// 表示选区的一个端点（起点或终点）
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SelectionPoint {
-    /// 行号（0-based）
-    pub line: usize,
-    /// 列号（0-based）
-    pub col: usize,
-}
-
-impl SelectionPoint {
-    /// 创建新的选区端点
-    ///
-    /// # 参数
-    /// - `line`: 行号（0-based）
-    /// - `col`: 列号（0-based）
-    pub fn new(line: usize, col: usize) -> Self {
-        Self { line, col }
-    }
-}
+#[deprecated(note = "Use AbsolutePoint instead")]
+pub type SelectionPoint = AbsolutePoint;
 
 /// 选区视图
 ///
@@ -53,7 +39,7 @@ impl SelectionPoint {
 ///
 /// - `start`: 选区起点（通常是左上角）
 /// - `end`: 选区终点（通常是右下角）
-/// - 坐标使用 0-based 索引
+/// - 坐标使用绝对坐标系（含历史缓冲区）
 ///
 /// # 选区类型
 ///
@@ -62,10 +48,10 @@ impl SelectionPoint {
 /// - `Lines`: 行选区，整行选择
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionView {
-    /// 选区起点
-    pub start: SelectionPoint,
-    /// 选区终点
-    pub end: SelectionPoint,
+    /// 选区起点（绝对坐标）
+    pub start: AbsolutePoint,
+    /// 选区终点（绝对坐标）
+    pub end: AbsolutePoint,
     /// 选区类型
     pub ty: SelectionType,
 }
@@ -81,11 +67,11 @@ impl SelectionView {
     /// # 示例
     ///
     /// ```ignore
-    /// let start = SelectionPoint::new(0, 0);
-    /// let end = SelectionPoint::new(5, 10);
+    /// let start = AbsolutePoint::new(0, 0);
+    /// let end = AbsolutePoint::new(5, 10);
     /// let selection = SelectionView::new(start, end, SelectionType::Simple);
     /// ```
-    pub fn new(start: SelectionPoint, end: SelectionPoint, ty: SelectionType) -> Self {
+    pub fn new(start: AbsolutePoint, end: AbsolutePoint, ty: SelectionType) -> Self {
         Self { start, end, ty }
     }
 
@@ -106,10 +92,10 @@ impl SelectionView {
 mod tests {
     use super::*;
 
-    /// 测试：SelectionPoint 构造
+    /// 测试：AbsolutePoint 构造
     #[test]
-    fn test_selection_point_basic() {
-        let point = SelectionPoint::new(10, 20);
+    fn test_absolute_point_basic() {
+        let point = AbsolutePoint::new(10, 20);
         assert_eq!(point.line, 10);
         assert_eq!(point.col, 20);
     }
@@ -117,8 +103,8 @@ mod tests {
     /// 测试：SelectionView 构造
     #[test]
     fn test_selection_view_construction() {
-        let start = SelectionPoint::new(0, 0);
-        let end = SelectionPoint::new(5, 10);
+        let start = AbsolutePoint::new(0, 0);
+        let end = AbsolutePoint::new(5, 10);
         let selection = SelectionView::new(start, end, SelectionType::Simple);
 
         assert_eq!(selection.start, start);
@@ -131,8 +117,8 @@ mod tests {
     /// 测试：不同选区类型
     #[test]
     fn test_selection_types() {
-        let start = SelectionPoint::new(0, 0);
-        let end = SelectionPoint::new(5, 10);
+        let start = AbsolutePoint::new(0, 0);
+        let end = AbsolutePoint::new(5, 10);
 
         // Simple 类型
         let simple = SelectionView::new(start, end, SelectionType::Simple);
@@ -153,12 +139,12 @@ mod tests {
         assert!(lines.is_lines());
     }
 
-    /// 测试：SelectionPoint 相等性
+    /// 测试：AbsolutePoint 相等性
     #[test]
-    fn test_selection_point_equality() {
-        let p1 = SelectionPoint::new(10, 20);
-        let p2 = SelectionPoint::new(10, 20);
-        let p3 = SelectionPoint::new(10, 21);
+    fn test_absolute_point_equality() {
+        let p1 = AbsolutePoint::new(10, 20);
+        let p2 = AbsolutePoint::new(10, 20);
+        let p3 = AbsolutePoint::new(10, 21);
 
         assert_eq!(p1, p2);
         assert_ne!(p1, p3);
@@ -167,8 +153,8 @@ mod tests {
     /// 测试：SelectionView 相等性
     #[test]
     fn test_selection_view_equality() {
-        let start = SelectionPoint::new(0, 0);
-        let end = SelectionPoint::new(5, 10);
+        let start = AbsolutePoint::new(0, 0);
+        let end = AbsolutePoint::new(5, 10);
 
         let s1 = SelectionView::new(start, end, SelectionType::Simple);
         let s2 = SelectionView::new(start, end, SelectionType::Simple);

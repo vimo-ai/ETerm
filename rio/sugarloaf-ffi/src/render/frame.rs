@@ -33,7 +33,7 @@
 //! - 完善的文档和测试
 
 use rio_backend::ansi::CursorShape;
-use crate::domain::selection::SelectionType;
+use crate::domain::{AbsolutePoint, selection::SelectionType};
 
 /// Frame - 渲染输出
 ///
@@ -107,20 +107,19 @@ pub struct BaseLayer {
 ///
 /// # 坐标系说明
 ///
-/// **所有行号都使用绝对坐标**（在整个 Grid 中的位置，包括历史滚动内容）。
-///
-/// - `absolute_row` / `absolute_line`: 绝对行号（0-based，从 Grid 顶部开始）
-/// - `col`: 列号（0-based，从行首开始）
+/// **所有坐标都使用绝对坐标系**（`AbsolutePoint`），包含历史滚动内容。
 ///
 /// RenderContext 负责将绝对坐标转换为屏幕坐标（减去 display_offset）。
 ///
 /// # 示例
 ///
 /// ```
+/// use crate::domain::AbsolutePoint;
+/// use rio_backend::ansi::CursorShape;
+///
 /// // 光标在 Grid 的第 100 行，第 5 列
 /// let cursor = Overlay::Cursor {
-///     absolute_row: 100,
-///     col: 5,
+///     position: AbsolutePoint::new(100, 5),
 ///     shape: CursorShape::Block,
 /// };
 ///
@@ -150,12 +149,10 @@ pub enum Overlay {
     ///
     /// # 字段说明
     ///
-    /// - `absolute_row`: 光标所在行（绝对坐标，0-based）
-    /// - `col`: 光标所在列（0-based）
+    /// - `position`: 光标位置（绝对坐标）
     /// - `shape`: 光标形状（Block、Beam、Underline 等）
     Cursor {
-        absolute_row: usize,
-        col: usize,
+        position: AbsolutePoint,
         shape: CursorShape,
     },
     /// 选区叠加层
@@ -164,16 +161,12 @@ pub enum Overlay {
     ///
     /// # 字段说明
     ///
-    /// - `start_absolute_line`: 起点行号（绝对坐标，0-based）
-    /// - `start_col`: 起点列号（0-based）
-    /// - `end_absolute_line`: 终点行号（绝对坐标，0-based）
-    /// - `end_col`: 终点列号（0-based）
+    /// - `start`: 起点（绝对坐标）
+    /// - `end`: 终点（绝对坐标）
     /// - `ty`: 选区类型（Simple、Block、Lines）
     Selection {
-        start_absolute_line: usize,
-        start_col: usize,
-        end_absolute_line: usize,
-        end_col: usize,
+        start: AbsolutePoint,
+        end: AbsolutePoint,
         ty: SelectionType,
     },
     /// 搜索匹配叠加层
@@ -182,16 +175,12 @@ pub enum Overlay {
     ///
     /// # 字段说明
     ///
-    /// - `start_absolute_line`: 起点行号（绝对坐标，0-based）
-    /// - `start_col`: 起点列号（0-based）
-    /// - `end_absolute_line`: 终点行号（绝对坐标，0-based）
-    /// - `end_col`: 终点列号（0-based）
+    /// - `start`: 起点（绝对坐标）
+    /// - `end`: 终点（绝对坐标）
     /// - `is_focused`: 是否为当前焦点匹配（焦点匹配可以用不同颜色渲染）
     SearchMatch {
-        start_absolute_line: usize,
-        start_col: usize,
-        end_absolute_line: usize,
-        end_col: usize,
+        start: AbsolutePoint,
+        end: AbsolutePoint,
         is_focused: bool,
     },
 }
@@ -209,7 +198,10 @@ impl Frame {
     /// ```ignore
     /// let base = BaseLayer::new(800, 600);
     /// let overlays = vec![
-    ///     Overlay::Cursor { absolute_row: 10, col: 5, shape: CursorShape::Block },
+    ///     Overlay::Cursor {
+    ///         position: AbsolutePoint::new(10, 5),
+    ///         shape: CursorShape::Block
+    ///     },
     /// ];
     /// let frame = Frame::new(base, overlays);
     /// ```
@@ -286,8 +278,7 @@ mod tests {
     fn test_frame_with_cursor_overlay() {
         let base = BaseLayer::new(1024, 768);
         let cursor = Overlay::Cursor {
-            absolute_row: 10,
-            col: 5,
+            position: AbsolutePoint::new(10, 5),
             shape: CursorShape::Block,
         };
         let overlays = vec![cursor];
@@ -299,9 +290,9 @@ mod tests {
 
         // 验证 cursor overlay 的内容
         match &frame.overlays[0] {
-            Overlay::Cursor { absolute_row, col, shape } => {
-                assert_eq!(*absolute_row, 10);
-                assert_eq!(*col, 5);
+            Overlay::Cursor { position, shape } => {
+                assert_eq!(position.line, 10);
+                assert_eq!(position.col, 5);
                 assert_eq!(*shape, CursorShape::Block);
             }
             _ => panic!("Expected Cursor overlay"),
@@ -320,8 +311,7 @@ mod tests {
 
         // 1 个 overlay
         let cursor1 = Overlay::Cursor {
-            absolute_row: 0,
-            col: 0,
+            position: AbsolutePoint::new(0, 0),
             shape: CursorShape::Beam,
         };
         let frame1 = Frame::new(base.clone(), vec![cursor1]);
@@ -330,21 +320,18 @@ mod tests {
 
         // 3 个 overlays
         let cursor2 = Overlay::Cursor {
-            absolute_row: 1,
-            col: 1,
+            position: AbsolutePoint::new(1, 1),
             shape: CursorShape::Underline,
         };
         let cursor3 = Overlay::Cursor {
-            absolute_row: 2,
-            col: 2,
+            position: AbsolutePoint::new(2, 2),
             shape: CursorShape::Block,
         };
         let frame3 = Frame::new(
             base,
             vec![
                 Overlay::Cursor {
-                    absolute_row: 0,
-                    col: 0,
+                    position: AbsolutePoint::new(0, 0),
                     shape: CursorShape::Beam,
                 },
                 cursor2,
@@ -381,8 +368,7 @@ mod tests {
 
         for (idx, shape) in shapes.iter().enumerate() {
             let cursor = Overlay::Cursor {
-                absolute_row: idx,
-                col: idx,
+                position: AbsolutePoint::new(idx, idx),
                 shape: *shape,
             };
 
@@ -399,18 +385,15 @@ mod tests {
     #[test]
     fn test_overlay_equality() {
         let cursor1 = Overlay::Cursor {
-            absolute_row: 10,
-            col: 5,
+            position: AbsolutePoint::new(10, 5),
             shape: CursorShape::Block,
         };
         let cursor2 = Overlay::Cursor {
-            absolute_row: 10,
-            col: 5,
+            position: AbsolutePoint::new(10, 5),
             shape: CursorShape::Block,
         };
         let cursor3 = Overlay::Cursor {
-            absolute_row: 10,
-            col: 6,
+            position: AbsolutePoint::new(10, 6),
             shape: CursorShape::Block,
         }; // 不同的 col
 
@@ -423,10 +406,8 @@ mod tests {
     fn test_frame_with_selection_overlay() {
         let base = BaseLayer::new(1024, 768);
         let selection = Overlay::Selection {
-            start_absolute_line: 0,
-            start_col: 0,
-            end_absolute_line: 5,
-            end_col: 20,
+            start: AbsolutePoint::new(0, 0),
+            end: AbsolutePoint::new(5, 20),
             ty: SelectionType::Simple,
         };
         let overlays = vec![selection];
@@ -438,11 +419,11 @@ mod tests {
 
         // 验证 selection overlay 的内容
         match &frame.overlays[0] {
-            Overlay::Selection { start_absolute_line, start_col, end_absolute_line, end_col, ty } => {
-                assert_eq!(*start_absolute_line, 0);
-                assert_eq!(*start_col, 0);
-                assert_eq!(*end_absolute_line, 5);
-                assert_eq!(*end_col, 20);
+            Overlay::Selection { start, end, ty } => {
+                assert_eq!(start.line, 0);
+                assert_eq!(start.col, 0);
+                assert_eq!(end.line, 5);
+                assert_eq!(end.col, 20);
                 assert_eq!(*ty, SelectionType::Simple);
             }
             _ => panic!("Expected Selection overlay"),
@@ -454,10 +435,8 @@ mod tests {
     fn test_overlay_selection_construction() {
         // Simple 类型选区
         let simple = Overlay::Selection {
-            start_absolute_line: 0,
-            start_col: 0,
-            end_absolute_line: 10,
-            end_col: 30,
+            start: AbsolutePoint::new(0, 0),
+            end: AbsolutePoint::new(10, 30),
             ty: SelectionType::Simple,
         };
 
@@ -470,10 +449,8 @@ mod tests {
 
         // Block 类型选区
         let block = Overlay::Selection {
-            start_absolute_line: 5,
-            start_col: 10,
-            end_absolute_line: 15,
-            end_col: 20,
+            start: AbsolutePoint::new(5, 10),
+            end: AbsolutePoint::new(15, 20),
             ty: SelectionType::Block,
         };
 
@@ -486,10 +463,8 @@ mod tests {
 
         // Lines 类型选区
         let lines = Overlay::Selection {
-            start_absolute_line: 2,
-            start_col: 0,
-            end_absolute_line: 8,
-            end_col: 79,
+            start: AbsolutePoint::new(2, 0),
+            end: AbsolutePoint::new(8, 79),
             ty: SelectionType::Lines,
         };
 
@@ -507,16 +482,13 @@ mod tests {
         let base = BaseLayer::new(800, 600);
 
         let cursor = Overlay::Cursor {
-            absolute_row: 10,
-            col: 5,
+            position: AbsolutePoint::new(10, 5),
             shape: CursorShape::Block,
         };
 
         let selection = Overlay::Selection {
-            start_absolute_line: 0,
-            start_col: 0,
-            end_absolute_line: 5,
-            end_col: 20,
+            start: AbsolutePoint::new(0, 0),
+            end: AbsolutePoint::new(5, 20),
             ty: SelectionType::Simple,
         };
 
@@ -545,10 +517,8 @@ mod tests {
     fn test_frame_with_search_overlay() {
         let base = BaseLayer::new(1024, 768);
         let search = Overlay::SearchMatch {
-            start_absolute_line: 0,
-            start_col: 0,
-            end_absolute_line: 0,
-            end_col: 5,
+            start: AbsolutePoint::new(0, 0),
+            end: AbsolutePoint::new(0, 5),
             is_focused: true,
         };
         let overlays = vec![search];
@@ -560,11 +530,11 @@ mod tests {
 
         // 验证 search overlay 的内容
         match &frame.overlays[0] {
-            Overlay::SearchMatch { start_absolute_line, start_col, end_absolute_line, end_col, is_focused } => {
-                assert_eq!(*start_absolute_line, 0);
-                assert_eq!(*start_col, 0);
-                assert_eq!(*end_absolute_line, 0);
-                assert_eq!(*end_col, 5);
+            Overlay::SearchMatch { start, end, is_focused } => {
+                assert_eq!(start.line, 0);
+                assert_eq!(start.col, 0);
+                assert_eq!(end.line, 0);
+                assert_eq!(end.col, 5);
                 assert!(is_focused);
             }
             _ => panic!("Expected SearchMatch overlay"),
@@ -576,10 +546,8 @@ mod tests {
     fn test_overlay_search_focused_and_normal() {
         // 焦点匹配
         let focused = Overlay::SearchMatch {
-            start_absolute_line: 0,
-            start_col: 0,
-            end_absolute_line: 0,
-            end_col: 5,
+            start: AbsolutePoint::new(0, 0),
+            end: AbsolutePoint::new(0, 5),
             is_focused: true,
         };
 
@@ -592,10 +560,8 @@ mod tests {
 
         // 非焦点匹配
         let normal = Overlay::SearchMatch {
-            start_absolute_line: 1,
-            start_col: 10,
-            end_absolute_line: 1,
-            end_col: 15,
+            start: AbsolutePoint::new(1, 10),
+            end: AbsolutePoint::new(1, 15),
             is_focused: false,
         };
 
@@ -613,26 +579,20 @@ mod tests {
         let base = BaseLayer::new(800, 600);
 
         let search1 = Overlay::SearchMatch {
-            start_absolute_line: 0,
-            start_col: 0,
-            end_absolute_line: 0,
-            end_col: 5,
+            start: AbsolutePoint::new(0, 0),
+            end: AbsolutePoint::new(0, 5),
             is_focused: false,
         };
 
         let search2 = Overlay::SearchMatch {
-            start_absolute_line: 1,
-            start_col: 10,
-            end_absolute_line: 1,
-            end_col: 15,
+            start: AbsolutePoint::new(1, 10),
+            end: AbsolutePoint::new(1, 15),
             is_focused: true,
         };
 
         let search3 = Overlay::SearchMatch {
-            start_absolute_line: 3,
-            start_col: 5,
-            end_absolute_line: 3,
-            end_col: 10,
+            start: AbsolutePoint::new(3, 5),
+            end: AbsolutePoint::new(3, 10),
             is_focused: false,
         };
 

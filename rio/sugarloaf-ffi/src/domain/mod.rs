@@ -20,6 +20,7 @@
 //! - 提供清晰的充血模型接口
 //!
 
+pub mod point;
 pub mod state;
 pub mod cursor;
 pub mod grid;
@@ -27,6 +28,7 @@ pub mod selection;
 pub mod search;
 
 // Re-export key types
+pub use point::{AbsolutePoint, Absolute, GridPoint, Screen, ScreenPoint};
 pub use state::TerminalState;
 pub use cursor::CursorView;
 pub use grid::{GridView, RowView, GridData};
