@@ -73,7 +73,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/stop_hook.sh"
+            "command": "bash /Users/higuaifan/Desktop/hi/小工具/english/.claude/hooks/stop_hook.sh"
           }
         ]
       }

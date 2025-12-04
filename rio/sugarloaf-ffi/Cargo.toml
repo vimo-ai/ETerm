@@ -30,3 +30,6 @@ corcovado = { path = "../corcovado" }
 
 # 并发渲染优化
 rayon = "1.8"
+
+# 搜索优化
+regex = "1"

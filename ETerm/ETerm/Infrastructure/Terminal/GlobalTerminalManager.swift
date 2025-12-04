@@ -528,6 +528,82 @@ final class GlobalTerminalManager {
 
         return result == 0
     }
+
+    // MARK: - Search API
+
+    /// 开始新的搜索
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - pattern: 搜索模式
+    ///   - isRegex: 是否为正则表达式
+    ///   - caseSensitive: 是否区分大小写
+    /// - Returns: (总匹配数, 当前索引, 滚动到的行号)，失败返回 nil
+    func startSearch(terminalId: Int, pattern: String, isRegex: Bool = false, caseSensitive: Bool = false) -> (totalCount: Int, currentIndex: Int, scrollToRow: Int64?)? {
+        guard let pool = poolHandle else { return nil }
+
+        let info = rio_terminal_start_search(
+            pool,
+            Int32(terminalId),
+            pattern,
+            pattern.utf8.count,
+            isRegex,
+            caseSensitive
+        )
+
+        // 错误处理
+        if info.total_count == -1 {
+            // 无效的 pattern
+            return nil
+        }
+        if info.total_count == -2 {
+            // 终端不存在
+            return nil
+        }
+
+        let scrollToRow = info.scroll_to_row >= 0 ? Int64(info.scroll_to_row) : nil
+        return (Int(info.total_count), Int(info.current_index), scrollToRow)
+    }
+
+    /// 跳转到下一个匹配
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 当前索引（1-based），失败返回 nil
+    func searchNext(terminalId: Int) -> Int? {
+        guard let pool = poolHandle else { return nil }
+
+        let index = rio_terminal_search_next(pool, Int32(terminalId))
+
+        if index == -1 || index == -2 {
+            return nil
+        }
+
+        return Int(index)
+    }
+
+    /// 跳转到上一个匹配
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 当前索引（1-based），失败返回 nil
+    func searchPrev(terminalId: Int) -> Int? {
+        guard let pool = poolHandle else { return nil }
+
+        let index = rio_terminal_search_prev(pool, Int32(terminalId))
+
+        if index == -1 || index == -2 {
+            return nil
+        }
+
+        return Int(index)
+    }
+
+    /// 清除当前搜索
+    ///
+    /// - Parameter terminalId: 终端 ID
+    func clearSearch(terminalId: Int) {
+        guard let pool = poolHandle else { return }
+        rio_terminal_clear_search(pool, Int32(terminalId))
+    }
 }
 
 // MARK: - Helper Types

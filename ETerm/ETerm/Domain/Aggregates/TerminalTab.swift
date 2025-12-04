@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import PanelLayoutKit
 
 /// 方向枚举
 enum Direction {
@@ -60,6 +61,9 @@ final class TerminalTab {
 
     /// 待恢复的 CWD（用于 Session 恢复）
     private(set) var pendingCwd: String?
+
+    /// 搜索信息（Tab 级别）
+    private(set) var searchInfo: TabSearchInfo?
 
     // MARK: - 初始化
 
@@ -387,6 +391,23 @@ final class TerminalTab {
     /// 同步输入行号
     func syncInputRow(_ row: UInt16?) {
         currentInputRow = row
+    }
+
+    // MARK: - Search Management
+
+    /// 设置搜索信息
+    func setSearchInfo(_ info: TabSearchInfo?) {
+        searchInfo = info
+    }
+
+    /// 更新搜索索引（保持 pattern 不变）
+    func updateSearchIndex(currentIndex: Int, totalCount: Int) {
+        guard let info = searchInfo else { return }
+        searchInfo = TabSearchInfo(
+            pattern: info.pattern,
+            totalCount: totalCount,
+            currentIndex: currentIndex
+        )
     }
 }
 

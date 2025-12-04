@@ -16,7 +16,7 @@ use corcovado::channel;
 use rio_backend::ansi::CursorShape;
 use rio_backend::crosswords::grid::row::Row;
 use rio_backend::crosswords::grid::Dimensions;
-use rio_backend::crosswords::square::Square;
+use rio_backend::crosswords::square::{LineLength, Square};
 use rio_backend::crosswords::{Crosswords, CrosswordsSize};
 use rio_backend::event::Msg;
 use teletypewriter::{create_pty_with_fork, WinsizeBuilder};
@@ -602,6 +602,34 @@ impl RioTerminal {
                 selection.start.col.0.hash(&mut hasher);
                 selection.end.row.0.hash(&mut hasher);
                 selection.end.col.0.hash(&mut hasher);
+            }
+        }
+
+        // Hash 搜索状态（搜索高亮是叠加层，变化时需要使缓存失效）
+        if let Some(ref search_state) = terminal.search_state {
+            // 调试：只打印一次
+            if grid_row == 0 {
+                eprintln!("[HASH DEBUG] search_state exists: {} matches, checking line={}",
+                    search_state.all_matches.len(), line.0);
+            }
+            for (idx, match_range) in search_state.all_matches.iter().enumerate() {
+                let match_start_row = match_range.start().row;
+                let match_end_row = match_range.end().row;
+                // 检查本行是否与搜索匹配相交
+                if match_start_row <= line && match_end_row >= line {
+                    if grid_row == 0 {
+                        eprintln!("[HASH DEBUG] MATCH FOUND! line={}, match_row={}..{}",
+                            line.0, match_start_row.0, match_end_row.0);
+                    }
+                    "search".hash(&mut hasher);
+                    idx.hash(&mut hasher);
+                    match_range.start().row.0.hash(&mut hasher);
+                    match_range.start().col.0.hash(&mut hasher);
+                    match_range.end().row.0.hash(&mut hasher);
+                    match_range.end().col.0.hash(&mut hasher);
+                    // 聚焦状态也需要 hash
+                    (idx == search_state.focused_index).hash(&mut hasher);
+                }
             }
         }
 
@@ -1497,9 +1525,11 @@ impl RioTerminalPool {
         let screen_lines_i64 = terminal_lock.screen_lines() as i64;
 
         // 计算所有行的 hash
+        // 注意：必须使用 terminal_lock 的 scrollback_lines，而不是 snapshot 的
+        // 因为 hash_grid_row 内部用的是这个值来计算 grid_row
         let row_hashes: Vec<u64> = (0..lines_to_render)
             .map(|row_index| {
-                let absolute_row = snapshot.scrollback_lines as i64
+                let absolute_row = scrollback_lines
                     - snapshot.display_offset as i64
                     + row_index as i64;
 
@@ -1516,6 +1546,14 @@ impl RioTerminalPool {
 
         // Clone search state data for concurrent rendering
         let search_data = terminal_lock.search_state.as_ref().map(|s| {
+            eprintln!("[SEARCH DEBUG] render_terminal_content: {} matches, focused={}, display_offset={}",
+                s.all_matches.len(), s.focused_index, snapshot.display_offset);
+            if !s.all_matches.is_empty() {
+                let first = &s.all_matches[0];
+                eprintln!("[SEARCH DEBUG] first match: row {}..{}, col {}..{}",
+                    first.start().row.0, first.end().row.0,
+                    first.start().col.0, first.end().col.0);
+            }
             (s.all_matches.clone(), s.focused_index)
         });
 
@@ -1552,7 +1590,7 @@ impl RioTerminalPool {
         let extracted_cells: HashMap<usize, Vec<FFICell>> = lines_to_extract
             .iter()
             .map(|&row_index| {
-                let absolute_row = snapshot.scrollback_lines as i64
+                let absolute_row = scrollback_lines
                     - snapshot.display_offset as i64
                     + row_index as i64;
 
@@ -1648,10 +1686,8 @@ impl RioTerminalPool {
 
                     // 处理搜索高亮
                     if let Some((ref all_matches, focused_index)) = search_data {
-                        // 计算当前单元格的绝对行号
-                        let absolute_row = snapshot.scrollback_lines as i64
-                            - snapshot.display_offset as i64
-                            + row_index as i64;
+                        // 计算当前单元格的 grid 行号（与搜索时存储的行号格式一致）
+                        let grid_row = row_index as i64 - snapshot.display_offset as i64;
 
                         // 检查当前单元格是否在任何搜索匹配范围内
                         for (idx, match_range) in all_matches.iter().enumerate() {
@@ -1661,14 +1697,14 @@ impl RioTerminalPool {
                             let match_end_col = match_range.end().col.0;
 
                             // 检查行是否在匹配范围内
-                            if absolute_row >= match_start_row && absolute_row <= match_end_row {
+                            if grid_row >= match_start_row && grid_row <= match_end_row {
                                 let in_match = if match_start_row == match_end_row {
                                     // 单行匹配：检查列范围
                                     col_index >= match_start_col && col_index <= match_end_col
-                                } else if absolute_row == match_start_row {
+                                } else if grid_row == match_start_row {
                                     // 匹配的起始行：从 match_start_col 开始
                                     col_index >= match_start_col
-                                } else if absolute_row == match_end_row {
+                                } else if grid_row == match_end_row {
                                     // 匹配的结束行：到 match_end_col 结束
                                     col_index <= match_end_col
                                 } else {
@@ -1933,9 +1969,10 @@ impl RioTerminalPool {
         let screen_lines_i64 = terminal_lock.screen_lines() as i64;
 
         // 计算所有行的 hash
+        // 注意：必须使用 terminal_lock 的 scrollback_lines
         let row_hashes: Vec<u64> = (0..lines_to_render)
             .map(|row_index| {
-                let absolute_row = snapshot.scrollback_lines as i64
+                let absolute_row = scrollback_lines
                     - snapshot.display_offset as i64
                     + row_index as i64;
 
@@ -1986,7 +2023,7 @@ impl RioTerminalPool {
         let extracted_cells: std::collections::HashMap<usize, Vec<FFICell>> = lines_to_extract
             .iter()
             .map(|&row_index| {
-                let absolute_row = snapshot.scrollback_lines as i64
+                let absolute_row = scrollback_lines
                     - snapshot.display_offset as i64
                     + row_index as i64;
 
@@ -2074,10 +2111,8 @@ impl RioTerminalPool {
 
                     // 处理搜索高亮
                     if let Some((ref all_matches, focused_index)) = search_data {
-                        // 计算当前单元格的绝对行号
-                        let absolute_row = snapshot.scrollback_lines as i64
-                            - snapshot.display_offset as i64
-                            + row_index as i64;
+                        // 计算当前单元格的 grid 行号（与搜索时存储的行号格式一致）
+                        let grid_row = row_index as i64 - snapshot.display_offset as i64;
 
                         // 检查当前单元格是否在任何搜索匹配范围内
                         for (idx, match_range) in all_matches.iter().enumerate() {
@@ -2087,14 +2122,14 @@ impl RioTerminalPool {
                             let match_end_col = match_range.end().col.0;
 
                             // 检查行是否在匹配范围内
-                            if absolute_row >= match_start_row && absolute_row <= match_end_row {
+                            if grid_row >= match_start_row && grid_row <= match_end_row {
                                 let in_match = if match_start_row == match_end_row {
                                     // 单行匹配：检查列范围
                                     col_index >= match_start_col && col_index <= match_end_col
-                                } else if absolute_row == match_start_row {
+                                } else if grid_row == match_start_row {
                                     // 匹配的起始行：从 match_start_col 开始
                                     col_index >= match_start_col
-                                } else if absolute_row == match_end_row {
+                                } else if grid_row == match_end_row {
                                     // 匹配的结束行：到 match_end_col 结束
                                     col_index <= match_end_col
                                 } else {
@@ -2357,7 +2392,7 @@ impl RioTerminalPool {
         let damaged_cells: Vec<(usize, Vec<FFICell>)> = damaged_lines
             .iter()
             .map(|&row_index| {
-                let absolute_row = snapshot.scrollback_lines as i64
+                let absolute_row = scrollback_lines
                     - snapshot.display_offset as i64
                     + row_index as i64;
 
@@ -2446,9 +2481,8 @@ impl RioTerminalPool {
 
                     // 处理搜索高亮
                     if let Some((ref all_matches, focused_index)) = search_data {
-                        let absolute_row = snapshot.scrollback_lines as i64
-                            - snapshot.display_offset as i64
-                            + row_index as i64;
+                        // 计算当前单元格的 grid 行号（与搜索时存储的行号格式一致）
+                        let grid_row = row_index as i64 - snapshot.display_offset as i64;
 
                         for (idx, match_range) in all_matches.iter().enumerate() {
                             let match_start_row = match_range.start().row.0 as i64;
@@ -2456,12 +2490,12 @@ impl RioTerminalPool {
                             let match_start_col = match_range.start().col.0;
                             let match_end_col = match_range.end().col.0;
 
-                            if absolute_row >= match_start_row && absolute_row <= match_end_row {
+                            if grid_row >= match_start_row && grid_row <= match_end_row {
                                 let in_match = if match_start_row == match_end_row {
                                     col_index >= match_start_col && col_index <= match_end_col
-                                } else if absolute_row == match_start_row {
+                                } else if grid_row == match_start_row {
                                     col_index >= match_start_col
-                                } else if absolute_row == match_end_row {
+                                } else if grid_row == match_end_row {
                                     col_index <= match_end_col
                                 } else {
                                     true
@@ -3542,6 +3576,14 @@ pub struct FFISearchInfo {
     pub scroll_to_row: i64,
 }
 
+/// 行信息：用于字节偏移到 (row, col) 的转换
+struct LineInfo {
+    row: i32,
+    byte_offset: usize,
+    /// 每个字符的字节长度，用于精确计算列位置
+    char_byte_lengths: Vec<usize>,
+}
+
 #[no_mangle]
 pub extern "C" fn rio_terminal_start_search(
     pool: *mut RioTerminalPool,
@@ -3551,6 +3593,9 @@ pub extern "C" fn rio_terminal_start_search(
     is_regex: bool,
     case_sensitive: bool,
 ) -> FFISearchInfo {
+    use rio_backend::crosswords::pos::{Column, Line, Pos};
+    use rio_backend::crosswords::square::Flags;
+
     if pool.is_null() || pattern.is_null() {
         return FFISearchInfo {
             total_count: -1,
@@ -3565,112 +3610,191 @@ pub extern "C" fn rio_terminal_start_search(
         std::str::from_utf8(bytes).unwrap_or("")
     };
 
+    if pattern.is_empty() {
+        return FFISearchInfo {
+            total_count: 0,
+            current_index: 0,
+            scroll_to_row: -1,
+        };
+    }
+
     if let Some(terminal) = pool.terminals.get_mut(&(terminal_id as usize)) {
-        // ⚠️ 优化：分离搜索和存储，减少写锁持有时间
-        // 1. 用读锁执行搜索（耗时操作）
-        let search_result = {
+        // ============================================================
+        // 优化：批量文本收集 + 标准 regex 搜索
+        // ============================================================
+
+        // 1. 读锁：快速收集文本 O(n)
+        let (full_text, line_infos, last_column) = {
             let term_read = terminal.terminal.read();
+            let max_lines = 10000usize;
+            let total_lines = term_read.grid.total_lines();
+            let search_lines = max_lines.min(total_lines);
+            let cols = term_read.grid.columns();
+            let last_col = term_read.grid.last_column();
 
-            // 处理 pattern（手动转义正则特殊字符）
-            let pattern_str = if is_regex {
-                pattern.to_string()
-            } else {
-                // 转义正则特殊字符
-                let mut escaped = String::with_capacity(pattern.len() * 2);
-                for c in pattern.chars() {
-                    match c {
-                        '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' => {
-                            escaped.push('\\');
-                            escaped.push(c);
-                        }
-                        _ => escaped.push(c),
+            let mut text = String::with_capacity(search_lines * cols);
+            let mut line_infos: Vec<LineInfo> = Vec::with_capacity(search_lines);
+
+            for row in 0..search_lines as i32 {
+                let grid_line = &term_read.grid[Line(row)];
+                let line_length = grid_line.line_length();
+
+                let mut char_byte_lengths = Vec::with_capacity(cols);
+                let line_start_offset = text.len();
+
+                for col_idx in 0..line_length.0 {
+                    let cell = &grid_line[Column(col_idx)];
+                    // 跳过宽字符占位符
+                    if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                        char_byte_lengths.push(0);
+                        continue;
+                    }
+                    let c = cell.c;
+                    let byte_len = c.len_utf8();
+                    char_byte_lengths.push(byte_len);
+                    text.push(c);
+
+                    // 处理 zero-width 字符
+                    for zw in cell.zerowidth().into_iter().flatten() {
+                        text.push(*zw);
                     }
                 }
-                escaped
-            };
-            let pattern_str = if !case_sensitive && !pattern_str.chars().any(|c| c.is_uppercase()) {
-                pattern_str
-            } else if !case_sensitive {
-                format!("(?i){}", pattern_str)
-            } else {
-                pattern_str
-            };
 
-            // 创建正则表达式
-            match rio_backend::crosswords::search::RegexSearch::new(&pattern_str) {
-                Ok(mut regex) => {
-                    // 在读锁下执行搜索
-                    let max_lines = 1000usize;
-                    let total_lines = term_read.grid.total_lines();
-                    let search_lines = max_lines.min(total_lines);
+                line_infos.push(LineInfo {
+                    row,
+                    byte_offset: line_start_offset,
+                    char_byte_lengths,
+                });
 
-                    let start = rio_backend::crosswords::pos::Pos::new(
-                        rio_backend::crosswords::pos::Line(0),
-                        rio_backend::crosswords::pos::Column(0),
-                    );
-                    let end = rio_backend::crosswords::pos::Pos::new(
-                        rio_backend::crosswords::pos::Line(search_lines as i32 - 1),
-                        term_read.grid.last_column(),
-                    );
-
-                    let mut matches = Vec::new();
-                    let mut iter = rio_backend::crosswords::search::RegexIter::new(
-                        start, end,
-                        rio_backend::crosswords::pos::Direction::Right,
-                        &*term_read,
-                        &mut regex
-                    );
-                    while let Some(m) = iter.next() {
-                        matches.push(m);
-                    }
-
-                    Some((matches, regex, pattern_str))
+                // 只有非软换行才加 '\n'
+                let is_wrapped = line_length.0 > 0
+                    && grid_line[line_length - 1].flags.contains(Flags::WRAPLINE);
+                if !is_wrapped {
+                    text.push('\n');
                 }
-                Err(_) => None,
+            }
+
+            (text, line_infos, last_col)
+        };
+        // 读锁释放
+
+        // 2. 无锁：构建正则并批量搜索 O(n)
+        let pattern_str = if is_regex {
+            pattern.to_string()
+        } else {
+            // 转义正则特殊字符
+            let mut escaped = String::with_capacity(pattern.len() * 2);
+            for c in pattern.chars() {
+                match c {
+                    '\\' | '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' => {
+                        escaped.push('\\');
+                        escaped.push(c);
+                    }
+                    _ => escaped.push(c),
+                }
+            }
+            escaped
+        };
+
+        let pattern_str = if !case_sensitive {
+            format!("(?i){}", pattern_str)
+        } else {
+            pattern_str
+        };
+
+        // 使用标准 regex crate 批量搜索
+        let regex = match regex::Regex::new(&pattern_str) {
+            Ok(r) => r,
+            Err(_) => {
+                return FFISearchInfo {
+                    total_count: -1,
+                    current_index: -1,
+                    scroll_to_row: -1,
+                };
             }
         };
-        // 读锁在这里释放
 
-        // 2. 用写锁快速存储结果
-        match search_result {
-            Some((all_matches, regex, pattern_str)) => {
-                let mut term_write = terminal.terminal.write();
+        // 辅助函数：字节偏移转换为 (row, col)
+        let byte_offset_to_pos = |byte_offset: usize| -> Pos {
+            // 二分查找所在行
+            let line_idx = match line_infos.binary_search_by(|info| info.byte_offset.cmp(&byte_offset)) {
+                Ok(idx) => idx,
+                Err(idx) => idx.saturating_sub(1),
+            };
 
-                if all_matches.is_empty() {
-                    term_write.search_state = None;
-                    FFISearchInfo {
-                        total_count: 0,
-                        current_index: 0,
-                        scroll_to_row: -1,
-                    }
-                } else {
-                    let scroll_to_row = all_matches[0].start().row.0 as i64;
-                    let total_count = all_matches.len();
+            let line_info = &line_infos[line_idx];
+            let offset_in_line = byte_offset.saturating_sub(line_info.byte_offset);
 
-                    term_write.search_state = Some(rio_backend::event::SearchState {
-                        all_matches: all_matches.clone(),
-                        focused_index: 0,
-                        dfas: Some(regex),
-                        direction: rio_backend::crosswords::pos::Direction::Right,
-                        history: std::collections::VecDeque::from([pattern_str]),
-                        history_index: Some(0),
-                        origin: rio_backend::crosswords::pos::Pos::default(),
-                        display_offset_delta: 0,
-                        focused_match: Some(all_matches[0].clone()),
-                    });
-
-                    FFISearchInfo {
-                        total_count: total_count as i32,
-                        current_index: 1,
-                        scroll_to_row,
-                    }
+            // 计算列位置：遍历字符字节长度
+            let mut current_byte = 0usize;
+            let mut col = 0usize;
+            for &byte_len in &line_info.char_byte_lengths {
+                if byte_len == 0 {
+                    // 宽字符占位符，列号仍要增加
+                    col += 1;
+                    continue;
                 }
+                if current_byte + byte_len > offset_in_line {
+                    break;
+                }
+                current_byte += byte_len;
+                col += 1;
             }
-            None => FFISearchInfo {
-                total_count: -1,
-                current_index: -1,
+
+            Pos::new(Line(line_info.row), Column(col))
+        };
+
+        // 批量匹配
+        let all_matches: Vec<_> = regex
+            .find_iter(&full_text)
+            .filter_map(|m| {
+                let start_pos = byte_offset_to_pos(m.start());
+                let end_byte = m.end().saturating_sub(1);
+                let end_pos = byte_offset_to_pos(end_byte);
+
+                // 跳过跨越换行符的匹配（如果匹配的是 '\n' 本身）
+                if m.as_str() == "\n" {
+                    return None;
+                }
+
+                Some(start_pos..=end_pos)
+            })
+            .collect();
+
+        // 3. 写锁：快速存储结果 O(matches)
+        let mut term_write = terminal.terminal.write();
+
+        if all_matches.is_empty() {
+            term_write.search_state = None;
+            FFISearchInfo {
+                total_count: 0,
+                current_index: 0,
                 scroll_to_row: -1,
-            },
+            }
+        } else {
+            let scroll_to_row = all_matches[0].start().row.0 as i64;
+            let total_count = all_matches.len();
+
+            // 创建一个空的 RegexSearch 用于兼容 SearchState
+            let dfas = rio_backend::crosswords::search::RegexSearch::new(&pattern_str).ok();
+
+            term_write.search_state = Some(rio_backend::event::SearchState {
+                all_matches: all_matches.clone(),
+                focused_index: 0,
+                dfas,
+                direction: rio_backend::crosswords::pos::Direction::Right,
+                history: std::collections::VecDeque::from([pattern_str]),
+                history_index: Some(0),
+                origin: rio_backend::crosswords::pos::Pos::default(),
+                display_offset_delta: 0,
+                focused_match: Some(all_matches[0].clone()),
+            });
+
+            FFISearchInfo {
+                total_count: total_count as i32,
+                current_index: 1,
+                scroll_to_row,
+            }
         }
     } else {
         FFISearchInfo {

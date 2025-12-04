@@ -77,14 +77,15 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 是否显示终端搜索框
     @Published var showTerminalSearch: Bool = false
 
-    /// 搜索文本
-    @Published var searchText: String = ""
-
-    /// 搜索匹配项
-    @Published var searchMatches: [SearchMatch] = []
-
-    /// 搜索引擎
-    private let searchEngine = TerminalSearch()
+    /// 当前 Tab 的搜索信息（从 TabNode 获取）
+    var currentTabSearchInfo: TabSearchInfo? {
+        guard let activePanelId = activePanelId,
+              let panel = terminalWindow.getPanel(activePanelId),
+              let activeTab = panel.activeTab else {
+            return nil
+        }
+        return activeTab.searchInfo
+    }
 
     // MARK: - Infrastructure
 
@@ -131,7 +132,7 @@ class TerminalWindowCoordinator: ObservableObject {
     init(initialWindow: TerminalWindow, terminalPool: TerminalPoolProtocol? = nil) {
         // 获取继承的 CWD（如果有）
         self.initialCwd = WindowCwdManager.shared.takePendingCwd()
-        print("🎯 [Coordinator] Initialized with CWD: \(self.initialCwd ?? "nil")")
+//        print("🎯 [Coordinator] Initialized with CWD: \(self.initialCwd ?? "nil")")
 
         self.terminalWindow = initialWindow
         self.terminalPool = terminalPool ?? MockTerminalPool()
@@ -571,21 +572,21 @@ class TerminalWindowCoordinator: ObservableObject {
             }
 
             if terminalId >= 0 {
-                print("✅ [Coordinator] Terminal created with ID \(terminalId)")
+//                print("✅ [Coordinator] Terminal created with ID \(terminalId)")
 
                 // 如果使用的是 initialCwd，清除它（只有第一个终端使用）
                 if cwd == nil && initialCwd != nil {
-                    print("🧹 [Coordinator] Clearing initialCwd after first terminal creation")
+//                    print("🧹 [Coordinator] Clearing initialCwd after first terminal creation")
                     initialCwd = nil
                 }
 
                 return terminalId
             }
             // 如果带 CWD 创建失败，继续走默认逻辑
-            print("⚠️ [Coordinator] Failed to create terminal with CWD, falling back to default")
+//            print("⚠️ [Coordinator] Failed to create terminal with CWD, falling back to default")
         }
 
-        print("📌 [Coordinator] Creating terminal with default CWD")
+//        print("📌 [Coordinator] Creating terminal with default CWD")
         // 默认行为：不指定 CWD
         if let manager = globalTerminalManager {
             return manager.createTerminal(cols: cols, rows: rows, shell: shell, for: self)
@@ -638,41 +639,41 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 为所有 Tab 创建终端（只创建当前激活Page的终端）
     private func createTerminalsForAllTabs() {
-        print("🟢 [Coordinator] createTerminalsForAllTabs called (only active page)")
+//        print("🟢 [Coordinator] createTerminalsForAllTabs called (only active page)")
         ensureTerminalsForActivePage()
     }
 
     /// 确保指定Page的所有终端都已创建（延迟创建）
     private func ensureTerminalsForPage(_ page: Page) {
-        print("🟢 [Coordinator] Ensuring terminals for page '\(page.title)'")
+//        print("🟢 [Coordinator] Ensuring terminals for page '\(page.title)'")
 
         for (panelIndex, panel) in page.allPanels.enumerated() {
-            print("🟢 [Coordinator]   Panel[\(panelIndex)] \(panel.panelId), tabs: \(panel.tabs.count)")
+//            print("🟢 [Coordinator]   Panel[\(panelIndex)] \(panel.panelId), tabs: \(panel.tabs.count)")
 
             for (tabIndex, tab) in panel.tabs.enumerated() {
                 // 如果 Tab 还没有终端，创建一个
                 if tab.rustTerminalId == nil {
-                    print("🟢 [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) has no terminal, checking pendingCwd...")
+//                    print("🟢 [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) has no terminal, checking pendingCwd...")
                     // 检查是否有待恢复的 CWD（用于 Session 恢复）
                     let cwdToUse = tab.takePendingCwd()
 
                     if let cwd = cwdToUse {
-                        print("✅ [Coordinator]     Tab[\(tabIndex)] has pendingCwd: \"\(cwd)\"")
+//                        print("✅ [Coordinator]     Tab[\(tabIndex)] has pendingCwd: \"\(cwd)\"")
                     } else {
-                        print("⚠️ [Coordinator]     Tab[\(tabIndex)] has NO pendingCwd, will use default")
+//                        print("⚠️ [Coordinator]     Tab[\(tabIndex)] has NO pendingCwd, will use default")
                     }
 
-                    print("🟢 [Coordinator]     Creating terminal for tab[\(tabIndex)]...")
+//                    print("🟢 [Coordinator]     Creating terminal for tab[\(tabIndex)]...")
                     let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: cwdToUse)
-                    print("🟢 [Coordinator]     createTerminalInternal returned: \(terminalId)")
+//                    print("🟢 [Coordinator]     createTerminalInternal returned: \(terminalId)")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
-                        print("✅ [Coordinator]     Terminal created with ID: \(terminalId)")
+//                        print("✅ [Coordinator]     Terminal created with ID: \(terminalId)")
                     } else {
-                        print("❌ [Coordinator]     Failed to create terminal!")
+//                        print("❌ [Coordinator]     Failed to create terminal!")
                     }
                 } else {
-                    print("ℹ️ [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) already has terminal \(tab.rustTerminalId!)")
+//                    print("ℹ️ [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) already has terminal \(tab.rustTerminalId!)")
                 }
             }
         }
@@ -681,7 +682,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 确保当前激活Page的终端都已创建
     private func ensureTerminalsForActivePage() {
         guard let activePage = terminalWindow.activePage else {
-            print("⚠️ [Coordinator] No active page")
+//            print("⚠️ [Coordinator] No active page")
             return
         }
         ensureTerminalsForPage(activePage)
@@ -1665,40 +1666,169 @@ class TerminalWindowCoordinator: ObservableObject {
         scheduleRender()
     }
 
-    // MARK: - Terminal Search
+    // MARK: - Terminal Search (Tab-Level)
 
-    /// 执行搜索
+    /// 开始搜索（在当前激活的 Tab 中）
     ///
-    /// 在当前激活的终端中搜索文本
-    func performSearch() {
-        guard !searchText.isEmpty,
-              let terminalId = getActiveTerminalId() else {
-            searchMatches = []
+    /// - Parameters:
+    ///   - pattern: 搜索模式
+    ///   - isRegex: 是否为正则表达式
+    ///   - caseSensitive: 是否区分大小写
+    func startSearch(pattern: String, isRegex: Bool = false, caseSensitive: Bool = false) {
+        guard let activePanelId = activePanelId,
+              let panel = terminalWindow.getPanel(activePanelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId,
+              let manager = globalTerminalManager else {
             return
         }
 
-        // 异步搜索
-        Task {
-            let matches = await searchEngine.searchAsync(
-                pattern: searchText,
-                in: Int(terminalId),
-                caseSensitive: false,
-                maxRows: 1000  // 限制搜索最近 1000 行
+        // 在后台线程执行搜索，避免阻塞主线程
+        let terminalIdValue = Int(terminalId)
+        Task.detached { [weak self] in
+            // 后台线程：调用 FFI 执行搜索
+            let result = manager.startSearch(
+                terminalId: terminalIdValue,
+                pattern: pattern,
+                isRegex: isRegex,
+                caseSensitive: caseSensitive
             )
 
+            // 回到主线程更新 UI
             await MainActor.run {
-                self.searchMatches = matches
-                // 触发渲染以显示高亮
+                guard let self = self,
+                      let activePanelId = self.activePanelId,
+                      let panel = self.terminalWindow.getPanel(activePanelId),
+                      let activeTab = panel.activeTab else {
+                    return
+                }
+
+                if let result = result {
+                    // 更新 Tab 的搜索信息
+                    activeTab.setSearchInfo(TabSearchInfo(
+                        pattern: pattern,
+                        totalCount: result.totalCount,
+                        currentIndex: result.currentIndex
+                    ))
+
+                    // 如果需要滚动到匹配位置
+                    if let scrollToRow = result.scrollToRow {
+                        _ = manager.scroll(terminalId: terminalIdValue, deltaLines: Int32(scrollToRow))
+                    }
+
+                    // 触发渲染更新
+                    self.objectWillChange.send()
+                    self.updateTrigger = UUID()
+                    self.scheduleRender()
+                } else {
+                    // 失败，清除搜索信息
+                    activeTab.setSearchInfo(nil)
+                    self.objectWillChange.send()
+                }
+            }
+        }
+    }
+
+    /// 跳转到下一个匹配
+    func searchNext() {
+        guard let activePanelId = activePanelId,
+              let panel = terminalWindow.getPanel(activePanelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId,
+              let manager = globalTerminalManager,
+              activeTab.searchInfo != nil else {
+            return
+        }
+
+        let terminalIdValue = Int(terminalId)
+        let totalCount = activeTab.searchInfo?.totalCount ?? 0
+
+        Task.detached { [weak self] in
+            let newIndex = manager.searchNext(terminalId: terminalIdValue)
+
+            await MainActor.run {
+                guard let self = self,
+                      let activePanelId = self.activePanelId,
+                      let panel = self.terminalWindow.getPanel(activePanelId),
+                      let activeTab = panel.activeTab,
+                      let newIndex = newIndex else {
+                    return
+                }
+
+                // 更新索引
+                activeTab.updateSearchIndex(
+                    currentIndex: newIndex,
+                    totalCount: totalCount
+                )
+
+                // 触发渲染更新
+                self.objectWillChange.send()
+                self.updateTrigger = UUID()
                 self.scheduleRender()
             }
         }
     }
 
-    /// 清除搜索
+    /// 跳转到上一个匹配
+    func searchPrev() {
+        guard let activePanelId = activePanelId,
+              let panel = terminalWindow.getPanel(activePanelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId,
+              let manager = globalTerminalManager,
+              activeTab.searchInfo != nil else {
+            return
+        }
+
+        let terminalIdValue = Int(terminalId)
+        let totalCount = activeTab.searchInfo?.totalCount ?? 0
+
+        Task.detached { [weak self] in
+            let newIndex = manager.searchPrev(terminalId: terminalIdValue)
+
+            await MainActor.run {
+                guard let self = self,
+                      let activePanelId = self.activePanelId,
+                      let panel = self.terminalWindow.getPanel(activePanelId),
+                      let activeTab = panel.activeTab,
+                      let newIndex = newIndex else {
+                    return
+                }
+
+                // 更新索引
+                activeTab.updateSearchIndex(
+                    currentIndex: newIndex,
+                    totalCount: totalCount
+                )
+
+                // 触发渲染更新
+                self.objectWillChange.send()
+                self.updateTrigger = UUID()
+                self.scheduleRender()
+            }
+        }
+    }
+
+    /// 清除当前 Tab 的搜索
     func clearSearch() {
-        searchText = ""
-        searchMatches = []
+        guard let activePanelId = activePanelId,
+              let panel = terminalWindow.getPanel(activePanelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId,
+              let manager = globalTerminalManager else {
+            return
+        }
+
+        // 调用 FFI 清除搜索
+        manager.clearSearch(terminalId: Int(terminalId))
+
+        // 清除 Tab 的搜索信息
+        activeTab.setSearchInfo(nil)
+
+        // 触发渲染更新
         showTerminalSearch = false
+        objectWillChange.send()
+        updateTrigger = UUID()
         scheduleRender()
     }
 

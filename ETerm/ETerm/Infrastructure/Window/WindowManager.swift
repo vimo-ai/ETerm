@@ -823,16 +823,16 @@ extension WindowManager: NSWindowDelegate {
 
     /// 保存当前所有窗口的 session
     func saveSession() {
-        print("💾 [WindowManager] saveSession called, windows count: \(windows.count)")
+//        print("💾 [WindowManager] saveSession called, windows count: \(windows.count)")
         let windowStates = captureAllWindowStates()
-        print("💾 [WindowManager] Captured \(windowStates.count) window states")
+//        print("💾 [WindowManager] Captured \(windowStates.count) window states")
         for (index, state) in windowStates.enumerated() {
-            print("💾 [WindowManager] Window[\(index)]: \(state.pages.count) pages")
+//            print("💾 [WindowManager] Window[\(index)]: \(state.pages.count) pages")
             for (pageIndex, page) in state.pages.enumerated() {
-                print("💾 [WindowManager]   Page[\(pageIndex)]: '\(page.title)'")
+//                print("💾 [WindowManager]   Page[\(pageIndex)]: '\(page.title)'")
             }
         }
         SessionManager.shared.save(windows: windowStates)
-        print("💾 [WindowManager] Session saved")
+//        print("💾 [WindowManager] Session saved")
     }
 }
