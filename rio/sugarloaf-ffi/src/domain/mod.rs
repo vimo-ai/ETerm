@@ -23,8 +23,12 @@
 pub mod state;
 pub mod cursor;
 pub mod grid;
+pub mod selection;
+pub mod search;
 
 // Re-export key types
 pub use state::TerminalState;
 pub use cursor::CursorView;
 pub use grid::{GridView, RowView, GridData};
+pub use selection::{SelectionView, SelectionPoint, SelectionType};
+pub use search::{SearchView, MatchRange};

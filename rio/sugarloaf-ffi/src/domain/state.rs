@@ -6,11 +6,13 @@
 //! - **延迟加载**：`RowView` 只在需要时加载行数据
 //! - **缓存友好**：`row_hash()` 提供行哈希用于缓存查询
 //!
-//! 这是 Phase 1 的最小核心，只包含 Grid 和 Cursor。
-//! 后续 Phase 会逐步添加 Selection、Search、Mode 等状态。
+//! Phase 1 Step 3: 添加 Selection 支持
+//! Phase 1 Step 4: 添加 Search 支持
 
 use super::cursor::CursorView;
 use super::grid::GridView;
+use super::selection::SelectionView;
+use super::search::SearchView;
 
 /// Terminal State - Read-only Snapshot
 ///
@@ -30,10 +32,16 @@ pub struct TerminalState {
 
     /// Cursor view - 光标视图
     pub cursor: CursorView,
+
+    /// Selection view - 选区视图（可选）
+    pub selection: Option<SelectionView>,
+
+    /// Search view - 搜索视图（可选）
+    pub search: Option<SearchView>,
 }
 
 impl TerminalState {
-    /// 创建新的 TerminalState
+    /// 创建新的 TerminalState（无选区）
     ///
     /// # 参数
     /// - `grid`: 网格视图
@@ -45,7 +53,42 @@ impl TerminalState {
     /// - CursorView 自己知道如何从 pos + shape 构造
     /// - TerminalState 只需要接收构造好的对象
     pub fn new(grid: GridView, cursor: CursorView) -> Self {
-        Self { grid, cursor }
+        Self {
+            grid,
+            cursor,
+            selection: None,
+            search: None,
+        }
+    }
+
+    /// 创建带选区的 TerminalState
+    ///
+    /// # 参数
+    /// - `grid`: 网格视图
+    /// - `cursor`: 光标视图
+    /// - `selection`: 选区视图
+    pub fn with_selection(grid: GridView, cursor: CursorView, selection: SelectionView) -> Self {
+        Self {
+            grid,
+            cursor,
+            selection: Some(selection),
+            search: None,
+        }
+    }
+
+    /// 创建带搜索的 TerminalState
+    ///
+    /// # 参数
+    /// - `grid`: 网格视图
+    /// - `cursor`: 光标视图
+    /// - `search`: 搜索视图
+    pub fn with_search(grid: GridView, cursor: CursorView, search: SearchView) -> Self {
+        Self {
+            grid,
+            cursor,
+            selection: None,
+            search: Some(search),
+        }
     }
 }
 
@@ -53,6 +96,8 @@ impl TerminalState {
 mod tests {
     use super::*;
     use super::super::grid::GridData;
+    use super::super::selection::{SelectionPoint, SelectionType};
+    use super::super::search::MatchRange;
     use rio_backend::crosswords::pos::{Line, Column, Pos};
     use rio_backend::ansi::CursorShape;
     use std::sync::Arc;
@@ -78,6 +123,8 @@ mod tests {
         assert_eq!(state.cursor.pos, cursor_pos);
         assert_eq!(state.cursor.shape, cursor_shape);
         assert!(state.cursor.is_visible());
+        assert!(state.selection.is_none());
+        assert!(state.search.is_none());
     }
 
     /// 测试：验证 TerminalState 是 Clone 的（低成本）
@@ -99,5 +146,64 @@ mod tests {
         // 验证两个 state 指向同一份 GridData
         assert_eq!(state1.grid.columns(), state2.grid.columns());
         assert_eq!(state1.grid.lines(), state2.grid.lines());
+    }
+
+    /// 测试：验证可以创建带选区的 TerminalState
+    #[test]
+    fn test_terminal_state_with_selection() {
+        // 创建 GridView
+        let grid_data = Arc::new(GridData::empty(80, 24));
+        let grid = GridView::new(grid_data);
+
+        // 创建 CursorView
+        let cursor = CursorView::new(
+            Pos::new(Line(5), Column(10)),
+            CursorShape::Block,
+        );
+
+        // 创建 SelectionView
+        let start = SelectionPoint::new(0, 0);
+        let end = SelectionPoint::new(5, 20);
+        let selection = SelectionView::new(start, end, SelectionType::Simple);
+
+        // 构造带选区的 TerminalState
+        let state = TerminalState::with_selection(grid, cursor, selection);
+
+        // 验证选区
+        assert!(state.selection.is_some());
+        let sel = state.selection.unwrap();
+        assert_eq!(sel.start, start);
+        assert_eq!(sel.end, end);
+        assert_eq!(sel.ty, SelectionType::Simple);
+    }
+
+    /// 测试：验证可以创建带搜索的 TerminalState
+    #[test]
+    fn test_terminal_state_with_search() {
+        // 创建 GridView
+        let grid_data = Arc::new(GridData::empty(80, 24));
+        let grid = GridView::new(grid_data);
+
+        // 创建 CursorView
+        let cursor = CursorView::new(
+            Pos::new(Line(5), Column(10)),
+            CursorShape::Block,
+        );
+
+        // 创建 SearchView
+        let matches = vec![
+            MatchRange::new(0, 0, 0, 5),
+            MatchRange::new(2, 10, 2, 15),
+        ];
+        let search = SearchView::new(matches, 0);
+
+        // 构造带搜索的 TerminalState
+        let state = TerminalState::with_search(grid, cursor, search);
+
+        // 验证搜索
+        assert!(state.search.is_some());
+        let srch = state.search.unwrap();
+        assert_eq!(srch.match_count(), 2);
+        assert_eq!(srch.focused_index, 0);
     }
 }
