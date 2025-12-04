@@ -23,8 +23,9 @@ ETERM_DIR="$ROOT/ETerm"
 
 echo "🚀 [开发模式] 快速编译 sugarloaf-ffi..."
 echo "   使用 dev-fast profile (thin LTO + 并行编译)"
+echo "   启用 new_architecture feature"
 cd "$RIO_DIR"
-cargo build --profile dev-fast -p sugarloaf-ffi
+cargo build --profile dev-fast -p sugarloaf-ffi --features new_architecture
 
 echo "📦 复制到 ETerm/ETerm/..."
 # dev-fast profile 的产物在 target/dev-fast/ 目录

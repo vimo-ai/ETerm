@@ -503,9 +503,15 @@ class RioContainerView: NSView {
 
 class RioMetalView: NSView, RenderViewProtocol {
 
+    // MARK: - Feature Flag
+    private let useNewArchitecture = true  // 硬编码 feature flag
+
     weak var coordinator: TerminalWindowCoordinator?
 
     private var sugarloaf: SugarloafHandle?
+
+    // 新架构：TerminalApp wrapper
+    private var terminalApp: TerminalAppWrapper?
 
     /// 公开 bounds 供 Coordinator 访问（用于布局同步）
     /// 注意：NSView.bounds 是 public，这里只是明确声明以便 Coordinator 使用
@@ -716,28 +722,45 @@ class RioMetalView: NSView, RenderViewProtocol {
     override func layout() {
         super.layout()
 
-        guard isInitialized, let sugarloaf = sugarloaf else { return }
+        if useNewArchitecture {
+            guard isInitialized, terminalApp != nil else { return }
 
-        // 优先使用 window 关联的 screen 的 scale，更可靠
-        let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            if bounds.width > 0 && bounds.height > 0 {
+                // 计算行列数（使用固定的 cell 尺寸估算）
+                let cellWidth: CGFloat = 9.6
+                let cellHeight: CGFloat = 20.0
 
-        // ⚠️ 重要：resize 应该传逻辑像素，而不是物理像素
-        // Rust 侧的 resize 会自动用 scale 计算物理像素
-        let width = Float(bounds.width)
-        let height = Float(bounds.height)
+                let cols = UInt16(bounds.width / cellWidth)
+                let rows = UInt16(bounds.height / cellHeight)
 
-        if width > 0 && height > 0 {
-            sugarloaf_resize(sugarloaf, width, height)
+                _ = terminalApp?.resize(cols: cols, rows: rows)
 
-            // 更新 coordinateMapper
-            let mapper = CoordinateMapper(scale: scale, containerBounds: bounds)
-            coordinateMapper = mapper
-            coordinator?.setCoordinateMapper(mapper)
+                requestRender()
+            }
+        } else {
+            guard isInitialized, let sugarloaf = sugarloaf else { return }
 
-            // 同步布局到 Rust（窗口 resize）
-            coordinator?.syncLayoutToRust()
+            // 优先使用 window 关联的 screen 的 scale，更可靠
+            let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
 
-            requestRender()
+            // ⚠️ 重要：resize 应该传逻辑像素，而不是物理像素
+            // Rust 侧的 resize 会自动用 scale 计算物理像素
+            let width = Float(bounds.width)
+            let height = Float(bounds.height)
+
+            if width > 0 && height > 0 {
+                sugarloaf_resize(sugarloaf, width, height)
+
+                // 更新 coordinateMapper
+                let mapper = CoordinateMapper(scale: scale, containerBounds: bounds)
+                coordinateMapper = mapper
+                coordinator?.setCoordinateMapper(mapper)
+
+                // 同步布局到 Rust（窗口 resize）
+                coordinator?.syncLayoutToRust()
+
+                requestRender()
+            }
         }
     }
 
@@ -746,59 +769,123 @@ class RioMetalView: NSView, RenderViewProtocol {
     private func initializeSugarloaf() {
         guard let window = window else { return }
 
-        // 优先使用 window 关联的 screen 的 scale，更可靠
-        let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
-        let scale = Float(effectiveScale)
+        if useNewArchitecture {
+            // 新架构：创建 TerminalApp
+            let viewPointer = Unmanaged.passUnretained(self).toOpaque()
 
-        // ⚠️ 重要：传递逻辑像素，Rust 侧会用 scale 计算物理像素
-        let width = Float(bounds.width)
-        let height = Float(bounds.height)
+            // 优先使用 window 关联的 screen 的 scale，更可靠
+            let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
 
-        layer?.contentsScale = effectiveScale
+            let config = AppConfig(
+                cols: 80,
+                rows: 24,
+                font_size: 14.0,
+                line_height: 1.5,
+                scale: Float(effectiveScale),
+                window_handle: viewPointer,
+                display_handle: viewPointer,
+                window_width: Float(bounds.width),
+                window_height: Float(bounds.height),
+                history_size: 10000
+            )
 
-        let viewPointer = Unmanaged.passUnretained(self).toOpaque()
-        let windowHandle = UnsafeMutableRawPointer(mutating: viewPointer)
+            terminalApp = TerminalAppWrapper(config: config)
 
-        sugarloaf = sugarloaf_new(
-            windowHandle,
-            windowHandle,
-            width,
-            height,
-            scale,
-            14.0
-        )
+            guard terminalApp != nil else {
+                print("⚠️ [RioMetalView] Failed to create TerminalApp")
+                return
+            }
 
-        guard let sugarloaf = sugarloaf else { return }
+            // 设置事件回调
+            terminalApp?.setEventCallback { [weak self] event in
+                guard let self = self else { return }
 
-        // fontMetrics 会在第一次创建 RichText 后更新为真实值
-        // 这里先不获取，等 renderTerminal 中创建 RichText 后再更新
+                if let eventType = TerminalEventType(rawValue: event.event_type) {
+                    switch eventType {
+                    case .damaged:
+                        // 收到 Damaged 事件，触发渲染
+                        DispatchQueue.main.async {
+                            self.requestRender()
+                        }
 
-        // 创建 CoordinateMapper（使用前面定义的 effectiveScale）
-        let mapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
-        coordinateMapper = mapper
-        coordinator?.setCoordinateMapper(mapper)
+                    case .bell:
+                        // Bell 事件
+                        DispatchQueue.main.async {
+                            NSSound.beep()
+                        }
 
-        // 初始化全局终端管理器（第一个窗口时）
-        if !terminalManager.isInitialized {
-            terminalManager.initialize(with: sugarloaf)
+                    case .cursorBlink:
+                        // 光标闪烁
+                        DispatchQueue.main.async {
+                            self.requestRender()
+                        }
+
+                    case .titleChanged:
+                        // 标题变更
+                        break
+                    }
+                }
+            }
+
+            // 初始渲染
+            requestRender()
+
+        } else {
+            // 旧架构：保持不变
+            // 优先使用 window 关联的 screen 的 scale，更可靠
+            let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
+            let scale = Float(effectiveScale)
+
+            // ⚠️ 重要：传递逻辑像素，Rust 侧会用 scale 计算物理像素
+            let width = Float(bounds.width)
+            let height = Float(bounds.height)
+
+            layer?.contentsScale = effectiveScale
+
+            let viewPointer = Unmanaged.passUnretained(self).toOpaque()
+            let windowHandle = UnsafeMutableRawPointer(mutating: viewPointer)
+
+            sugarloaf = sugarloaf_new(
+                windowHandle,
+                windowHandle,
+                width,
+                height,
+                scale,
+                14.0
+            )
+
+            guard let sugarloaf = sugarloaf else { return }
+
+            // fontMetrics 会在第一次创建 RichText 后更新为真实值
+            // 这里先不获取，等 renderTerminal 中创建 RichText 后再更新
+
+            // 创建 CoordinateMapper（使用前面定义的 effectiveScale）
+            let mapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
+            coordinateMapper = mapper
+            coordinator?.setCoordinateMapper(mapper)
+
+            // 初始化全局终端管理器（第一个窗口时）
+            if !terminalManager.isInitialized {
+                terminalManager.initialize(with: sugarloaf)
+            }
+
+            // 注册 coordinator 到全局终端管理器
+            if let coordinator = coordinator {
+                coordinator.setGlobalTerminalManager(terminalManager)
+            }
+
+            // 启动 CVDisplayLink
+            setupDisplayLink()
+
+            // 初始化时同步一次布局
+            // 延迟执行，确保 fontMetrics 已经更新
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.coordinator?.syncLayoutToRust()
+            }
+
+            // 初始渲染
+            requestRender()
         }
-
-        // 注册 coordinator 到全局终端管理器
-        if let coordinator = coordinator {
-            coordinator.setGlobalTerminalManager(terminalManager)
-        }
-
-        // 启动 CVDisplayLink
-        setupDisplayLink()
-
-        // 初始化时同步一次布局
-        // 延迟执行，确保 fontMetrics 已经更新
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.coordinator?.syncLayoutToRust()
-        }
-
-        // 初始渲染
-        requestRender()
     }
 
     // MARK: - CVDisplayLink Setup
@@ -975,37 +1062,45 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 这个方法是渲染层，只调用 rio_pool_render_all()
     private func render() {
         // 关键检查：如果已清理或未初始化，不执行渲染
-        guard isInitialized,
-              let sugarloaf = sugarloaf,
-              let coordinator = coordinator else { return }
+        guard isInitialized else { return }
 
-        guard let poolHandle = terminalManager.poolHandleForRender else { return }
+        if useNewArchitecture {
+            // 新架构：一次调用完成渲染
+            guard let terminalApp = terminalApp else { return }
+            _ = terminalApp.render()
+        } else {
+            // 旧架构：保持不变
+            guard let sugarloaf = sugarloaf,
+                  let coordinator = coordinator else { return }
 
-        // 确保 RichText 已创建（第一次渲染时）
-        // 从 coordinator 获取所有需要渲染的终端
-        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
-            containerBounds: bounds,
-            headerHeight: 30.0
-        )
+            guard let poolHandle = terminalManager.poolHandleForRender else { return }
 
-        for (terminalId, _) in tabsToRender {
-            if richTextIds[Int(terminalId)] == nil {
-                let richTextId = Int(sugarloaf_create_rich_text(sugarloaf))
-                richTextIds[Int(terminalId)] = richTextId
+            // 确保 RichText 已创建（第一次渲染时）
+            // 从 coordinator 获取所有需要渲染的终端
+            let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
+                containerBounds: bounds,
+                headerHeight: 30.0
+            )
 
-                // 第一次创建时更新 fontMetrics
-                if richTextIds.count == 1 {
-                    updateFontMetricsFromSugarloaf(sugarloaf)
-                    DispatchQueue.main.async { [weak self] in
-                        self?.requestRender()
+            for (terminalId, _) in tabsToRender {
+                if richTextIds[Int(terminalId)] == nil {
+                    let richTextId = Int(sugarloaf_create_rich_text(sugarloaf))
+                    richTextIds[Int(terminalId)] = richTextId
+
+                    // 第一次创建时更新 fontMetrics
+                    if richTextIds.count == 1 {
+                        updateFontMetricsFromSugarloaf(sugarloaf)
+                        DispatchQueue.main.async { [weak self] in
+                            self?.requestRender()
+                        }
                     }
                 }
             }
-        }
 
-        // 纯渲染：调用 Rust 统一渲染函数
-        // 布局已经由 syncLayoutToRust() 在布局变化时设置好了
-        rio_pool_render_all(poolHandle)
+            // 纯渲染：调用 Rust 统一渲染函数
+            // 布局已经由 syncLayoutToRust() 在布局变化时设置好了
+            rio_pool_render_all(poolHandle)
+        }
     }
 
 
@@ -1768,9 +1863,14 @@ class RioMetalView: NSView, RenderViewProtocol {
         cachedSnapshots.removeAll()
         snapshotCacheLock.unlock()
 
-        // 注意：不在这里释放 sugarloaf handle
-        // 因为 GlobalTerminalManager 可能还在使用同一个 Sugarloaf 实例
-        // Sugarloaf 的生命周期由 GlobalTerminalManager 管理
+        if useNewArchitecture {
+            // 新架构：清理 TerminalApp（触发 deinit → terminal_app_destroy()）
+            terminalApp = nil
+        } else {
+            // 注意：不在这里释放 sugarloaf handle
+            // 因为 GlobalTerminalManager 可能还在使用同一个 Sugarloaf 实例
+            // Sugarloaf 的生命周期由 GlobalTerminalManager 管理
+        }
     }
 
     deinit {
@@ -1875,9 +1975,14 @@ extension RioMetalView: NSTextInputClient {
         let imeCoord = coordinator?.keyboardSystem?.imeCoordinator ?? imeCoordinator
         let committedText = imeCoord.commitText(text)
 
-        // 发送到终端
-        guard let terminalId = coordinator?.getActiveTerminalId() else { return }
-        _ = terminalManager.writeInput(terminalId: Int(terminalId), data: committedText)
+        if useNewArchitecture {
+            // 新架构：写入到 TerminalApp
+            _ = terminalApp?.write(data: committedText)
+        } else {
+            // 旧架构：写入到 GlobalTerminalManager
+            guard let terminalId = coordinator?.getActiveTerminalId() else { return }
+            _ = terminalManager.writeInput(terminalId: Int(terminalId), data: committedText)
+        }
     }
 }
 
