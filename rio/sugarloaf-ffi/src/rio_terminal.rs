@@ -55,6 +55,9 @@ static NEXT_TERMINAL_ID: std::sync::atomic::AtomicUsize =
 // ============================================================================
 
 /// 单个字符的渲染数据（并发阶段解析后的中间格式）
+///
+/// 注意：这里只包含**纯内容和样式**信息，不包含叠加层信息（光标、选区等）。
+/// 叠加层信息是动态的，应该在渲染时单独处理，不应该存储在字符数据中。
 #[derive(Debug, Clone)]
 struct CharRenderData {
     char_str: String,
@@ -68,12 +71,9 @@ struct CharRenderData {
     bg_b: f32,
     bg_a: f32,
     glyph_width: f32,
-    has_cursor: bool,
-    cursor_r: f32,
-    cursor_g: f32,
-    cursor_b: f32,
-    cursor_a: f32,
     flags: u32,
+    // ❌ 已移除：has_cursor, cursor_r/g/b/a
+    // 光标是叠加层，在渲染时动态计算，不存储在字符数据中
 }
 
 /// 单行的渲染数据
@@ -1689,18 +1689,13 @@ impl RioTerminalPool {
                         }
                     }
 
-                    // 处理光标
-                    let has_cursor = cursor_visible
+                    // Block cursor 反转颜色（这是内容样式的一部分）
+                    let is_block_cursor = cursor_visible
                         && row_index == cursor_row
-                        && col_index == cursor_col;
+                        && col_index == cursor_col
+                        && snapshot.cursor_shape == 0;
 
-                    let cursor_r = 1.0;
-                    let cursor_g = 1.0;
-                    let cursor_b = 1.0;
-                    let cursor_a = 0.8;
-
-                    // Block cursor 反转颜色
-                    if has_cursor && snapshot.cursor_shape == 0 {
+                    if is_block_cursor {
                         fg_r = 0.0;
                         fg_g = 0.0;
                         fg_b = 0.0;
@@ -1718,12 +1713,8 @@ impl RioTerminalPool {
                         bg_b,
                         bg_a,
                         glyph_width,
-                        has_cursor: has_cursor && snapshot.cursor_shape == 0,
-                        cursor_r,
-                        cursor_g,
-                        cursor_b,
-                        cursor_a,
                         flags: cell.flags,
+                        // 光标信息不存储，在渲染时动态计算
                     });
                 }
 
@@ -1748,16 +1739,9 @@ impl RioTerminalPool {
 
             let hash = row_hashes[row_index];
 
-            // 检查当前行是否是光标行
-            let is_cursor_line = row_index == cursor_row;
-
             // 先尝试从 cache 获取（确保借用在使用前就被释放）
-            // 🚫 如果是光标行，跳过缓存，因为光标位置是动态的
-            let cached_chars = if !is_cursor_line {
-                fragments_cache.borrow().get(&hash).map(|cached| cached.chars.clone())
-            } else {
-                None
-            };
+            // 注意：现在 CharRenderData 不包含光标信息，所以所有行都可以安全缓存
+            let cached_chars = fragments_cache.borrow().get(&hash).map(|cached| cached.chars.clone());
 
             let row_data = if let Some(chars) = cached_chars {
                 // Cache hit: 复用
@@ -1766,9 +1750,8 @@ impl RioTerminalPool {
                     is_cursor_report: false,
                 })
             } else if let Some(parsed) = parsed_rows.get(&row_index) {
-                // Cache miss: 使用新解析的数据
-                // 🚫 不缓存光标行，因为光标位置会变化
-                if !parsed.is_cursor_report && !parsed.chars.is_empty() && !is_cursor_line {
+                // Cache miss: 使用新解析的数据并缓存
+                if !parsed.is_cursor_report && !parsed.chars.is_empty() {
                     fragments_cache.borrow_mut().insert(hash, CachedFragments {
                         chars: parsed.chars.clone(),
                     });
@@ -1791,39 +1774,62 @@ impl RioTerminalPool {
                     continue;
                 }
 
+                // 检查当前行是否是光标行
+                let is_cursor_line = cursor_visible && row_index == cursor_row;
+                let cursor_color = [1.0f32, 1.0, 1.0, 0.8]; // 光标颜色
+
                 let mut merged_text = String::new();
                 let mut segment_start_idx = 0;
 
                 for (i, char_data) in row_data.chars.iter().enumerate() {
-                    // 检查是否需要切分 segment
+                    // 检查当前字符是否是光标位置
+                    let is_cursor_char = is_cursor_line && i == cursor_col;
+
+                    // 切分条件：样式变化 OR 当前是光标 OR 前一个是光标
+                    let prev_is_cursor = is_cursor_line && i > 0 && (i - 1) == cursor_col;
                     let should_split = if i == 0 {
-                        false  // 第一个字符不切分
+                        false
                     } else {
-                        // 和前一个字符比较
                         let prev = &row_data.chars[i - 1];
-                        !Self::char_styles_equal(prev, char_data)
+                        !Self::char_styles_equal(prev, char_data) || is_cursor_char || prev_is_cursor
                     };
 
                     if should_split {
-                        // 样式变化，flush 之前的 segment
-                        let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                        // 判断之前的 segment 是否包含光标
+                        let prev_cursor_info = if is_cursor_line
+                            && segment_start_idx <= cursor_col
+                            && cursor_col < i
+                            && snapshot.cursor_shape != 3
+                        {
+                            Some((snapshot.cursor_shape, cursor_color))
+                        } else {
+                            None
+                        };
+                        let style = Self::build_fragment_style(&row_data.chars[segment_start_idx], prev_cursor_info);
                         content.add_text(&merged_text, style);
-                        total_segments += 1;  // 统计 fragment
+                        total_segments += 1;
 
-                        // 开始新的 segment
                         merged_text.clear();
                         segment_start_idx = i;
                     }
 
-                    // 累积当前字符
                     merged_text.push_str(&char_data.char_str);
                 }
 
                 // flush 最后一个 segment
                 if !merged_text.is_empty() {
-                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                    let last_cursor_info = if is_cursor_line
+                        && segment_start_idx <= cursor_col
+                        && cursor_col < row_data.chars.len()
+                        && snapshot.cursor_shape != 3
+                    {
+                        Some((snapshot.cursor_shape, cursor_color))
+                    } else {
+                        None
+                    };
+                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx], last_cursor_info);
                     content.add_text(&merged_text, style);
-                    total_segments += 1;  // 统计 fragment
+                    total_segments += 1;
                 }
 
                 // 🔑 设置行的 content hash（用于缓存查找）
@@ -2109,18 +2115,13 @@ impl RioTerminalPool {
                         }
                     }
 
-                    // 处理光标
-                    let has_cursor = cursor_visible
+                    // Block cursor 反转颜色（这是内容样式的一部分）
+                    let is_block_cursor = cursor_visible
                         && row_index == cursor_row
-                        && col_index == cursor_col;
+                        && col_index == cursor_col
+                        && snapshot.cursor_shape == 0;
 
-                    let cursor_r = 1.0;
-                    let cursor_g = 1.0;
-                    let cursor_b = 1.0;
-                    let cursor_a = 0.8;
-
-                    // Block cursor 反转颜色
-                    if has_cursor && snapshot.cursor_shape == 0 {
+                    if is_block_cursor {
                         fg_r = 0.0;
                         fg_g = 0.0;
                         fg_b = 0.0;
@@ -2138,12 +2139,8 @@ impl RioTerminalPool {
                         bg_b,
                         bg_a,
                         glyph_width,
-                        has_cursor: has_cursor && snapshot.cursor_shape == 0,
-                        cursor_r,
-                        cursor_g,
-                        cursor_b,
-                        cursor_a,
                         flags: cell.flags,
+                        // 光标信息不存储，在渲染时动态计算
                     });
                 }
 
@@ -2186,39 +2183,63 @@ impl RioTerminalPool {
                     continue;
                 }
 
+                // 检查当前行是否是光标行
+                let is_cursor_line = cursor_visible && row_index == cursor_row;
+                let cursor_color = [1.0f32, 1.0, 1.0, 0.8]; // 光标颜色
+
                 let mut merged_text = String::new();
                 let mut segment_start_idx = 0;
 
                 for (i, char_data) in row_data.chars.iter().enumerate() {
-                    // 检查是否需要切分 segment
+                    // 检查当前字符是否是光标位置
+                    let is_cursor_char = is_cursor_line && i == cursor_col;
+
+                    // 切分条件：样式变化 OR 当前是光标 OR 前一个是光标
+                    let prev_is_cursor = is_cursor_line && i > 0 && (i - 1) == cursor_col;
                     let should_split = if i == 0 {
-                        false  // 第一个字符不切分
+                        false
                     } else {
-                        // 和前一个字符比较
                         let prev = &row_data.chars[i - 1];
-                        !Self::char_styles_equal(prev, char_data)
+                        !Self::char_styles_equal(prev, char_data) || is_cursor_char || prev_is_cursor
                     };
 
                     if should_split {
-                        // 样式变化，flush 之前的 segment
-                        let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                        // 判断之前的 segment 是否包含光标
+                        let prev_cursor_info = if is_cursor_line
+                            && segment_start_idx <= cursor_col
+                            && cursor_col < i
+                            && snapshot.cursor_shape != 3  // Hidden 时不渲染光标
+                        {
+                            Some((snapshot.cursor_shape, cursor_color))
+                        } else {
+                            None
+                        };
+                        let style = Self::build_fragment_style(&row_data.chars[segment_start_idx], prev_cursor_info);
                         content.add_text(&merged_text, style);
-                        total_segments += 1;  // 统计 fragment
+                        total_segments += 1;
 
-                        // 开始新的 segment
                         merged_text.clear();
                         segment_start_idx = i;
                     }
 
-                    // 累积当前字符
                     merged_text.push_str(&char_data.char_str);
                 }
 
                 // flush 最后一个 segment
                 if !merged_text.is_empty() {
-                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                    // 判断最后的 segment 是否包含光标
+                    let last_cursor_info = if is_cursor_line
+                        && segment_start_idx <= cursor_col
+                        && cursor_col < row_data.chars.len()
+                        && snapshot.cursor_shape != 3  // Hidden 时不渲染光标
+                    {
+                        Some((snapshot.cursor_shape, cursor_color))
+                    } else {
+                        None
+                    };
+                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx], last_cursor_info);
                     content.add_text(&merged_text, style);
-                    total_segments += 1;  // 统计 fragment
+                    total_segments += 1;
                 }
 
                 // 🔑 设置行的 content hash（用于缓存查找）
@@ -2455,17 +2476,13 @@ impl RioTerminalPool {
                         }
                     }
 
-                    // 处理光标
-                    let has_cursor = cursor_visible
+                    // Block cursor 反转颜色（这是内容样式的一部分）
+                    let is_block_cursor = cursor_visible
                         && row_index == cursor_row
-                        && col_index == cursor_col;
+                        && col_index == cursor_col
+                        && snapshot.cursor_shape == 0;
 
-                    let cursor_r = 1.0;
-                    let cursor_g = 1.0;
-                    let cursor_b = 1.0;
-                    let cursor_a = 0.8;
-
-                    if has_cursor && snapshot.cursor_shape == 0 {
+                    if is_block_cursor {
                         fg_r = 0.0;
                         fg_g = 0.0;
                         fg_b = 0.0;
@@ -2483,12 +2500,8 @@ impl RioTerminalPool {
                         bg_b,
                         bg_a,
                         glyph_width,
-                        has_cursor: has_cursor && snapshot.cursor_shape == 0,
-                        cursor_r,
-                        cursor_g,
-                        cursor_b,
-                        cursor_a,
                         flags: cell.flags,
+                        // 光标信息不存储，在渲染时动态计算
                     });
                 }
 
@@ -2537,19 +2550,38 @@ impl RioTerminalPool {
                     continue;
                 }
 
+                // 检查当前行是否是光标行
+                let is_cursor_line = cursor_visible && row_index == cursor_row;
+                let cursor_color = [1.0f32, 1.0, 1.0, 0.8]; // 光标颜色
+
                 let mut merged_text = String::new();
                 let mut segment_start_idx = 0;
 
                 for (i, char_data) in row_data.chars.iter().enumerate() {
+                    // 检查当前字符是否是光标位置
+                    let is_cursor_char = is_cursor_line && i == cursor_col;
+
+                    // 切分条件：样式变化 OR 当前是光标 OR 前一个是光标
+                    let prev_is_cursor = is_cursor_line && i > 0 && (i - 1) == cursor_col;
                     let should_split = if i == 0 {
                         false
                     } else {
                         let prev = &row_data.chars[i - 1];
-                        !Self::char_styles_equal(prev, char_data)
+                        !Self::char_styles_equal(prev, char_data) || is_cursor_char || prev_is_cursor
                     };
 
                     if should_split {
-                        let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                        // 判断之前的 segment 是否包含光标
+                        let prev_cursor_info = if is_cursor_line
+                            && segment_start_idx <= cursor_col
+                            && cursor_col < i
+                            && snapshot.cursor_shape != 3  // Hidden 时不渲染光标
+                        {
+                            Some((snapshot.cursor_shape, cursor_color))
+                        } else {
+                            None
+                        };
+                        let style = Self::build_fragment_style(&row_data.chars[segment_start_idx], prev_cursor_info);
                         content.add_text(&merged_text, style);
                         total_segments += 1;
 
@@ -2562,7 +2594,17 @@ impl RioTerminalPool {
 
                 // flush 最后一个 segment
                 if !merged_text.is_empty() {
-                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx]);
+                    // 判断最后的 segment 是否包含光标
+                    let last_cursor_info = if is_cursor_line
+                        && segment_start_idx <= cursor_col
+                        && cursor_col < row_data.chars.len()
+                        && snapshot.cursor_shape != 3  // Hidden 时不渲染光标
+                    {
+                        Some((snapshot.cursor_shape, cursor_color))
+                    } else {
+                        None
+                    };
+                    let style = Self::build_fragment_style(&row_data.chars[segment_start_idx], last_cursor_info);
                     content.add_text(&merged_text, style);
                     total_segments += 1;
                 }
@@ -2588,9 +2630,12 @@ impl RioTerminalPool {
     /// 比较两个字符的样式是否相同
     ///
     /// 用于判断连续字符是否可以合并到同一个 fragment，
-    /// 避免为每个字符创建单独的 fragment
+    /// 避免为每个字符创建单独的 fragment。
+    ///
+    /// 注意：只比较**内容样式**，不比较叠加层（光标、选区等）。
+    /// 叠加层是动态的，在渲染时单独处理。
     fn char_styles_equal(a: &CharRenderData, b: &CharRenderData) -> bool {
-        // 比较所有影响渲染的字段
+        // 只比较影响内容渲染的字段（不包含光标等叠加层）
         a.fg_r == b.fg_r
             && a.fg_g == b.fg_g
             && a.fg_b == b.fg_b
@@ -2601,19 +2646,16 @@ impl RioTerminalPool {
             && a.bg_b == b.bg_b
             && a.bg_a == b.bg_a
             && a.glyph_width == b.glyph_width
-            && a.has_cursor == b.has_cursor
             && a.flags == b.flags
-            // 注意：cursor 颜色也需要比较，因为它影响光标显示
-            && a.cursor_r == b.cursor_r
-            && a.cursor_g == b.cursor_g
-            && a.cursor_b == b.cursor_b
-            && a.cursor_a == b.cursor_a
     }
 
     /// 构建 FragmentStyle（从 CharRenderData）
     ///
-    /// 复用 lib.rs 中的样式构建逻辑，直接在 Rust 侧构建样式
-    fn build_fragment_style(char_data: &CharRenderData) -> FragmentStyle {
+    /// 复用 lib.rs 中的样式构建逻辑，直接在 Rust 侧构建样式。
+    ///
+    /// cursor_info: 如果当前 fragment 包含光标，传入 Some((cursor_shape, color))
+    /// - cursor_shape: 0=Block, 1=Underline, 2=Beam
+    fn build_fragment_style(char_data: &CharRenderData, cursor_info: Option<(u8, [f32; 4])>) -> FragmentStyle {
         let flags = char_data.flags;
 
         // 解析装饰（下划线、删除线等）
@@ -2680,17 +2722,15 @@ impl RioTerminalPool {
             None
         };
 
-        // 光标（Block cursor 使用 SugarCursor::Block）
-        let cursor = if char_data.has_cursor {
-            Some(SugarCursor::Block([
-                char_data.cursor_r,
-                char_data.cursor_g,
-                char_data.cursor_b,
-                char_data.cursor_a,
-            ]))
-        } else {
-            None
-        };
+        // 光标（在渲染阶段动态注入，不影响缓存）
+        let cursor = cursor_info.map(|(shape, color)| {
+            match shape {
+                0 => SugarCursor::Block(color),       // Block
+                1 => SugarCursor::Underline(color),   // Underline
+                2 => SugarCursor::Caret(color),       // Beam/Caret
+                _ => SugarCursor::Block(color),       // 默认 Block
+            }
+        });
 
         FragmentStyle {
             font_id,

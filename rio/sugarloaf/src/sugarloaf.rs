@@ -991,12 +991,7 @@ impl Sugarloaf<'_> {
                 (cache_hits as f32 / total_lines as f32) * 100.0
             } else { 0.0 };
 
-            println!("🎨 [Sugarloaf Render]");
-            println!("   Total chars: {}", total_chars);
-            println!("   Total lines: {}", total_lines);
-            println!("   💾 Layout cache: {} hits, {} misses (hit rate: {:.1}%)",
-                cache_hits, cache_misses, hit_rate);
-            println!("   ⏱️  Render time: {}μs ({}ms)", render_time, render_time / 1000);
+            // Debug logging removed - use perf_log! macro if needed
         }
     }
 
@@ -1232,8 +1227,6 @@ impl Sugarloaf<'_> {
                                             let x = base_x + layout.positions[char_idx];
                                             let fragment_cell_width = fragment.style.width;
                                             let char_cell_advance = cell_width * fragment_cell_width;
-                                            println!("      📍 Fragment cursor: line={}, char_idx={}, x={:.1}, content={:?}",
-                                                line_idx, char_idx, x, &fragment.content);
                                             all_cursor_overlays.push((x, y_top, char_cell_advance, cell_height, cursor));
                                         }
                                     }
@@ -1245,12 +1238,7 @@ impl Sugarloaf<'_> {
                         }
                     }
 
-                    // 打印 raster cache 统计
-                    if raster_hits + raster_misses > 0 {
-                        let hit_rate = raster_hits as f32 / (raster_hits + raster_misses) as f32 * 100.0;
-                        println!("   🖼️ Raster cache: {} hits, {} misses (hit rate: {:.1}%)",
-                            raster_hits, raster_misses, hit_rate);
-                    }
+                    // Raster cache stats available: raster_hits, raster_misses
                 }
             }
         }
@@ -1282,7 +1270,6 @@ impl Sugarloaf<'_> {
         canvas.draw_image(&image, (0, 0), Some(&blit_paint));
 
         // 🎨 在最终 surface 上绘制光标叠加层（不在 off_canvas 上，避免持久化缓存问题）
-        println!("   🎯 Collected {} cursor overlays", all_cursor_overlays.len());
         for (x, y_top, char_advance, cell_h, cursor) in all_cursor_overlays {
             match cursor {
                 crate::SugarCursor::Block(color) => {
@@ -1367,12 +1354,7 @@ impl Sugarloaf<'_> {
 
             let damaged_count = damaged_lines.map(|l| l.len()).unwrap_or(0);
 
-            println!("🎨 [Sugarloaf Render - Off-screen] Damage: {} ({})", damage_type, damaged_count);
-            println!("   Total chars: {}", total_chars);
-            println!("   Total lines rendered: {}", total_lines);
-            println!("   💾 Layout cache: {} hits, {} misses (hit rate: {:.1}%)",
-                cache_hits, cache_misses, hit_rate);
-            println!("   ⏱️  Render time: {}μs ({}ms)", render_time, render_time / 1000);
+            // Debug logging removed - use perf_log! macro if needed
         }
     }
 
