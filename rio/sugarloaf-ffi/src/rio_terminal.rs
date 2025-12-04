@@ -499,6 +499,63 @@ impl RioTerminal {
         terminal.visible_rows()
     }
 
+    /// 找到行中最后一个需要渲染的列（尾部空白优化）
+    ///
+    /// 返回最后一个 "有意义" 的列索引（包含）。如果整行都是空白，返回 0。
+    ///
+    /// "有意义" 的定义：
+    /// - 字符不是空格
+    /// - 背景色不是默认色
+    /// - 有特殊 flags
+    /// - 有 extra 数据（zerowidth, hyperlink, graphics）
+    /// - 在选区范围内
+    /// - 光标所在位置
+    #[cfg(target_os = "macos")]
+    fn find_last_significant_col(
+        row: &rio_backend::crosswords::grid::row::Row<rio_backend::crosswords::square::Square>,
+        selection_end_col: Option<usize>,
+        cursor_col: Option<usize>,
+    ) -> usize {
+        use rio_backend::config::colors::{AnsiColor, NamedColor};
+
+        let num_cols = row.len();
+        if num_cols == 0 {
+            return 0;
+        }
+
+        // 如果有选区或光标，至少渲染到该位置
+        let min_col = selection_end_col.unwrap_or(0).max(cursor_col.unwrap_or(0));
+
+        // 从右往左找第一个非空白 cell
+        for col in (0..num_cols).rev() {
+            let square = &row.inner[col];
+
+            // 检查字符
+            if square.c != ' ' && square.c != '\0' {
+                return col.max(min_col);
+            }
+
+            // 检查背景色
+            if square.bg != AnsiColor::Named(NamedColor::Background) {
+                return col.max(min_col);
+            }
+
+            // 检查 flags（排除 WRAPLINE，它不影响视觉）
+            let visual_flags = square.flags.bits() & !0b0000_0000_0001_0000; // 排除 WRAPLINE
+            if visual_flags != 0 {
+                return col.max(min_col);
+            }
+
+            // 检查 extra 数据
+            if square.extra.is_some() {
+                return col.max(min_col);
+            }
+        }
+
+        // 整行都是空白，返回最小列位置
+        min_col
+    }
+
     /// 计算 Grid 一行的内容 hash（用于缓存优化）
     ///
     /// 这个函数在持有 terminal lock 时调用，计算一行的所有 Square 的 hash 值。
@@ -623,6 +680,8 @@ impl RioTerminal {
     /// - absolute_row: 绝对行号（0-based，包含历史缓冲区）
     ///
     /// 返回：该行的单元格数组
+    ///
+    /// 🚀 尾部空白优化：只提取到最后一个有意义的列
     pub fn get_row_cells(&self, absolute_row: i64) -> Vec<FFICell> {
         use rio_backend::crosswords::pos::Line;
 
@@ -647,14 +706,48 @@ impl RioTerminal {
         // 直接访问 grid[Line(grid_row)]
         let line = Line(grid_row as i32);
         let row = &terminal.grid[line];
-        let mut cells = Vec::with_capacity(row.len());
 
         // 获取选区（Grid 坐标）
         let selection_range = terminal.selection
             .as_ref()
             .and_then(|s| s.to_range(&terminal));
 
-        for (col_idx, square) in row.inner.iter().enumerate() {
+        // 🚀 尾部空白优化：计算选区在本行的结束列
+        #[cfg(target_os = "macos")]
+        let selection_end_col = selection_range.as_ref().and_then(|range| {
+            // 检查本行是否在选区范围内
+            if range.start.row <= line && range.end.row >= line {
+                // 本行在选区内，返回选区在本行的结束列
+                if range.end.row == line {
+                    Some(range.end.col.0)
+                } else {
+                    Some(row.len().saturating_sub(1)) // 选区跨越本行，渲染到行尾
+                }
+            } else {
+                None
+            }
+        });
+
+        // 🚀 尾部空白优化：检查光标是否在本行
+        #[cfg(target_os = "macos")]
+        let cursor_col = {
+            let cursor = &terminal.grid.cursor;
+            if cursor.pos.row == line {
+                Some(cursor.pos.col.0)
+            } else {
+                None
+            }
+        };
+
+        // 🚀 找到最后一个有意义的列
+        #[cfg(target_os = "macos")]
+        let last_col = Self::find_last_significant_col(row, selection_end_col, cursor_col);
+        #[cfg(not(target_os = "macos"))]
+        let last_col = row.len().saturating_sub(1);
+
+        let mut cells = Vec::with_capacity(last_col + 1);
+
+        for (col_idx, square) in row.inner.iter().enumerate().take(last_col + 1) {
             // 获取原始颜色
             let (mut fg_r, mut fg_g, mut fg_b, mut fg_a) = Self::ansi_color_to_rgba(&square.fg, &terminal);
             let (mut bg_r, mut bg_g, mut bg_b, mut bg_a) = Self::ansi_color_to_rgba(&square.bg, &terminal);
@@ -720,6 +813,8 @@ impl RioTerminal {
     ///
     /// 这是 get_row_cells() 的内部逻辑，但不加锁
     /// 用于在并发渲染前批量提取数据，避免锁竞争
+    ///
+    /// 🚀 尾部空白优化：只提取到最后一个有意义的列
     fn extract_row_cells_locked(
         terminal: &rio_backend::crosswords::Crosswords<FFIEventListener>,
         absolute_row: i64,
@@ -742,17 +837,51 @@ impl RioTerminal {
         // 直接访问 grid[Line(grid_row)]
         let line = Line(grid_row as i32);
         let row = &terminal.grid[line];
-        let mut cells = Vec::with_capacity(row.len());
 
         // 获取选区（Grid 坐标）
         let selection_range = terminal.selection
             .as_ref()
-            .and_then(|s| s.to_range(&terminal));
+            .and_then(|s| s.to_range(terminal));
 
-        for (col_idx, square) in row.inner.iter().enumerate() {
+        // 🚀 尾部空白优化：计算选区在本行的结束列
+        #[cfg(target_os = "macos")]
+        let selection_end_col = selection_range.as_ref().and_then(|range| {
+            // 检查本行是否在选区范围内
+            if range.start.row <= line && range.end.row >= line {
+                // 本行在选区内，返回选区在本行的结束列
+                if range.end.row == line {
+                    Some(range.end.col.0)
+                } else {
+                    Some(row.len().saturating_sub(1)) // 选区跨越本行，渲染到行尾
+                }
+            } else {
+                None
+            }
+        });
+
+        // 🚀 尾部空白优化：检查光标是否在本行
+        #[cfg(target_os = "macos")]
+        let cursor_col = {
+            let cursor = &terminal.grid.cursor;
+            if cursor.pos.row == line {
+                Some(cursor.pos.col.0)
+            } else {
+                None
+            }
+        };
+
+        // 🚀 找到最后一个有意义的列
+        #[cfg(target_os = "macos")]
+        let last_col = Self::find_last_significant_col(row, selection_end_col, cursor_col);
+        #[cfg(not(target_os = "macos"))]
+        let last_col = row.len().saturating_sub(1);
+
+        let mut cells = Vec::with_capacity(last_col + 1);
+
+        for (col_idx, square) in row.inner.iter().enumerate().take(last_col + 1) {
             // 获取原始颜色
-            let (mut fg_r, mut fg_g, mut fg_b, mut fg_a) = Self::ansi_color_to_rgba(&square.fg, &terminal);
-            let (mut bg_r, mut bg_g, mut bg_b, mut bg_a) = Self::ansi_color_to_rgba(&square.bg, &terminal);
+            let (mut fg_r, mut fg_g, mut fg_b, mut fg_a) = Self::ansi_color_to_rgba(&square.fg, terminal);
+            let (mut bg_r, mut bg_g, mut bg_b, mut bg_a) = Self::ansi_color_to_rgba(&square.bg, terminal);
 
             // 检查是否在选区内
             let in_selection = if let Some(range) = &selection_range {
@@ -1368,12 +1497,6 @@ impl RioTerminalPool {
                     screen_lines_i64,
                 );
 
-                // 🐛 Debug: 打印前5行和后5行的 absolute_row 和 hash
-                if row_index < 5 || row_index >= lines_to_render - 5 {
-                    perf_log!("  [Row {}] absolute_row={}, hash={:016x} (scrollback={}, display_offset={})",
-                        row_index, absolute_row, hash, snapshot.scrollback_lines, snapshot.display_offset);
-                }
-
                 hash
             })
             .collect();
@@ -1625,8 +1748,16 @@ impl RioTerminalPool {
 
             let hash = row_hashes[row_index];
 
+            // 检查当前行是否是光标行
+            let is_cursor_line = row_index == cursor_row;
+
             // 先尝试从 cache 获取（确保借用在使用前就被释放）
-            let cached_chars = fragments_cache.borrow().get(&hash).map(|cached| cached.chars.clone());
+            // 🚫 如果是光标行，跳过缓存，因为光标位置是动态的
+            let cached_chars = if !is_cursor_line {
+                fragments_cache.borrow().get(&hash).map(|cached| cached.chars.clone())
+            } else {
+                None
+            };
 
             let row_data = if let Some(chars) = cached_chars {
                 // Cache hit: 复用
@@ -1635,8 +1766,9 @@ impl RioTerminalPool {
                     is_cursor_report: false,
                 })
             } else if let Some(parsed) = parsed_rows.get(&row_index) {
-                // Cache miss: 使用新解析的数据，并缓存
-                if !parsed.is_cursor_report && !parsed.chars.is_empty() {
+                // Cache miss: 使用新解析的数据
+                // 🚫 不缓存光标行，因为光标位置会变化
+                if !parsed.is_cursor_report && !parsed.chars.is_empty() && !is_cursor_line {
                     fragments_cache.borrow_mut().insert(hash, CachedFragments {
                         chars: parsed.chars.clone(),
                     });
@@ -1794,12 +1926,6 @@ impl RioTerminalPool {
                     scrollback_lines,
                     screen_lines_i64,
                 );
-
-                // 🐛 Debug: 打印前5行和后5行的 absolute_row 和 hash
-                if row_index < 5 || row_index >= lines_to_render - 5 {
-                    perf_log!("  [Row {}] absolute_row={}, hash={:016x} (scrollback={}, display_offset={})",
-                        row_index, absolute_row, hash, snapshot.scrollback_lines, snapshot.display_offset);
-                }
 
                 hash
             })

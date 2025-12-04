@@ -1088,6 +1088,9 @@ impl Sugarloaf<'_> {
         let mut cursor_paint = Paint::default();
         cursor_paint.set_anti_alias(true);
 
+        // 收集所有光标信息（稍后在最终 surface 上绘制，不是 off_canvas）
+        let mut all_cursor_overlays: Vec<(f32, f32, f32, f32, crate::SugarCursor)> = Vec::new();
+
         // Get line height from style
         let line_height = self.state.style.line_height;
 
@@ -1117,6 +1120,7 @@ impl Sugarloaf<'_> {
             });
 
             // 渲染 rich text 到 off-screen canvas（根据 damage 类型决定渲染哪些行）
+
             for rich_text in &self.state.rich_texts {
                 if let Some(builder_state) = self.state.content.get_state(&rich_text.id) {
                     let base_x = rich_text.position[0] * scale;
@@ -1125,13 +1129,11 @@ impl Sugarloaf<'_> {
                     // 计算行渲染区域宽度
                     let line_width = width as f32 - base_x;
 
-                    // 收集需要绘制的光标信息（叠加层，稍后单独绘制）
-                    let mut cursor_overlays: Vec<(f32, f32, f32, f32, crate::SugarCursor)> = Vec::new();
-
                     // 统计 raster cache 命中
                     let mut raster_hits = 0;
                     let mut raster_misses = 0;
 
+                    // 渲染 damaged 行到 off_canvas
                     for (line_idx, line) in builder_state.lines.iter().enumerate() {
                         // 🎯 Partial damage: 只渲染 damaged 行
                         if let Some(ref set) = damaged_set {
@@ -1146,12 +1148,6 @@ impl Sugarloaf<'_> {
 
                         // 🚀 优先查询 raster cache
                         let cached_image = self.raster_cache.borrow().get(&content_hash).cloned();
-
-                        // 🔍 Debug: 追踪 hash 来源
-                        if line_idx < 3 || line_idx > 110 {
-                            println!("   [Sugarloaf Row {}] content_hash={:016x}, cache_hit={}",
-                                line_idx, content_hash, cached_image.is_some());
-                        }
 
                         if let Some(image) = cached_image {
                             // ✅ Raster cache hit: 直接 blit 缓存的 Image
@@ -1202,17 +1198,29 @@ impl Sugarloaf<'_> {
                             }
                         }
 
-                        // 收集光标信息（稍后作为叠加层绘制）
-                        // 遍历 fragments 找到光标位置
+                        // 统计字符数
+                        for fragment in &line.fragments {
+                            let fragment_chars: Vec<char> = fragment.content.chars()
+                                .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}' && c != '\u{20E3}')
+                                .collect();
+                            total_chars += fragment_chars.len();
+                        }
+                    }
+
+                    // 🎯 收集所有行的光标信息（不受 damage 限制，每帧都绘制当前光标）
+                    for (line_idx, line) in builder_state.lines.iter().enumerate() {
+                        let y_top = base_y + (line_idx as f32) * cell_height;
+                        let content_hash = line.content_hash;
+
                         let mut char_idx = 0;
                         for fragment in &line.fragments {
-                            let fragment_cell_width = fragment.style.width;
                             let fragment_chars: Vec<char> = fragment.content.chars()
                                 .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}' && c != '\u{20E3}')
                                 .collect();
 
-                            for _ in 0..fragment_chars.len() {
-                                if let Some(cursor) = fragment.style.cursor {
+                            // 如果这个 fragment 有 cursor 属性，只在第一个字符位置添加光标
+                            if let Some(cursor) = fragment.style.cursor {
+                                if !fragment_chars.is_empty() {
                                     // 获取光标位置（需要从 layout 获取）
                                     let layout = {
                                         let cache = self.layout_cache.borrow();
@@ -1222,47 +1230,18 @@ impl Sugarloaf<'_> {
                                     if let Some(layout) = layout {
                                         if char_idx < layout.positions.len() {
                                             let x = base_x + layout.positions[char_idx];
+                                            let fragment_cell_width = fragment.style.width;
                                             let char_cell_advance = cell_width * fragment_cell_width;
-                                            cursor_overlays.push((x, y_top, char_cell_advance, cell_height, cursor));
+                                            println!("      📍 Fragment cursor: line={}, char_idx={}, x={:.1}, content={:?}",
+                                                line_idx, char_idx, x, &fragment.content);
+                                            all_cursor_overlays.push((x, y_top, char_cell_advance, cell_height, cursor));
                                         }
                                     }
                                 }
-                                char_idx += 1;
-                                total_chars += 1;
                             }
-                        }
-                    }
 
-                    // 🎨 绘制所有光标叠加层
-                    for (x, y_top, char_advance, cell_h, cursor) in cursor_overlays {
-                        match cursor {
-                            crate::SugarCursor::Block(color) => {
-                                cursor_paint.set_style(skia_safe::PaintStyle::Fill);
-                                cursor_paint.set_color(skia_safe::Color::from_argb(
-                                    (color[3] * 255.0) as u8,
-                                    (color[0] * 255.0) as u8,
-                                    (color[1] * 255.0) as u8,
-                                    (color[2] * 255.0) as u8,
-                                ));
-                                off_canvas.draw_rect(
-                                    skia_safe::Rect::from_xywh(x, y_top, char_advance, cell_h),
-                                    &cursor_paint,
-                                );
-                            }
-                            crate::SugarCursor::Caret(color) => {
-                                cursor_paint.set_style(skia_safe::PaintStyle::Fill);
-                                cursor_paint.set_color(skia_safe::Color::from_argb(
-                                    (color[3] * 255.0) as u8,
-                                    (color[0] * 255.0) as u8,
-                                    (color[1] * 255.0) as u8,
-                                    (color[2] * 255.0) as u8,
-                                ));
-                                off_canvas.draw_rect(
-                                    skia_safe::Rect::from_xywh(x, y_top, 2.0, cell_h),
-                                    &cursor_paint,
-                                );
-                            }
-                            _ => {} // 其他光标类型暂时忽略
+                            // 更新字符索引
+                            char_idx += fragment_chars.len();
                         }
                     }
 
@@ -1301,6 +1280,67 @@ impl Sugarloaf<'_> {
         let mut blit_paint = Paint::default();
         blit_paint.set_blend_mode(skia_safe::BlendMode::Src);
         canvas.draw_image(&image, (0, 0), Some(&blit_paint));
+
+        // 🎨 在最终 surface 上绘制光标叠加层（不在 off_canvas 上，避免持久化缓存问题）
+        println!("   🎯 Collected {} cursor overlays", all_cursor_overlays.len());
+        for (x, y_top, char_advance, cell_h, cursor) in all_cursor_overlays {
+            match cursor {
+                crate::SugarCursor::Block(color) => {
+                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                    cursor_paint.set_color(skia_safe::Color::from_argb(
+                        (color[3] * 255.0) as u8,
+                        (color[0] * 255.0) as u8,
+                        (color[1] * 255.0) as u8,
+                        (color[2] * 255.0) as u8,
+                    ));
+                    canvas.draw_rect(
+                        skia_safe::Rect::from_xywh(x, y_top, char_advance, cell_h),
+                        &cursor_paint,
+                    );
+                }
+                crate::SugarCursor::HollowBlock(color) => {
+                    cursor_paint.set_style(skia_safe::PaintStyle::Stroke);
+                    cursor_paint.set_stroke_width(1.0);
+                    cursor_paint.set_color(skia_safe::Color::from_argb(
+                        (color[3] * 255.0) as u8,
+                        (color[0] * 255.0) as u8,
+                        (color[1] * 255.0) as u8,
+                        (color[2] * 255.0) as u8,
+                    ));
+                    canvas.draw_rect(
+                        skia_safe::Rect::from_xywh(x + 0.5, y_top + 0.5, char_advance - 1.0, cell_h - 1.0),
+                        &cursor_paint,
+                    );
+                }
+                crate::SugarCursor::Caret(color) => {
+                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                    cursor_paint.set_color(skia_safe::Color::from_argb(
+                        (color[3] * 255.0) as u8,
+                        (color[0] * 255.0) as u8,
+                        (color[1] * 255.0) as u8,
+                        (color[2] * 255.0) as u8,
+                    ));
+                    canvas.draw_rect(
+                        skia_safe::Rect::from_xywh(x, y_top, 2.0, cell_h),
+                        &cursor_paint,
+                    );
+                }
+                crate::SugarCursor::Underline(color) => {
+                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                    cursor_paint.set_color(skia_safe::Color::from_argb(
+                        (color[3] * 255.0) as u8,
+                        (color[0] * 255.0) as u8,
+                        (color[1] * 255.0) as u8,
+                        (color[2] * 255.0) as u8,
+                    ));
+                    let underline_height = 2.0;
+                    canvas.draw_rect(
+                        skia_safe::Rect::from_xywh(x, y_top + cell_h - underline_height, char_advance, underline_height),
+                        &cursor_paint,
+                    );
+                }
+            }
+        }
 
         // End frame and present
         self.ctx.end_frame(drawable);
