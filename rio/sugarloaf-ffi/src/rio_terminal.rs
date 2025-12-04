@@ -592,6 +592,19 @@ impl RioTerminal {
         // Hash 行号本身（避免不同行号产生相同 hash）
         grid_row.hash(&mut hasher);
 
+        // Hash 选区信息（选区是叠加层，变化时需要使缓存失效）
+        if let Some(selection) = terminal.selection.as_ref().and_then(|s| s.to_range(terminal)) {
+            // 检查本行是否与选区相交
+            if selection.start.row <= line && selection.end.row >= line {
+                // 本行在选区内，hash 选区的边界信息
+                "selection".hash(&mut hasher);
+                selection.start.row.0.hash(&mut hasher);
+                selection.start.col.0.hash(&mut hasher);
+                selection.end.row.0.hash(&mut hasher);
+                selection.end.col.0.hash(&mut hasher);
+            }
+        }
+
         // Hash 每个 Square 的内容
         for square in row.inner.iter() {
             // Hash 字符
