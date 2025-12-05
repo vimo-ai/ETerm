@@ -14,7 +14,8 @@ use super::ffi::{AppConfig, ErrorCode, TerminalEvent, TerminalEventType, Termina
 use std::sync::Arc;
 use std::ffi::c_void;
 use parking_lot::Mutex;
-use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
+use sugarloaf::font::FontLibrary;
+use crate::create_default_font_spec;
 use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, layout::RootStyle};
 use crate::rio_event::EventQueue;
 use crate::rio_machine::Machine;
@@ -78,8 +79,10 @@ impl TerminalApp {
         eprintln!("✅ [TerminalApp] PTY and Machine created successfully");
 
         // 4. 创建 FontLibrary (为 FontContext 和 Sugarloaf 各创建一个)
-        let (font_library_for_context, _) = FontLibrary::new(SugarloafFonts::default());
-        let (font_library_for_sugarloaf, _) = FontLibrary::new(SugarloafFonts::default());
+        // 使用统一的字体配置（Maple Mono NF CN + Apple Color Emoji）
+        let font_spec = create_default_font_spec(config.font_size);
+        let (font_library_for_context, _) = FontLibrary::new(font_spec.clone());
+        let (font_library_for_sugarloaf, _) = FontLibrary::new(font_spec);
 
         // 5. 创建字体上下文
         let font_context = Arc::new(FontContext::new(font_library_for_context));

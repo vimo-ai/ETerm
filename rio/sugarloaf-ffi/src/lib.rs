@@ -21,6 +21,49 @@ pub use sync::*;
 /// 建议使用 1.0 以获得最佳渲染效果
 pub const DEFAULT_LINE_HEIGHT: f32 = 1.0;
 
+/// 创建默认字体配置（Maple Mono NF CN + Apple Color Emoji）
+///
+/// 统一的字体配置入口，确保所有终端实例使用相同的字体设置
+pub fn create_default_font_spec(font_size: f32) -> SugarloafFonts {
+    SugarloafFonts {
+        family: Some("Maple Mono NF CN".to_string()),
+        size: font_size,
+        hinting: true,
+        regular: SugarloafFont {
+            family: "MapleMono-NF-CN-Regular".to_string(),
+            weight: Some(600),
+            style: SugarloafFontStyle::Normal,
+            width: None,
+        },
+        bold: SugarloafFont {
+            family: "MapleMono-NF-CN-Bold".to_string(),
+            weight: Some(700),
+            style: SugarloafFontStyle::Normal,
+            width: None,
+        },
+        italic: SugarloafFont {
+            family: "MapleMono-NF-CN-Italic".to_string(),
+            weight: Some(600),
+            style: SugarloafFontStyle::Italic,
+            width: None,
+        },
+        bold_italic: SugarloafFont {
+            family: "MapleMono-NF-CN-BoldItalic".to_string(),
+            weight: Some(700),
+            style: SugarloafFontStyle::Italic,
+            width: None,
+        },
+        // 🍎 启用 Apple Color Emoji（macOS 原生 emoji 支持）
+        emoji: Some(SugarloafFont {
+            family: "Apple Color Emoji".to_string(),
+            weight: None,
+            style: SugarloafFontStyle::Normal,
+            width: None,
+        }),
+        ..Default::default()
+    }
+}
+
 // ============================================================================
 // 新架构模块（DDD 分层架构，使用 feature flag 隔离）
 // ============================================================================
@@ -193,46 +236,8 @@ pub extern "C" fn sugarloaf_new(
 
         let renderer = SugarloafRenderer::default();
 
-        // 创建字体配置（添加中文字体支持）
-        // 🔧 指定 Maple Mono NF CN 作为主字体
-        let font_spec = SugarloafFonts {
-            family: Some("Maple Mono NF CN".to_string()),
-            size: font_size,
-            hinting: true,
-            regular: SugarloafFont {
-                family: "MapleMono-NF-CN-Regular".to_string(),
-                weight: Some(600),
-                style: SugarloafFontStyle::Normal,
-                width: None,
-            },
-            bold: SugarloafFont {
-                family: "MapleMono-NF-CN-Bold".to_string(),
-                weight: Some(700),
-                style: SugarloafFontStyle::Normal,
-                width: None,
-            },
-            italic: SugarloafFont {
-                family: "MapleMono-NF-CN-Italic".to_string(),
-                weight: Some(600),
-                style: SugarloafFontStyle::Italic,
-                width: None,
-            },
-            bold_italic: SugarloafFont {
-                family: "MapleMono-NF-CN-BoldItalic".to_string(),
-                weight: Some(700),
-                style: SugarloafFontStyle::Italic,
-                width: None,
-            },
-            // 🍎 启用 Apple Color Emoji（macOS 原生 emoji 支持）
-            emoji: Some(SugarloafFont {
-                family: "Apple Color Emoji".to_string(),
-                weight: None,
-                style: SugarloafFontStyle::Normal,
-                width: None,
-            }),
-            ..Default::default()
-        };
-
+        // 使用统一的字体配置
+        let font_spec = create_default_font_spec(font_size);
         let (font_library, _font_errors) = FontLibrary::new(font_spec);
 
         // 🎯 延迟初始化：真实值在创建 RichText 后通过 get_font_metrics_skia 获取

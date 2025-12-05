@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
+use sugarloaf::font::FontLibrary;
+use crate::create_default_font_spec;
 use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, ImageObject, layout::RootStyle};
 use std::ffi::c_void;
 
@@ -91,8 +92,10 @@ impl TerminalPool {
         let event_queue = EventQueue::new();
 
         // 创建 FontLibrary (为 FontContext 和 Sugarloaf 各创建一个)
-        let (font_library_for_context, _) = FontLibrary::new(SugarloafFonts::default());
-        let (font_library_for_sugarloaf, _) = FontLibrary::new(SugarloafFonts::default());
+        // 使用统一的字体配置（Maple Mono NF CN + Apple Color Emoji）
+        let font_spec = create_default_font_spec(config.font_size);
+        let (font_library_for_context, _) = FontLibrary::new(font_spec.clone());
+        let (font_library_for_sugarloaf, _) = FontLibrary::new(font_spec);
 
         // 创建字体上下文
         let font_context = Arc::new(FontContext::new(font_library_for_context));
