@@ -18,6 +18,7 @@ impl LineRasterizer {
     /// 参数：
     /// - layout: 字形布局（字符 + 字体 + 位置）
     /// - line_width: 行宽度（像素）
+    /// - cell_width: 单元格宽度（像素）
     /// - cell_height: 单元格高度（像素）
     /// - baseline_offset: 基线偏移（y 坐标）
     /// - background_color: 背景色
@@ -31,13 +32,22 @@ impl LineRasterizer {
         &self,
         layout: &GlyphLayout,
         line_width: f32,
+        cell_width: f32,
         cell_height: f32,
         baseline_offset: f32,
         background_color: Color4f,
     ) -> Option<Image> {
         // ===== 步骤 1: 创建 surface（547-554 行）=====
+        // 🎯 关键修复：先 round 再转 i32，避免浮点精度导致截断
+        // 例如 20.9999999 as i32 = 20 (错误)，应该 round() 后再转换
+        let image_width = line_width.round() as i32;
+        let image_height = cell_height.round() as i32;
+
+        eprintln!("🔍 line_rasterizer | line_width={:.6} → {}, cell_height={:.6} → {}",
+                  line_width, image_width, cell_height, image_height);
+
         let image_info = ImageInfo::new(
-            (line_width as i32, cell_height as i32),
+            (image_width, image_height),
             ColorType::BGRA8888,
             AlphaType::Premul,
             None,
@@ -59,13 +69,10 @@ impl LineRasterizer {
             if let Some(bg_color) = &glyph.background_color {
                 let mut bg_paint = Paint::default();
                 bg_paint.set_color4f(*bg_color, None);
-                // 计算单元格宽度（假设等宽字体）
-                let cell_w = if layout.glyphs.len() > 1 {
-                    layout.glyphs.get(1).map(|g| g.x - layout.glyphs[0].x).unwrap_or(10.0)
-                } else {
-                    10.0  // 默认宽度
-                };
-                let rect = skia_safe::Rect::from_xywh(glyph.x, 0.0, cell_w, cell_height);
+                // 🔧 修复：使用 glyph.width（1.0 或 2.0）计算背景矩形宽度
+                // 这样中文字符（width=2.0）的背景会是双倍宽度
+                let bg_width = cell_width * glyph.width;
+                let rect = skia_safe::Rect::from_xywh(glyph.x, 0.0, bg_width, cell_height);
                 canvas.draw_rect(rect, &bg_paint);
             }
 
@@ -109,6 +116,7 @@ mod tests {
         let image = rasterizer.render(
             &layout,
             800.0,  // line_width
+            10.0,   // cell_width
             16.0,   // cell_height
             12.0,   // baseline_offset
             Color4f::new(0.0, 0.0, 0.0, 1.0),  // black background
@@ -132,6 +140,7 @@ mod tests {
                 x: 0.0,
                 color: Color4f::new(1.0, 1.0, 1.0, 1.0),  // 白色
                 background_color: None,
+                width: 1.0,  // 单宽字符
             }],
             content_hash: 0,
         };
@@ -139,6 +148,7 @@ mod tests {
         let image = rasterizer.render(
             &layout,
             800.0,
+            10.0,
             16.0,
             12.0,
             Color4f::new(0.0, 0.0, 0.0, 1.0),

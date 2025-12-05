@@ -102,17 +102,25 @@ impl FontMetrics {
         let primary_font = font_context.get_primary_font(font_size);
         let (_, skia_metrics) = primary_font.metrics();
 
-        // ===== 计算 cell_height（693-695 行）=====
+        // ===== 计算 cell_height =====
         let raw_cell_height = (-skia_metrics.ascent
                              + skia_metrics.descent
                              + skia_metrics.leading) * config.line_height;
-        // 物理像素对齐，避免行间缝隙（704 行）
-        let cell_height = (raw_cell_height * config.scale).round() / config.scale;
+        // 🎯 关键修复：Round 到整数像素，避免渲染时的亚像素缝隙
+        // 参考：rio/sugarloaf/src/sugarloaf.rs:419-420 (get_font_metrics_skia)
+        // 注意：font_size 已经 = config.font_size * config.scale，所以 metrics 已经是物理像素
+        // 因此直接 round 即可，不需要再乘以 scale
+        let cell_height = raw_cell_height.round();
 
-        // ===== 计算 cell_width（700-704 行）=====
+        // ===== 计算 cell_width =====
         let (raw_cell_width, _) = primary_font.measure_str("M", None);
-        // 物理像素对齐，避免子像素渲染导致的字符缝隙
-        let cell_width = (raw_cell_width * config.scale).round() / config.scale;
+        // 🎯 关键修复：Round 到整数像素，避免子像素渲染导致的字符缝隙
+        let cell_width = raw_cell_width.round();
+
+        eprintln!("🔍 FontMetrics::compute | font_size={:.2}, scale={:.2}, ascent={:.2}, descent={:.2}, leading={:.2}",
+                  font_size, config.scale, -skia_metrics.ascent, skia_metrics.descent, skia_metrics.leading);
+        eprintln!("🔍 FontMetrics::compute | raw_cell_height={:.6} → cell_height={:.6}, raw_cell_width={:.6} → cell_width={:.6}",
+                  raw_cell_height, cell_height, raw_cell_width, cell_width);
 
         // ===== 计算 baseline_offset（696 行）=====
         let baseline_offset = -skia_metrics.ascent;

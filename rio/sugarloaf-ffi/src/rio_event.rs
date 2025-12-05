@@ -273,7 +273,6 @@ impl EventQueue {
     ///
     /// 照抄 Rio 的 EventProxy::send_event
     pub fn send_event(&self, event: RioEvent) {
-        eprintln!("📤 [EventQueue] send_event: {:?}", event);
         // 使用 catch_unwind 保护 FFI 回调，防止 panic 传播
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let inner = self.inner.lock().unwrap();
@@ -281,7 +280,6 @@ impl EventQueue {
             // 直接调用回调，不入队列
             // 这样可以确保事件立即传递给 Swift 侧
             if let Some(callback) = inner.callback {
-                eprintln!("   Callback is set, sending to Swift");
                 let ffi_event = FFIEvent::from(&event);
 
                 // 处理带字符串的事件

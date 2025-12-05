@@ -643,10 +643,10 @@ impl Sugarloaf<'_> {
         let (mut surface, drawable) = frame.unwrap();
         let canvas = surface.canvas();
 
-        // Clear background
-        if let Some(bg_color) = self.background_color {
-            canvas.clear(bg_color);
-        }
+        // 清理上一帧（必须！否则内容会叠加）
+        // 使用背景色，如果没设置则用黑色
+        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 1.0));
+        canvas.clear(clear_color);
 
         let scale = self.ctx.scale;
 

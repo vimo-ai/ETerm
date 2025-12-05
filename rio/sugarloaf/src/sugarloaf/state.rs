@@ -211,6 +211,10 @@ impl SugarState {
 
     #[inline]
     pub fn compute_dimensions_skia(&mut self) {
+        // 清空上一帧的 quads 和 images，避免叠加
+        self.quads.clear();
+        self.images.clear();
+
         // Process objects to extract quads and images
         for object in &self.objects {
             match object {

@@ -109,12 +109,23 @@ impl Renderer {
             }
 
             let cell = &cells[col];
+
+            // 🔧 修复：跳过宽字符的占位符（WIDE_CHAR_SPACER）
+            // 宽字符（如中文）在 Grid 中占据 2 个 cell：
+            // - cell[0]: 实际字符 with WIDE_CHAR flag
+            // - cell[1]: 占位符 with WIDE_CHAR_SPACER flag (应该跳过)
+            const WIDE_CHAR_SPACER: u16 = 0b0000_0000_0100_0000;
+            if cell.flags & WIDE_CHAR_SPACER != 0 {
+                continue;  // 跳过占位符
+            }
+
             let ch = cell.c;
 
             // 从 CellData 构造 FragmentStyle
             let style = self.cell_to_fragment_style(&cell);
 
             // 如果样式改变，创建新 fragment
+            // styles_equal 已经比较了 width，所以 width 改变会自动分割 fragment
             if let Some(ref prev_style) = current_style {
                 if !styles_equal(prev_style, &style) {
                     if !current_content.is_empty() {
@@ -163,9 +174,18 @@ impl Renderer {
             _ => Some(bg_color),
         };
 
+        // 检查 WIDE_CHAR 标志（0x20 = 0b0000_0000_0010_0000）
+        // 参考：rio-backend/src/crosswords/square.rs:21
+        const WIDE_CHAR_FLAG: u16 = 0b0000_0000_0010_0000;
+        let width = if cell.flags & WIDE_CHAR_FLAG != 0 {
+            2.0  // 双宽字符（中文、全角、emoji 等）
+        } else {
+            1.0  // 单宽字符
+        };
+
         FragmentStyle {
             font_id: 0,  // 默认字体
-            width: 1.0,  // 单宽字符
+            width,       // 🔧 修复：动态计算宽度，支持双宽字符
             font_attrs: Attributes::default(),
             color: fg_color,
             background_color,
@@ -285,6 +305,7 @@ impl Renderer {
             .render(
                 &layout,
                 line_width,
+                metrics.cell_width,
                 metrics.cell_height,
                 metrics.baseline_offset,
                 background_color,

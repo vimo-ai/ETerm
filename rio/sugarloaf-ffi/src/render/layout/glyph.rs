@@ -16,4 +16,8 @@ pub struct GlyphInfo {
     pub color: Color4f,
     /// 背景色（可选，None 表示透明）
     pub background_color: Option<Color4f>,
+    /// 字符宽度（单位：cell 个数）
+    /// - 单宽字符（ASCII、半角）：1.0
+    /// - 双宽字符（中文、全角、emoji）：2.0
+    pub width: f32,
 }

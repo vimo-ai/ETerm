@@ -93,6 +93,7 @@ impl TextShaper {
                     x,
                     color,
                     background_color,
+                    width: fragment_cell_width,  // 🔧 修复：传递字符宽度（1.0 或 2.0）
                 });
 
                 x += cell_width * fragment_cell_width;
