@@ -122,6 +122,9 @@ pub struct Terminal {
 
     /// ANSI 解析器
     parser: Processor<StdSyncHandler>,
+
+    /// Dirty lines 追踪（每行是否需要重绘）
+    dirty_lines: Vec<bool>,
 }
 
 /// 事件监听器类型
@@ -198,6 +201,7 @@ impl Terminal {
             cols,
             rows,
             parser,
+            dirty_lines: vec![true; rows],  // 初始化为 dirty，确保首次渲染
         }
     }
 
@@ -246,6 +250,7 @@ impl Terminal {
             cols,
             rows,
             parser,
+            dirty_lines: vec![true; rows],  // 初始化为 dirty，确保首次渲染
         }
     }
 
@@ -283,23 +288,35 @@ impl Terminal {
     /// 1. 将数据喂给 Processor 进行 ANSI 解析
     /// 2. Processor 调用 Crosswords (Handler trait) 更新内部 Grid 状态
     /// 3. 可能产生事件（通过 EventListener）
+    /// 4. 标记所有行为 dirty（简单实现，未来可优化为只标记受影响的行）
     pub fn write(&mut self, data: &[u8]) {
-        eprintln!("✍️ [Terminal::write] Writing {} bytes: {:?}", data.len(), String::from_utf8_lossy(data));
+        // eprintln!("✍️ [Terminal::write] Writing {} bytes: {:?}", data.len(), String::from_utf8_lossy(data));
         if let Some(ref crosswords_ffi) = self.crosswords_ffi {
-            eprintln!("   Using FFI crosswords");
-            let mut crosswords = crosswords_ffi.write();
-            self.parser.advance(&mut *crosswords, data);
-            eprintln!("   After advance, parser finished");
+            // eprintln!("   Using FFI crosswords");
+            {
+                let mut crosswords = crosswords_ffi.write();
+                self.parser.advance(&mut *crosswords, data);
+                // eprintln!("   After advance, parser finished");
+            } // 释放 crosswords 的锁
+
+            // 标记所有行为 dirty（简单实现）
+            // TODO: 未来优化为只标记实际受影响的行（通过 Crosswords 的 damage API）
+            self.mark_all_dirty();
 
             // 手动触发 Render 事件（Crosswords 不会自动标记 damage）
             if let EventListenerType::FFI(ref listener) = self.event_listener {
-                eprintln!("   📤 Manually sending Render event");
+                // eprintln!("   📤 Manually sending Render event");
                 listener.send_event(crate::rio_event::RioEvent::Render);
             }
         } else if let Some(ref crosswords_test) = self.crosswords_test {
-            eprintln!("   Using Test crosswords");
-            let mut crosswords = crosswords_test.write();
-            self.parser.advance(&mut *crosswords, data);
+            // eprintln!("   Using Test crosswords");
+            {
+                let mut crosswords = crosswords_test.write();
+                self.parser.advance(&mut *crosswords, data);
+            } // 释放 crosswords 的锁
+
+            // 标记所有行为 dirty
+            self.mark_all_dirty();
         }
     }
 
@@ -328,6 +345,9 @@ impl Terminal {
             let mut crosswords = crosswords_test.write();
             crosswords.resize(new_size);
         }
+
+        // 重置 dirty_lines 大小（resize 时标记所有行为 dirty）
+        self.dirty_lines = vec![true; rows];
     }
 
     /// 驱动终端，返回产生的事件（仅测试模式）
@@ -563,6 +583,9 @@ impl Terminal {
         with_crosswords_mut!(self, crosswords, {
             crosswords.scroll_display(Scroll::Delta(delta));
         });
+
+        // 滚动后 display_offset 变化，屏幕内容变化，需要重绘
+        self.mark_all_dirty();
     }
 
     /// 滚动到顶部
@@ -572,6 +595,8 @@ impl Terminal {
         with_crosswords_mut!(self, crosswords, {
             crosswords.scroll_display(Scroll::Top);
         });
+
+        self.mark_all_dirty();
     }
 
     /// 滚动到底部
@@ -581,6 +606,48 @@ impl Terminal {
         with_crosswords_mut!(self, crosswords, {
             crosswords.scroll_display(Scroll::Bottom);
         });
+
+        self.mark_all_dirty();
+    }
+
+    // ==================== Dirty Lines 管理 ====================
+
+    /// 标记所有行为 dirty（内部使用）
+    fn mark_all_dirty(&mut self) {
+        for dirty in &mut self.dirty_lines {
+            *dirty = true;
+        }
+    }
+
+    /// 标记所有行为 dirty（公开方法，供事件回调使用）
+    ///
+    /// 当收到 Wakeup/Render 事件时调用，表示终端内容已变化
+    pub fn mark_all_dirty_pub(&mut self) {
+        self.mark_all_dirty();
+    }
+
+    /// 获取并清空 dirty lines
+    ///
+    /// # 返回
+    /// - `Some(Vec<usize>)` - 如果有 dirty lines，返回行号列表
+    /// - `None` - 如果没有 dirty lines
+    pub fn take_dirty_lines(&mut self) -> Option<Vec<usize>> {
+        let dirty_indices: Vec<usize> = self.dirty_lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &dirty)| if dirty { Some(i) } else { None })
+            .collect();
+
+        if dirty_indices.is_empty() {
+            return None;
+        }
+
+        // 清空 dirty 标记
+        for dirty in &mut self.dirty_lines {
+            *dirty = false;
+        }
+
+        Some(dirty_indices)
     }
 }
 

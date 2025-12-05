@@ -336,44 +336,40 @@ impl TerminalApp {
         }
     }
 
-    /// 渲染（批量渲染所有行）
+    /// 渲染
+    ///
+    /// TODO: dirty_lines 追踪暂时禁用
+    /// 原因：Machine 直接写入 Crosswords，绕过了 Terminal::write()，
+    /// 导致 dirty_lines 不会被标记。需要在事件回调中标记 dirty。
     pub fn render(&mut self) -> Result<(), ErrorCode> {
         let frame_start = std::time::Instant::now();
-        eprintln!("🎨 [TerminalApp::render] Called");
-        // 1. 从 Terminal 获取状态
+
+        // 从 Terminal 获取状态
         let terminal = self.terminal.lock();
         let state = terminal.state();
         let rows = terminal.rows();
-        eprintln!("   Grid lines: {}, rows: {}", state.grid.lines(), rows);
         drop(terminal);
 
-        // 2. 使用 Renderer 渲染所有行，得到 SkImage
+        // 使用 Renderer 渲染所有行
         let mut renderer = self.renderer.lock();
-        let mut objects = Vec::with_capacity(rows);
-
-        // 获取字体度量（用于计算 Y 坐标）
         let font_metrics = crate::render::config::FontMetrics::compute(
             renderer.config(),
             &self.font_context,
         );
         let cell_height = font_metrics.cell_height;
 
-        // 批量渲染所有可见行
+        let mut objects = Vec::with_capacity(rows);
         for line in 0..rows {
             let image = renderer.render_line(line, &state);
-
-            // 创建 ImageObject
             let image_obj = sugarloaf::ImageObject {
                 position: [0.0, line as f32 * cell_height],
                 image,
             };
-
             objects.push(Object::Image(image_obj));
         }
-
         drop(renderer);
 
-        // 3. 提交给 Sugarloaf 渲染 (如果存在)
+        // 提交给 Sugarloaf 渲染
         if let Some(ref sugarloaf) = self.sugarloaf {
             let mut sugarloaf = sugarloaf.lock();
             sugarloaf.set_objects(objects);

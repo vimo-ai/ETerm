@@ -1,9 +1,12 @@
 //! TerminalPool - 多终端管理 + 统一渲染
 //!
-//! 职责分离：
+//! 职责分离（DDD）：
 //! - TerminalPool 管理多个 Terminal 实例（状态 + PTY）
-//! - 渲染位置由调用方指定（Swift 控制布局）
+//! - 渲染位置由调用方指定
 //! - 统一提交：beginFrame → renderTerminal × N → endFrame
+//!
+//! 注意：TerminalPool 不知道 DisplayLink 的存在
+//! 渲染调度由 RenderScheduler 负责
 
 use crate::domain::aggregates::{Terminal, TerminalId};
 use crate::rio_event::EventQueue;
@@ -14,6 +17,7 @@ use corcovado::channel;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
 use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, ImageObject, layout::RootStyle};
@@ -66,6 +70,9 @@ pub struct TerminalPool {
 
     /// 配置
     config: AppConfig,
+
+    /// 是否需要渲染（dirty 标记，供外部调度器查询）
+    needs_render: Arc<AtomicBool>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -90,7 +97,7 @@ impl TerminalPool {
         // 创建字体上下文
         let font_context = Arc::new(FontContext::new(font_library_for_context));
 
-        // 创建渲染配置
+        // 创建渲染配置（统一背景色配置源）
         let render_config = RenderConfig::new(
             config.font_size,
             config.line_height,
@@ -100,8 +107,8 @@ impl TerminalPool {
         // 创建渲染器
         let renderer = Renderer::new(font_context.clone(), render_config);
 
-        // 创建 Sugarloaf
-        let sugarloaf = Self::create_sugarloaf(&config, &font_library_for_sugarloaf)?;
+        // 创建 Sugarloaf（使用 render_config 的背景色）
+        let sugarloaf = Self::create_sugarloaf(&config, &font_library_for_sugarloaf, &render_config)?;
 
         Ok(Self {
             terminals: HashMap::new(),
@@ -113,11 +120,16 @@ impl TerminalPool {
             event_queue,
             event_callback: None,
             config,
+            needs_render: Arc::new(AtomicBool::new(false)),
         })
     }
 
     /// 创建 Sugarloaf 实例
-    fn create_sugarloaf(config: &AppConfig, font_library: &FontLibrary) -> Result<Sugarloaf<'static>, ErrorCode> {
+    fn create_sugarloaf(
+        config: &AppConfig,
+        font_library: &FontLibrary,
+        render_config: &RenderConfig,
+    ) -> Result<Sugarloaf<'static>, ErrorCode> {
         #[cfg(target_os = "macos")]
         let raw_window_handle = {
             use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
@@ -158,8 +170,8 @@ impl TerminalPool {
             Err(with_errors) => with_errors.instance,
         };
 
-        // 透明背景，让 Swift 层的磨砂效果显示
-        sugarloaf.set_background_color(None);
+        // 使用统一的背景色配置（来自 RenderConfig）
+        sugarloaf.set_background_color(Some(render_config.background_color));
 
         Ok(sugarloaf)
     }
@@ -171,7 +183,7 @@ impl TerminalPool {
         let id = self.next_id;
         self.next_id += 1;
 
-        eprintln!("🆕 [TerminalPool] Creating terminal {} ({}x{})", id, cols, rows);
+        // eprintln!("🆕 [TerminalPool] Creating terminal {} ({}x{})", id, cols, rows);
 
         // 1. 创建 Terminal
         let terminal_id = TerminalId(id);
@@ -202,7 +214,7 @@ impl TerminalPool {
 
         self.terminals.insert(id, entry);
 
-        eprintln!("✅ [TerminalPool] Terminal {} created", id);
+        // eprintln!("✅ [TerminalPool] Terminal {} created", id);
 
         id as i32
     }
@@ -250,7 +262,7 @@ impl TerminalPool {
     /// 关闭终端
     pub fn close_terminal(&mut self, id: usize) -> bool {
         if let Some(entry) = self.terminals.remove(&id) {
-            eprintln!("🗑️ [TerminalPool] Closing terminal {}", id);
+            // eprintln!("🗑️ [TerminalPool] Closing terminal {}", id);
             // PTY 会在 pty_tx drop 时自动清理
             drop(entry.pty_tx);
             true
@@ -262,7 +274,7 @@ impl TerminalPool {
     /// 调整终端大小
     pub fn resize_terminal(&mut self, id: usize, cols: u16, rows: u16, width: f32, height: f32) -> bool {
         if let Some(entry) = self.terminals.get_mut(&id) {
-            eprintln!("📐 [TerminalPool] Resizing terminal {} to {}x{}", id, cols, rows);
+            // eprintln!("📐 [TerminalPool] Resizing terminal {} to {}x{}", id, cols, rows);
 
             // 更新 Terminal
             {
@@ -320,7 +332,7 @@ impl TerminalPool {
         self.pending_objects.clear();
     }
 
-    /// 渲染终端到指定位置（累积到待渲染列表）
+    /// 渲染终端到指定位置（累积到待渲染列表，增量渲染）
     ///
     /// # 参数
     /// - id: 终端 ID
@@ -367,20 +379,50 @@ impl TerminalPool {
             None => return false,
         };
 
-        // 获取终端状态
+        // 1. 获取 dirty lines
+        let dirty_lines = {
+            let mut terminal = entry.terminal.lock();
+            terminal.take_dirty_lines()
+        };
+
+        // 2. 如果没有 dirty lines，跳过渲染
+        if dirty_lines.is_none() {
+            // 注意：dirty_lines 由 event_queue_callback 在收到 Wakeup/Render 事件时标记
+            return true; // 返回 true 表示成功（只是没有渲染工作）
+        }
+
+        let _dirty_indices = dirty_lines.unwrap();
+
+        // 3. 获取终端状态
         let terminal = entry.terminal.lock();
         let state = terminal.state();
         let rows = terminal.rows();
         drop(terminal);
 
-        // 使用 Renderer 渲染每一行
+        // 4. 渲染所有行
+        // TODO: 后续优化为只渲染 dirty lines（需要 cached_objects 持久化）
         let mut renderer = self.renderer.lock();
+
+        // 🎯 关键修复：ImageObject.position 需要逻辑坐标
+        // cell_height 是物理像素，需要除以 scale 转换为逻辑像素
+        let scale = self.config.scale;
+        let logical_cell_height = cell_height / scale;
+
+        // eprintln!("🔍 terminal_pool | cell_height(physical)={:.6}, scale={:.2}, logical_cell_height={:.6}",
+        //           cell_height, scale, logical_cell_height);
 
         for line in 0..rows {
             let image = renderer.render_line(line, &state);
 
+            let y_position = y + line as f32 * logical_cell_height;
+
+            // if line < 3 {  // 只打印前3行
+            //     eprintln!("🔍 terminal_pool | line={}, y_position={:.6}, image_size={}x{}",
+            //               line, y_position, image.width(), image.height());
+            // }
+
             let image_obj = ImageObject {
-                position: [x, y + line as f32 * cell_height],
+                position: [x, y_position],
                 image,
             };
 
@@ -434,6 +476,8 @@ impl TerminalPool {
     }
 
     /// EventQueue 回调
+    ///
+    /// 当收到 Wakeup/Render 事件时，标记对应终端的 dirty_lines
     extern "C" fn event_queue_callback(context: *mut c_void, event: crate::rio_event::FFIEvent) {
         if context.is_null() {
             return;
@@ -447,6 +491,22 @@ impl TerminalPool {
             4 => TerminalEventType::TitleChanged,
             _ => return,
         };
+
+        // 收到 Wakeup/Render 事件时：
+        // 1. 标记对应终端的 dirty_lines
+        // 2. 设置 needs_render 标记（供外部调度器查询）
+        if event_type == TerminalEventType::Wakeup || event_type == TerminalEventType::Render {
+            unsafe {
+                let pool = &mut *(context as *mut TerminalPool);
+                let terminal_id = event.route_id as usize;
+                if let Some(entry) = pool.terminals.get(&terminal_id) {
+                    let mut terminal = entry.terminal.lock();
+                    terminal.mark_all_dirty_pub();
+                }
+                // 设置 dirty 标记
+                pool.needs_render.store(true, Ordering::Release);
+            }
+        }
 
         let terminal_event = TerminalEvent {
             event_type,
@@ -465,11 +525,34 @@ impl TerminalPool {
     pub fn terminal_count(&self) -> usize {
         self.terminals.len()
     }
+
+    /// 检查是否需要渲染
+    ///
+    /// 供外部调度器（如 RenderScheduler）查询
+    #[inline]
+    pub fn needs_render(&self) -> bool {
+        self.needs_render.load(Ordering::Acquire)
+    }
+
+    /// 清除渲染标记
+    ///
+    /// 渲染完成后调用
+    #[inline]
+    pub fn clear_render_flag(&self) {
+        self.needs_render.store(false, Ordering::Release);
+    }
+
+    /// 获取 needs_render 的 Arc 引用
+    ///
+    /// 供 RenderScheduler 使用
+    pub fn needs_render_flag(&self) -> Arc<AtomicBool> {
+        self.needs_render.clone()
+    }
 }
 
 impl Drop for TerminalPool {
     fn drop(&mut self) {
-        eprintln!("🗑️ [TerminalPool] Dropping pool with {} terminals", self.terminals.len());
+        // eprintln!("🗑️ [TerminalPool] Dropping pool with {} terminals", self.terminals.len());
         // terminals 会自动 drop，PTY 连接会关闭
     }
 }
