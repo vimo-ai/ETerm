@@ -45,7 +45,16 @@ impl Default for TermColors {
     fn default() -> Self {
         // 🎨 ETerm Shuimo: 使用实际颜色而不是 None
         let colors = Colors::default();
+
+        // 🔍 调试：打印 Red 颜色值
+        eprintln!("🎨 [TermColors::default] Red color from Colors::default(): {:?}", colors.red);
+
         let list = List::from(&colors);
+
+        // 🔍 调试：打印 NamedColor::Red 的值
+        eprintln!("🎨 [TermColors::default] NamedColor::Red (index {}): {:?}",
+                  NamedColor::Red as usize, list[NamedColor::Red]);
+
         let mut term_colors = [None; COUNT];
 
         // 填充命名颜色（0-268）
