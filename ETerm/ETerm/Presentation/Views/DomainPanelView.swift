@@ -59,6 +59,21 @@ final class DomainPanelView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    // MARK: - Hit Testing
+
+    /// 让 content 区域的鼠标事件穿透到底层 Metal 视图
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 检查是否在 Header 区域
+        let headerPoint = headerView.convert(point, from: self)
+        if headerView.bounds.contains(headerPoint) {
+            // Header 区域正常处理
+            return super.hitTest(point)
+        }
+
+        // Content 区域：让事件穿透到底层
+        return nil
+    }
+
     // MARK: - Setup
 
     private func setupUI() {
