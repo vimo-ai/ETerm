@@ -22,18 +22,31 @@ use rio_backend::ansi::CursorShape;
 /// 使用场景：
 /// - 渲染光标
 /// - 判断光标是否在选区内
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 光标颜色（RGBA）
+pub type CursorColor = [f32; 4];
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CursorView {
     /// 光标位置（绝对坐标）
     pub position: AbsolutePoint,
     /// 光标形状
     pub shape: CursorShape,
+    /// 光标颜色（RGBA）
+    pub color: CursorColor,
 }
 
+/// 默认光标颜色（白色，80% 透明度）
+pub const DEFAULT_CURSOR_COLOR: CursorColor = [1.0, 1.0, 1.0, 0.8];
+
 impl CursorView {
-    /// 创建新的 CursorView
+    /// 创建新的 CursorView（使用默认颜色）
     pub fn new(position: AbsolutePoint, shape: CursorShape) -> Self {
-        Self { position, shape }
+        Self { position, shape, color: DEFAULT_CURSOR_COLOR }
+    }
+
+    /// 创建新的 CursorView（指定颜色）
+    pub fn with_color(position: AbsolutePoint, shape: CursorShape, color: CursorColor) -> Self {
+        Self { position, shape, color }
     }
 
     /// 判断光标是否可见

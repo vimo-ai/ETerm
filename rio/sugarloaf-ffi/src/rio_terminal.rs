@@ -607,20 +607,11 @@ impl RioTerminal {
 
         // Hash 搜索状态（搜索高亮是叠加层，变化时需要使缓存失效）
         if let Some(ref search_state) = terminal.search_state {
-            // 调试：只打印一次
-            if grid_row == 0 {
-                eprintln!("[HASH DEBUG] search_state exists: {} matches, checking line={}",
-                    search_state.all_matches.len(), line.0);
-            }
             for (idx, match_range) in search_state.all_matches.iter().enumerate() {
                 let match_start_row = match_range.start().row;
                 let match_end_row = match_range.end().row;
                 // 检查本行是否与搜索匹配相交
                 if match_start_row <= line && match_end_row >= line {
-                    if grid_row == 0 {
-                        eprintln!("[HASH DEBUG] MATCH FOUND! line={}, match_row={}..{}",
-                            line.0, match_start_row.0, match_end_row.0);
-                    }
                     "search".hash(&mut hasher);
                     idx.hash(&mut hasher);
                     match_range.start().row.0.hash(&mut hasher);
@@ -1552,14 +1543,6 @@ impl RioTerminalPool {
 
         // Clone search state data for concurrent rendering
         let search_data = terminal_lock.search_state.as_ref().map(|s| {
-            eprintln!("[SEARCH DEBUG] render_terminal_content: {} matches, focused={}, display_offset={}",
-                s.all_matches.len(), s.focused_index, snapshot.display_offset);
-            if !s.all_matches.is_empty() {
-                let first = &s.all_matches[0];
-                eprintln!("[SEARCH DEBUG] first match: row {}..{}, col {}..{}",
-                    first.start().row.0, first.end().row.0,
-                    first.start().col.0, first.end().col.0);
-            }
             (s.all_matches.clone(), s.focused_index)
         });
 
@@ -1740,6 +1723,42 @@ impl RioTerminalPool {
                                     fg_a = 1.0;
                                     break;  // 找到匹配，跳出循环
                                 }
+                            }
+                        }
+                    }
+
+                    // 处理选区高亮
+                    if snapshot.has_selection != 0 {
+                        // 计算当前单元格的 grid 行号
+                        let grid_row = row_index as i64 - snapshot.display_offset as i64;
+                        let sel_start_row = snapshot.selection_start_row as i64;
+                        let sel_end_row = snapshot.selection_end_row as i64;
+                        let sel_start_col = snapshot.selection_start_col;
+                        let sel_end_col = snapshot.selection_end_col;
+
+                        // 检查行是否在选区范围内
+                        if grid_row >= sel_start_row && grid_row <= sel_end_row {
+                            let in_selection = if sel_start_row == sel_end_row {
+                                // 单行选区：检查列范围
+                                col_index >= sel_start_col && col_index <= sel_end_col
+                            } else if grid_row == sel_start_row {
+                                // 选区起始行：从 sel_start_col 开始
+                                col_index >= sel_start_col
+                            } else if grid_row == sel_end_row {
+                                // 选区结束行：到 sel_end_col 结束
+                                col_index <= sel_end_col
+                            } else {
+                                // 中间行：全部高亮
+                                true
+                            };
+
+                            if in_selection {
+                                // 应用选区颜色（蓝色半透明背景）
+                                bg_r = 0x44 as f32 / 255.0;
+                                bg_g = 0x88 as f32 / 255.0;
+                                bg_b = 0xCC as f32 / 255.0;
+                                bg_a = 0.5;
+                                has_bg = true;
                             }
                         }
                     }
@@ -2165,6 +2184,42 @@ impl RioTerminalPool {
                                     fg_a = 1.0;
                                     break;  // 找到匹配，跳出循环
                                 }
+                            }
+                        }
+                    }
+
+                    // 处理选区高亮
+                    if snapshot.has_selection != 0 {
+                        // 计算当前单元格的 grid 行号
+                        let grid_row = row_index as i64 - snapshot.display_offset as i64;
+                        let sel_start_row = snapshot.selection_start_row as i64;
+                        let sel_end_row = snapshot.selection_end_row as i64;
+                        let sel_start_col = snapshot.selection_start_col;
+                        let sel_end_col = snapshot.selection_end_col;
+
+                        // 检查行是否在选区范围内
+                        if grid_row >= sel_start_row && grid_row <= sel_end_row {
+                            let in_selection = if sel_start_row == sel_end_row {
+                                // 单行选区：检查列范围
+                                col_index >= sel_start_col && col_index <= sel_end_col
+                            } else if grid_row == sel_start_row {
+                                // 选区起始行：从 sel_start_col 开始
+                                col_index >= sel_start_col
+                            } else if grid_row == sel_end_row {
+                                // 选区结束行：到 sel_end_col 结束
+                                col_index <= sel_end_col
+                            } else {
+                                // 中间行：全部高亮
+                                true
+                            };
+
+                            if in_selection {
+                                // 应用选区颜色（蓝色半透明背景）
+                                bg_r = 0x44 as f32 / 255.0;
+                                bg_g = 0x88 as f32 / 255.0;
+                                bg_b = 0xCC as f32 / 255.0;
+                                bg_a = 0.5;
+                                has_bg = true;
                             }
                         }
                     }

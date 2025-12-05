@@ -1012,18 +1012,26 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
-        guard let sugarloaf = sugarloaf else { return }
+        if useNewArchitecture {
+            // 新架构：通过 TerminalPoolWrapper 调整字体大小
+            terminalPool?.changeFontSize(operation: operation)
+            // 重新渲染
+            requestRender()
+        } else {
+            // 旧架构：通过 Sugarloaf 调整字体大小
+            guard let sugarloaf = sugarloaf else { return }
 
-        // 对所有 RichText 调整字体大小
-        for (_, richTextId) in richTextIds {
-            sugarloaf_change_font_size(sugarloaf, richTextId, operation.rawValue)
+            // 对所有 RichText 调整字体大小
+            for (_, richTextId) in richTextIds {
+                sugarloaf_change_font_size(sugarloaf, richTextId, operation.rawValue)
+            }
+
+            // 更新 fontMetrics
+            updateFontMetricsFromSugarloaf(sugarloaf)
+
+            // 重新渲染
+            requestRender()
         }
-
-        // 更新 fontMetrics
-        updateFontMetricsFromSugarloaf(sugarloaf)
-
-        // 重新渲染
-        requestRender()
     }
 
     func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
@@ -1626,29 +1634,52 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - 鼠标事件
 
     override func mouseDown(with event: NSEvent) {
+        print("🖱️ [Selection] mouseDown triggered!")  // 🔍 DEBUG
+
         window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
+        print("🖱️ [Selection] location: \(location), bounds: \(bounds)")  // 🔍 DEBUG
 
         guard let coordinator = coordinator else {
+            print("🖱️ [Selection] FAILED: coordinator is nil")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
 
         // 根据位置找到对应的 Panel
-        guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
-              let panel = coordinator.terminalWindow.getPanel(panelId),
-              let activeTab = panel.activeTab,
-              let terminalId = activeTab.rustTerminalId else {
+        guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds) else {
+            print("🖱️ [Selection] FAILED: findPanel returned nil")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
+
+        guard let panel = coordinator.terminalWindow.getPanel(panelId) else {
+            print("🖱️ [Selection] FAILED: getPanel returned nil for panelId=\(panelId)")  // 🔍 DEBUG
+            super.mouseDown(with: event)
+            return
+        }
+
+        guard let activeTab = panel.activeTab else {
+            print("🖱️ [Selection] FAILED: activeTab is nil")  // 🔍 DEBUG
+            super.mouseDown(with: event)
+            return
+        }
+
+        guard let terminalId = activeTab.rustTerminalId else {
+            print("🖱️ [Selection] FAILED: rustTerminalId is nil")  // 🔍 DEBUG
+            super.mouseDown(with: event)
+            return
+        }
+
+        print("🖱️ [Selection] Found terminal: panelId=\(panelId), terminalId=\(terminalId)")  // 🔍 DEBUG
 
         // 设置激活的 Panel
         coordinator.setActivePanel(panelId)
 
         // 转换为网格坐标
         let gridPos = screenToGrid(location: location, panelId: panelId)
+        print("🖱️ [Selection] gridPos: row=\(gridPos.row), col=\(gridPos.col)")  // 🔍 DEBUG
 
         // 双击选中单词
         if event.clickCount == 2 {
@@ -1657,25 +1688,38 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 单击：开始拖拽选择
-        // 将 Screen 坐标转换为真实行号
-        guard let (absoluteRow, col) = terminalManager.screenToAbsolute(
-            terminalId: Int(terminalId),
-            screenRow: Int(gridPos.row),
-            screenCol: Int(gridPos.col)
-        ) else {
+        // 将 Screen 坐标转换为真实行号（新架构使用 terminalPool）
+        guard let pool = terminalPool,
+              let (absoluteRow, col) = pool.screenToAbsolute(
+                  terminalId: Int(terminalId),
+                  screenRow: Int(gridPos.row),
+                  screenCol: Int(gridPos.col)
+              ) else {
+            print("🖱️ [Selection] FAILED: screenToAbsolute returned nil for screenRow=\(gridPos.row), screenCol=\(gridPos.col)")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
 
         activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
-        // 通知 Rust 层渲染高亮
+        // 🔍 DEBUG: 打印选区起点
+        print("🖱️ [Selection] mouseDown: absoluteRow=\(absoluteRow), col=\(col), terminalId=\(terminalId)")
+
+        // 通知 Rust 层渲染高亮（新架构使用 terminalPool）
         if let selection = activeTab.textSelection {
-            _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
+            print("🖱️ [Selection] setSelection: start=(\(selection.startAbsoluteRow), \(selection.startCol)), end=(\(selection.endAbsoluteRow), \(selection.endCol))")
+            let success = pool.setSelection(
+                terminalId: Int(terminalId),
+                startAbsoluteRow: selection.startAbsoluteRow,
+                startCol: Int(selection.startCol),
+                endAbsoluteRow: selection.endAbsoluteRow,
+                endCol: Int(selection.endCol)
+            )
+            print("🖱️ [Selection] setSelection result: \(success)")
         }
 
         // 触发渲染
-        // requestRender()  // 🔍 临时注释：测试是否 setActivePanel 已经通过 SwiftUI 触发了渲染
+        requestRender()  // 🔍 恢复：确保选区立即渲染
 
         // 记录选中状态
         isDraggingSelection = true
@@ -1693,6 +1737,9 @@ class RioMetalView: NSView, RenderViewProtocol {
         panelId: UUID,
         event: NSEvent
     ) {
+        // 新架构：使用 terminalPool
+        guard let pool = terminalPool else { return }
+
         let row = Int(gridPos.row)
         let col = Int(gridPos.col)
 
@@ -1700,10 +1747,10 @@ class RioMetalView: NSView, RenderViewProtocol {
         guard let snapshot = getCachedSnapshot(terminalId: Int(terminalId)) else { return }
 
         // 转换屏幕坐标为绝对行号
-        let absoluteRow = Int64(snapshot.scrollback_lines) - Int64(snapshot.display_offset) + Int64(row)
+        let absoluteRowForCells = Int64(snapshot.scrollback_lines) - Int64(snapshot.display_offset) + Int64(row)
 
-        // 获取该行的所有单元格
-        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), absoluteRow: absoluteRow, maxCells: 500)
+        // 获取该行的所有单元格（仍使用老架构 API，后续需要添加新架构支持）
+        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), absoluteRow: absoluteRowForCells, maxCells: 500)
         guard !cells.isEmpty else { return }
 
         // 将单元格转换为字符串
@@ -1718,8 +1765,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 将 Screen 坐标转换为真实行号
-        guard let (absoluteRow, _) = terminalManager.screenToAbsolute(
+        // 将 Screen 坐标转换为真实行号（新架构：使用 terminalPool）
+        guard let (absoluteRow, _) = pool.screenToAbsolute(
             terminalId: Int(terminalId),
             screenRow: row,
             screenCol: col
@@ -1731,9 +1778,15 @@ class RioMetalView: NSView, RenderViewProtocol {
         activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(boundary.startIndex))
         activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(boundary.endIndex - 1))
 
-        // 通知 Rust 层渲染高亮
+        // 通知 Rust 层渲染高亮（新架构：使用 terminalPool）
         if let selection = activeTab.textSelection {
-            _ = coordinator?.setSelection(terminalId: terminalId, selection: selection)
+            _ = pool.setSelection(
+                terminalId: Int(terminalId),
+                startAbsoluteRow: selection.startAbsoluteRow,
+                startCol: Int(selection.startCol),
+                endAbsoluteRow: selection.endAbsoluteRow,
+                endCol: Int(selection.endCol)
+            )
         }
 
         // 触发渲染
@@ -1764,7 +1817,7 @@ class RioMetalView: NSView, RenderViewProtocol {
               let panelId = selectionPanelId,
               let activeTab = selectionTab,
               let terminalId = activeTab.rustTerminalId,
-              let coordinator = coordinator else {
+              let pool = terminalPool else {
             super.mouseDragged(with: event)
             return
         }
@@ -1775,8 +1828,8 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 转换为网格坐标
         let gridPos = screenToGrid(location: location, panelId: panelId)
 
-        // 将 Screen 坐标转换为真实行号
-        guard let (absoluteRow, col) = terminalManager.screenToAbsolute(
+        // 将 Screen 坐标转换为真实行号（新架构：使用 terminalPool）
+        guard let (absoluteRow, col) = pool.screenToAbsolute(
             terminalId: Int(terminalId),
             screenRow: Int(gridPos.row),
             screenCol: Int(gridPos.col)
@@ -1788,9 +1841,20 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 更新 Domain 层状态
         activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
-        // 通知 Rust 层渲染高亮
+        // 🔍 DEBUG: 打印选区更新
+        print("🖱️ [Selection] mouseDragged: absoluteRow=\(absoluteRow), col=\(col)")
+
+        // 通知 Rust 层渲染高亮（新架构：使用 terminalPool）
         if let selection = activeTab.textSelection {
-            _ = coordinator.setSelection(terminalId: terminalId, selection: selection)
+            print("🖱️ [Selection] updateSelection: start=(\(selection.startAbsoluteRow), \(selection.startCol)), end=(\(selection.endAbsoluteRow), \(selection.endCol))")
+            let success = pool.setSelection(
+                terminalId: Int(terminalId),
+                startAbsoluteRow: selection.startAbsoluteRow,
+                startCol: Int(selection.startCol),
+                endAbsoluteRow: selection.endAbsoluteRow,
+                endCol: Int(selection.endCol)
+            )
+            print("🖱️ [Selection] setSelection result: \(success)")
         }
 
         // 触发渲染（事件驱动模式下必须手动触发）
@@ -1858,10 +1922,16 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 从 fontMetrics 获取实际的 cell 尺寸
+        // 🔧 新架构：优先使用 terminalPool.getFontMetrics()，它返回与渲染一致的值
+        // 老架构的 coordinator.fontMetrics 中 cell_height 已含 line_height_factor（导致偏移）
         let cellWidthVal: CGFloat
         let cellHeightVal: CGFloat
-        if let metrics = coordinator.fontMetrics {
-            // fontMetrics 是物理像素，需要转换为逻辑点
+        if useNewArchitecture, let metrics = terminalPool?.getFontMetrics() {
+            // 新架构：line_height = cell_height * line_height_factor
+            cellWidthVal = CGFloat(metrics.cell_width) / mapper.scale
+            cellHeightVal = CGFloat(metrics.line_height) / mapper.scale
+        } else if let metrics = coordinator.fontMetrics {
+            // 老架构 fallback
             cellWidthVal = CGFloat(metrics.cell_width) / mapper.scale
             cellHeightVal = CGFloat(metrics.line_height) / mapper.scale
         } else {
@@ -1879,11 +1949,13 @@ class RioMetalView: NSView, RenderViewProtocol {
         )
 
         // 边界检查：确保网格坐标不越界
-        // 计算终端的行列数
+        // 计算终端的行列数（使用与上面相同的 metrics 来源）
         let physicalWidth = contentBounds.width * mapper.scale
         let physicalHeight = contentBounds.height * mapper.scale
-        let maxCols = UInt16(physicalWidth / CGFloat(coordinator.fontMetrics?.cell_width ?? 15))
-        let maxRows = UInt16(physicalHeight / CGFloat(coordinator.fontMetrics?.line_height ?? 33))
+        let physicalCellWidth = cellWidthVal * mapper.scale
+        let physicalLineHeight = cellHeightVal * mapper.scale
+        let maxCols = UInt16(physicalWidth / physicalCellWidth)
+        let maxRows = UInt16(physicalHeight / physicalLineHeight)
 
         // 限制在有效范围内（0 到 max-1）
         if maxCols > 0 && gridPos.col >= maxCols {

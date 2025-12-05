@@ -40,6 +40,19 @@ pub struct CursorInfo {
     pub color: [f32; 4],
 }
 
+/// 选区信息（用于渲染时动态覆盖背景色）
+#[derive(Debug, Clone, Copy)]
+pub struct SelectionInfo {
+    /// 选区起始列
+    pub start_col: usize,
+    /// 选区结束列
+    pub end_col: usize,
+    /// 选区前景色 (RGBA)
+    pub fg_color: [f32; 4],
+    /// 选区背景色 (RGBA)
+    pub bg_color: [f32; 4],
+}
+
 /// 缓存查询结果
 pub enum CacheResult {
     /// 内层命中：直接返回最终渲染

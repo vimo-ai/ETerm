@@ -1,6 +1,6 @@
 #[cfg(feature = "new_architecture")]
 use crate::render::cache::GlyphLayout;
-use crate::render::cache::CursorInfo;
+use crate::render::cache::{CursorInfo, SelectionInfo};
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};
 use rio_backend::ansi::CursorShape;
 use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f};
@@ -22,6 +22,7 @@ impl LineRasterizer {
     /// 参数：
     /// - layout: 字形布局（字符 + 字体 + 位置）
     /// - cursor_info: 光标信息（从 TerminalState 动态计算，不从 layout 缓存读取）
+    /// - selection_info: 选区信息（从 TerminalState 动态计算，不从 layout 缓存读取）
     /// - line_width: 行宽度（像素）
     /// - cell_width: 单元格宽度（像素）
     /// - cell_height: 单元格高度（像素）
@@ -40,6 +41,7 @@ impl LineRasterizer {
         &self,
         layout: &GlyphLayout,
         cursor_info: Option<&CursorInfo>,
+        selection_info: Option<&SelectionInfo>,
         line_width: f32,
         cell_width: f32,
         cell_height: f32,
@@ -61,19 +63,37 @@ impl LineRasterizer {
         let mut surface = skia_safe::surfaces::raster(&image_info, None, None)?;
         let canvas = surface.canvas();
 
-        // ===== 步骤 2: 填充背景色（558 行）=====
+        // ===== 步骤 2: 填充背景色 =====
         canvas.clear(background_color);
 
-        // ===== 步骤 3: 创建 Paint（561-562 行）=====
+        // ===== 步骤 3: 创建 Paint =====
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
 
-        // ===== 步骤 4: 遍历字形，绘制字符（567-622 行）=====
+        // ===== 步骤 4: 遍历字形，绘制字符 =====
+        // 跟踪当前列号（用于选区检测）
+        let mut current_col: usize = 0;
+
         for glyph in &layout.glyphs {
+            // 检查当前字符是否在选区内
+            let in_selection = selection_info.map_or(false, |sel| {
+                current_col >= sel.start_col && current_col <= sel.end_col
+            });
+
+            // 确定背景色：选区优先
+            let effective_bg_color = if in_selection {
+                // 选区内：使用选区背景色
+                let sel = selection_info.unwrap();
+                Some(Color4f::new(sel.bg_color[0], sel.bg_color[1], sel.bg_color[2], sel.bg_color[3]))
+            } else {
+                // 非选区：使用字形原有背景色
+                glyph.background_color
+            };
+
             // 先绘制背景色（如果有）
-            if let Some(bg_color) = &glyph.background_color {
+            if let Some(bg_color) = effective_bg_color {
                 let mut bg_paint = Paint::default();
-                bg_paint.set_color4f(*bg_color, None);
+                bg_paint.set_color4f(bg_color, None);
                 // 使用 glyph.width（1.0 或 2.0）计算背景矩形宽度
                 let bg_width = cell_width * glyph.width;
                 // 背景填满整个 line_height
@@ -81,8 +101,16 @@ impl LineRasterizer {
                 canvas.draw_rect(rect, &bg_paint);
             }
 
+            // 确定前景色：选区优先
+            let effective_fg_color = if in_selection {
+                let sel = selection_info.unwrap();
+                Color4f::new(sel.fg_color[0], sel.fg_color[1], sel.fg_color[2], sel.fg_color[3])
+            } else {
+                glyph.color
+            };
+
             // 设置字符颜色
-            paint.set_color4f(glyph.color, None);
+            paint.set_color4f(effective_fg_color, None);
 
             // 🎯 对 box-drawing 字符进行形变拉伸，填满整个 line_height
             if detect_drawable_character(glyph.ch).is_some() && box_drawing_config.enabled {
@@ -205,6 +233,9 @@ impl LineRasterizer {
                     }
                 }
             }
+
+            // 更新列号（用于下一个字符的选区检测）
+            current_col += glyph.width as usize;
         }
 
         // ===== 步骤 4.5: 绘制光标（如果有）=====
@@ -281,6 +312,7 @@ mod tests {
         let image = rasterizer.render(
             &layout,
             None,   // cursor_info
+            None,   // selection_info
             800.0,  // line_width
             10.0,   // cell_width
             16.0,   // cell_height
@@ -318,6 +350,7 @@ mod tests {
         let image = rasterizer.render(
             &layout,
             None,   // cursor_info
+            None,   // selection_info
             800.0,
             10.0,
             16.0,

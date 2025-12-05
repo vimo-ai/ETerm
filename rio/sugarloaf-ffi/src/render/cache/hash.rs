@@ -130,10 +130,7 @@ mod tests {
         let grid_data = Arc::new(GridData::new_mock(80, 24, 0, row_hashes));
         let grid = GridView::new(grid_data);
 
-        let cursor = CursorView {
-            position: AbsolutePoint::new(cursor_line, cursor_col),
-            shape: CursorShape::Block,
-        };
+        let cursor = CursorView::new(AbsolutePoint::new(cursor_line, cursor_col), CursorShape::Block);
 
         TerminalState {
             grid,

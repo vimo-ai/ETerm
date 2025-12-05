@@ -371,30 +371,34 @@ impl Terminal {
                 let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
                 AbsolutePoint::new(absolute_line, pos.col.0 as usize)
             };
-            let cursor_shape = crosswords.cursor_shape;
-            let cursor = CursorView::new(cursor_pos, cursor_shape);
+            // 使用 cursor() 方法获取光标状态（会考虑 SHOW_CURSOR 模式）
+            let cursor_state = crosswords.cursor();
+            let cursor_shape = cursor_state.content;
+
+            // 提取光标颜色（ColorArray 已经是 [f32; 4]，直接使用）
+            use rio_backend::config::colors::NamedColor;
+            let cursor_color = crosswords.colors[NamedColor::Cursor as usize]
+                .unwrap_or(crate::domain::views::cursor::DEFAULT_CURSOR_COLOR);
+
+            let cursor = CursorView::with_color(cursor_pos, cursor_shape, cursor_color);
 
             // 3. 转换 Selection（如果有）
             let selection = crosswords.selection.as_ref().and_then(|sel| {
                 use crate::domain::primitives::AbsolutePoint;
                 use crate::domain::views::SelectionType;
 
-                eprintln!("🔷 [Terminal::state] Selection exists: {:?}", sel);
-
                 // 获取选区范围（可能返回 None）
                 sel.to_range(&crosswords).map(|sel_range| {
-                    let display_offset = crosswords.grid.display_offset();
                     let history_size = crosswords.grid.history_size();
 
-                    // 转换为绝对坐标
-                    let start_line = (history_size as i32 + sel_range.start.row.0 - display_offset as i32) as usize;
-                    let end_line = (history_size as i32 + sel_range.end.row.0 - display_offset as i32) as usize;
+                    // Grid Line → Absolute Row
+                    // 公式：absolute_row = grid_line + history_size
+                    // （与 start_selection 中 grid_line = absolute_row - history_size 相反）
+                    let start_line = (sel_range.start.row.0 + history_size as i32) as usize;
+                    let end_line = (sel_range.end.row.0 + history_size as i32) as usize;
 
                     let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
                     let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
-
-                    eprintln!("   → start=({}, {}), end=({}, {})",
-                              start.line, start.col, end.line, end.col);
 
                     // 转换选区类型
                     let ty = match sel.ty {
@@ -464,8 +468,32 @@ impl Terminal {
 
         with_crosswords_mut!(self, crosswords, {
             // 转换坐标：AbsolutePoint → Crosswords Pos
+            //
+            // Grid Line 坐标系（rio-backend 定义）：
+            // - topmost_line = Line(-history_size)
+            // - bottommost_line = Line(screen_lines - 1)
+            // - 可见区域（无滚动时）: Line(0) 到 Line(screen_lines - 1)
+            // - 历史区域: Line(-history_size) 到 Line(-1)
+            //
+            // 绝对坐标定义（我们的定义）：
+            // - absolute_row=0 → Line(-history_size)（历史最旧）
+            // - absolute_row=history_size → Line(0)（可见区域顶部）
+            // - absolute_row=history_size+screen_lines-1 → Line(screen_lines-1)（可见区域底部）
+            //
+            // 转换公式（不考虑滚动）：
+            // grid_line = absolute_row - history_size
+            //
+            // 考虑滚动（display_offset 向上滚动了多少行）：
+            // 屏幕显示的是 Line(-display_offset) 到 Line(screen_lines-1-display_offset)
+            // 但选区坐标不受 display_offset 影响，因为选区是相对于 Grid 的
             let history_size = crosswords.grid.history_size();
-            let line = Line((pos.line as i32) - (history_size as i32));
+            let display_offset = crosswords.display_offset();
+            let screen_lines = crosswords.screen_lines();
+
+            // 正确的转换：absolute → grid_line
+            // grid_line = absolute_row - history_size
+            let grid_line = pos.line as i32 - history_size as i32;
+            let line = Line(grid_line);
             let col = Column(pos.col);
             let crosswords_pos = Pos::new(line, col);
 
@@ -489,9 +517,15 @@ impl Terminal {
         use rio_backend::crosswords::pos::{Line, Column, Pos, Side};
 
         with_crosswords_mut!(self, crosswords, {
-            // 转换坐标
+            // 转换坐标（与 start_selection 相同的逻辑）
             let history_size = crosswords.grid.history_size();
-            let line = Line((pos.line as i32) - (history_size as i32));
+            let display_offset = crosswords.display_offset();
+            let screen_lines = crosswords.screen_lines();
+
+            // 正确的转换：absolute → grid_line
+            // grid_line = absolute_row - history_size
+            let grid_line = pos.line as i32 - history_size as i32;
+            let line = Line(grid_line);
             let col = Column(pos.col);
             let crosswords_pos = Pos::new(line, col);
 

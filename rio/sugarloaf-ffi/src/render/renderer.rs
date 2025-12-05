@@ -1,6 +1,6 @@
 use crate::domain::TerminalState;
 use crate::domain::views::grid::CellData;
-use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo};
+use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SelectionInfo};
 use super::cache::{compute_text_hash, compute_state_hash_for_line};
 use super::font::FontContext;
 use super::layout::TextShaper;
@@ -286,6 +286,8 @@ impl Renderer {
         let cursor = None;
 
         // ===== 选区高亮 =====
+        // 注意：选区高亮现在在 LineRasterizer 中动态计算（不再从布局缓存读取）
+        // 这里只保留用于 cache miss 时的初始渲染
         if let Some(selection) = &state.selection {
             if let Some(_range) = get_selection_range_at(pos, selection) {
                 fg_color = colors.selection_foreground;
@@ -464,8 +466,43 @@ impl Renderer {
             Some(CursorInfo {
                 col: state.cursor.col(),
                 shape: state.cursor.shape,
-                color: [1.0, 1.0, 1.0, 0.8],  // TODO: 从 config.colors 读取
+                color: state.cursor.color,
             })
+        } else {
+            None
+        };
+
+        // 🔧 从 state 动态计算 selection_info（不从 layout 缓存读取）
+        // 注意：selection 使用绝对坐标，需要转换为屏幕行号进行比较
+        let selection_info = if let Some(selection) = &state.selection {
+            // 转换屏幕行号为绝对行号
+            let abs_line = state.grid.history_size()
+                .saturating_add(line)
+                .saturating_sub(state.grid.display_offset());
+
+            // 检查本行是否在选区范围内
+            if abs_line >= selection.start.line && abs_line <= selection.end.line {
+                // 计算本行的选区列范围
+                let start_col = if abs_line == selection.start.line {
+                    selection.start.col
+                } else {
+                    0
+                };
+                let end_col = if abs_line == selection.end.line {
+                    selection.end.col
+                } else {
+                    usize::MAX
+                };
+
+                Some(SelectionInfo {
+                    start_col,
+                    end_col,
+                    fg_color: self.config.colors.selection_foreground,
+                    bg_color: self.config.colors.selection_background,
+                })
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -474,6 +511,7 @@ impl Renderer {
             .render(
                 &layout,
                 cursor_info.as_ref(),
+                selection_info.as_ref(),
                 line_width,
                 metrics.cell_width.value,
                 metrics.cell_height.value,
@@ -695,10 +733,7 @@ mod tests {
         let grid_data = Arc::new(GridData::new_mock(80, 24, 0, row_hashes));
         let grid = GridView::new(grid_data);
 
-        let cursor = CursorView {
-            position: AbsolutePoint::new(0, 0),
-            shape: CursorShape::Block,
-        };
+        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
 
         TerminalState {
             grid,
@@ -879,10 +914,7 @@ mod tests {
         let grid_data = Arc::new(GridData::new_mock(80, 24, 0, row_hashes));
         let grid = GridView::new(grid_data);
 
-        let cursor = CursorView {
-            position: AbsolutePoint::new(0, 0),  // 光标在第 0 行
-            shape: CursorShape::Block,
-        };
+        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
 
         TerminalState {
             grid,
