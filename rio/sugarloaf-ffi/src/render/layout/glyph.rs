@@ -1,5 +1,6 @@
 #[cfg(feature = "new_architecture")]
 use skia_safe::{Font, Color4f};
+use sugarloaf::layout::FragmentStyleDecoration;
 
 /// 单个字形信息（渲染层数据）
 #[derive(Debug, Clone)]
@@ -20,4 +21,6 @@ pub struct GlyphInfo {
     /// - 单宽字符（ASCII、半角）：1.0
     /// - 双宽字符（中文、全角、emoji）：2.0
     pub width: f32,
+    /// 装饰（下划线、删除线）
+    pub decoration: Option<FragmentStyleDecoration>,
 }

@@ -175,21 +175,37 @@ impl Renderer {
     /// - `state`: 终端状态（用于检查光标、选区、搜索）
     fn cell_to_fragment_style(&self, cell: &CellData, pos: &crate::domain::AbsolutePoint, state: &TerminalState) -> FragmentStyle {
         use rio_backend::config::colors::NamedColor;
+        use sugarloaf::layout::{UnderlineInfo, UnderlineShape, FragmentStyleDecoration};
+        use sugarloaf::font_introspector::{Stretch, Weight, Style};
+
+        // ===== Flags 常量定义 =====
+        const INVERSE: u16         = 0b0000_0000_0000_0001;
+        const BOLD: u16            = 0b0000_0000_0000_0010;
+        const ITALIC: u16          = 0b0000_0000_0000_0100;
+        const UNDERLINE: u16       = 0b0000_0000_0000_1000;
+        const WIDE_CHAR: u16       = 0b0000_0000_0010_0000;
+        const DIM: u16             = 0b0000_0000_1000_0000;
+        const HIDDEN: u16          = 0b0000_0001_0000_0000;
+        const STRIKEOUT: u16       = 0b0000_0010_0000_0000;
+        const DOUBLE_UNDERLINE: u16= 0b0000_1000_0000_0000;
+        const UNDERCURL: u16       = 0b0001_0000_0000_0000;
+        const DOTTED_UNDERLINE: u16= 0b0010_0000_0000_0000;
+        const DASHED_UNDERLINE: u16= 0b0100_0000_0000_0000;
 
         // 获取颜色配置
         let colors = &self.config.colors;
+        let flags = cell.flags;
 
-        // 检查 WIDE_CHAR 标志（需要提前计算 width）
-        const WIDE_CHAR_FLAG: u16 = 0b0000_0000_0010_0000;
-        let width = if cell.flags & WIDE_CHAR_FLAG != 0 {
+        // ===== 宽度计算 =====
+        let width = if flags & WIDE_CHAR != 0 {
             2.0  // 双宽字符（中文、全角、emoji 等）
         } else {
             1.0  // 单宽字符
         };
 
-        // 基础前景色和背景色（从单元格数据）
+        // ===== 基础颜色 =====
         let mut fg_color = ansi_color_to_rgba(&cell.fg, colors);
-        let bg_color = ansi_color_to_rgba(&cell.bg, colors);
+        let mut bg_color = ansi_color_to_rgba(&cell.bg, colors);
 
         // 背景色：仅当不是默认背景时才设置
         let mut background_color = match &cell.bg {
@@ -197,33 +213,93 @@ impl Renderer {
             _ => Some(bg_color),
         };
 
-        // ===== 检查光标 =====
+        // ===== INVERSE: 前景/背景色互换 =====
+        if flags & INVERSE != 0 {
+            std::mem::swap(&mut fg_color, &mut bg_color);
+            // INVERSE 时强制显示背景色（即使原本是透明的）
+            background_color = Some(bg_color);
+        }
+
+        // ===== DIM: 降低亮度 50% =====
+        if flags & DIM != 0 {
+            fg_color[0] *= 0.5;
+            fg_color[1] *= 0.5;
+            fg_color[2] *= 0.5;
+        }
+
+        // ===== HIDDEN: 隐藏字符（alpha = 0） =====
+        if flags & HIDDEN != 0 {
+            fg_color[3] = 0.0;
+        }
+
+        // ===== BOLD / ITALIC: 字体属性 =====
+        let font_attrs = {
+            let weight = if flags & BOLD != 0 {
+                Weight::BOLD
+            } else {
+                Weight::NORMAL
+            };
+
+            let style = if flags & ITALIC != 0 {
+                Style::Italic
+            } else {
+                Style::Normal
+            };
+
+            Attributes::new(Stretch::NORMAL, weight, style)
+        };
+
+        // ===== 下划线和删除线 =====
+        let decoration = if flags & STRIKEOUT != 0 {
+            Some(FragmentStyleDecoration::Strikethrough)
+        } else if flags & UNDERCURL != 0 {
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Curly,
+            }))
+        } else if flags & DOTTED_UNDERLINE != 0 {
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Dotted,
+            }))
+        } else if flags & DASHED_UNDERLINE != 0 {
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Dashed,
+            }))
+        } else if flags & DOUBLE_UNDERLINE != 0 {
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: true,
+                shape: UnderlineShape::Regular,
+            }))
+        } else if flags & UNDERLINE != 0 {
+            Some(FragmentStyleDecoration::Underline(UnderlineInfo {
+                is_doubled: false,
+                shape: UnderlineShape::Regular,
+            }))
+        } else {
+            None
+        };
+
+        // ===== 光标 =====
         // 注意：光标现在在 LineRasterizer 中渲染（通过独立的 cursor_info 参数）
-        // 这里的 FragmentStyle.cursor 已经不再使用，所以固定为 None
         let cursor = None;
 
-        // ===== 检查选区 =====
+        // ===== 选区高亮 =====
         if let Some(selection) = &state.selection {
             if let Some(_range) = get_selection_range_at(pos, selection) {
-                eprintln!("🔷 [Renderer] SELECTION DETECTED at ({}, {}), fg={:?}, bg={:?}",
-                          pos.line, pos.col, colors.selection_foreground, colors.selection_background);
-
-                // 在选区内：使用选区颜色
                 fg_color = colors.selection_foreground;
                 background_color = Some(colors.selection_background);
             }
         }
 
-        // ===== 检查搜索匹配 =====
+        // ===== 搜索匹配高亮 =====
         if let Some(search) = &state.search {
             if let Some(is_focused) = get_search_match_at(pos, search) {
-                // 在搜索匹配内
                 if is_focused {
-                    // 聚焦的匹配：使用聚焦颜色
                     fg_color = colors.search_focused_match_foreground;
                     background_color = Some(colors.search_focused_match_background);
                 } else {
-                    // 普通匹配：使用普通匹配颜色
                     fg_color = colors.search_match_foreground;
                     background_color = Some(colors.search_match_background);
                 }
@@ -231,14 +307,14 @@ impl Renderer {
         }
 
         FragmentStyle {
-            font_id: 0,  // 默认字体
-            width,       // 动态计算宽度，支持双宽字符
-            font_attrs: Attributes::default(),
+            font_id: 0,
+            width,
+            font_attrs,
             color: fg_color,
             background_color,
             font_vars: 0,
-            decoration: None,
-            decoration_color: None,
+            decoration,
+            decoration_color: None,  // TODO: 可以支持 underline_color
             cursor,
             media: None,
             drawable_char: None,
@@ -421,6 +497,8 @@ fn styles_equal(a: &FragmentStyle, b: &FragmentStyle) -> bool {
         && a.width == b.width
         && a.color == b.color
         && a.background_color == b.background_color
+        && a.font_attrs == b.font_attrs
+        && a.decoration == b.decoration
 }
 
 /// 判断光标是否在指定位置

@@ -90,13 +90,17 @@ impl TextShaper {
                     Color4f::new(c[0], c[1], c[2], c[3])
                 });
 
+                // ===== 根据 font_attrs 选择正确的字体变体 =====
+                let final_font = self.font_context.apply_font_attrs(&best_font, &fragment.style.font_attrs, font_size);
+
                 glyphs.push(GlyphInfo {
                     ch,
-                    font: best_font,
+                    font: final_font,
                     x,
                     color,
                     background_color,
-                    width: fragment_cell_width,  // 🔧 修复：传递字符宽度（1.0 或 2.0）
+                    width: fragment_cell_width,
+                    decoration: fragment.style.decoration,  // 传递装饰信息
                 });
 
                 x += cell_width * fragment_cell_width;

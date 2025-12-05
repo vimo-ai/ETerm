@@ -212,6 +212,39 @@ impl FontContext {
     pub fn font_library(&self) -> &Arc<RwLock<FontLibraryData>> {
         &self.font_library
     }
+
+    /// 根据 font_attrs 应用字体变体（粗体、斜体）
+    /// 使用 Skia 合成：embolden + skew
+    pub fn apply_font_attrs(
+        &self,
+        base_font: &Font,
+        attrs: &sugarloaf::font_introspector::Attributes,
+        _font_size: f32,
+    ) -> Font {
+        use sugarloaf::font_introspector::{Weight, Style};
+
+        let is_bold = attrs.weight() >= Weight::BOLD;
+        let is_italic = matches!(attrs.style(), Style::Italic | Style::Oblique(_));
+
+        // 🔍 调试
+        if is_bold || is_italic {
+            eprintln!("🔍 [apply_font_attrs] is_bold={}, is_italic={}, weight={:?}, style={:?}",
+                      is_bold, is_italic, attrs.weight(), attrs.style());
+        }
+
+        if !is_bold && !is_italic {
+            return base_font.clone();
+        }
+
+        // 🔧 Font::clone() 不会复制 skew/embolden 设置，需要创建新 Font
+        let typeface = base_font.typeface();
+        let size = base_font.size();
+        let mut font = Font::from_typeface(&typeface, size);
+
+        if is_bold { font.set_embolden(true); }
+        if is_italic { font.set_skew_x(-0.25); }
+        font
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +259,59 @@ mod tests {
 
         // 验证主字体存在
         assert!(font_context.primary_font_typeface.is_some());
+    }
+
+    #[test]
+    fn test_apply_font_attrs_italic() {
+        use sugarloaf::font_introspector::{Attributes, Stretch, Weight, Style};
+
+        let (font_library, _) = FontLibrary::new(SugarloafFonts::default());
+        let font_context = FontContext::new(font_library);
+        let base_font = font_context.get_primary_font(14.0);
+
+        // 测试斜体
+        let italic_attrs = Attributes::new(Stretch::NORMAL, Weight::NORMAL, Style::Italic);
+        let italic_font = font_context.apply_font_attrs(&base_font, &italic_attrs, 14.0);
+
+        // 验证 skew_x 被设置
+        println!("base_font skew_x: {}", base_font.skew_x());
+        println!("italic_font skew_x: {}", italic_font.skew_x());
+        assert!(italic_font.skew_x() < 0.0, "斜体字体的 skew_x 应该为负数，实际是 {}", italic_font.skew_x());
+    }
+
+    #[test]
+    fn test_apply_font_attrs_bold() {
+        use sugarloaf::font_introspector::{Attributes, Stretch, Weight, Style};
+
+        let (font_library, _) = FontLibrary::new(SugarloafFonts::default());
+        let font_context = FontContext::new(font_library);
+        let base_font = font_context.get_primary_font(14.0);
+
+        // 测试粗体
+        let bold_attrs = Attributes::new(Stretch::NORMAL, Weight::BOLD, Style::Normal);
+        let bold_font = font_context.apply_font_attrs(&base_font, &bold_attrs, 14.0);
+
+        // 验证 embolden 被设置
+        println!("base_font is_embolden: {}", base_font.is_embolden());
+        println!("bold_font is_embolden: {}", bold_font.is_embolden());
+        assert!(bold_font.is_embolden(), "粗体字体的 is_embolden 应该为 true");
+    }
+
+    #[test]
+    fn test_apply_font_attrs_normal() {
+        use sugarloaf::font_introspector::{Attributes, Stretch, Weight, Style};
+
+        let (font_library, _) = FontLibrary::new(SugarloafFonts::default());
+        let font_context = FontContext::new(font_library);
+        let base_font = font_context.get_primary_font(14.0);
+
+        // 测试普通样式（应该返回相同的字体）
+        let normal_attrs = Attributes::new(Stretch::NORMAL, Weight::NORMAL, Style::Normal);
+        let normal_font = font_context.apply_font_attrs(&base_font, &normal_attrs, 14.0);
+
+        // 验证没有改变
+        assert_eq!(normal_font.skew_x(), base_font.skew_x());
+        assert_eq!(normal_font.is_embolden(), base_font.is_embolden());
     }
 
     #[test]

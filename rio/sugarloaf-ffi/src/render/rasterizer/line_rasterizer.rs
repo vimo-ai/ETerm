@@ -4,6 +4,7 @@ use crate::render::cache::CursorInfo;
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};
 use rio_backend::ansi::CursorShape;
 use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f};
+use sugarloaf::layout::{FragmentStyleDecoration, UnderlineShape};
 
 /// 行光栅化器（渲染 GlyphLayout → SkImage）
 /// 复用老代码的 render_line_to_image 逻辑（sugarloaf.rs:535-627 行）
@@ -105,6 +106,104 @@ impl LineRasterizer {
                 // 普通字符：正常绘制
                 let ch_str = glyph.ch.to_string();
                 canvas.draw_str(&ch_str, Point::new(glyph.x, baseline_offset), &glyph.font, &paint);
+            }
+
+            // ===== 绘制装饰（下划线、删除线）=====
+            if let Some(decoration) = &glyph.decoration {
+                let glyph_width = cell_width * glyph.width;
+                let decoration_paint = &paint;  // 复用字符颜色
+
+                match decoration {
+                    FragmentStyleDecoration::Strikethrough => {
+                        // 删除线：在字符中间位置
+                        let strike_y = baseline_offset - cell_height * 0.3;  // 大约在字符中间
+                        let stroke_width = 1.0;
+                        let mut strike_paint = decoration_paint.clone();
+                        strike_paint.set_stroke_width(stroke_width);
+                        strike_paint.set_style(skia_safe::PaintStyle::Stroke);
+                        canvas.draw_line(
+                            Point::new(glyph.x, strike_y),
+                            Point::new(glyph.x + glyph_width, strike_y),
+                            &strike_paint,
+                        );
+                    }
+                    FragmentStyleDecoration::Underline(info) => {
+                        // 下划线：在基线下方，但不能超出 line_height
+                        let underline_y = (baseline_offset + 2.0).min(line_height - 2.0);
+                        let stroke_width = if info.is_doubled { 1.0 } else { 1.5 };
+
+                        let mut underline_paint = decoration_paint.clone();
+                        underline_paint.set_stroke_width(stroke_width);
+                        underline_paint.set_style(skia_safe::PaintStyle::Stroke);
+
+                        match info.shape {
+                            UnderlineShape::Regular => {
+                                // 普通下划线
+                                canvas.draw_line(
+                                    Point::new(glyph.x, underline_y),
+                                    Point::new(glyph.x + glyph_width, underline_y),
+                                    &underline_paint,
+                                );
+                                // 双下划线
+                                if info.is_doubled {
+                                    canvas.draw_line(
+                                        Point::new(glyph.x, underline_y + 3.0),
+                                        Point::new(glyph.x + glyph_width, underline_y + 3.0),
+                                        &underline_paint,
+                                    );
+                                }
+                            }
+                            UnderlineShape::Dotted => {
+                                // 点状下划线
+                                underline_paint.set_path_effect(skia_safe::PathEffect::dash(&[2.0, 2.0], 0.0));
+                                canvas.draw_line(
+                                    Point::new(glyph.x, underline_y),
+                                    Point::new(glyph.x + glyph_width, underline_y),
+                                    &underline_paint,
+                                );
+                            }
+                            UnderlineShape::Dashed => {
+                                // 虚线下划线
+                                underline_paint.set_path_effect(skia_safe::PathEffect::dash(&[4.0, 2.0], 0.0));
+                                canvas.draw_line(
+                                    Point::new(glyph.x, underline_y),
+                                    Point::new(glyph.x + glyph_width, underline_y),
+                                    &underline_paint,
+                                );
+                            }
+                            UnderlineShape::Curly => {
+                                // 波浪下划线（undercurl）- 确保不超出 line_height
+                                let wave_amplitude = 1.5;
+                                let wave_length = 4.0;
+                                let mut path = skia_safe::Path::new();
+
+                                // 波浪中心线在 underline_y 上方，留出 stroke_width 余量
+                                // 这样波浪的最低点 + stroke_width/2 不会超出 line_height
+                                let max_bottom = line_height - stroke_width;
+                                let center_y = (max_bottom - wave_amplitude).min(underline_y);
+                                let top_y = center_y - wave_amplitude;
+                                let bottom_y = center_y + wave_amplitude;
+
+                                path.move_to(Point::new(glyph.x, center_y));
+
+                                let mut x = glyph.x;
+                                let mut up = true;
+                                while x < glyph.x + glyph_width {
+                                    let next_x = (x + wave_length).min(glyph.x + glyph_width);
+                                    let ctrl_y = if up { top_y } else { bottom_y };
+                                    path.quad_to(
+                                        Point::new(x + wave_length / 2.0, ctrl_y),
+                                        Point::new(next_x, center_y),
+                                    );
+                                    x = next_x;
+                                    up = !up;
+                                }
+
+                                canvas.draw_path(&path, &underline_paint);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -211,6 +310,7 @@ mod tests {
                 color: Color4f::new(1.0, 1.0, 1.0, 1.0),  // 白色
                 background_color: None,
                 width: 1.0,  // 单宽字符
+                decoration: None,
             }],
             content_hash: 0,
         };
