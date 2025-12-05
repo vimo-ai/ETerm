@@ -487,7 +487,10 @@ final class GlobalTerminalManager {
     ///   - screenCol: 列号
     /// - Returns: 真实行号坐标，失败返回 nil
     func screenToAbsolute(terminalId: Int, screenRow: Int, screenCol: Int) -> (absoluteRow: Int64, col: Int)? {
-        guard let pool = poolHandle else { return nil }
+        guard let pool = poolHandle else {
+            print("🔍 [screenToAbsolute] FAILED: poolHandle is nil")
+            return nil
+        }
 
         let result = rio_pool_screen_to_absolute(
             pool,
@@ -496,6 +499,7 @@ final class GlobalTerminalManager {
             screenCol
         )
 
+        print("🔍 [screenToAbsolute] terminalId=\(terminalId), screenRow=\(screenRow), screenCol=\(screenCol) -> absoluteRow=\(result.absolute_row), col=\(result.col)")
         return (result.absolute_row, Int(result.col))
     }
 

@@ -226,12 +226,6 @@ impl FontContext {
         let is_bold = attrs.weight() >= Weight::BOLD;
         let is_italic = matches!(attrs.style(), Style::Italic | Style::Oblique(_));
 
-        // 🔍 调试
-        if is_bold || is_italic {
-            eprintln!("🔍 [apply_font_attrs] is_bold={}, is_italic={}, weight={:?}, style={:?}",
-                      is_bold, is_italic, attrs.weight(), attrs.style());
-        }
-
         if !is_bold && !is_italic {
             return base_font.clone();
         }
