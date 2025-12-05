@@ -52,6 +52,17 @@ impl FontContext {
         }
     }
 
+    /// 从 typeface 创建 Font，如果是 emoji 字体则启用嵌入位图
+    fn create_font_with_emoji_support(typeface: &Typeface, font_size: f32, is_emoji: bool) -> Font {
+        let mut font = Font::from_typeface(typeface, font_size);
+        // 🎨 如果是 emoji 字体，启用嵌入位图以支持彩色渲染
+        // Apple Color Emoji 使用 sbix 表存储彩色位图
+        if is_emoji {
+            font.set_embedded_bitmaps(true);
+        }
+        font
+    }
+
     /// 查找字符的最佳字体（复用老代码：1467-1506 行）
     /// 五步 fallback：
     /// 1. ASCII 快速路径
@@ -81,7 +92,8 @@ impl FontContext {
         {
             let cache = self.char_font_cache.borrow();
             if let Some((typeface, is_emoji)) = cache.get(&ch) {
-                return (Font::from_typeface(typeface, font_size), *is_emoji);
+                let font = Self::create_font_with_emoji_support(typeface, font_size, *is_emoji);
+                return (font, *is_emoji);
             }
         }
 
@@ -101,7 +113,8 @@ impl FontContext {
                 .borrow_mut()
                 .insert(ch, (typeface.clone(), is_emoji));
 
-            return (Font::from_typeface(&typeface, font_size), is_emoji);
+            let font = Self::create_font_with_emoji_support(&typeface, font_size, is_emoji);
+            return (font, is_emoji);
         }
 
         // 步骤 5: 最终 fallback（使用 styled_font）
@@ -118,7 +131,7 @@ impl FontContext {
                 &[],
                 ch as i32,
             )
-            .map(|tf| Font::from_typeface(&tf, font_size))
+            .map(|tf| Self::create_font_with_emoji_support(&tf, font_size, true))
     }
 
     /// 从 font_id 获取或创建 Typeface（带缓存）
@@ -245,5 +258,59 @@ mod tests {
             font1.typeface().unique_id(),
             font2.typeface().unique_id()
         );
+    }
+
+    #[test]
+    fn test_specific_emoji_sun_and_scissors() {
+        let (font_library, _) = FontLibrary::new(SugarloafFonts::default());
+        let font_context = FontContext::new(font_library);
+
+        // 测试 ☀️ (sun emoji - Unicode: U+2600)
+        let sun_font = font_context.find_emoji_font('☀', 14.0);
+        assert!(sun_font.is_some(), "Failed to find font for ☀️ emoji");
+
+        if let Some(font) = sun_font {
+            let typeface = font.typeface();
+            let family_name = typeface.family_name();
+            println!("☀️ (U+2600) font family: {}", family_name);
+            println!("☀️ glyph id: {}", typeface.unichar_to_glyph('☀' as i32));
+            println!("☀️ embedded_bitmaps: {}", font.is_embedded_bitmaps());
+            // 验证找到了有效的字体
+            assert!(typeface.unique_id() != 0);
+            // 验证启用了嵌入位图
+            assert!(font.is_embedded_bitmaps(), "Embedded bitmaps should be enabled for emoji");
+        }
+
+        // 测试 ✂️ (scissors emoji - Unicode: U+2702)
+        let scissors_font = font_context.find_emoji_font('✂', 14.0);
+        assert!(scissors_font.is_some(), "Failed to find font for ✂️ emoji");
+
+        if let Some(font) = scissors_font {
+            let typeface = font.typeface();
+            let family_name = typeface.family_name();
+            println!("✂️ (U+2702) font family: {}", family_name);
+            println!("✂️ glyph id: {}", typeface.unichar_to_glyph('✂' as i32));
+            println!("✂️ embedded_bitmaps: {}", font.is_embedded_bitmaps());
+            // 验证找到了有效的字体
+            assert!(typeface.unique_id() != 0);
+            // 验证启用了嵌入位图
+            assert!(font.is_embedded_bitmaps(), "Embedded bitmaps should be enabled for emoji");
+        }
+
+        // 测试 ✨ (sparkles emoji - Unicode: U+2728)
+        let sparkles_font = font_context.find_emoji_font('✨', 14.0);
+        assert!(sparkles_font.is_some(), "Failed to find font for ✨ emoji");
+
+        if let Some(font) = sparkles_font {
+            let typeface = font.typeface();
+            let family_name = typeface.family_name();
+            println!("✨ (U+2728) font family: {}", family_name);
+            println!("✨ glyph id: {}", typeface.unichar_to_glyph('✨' as i32));
+            println!("✨ embedded_bitmaps: {}", font.is_embedded_bitmaps());
+            // 验证找到了有效的字体
+            assert!(typeface.unique_id() != 0);
+            // 验证启用了嵌入位图
+            assert!(font.is_embedded_bitmaps(), "Embedded bitmaps should be enabled for emoji");
+        }
     }
 }
