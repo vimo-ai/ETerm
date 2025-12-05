@@ -1813,6 +1813,32 @@ pub extern "C" fn terminal_pool_create_terminal(
     pool.create_terminal(cols, rows)
 }
 
+/// 创建新终端（指定工作目录）
+///
+/// 返回终端 ID（>= 1），失败返回 -1
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_create_terminal_with_cwd(
+    handle: *mut TerminalPoolHandle,
+    cols: u16,
+    rows: u16,
+    working_dir: *const std::ffi::c_char,
+) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+
+    let working_dir_opt = if working_dir.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(working_dir).to_str().ok().map(|s| s.to_string()) }
+    };
+
+    pool.create_terminal_with_cwd(cols, rows, working_dir_opt)
+}
+
 /// 关闭终端
 #[cfg(feature = "new_architecture")]
 #[no_mangle]
@@ -1826,6 +1852,31 @@ pub extern "C" fn terminal_pool_close_terminal(
 
     let pool = unsafe { &mut *(handle as *mut TerminalPool) };
     pool.close_terminal(terminal_id)
+}
+
+/// 获取终端的当前工作目录
+///
+/// 返回的字符串需要调用者使用 `rio_free_string` 释放
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_cwd(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> *mut std::ffi::c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    if let Some(cwd) = pool.get_cwd(terminal_id) {
+        match std::ffi::CString::new(cwd.to_string_lossy().as_bytes()) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
 }
 
 /// 调整终端大小
@@ -1999,6 +2050,198 @@ pub extern "C" fn terminal_pool_clear_render_flag(handle: *mut TerminalPoolHandl
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
     pool.clear_render_flag();
+}
+
+/// 获取字体度量（物理像素）
+///
+/// 返回与渲染一致的字体度量：
+/// - cell_width: 单元格宽度（物理像素）
+/// - cell_height: 基础单元格高度（物理像素，不含 line_height_factor）
+/// - line_height: 实际行高（物理像素，= cell_height * line_height_factor）
+///
+/// 注意：鼠标坐标转换应使用 line_height（而非 cell_height）
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_font_metrics(
+    handle: *mut TerminalPoolHandle,
+    out_metrics: *mut SugarloafFontMetrics,
+) -> bool {
+    if handle.is_null() || out_metrics.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    let (cell_width, cell_height, line_height) = pool.get_font_metrics();
+
+    unsafe {
+        (*out_metrics).cell_width = cell_width;
+        (*out_metrics).cell_height = cell_height;
+        (*out_metrics).line_height = line_height;
+    }
+
+    true
+}
+
+/// 调整字体大小
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - operation: 0=重置(14pt), 1=减小(-1pt), 2=增大(+1pt)
+///
+/// # 返回
+/// - true: 成功
+/// - false: 句柄无效
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_change_font_size(
+    handle: *mut TerminalPoolHandle,
+    operation: u8,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.change_font_size(operation);
+    true
+}
+
+/// 获取当前字体大小
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+///
+/// # 返回
+/// - 当前字体大小（pt），如果句柄无效返回 0.0
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_font_size(
+    handle: *mut TerminalPoolHandle,
+) -> f32 {
+    if handle.is_null() {
+        return 0.0;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.get_font_size()
+}
+
+// ============================================================================
+// Selection FFI - 选区相关
+// ============================================================================
+
+/// 屏幕坐标转绝对坐标结果
+#[cfg(feature = "new_architecture")]
+#[repr(C)]
+pub struct ScreenToAbsoluteResult {
+    pub absolute_row: i64,
+    pub col: usize,
+    pub success: bool,
+}
+
+/// 屏幕坐标转绝对坐标
+///
+/// 将屏幕坐标（相对于可见区域）转换为绝对坐标（含历史缓冲区）
+///
+/// 坐标系说明：
+/// - 屏幕坐标：screen_row=0 是屏幕顶部，screen_row=screen_lines-1 是屏幕底部
+/// - 绝对坐标：从 0 开始，0 是历史缓冲区最开始（最旧的行）
+///   - 当 history_size=0 时，absolute_row 范围是 [0, screen_lines-1]
+///   - 当 history_size>0 时，absolute_row 范围是 [0, history_size+screen_lines-1]
+///
+/// 转换公式（考虑滚动偏移）：
+/// absolute_row = history_size - display_offset + screen_row
+///
+/// 注意：这里的 absolute_row 总是非负数，因为：
+/// - history_size >= display_offset（display_offset 不能超过历史大小）
+/// - screen_row >= 0
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_screen_to_absolute(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    screen_row: usize,
+    screen_col: usize,
+) -> ScreenToAbsoluteResult {
+    if handle.is_null() {
+        return ScreenToAbsoluteResult { absolute_row: 0, col: 0, success: false };
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    if let Some(terminal) = pool.get_terminal(terminal_id) {
+        // 从 state() 获取 grid 信息
+        let state = terminal.state();
+        let history_size = state.grid.history_size();
+        let display_offset = state.grid.display_offset();
+
+        // 绝对行号 = history_size - display_offset + screen_row
+        // 这保证结果是非负数
+        let absolute_row = (history_size + screen_row).saturating_sub(display_offset) as i64;
+
+        ScreenToAbsoluteResult {
+            absolute_row,
+            col: screen_col,
+            success: true,
+        }
+    } else {
+        ScreenToAbsoluteResult { absolute_row: 0, col: 0, success: false }
+    }
+}
+
+/// 设置选区
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_selection(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    start_absolute_row: i64,
+    start_col: usize,
+    end_absolute_row: i64,
+    end_col: usize,
+) -> bool {
+    use crate::domain::primitives::AbsolutePoint;
+    use crate::domain::views::SelectionType;
+
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+
+    if let Some(mut terminal) = pool.get_terminal_mut(terminal_id) {
+        // 使用 start_selection + update_selection 来设置选区
+        let start_pos = AbsolutePoint::new(start_absolute_row as usize, start_col);
+        let end_pos = AbsolutePoint::new(end_absolute_row as usize, end_col);
+
+        terminal.start_selection(start_pos, SelectionType::Simple);
+        terminal.update_selection(end_pos);
+
+        true
+    } else {
+        false
+    }
+}
+
+/// 清除选区
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_clear_selection(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+
+    if let Some(mut terminal) = pool.get_terminal_mut(terminal_id) {
+        terminal.clear_selection();
+        true
+    } else {
+        false
+    }
 }
 
 // ============================================================================

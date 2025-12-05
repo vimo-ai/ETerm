@@ -149,6 +149,26 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return Int(id)
     }
 
+    func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int {
+        guard let handle = handle else { return -1 }
+        print("🆕 [TerminalPoolWrapper] Creating terminal with CWD: \(cwd)")
+        let id = terminal_pool_create_terminal_with_cwd(handle, cols, rows, cwd)
+        print("🆕 [TerminalPoolWrapper] Created terminal \(id) with CWD")
+        return Int(id)
+    }
+
+    /// 获取终端的当前工作目录
+    func getCwd(terminalId: Int) -> String? {
+        guard let handle = handle else { return nil }
+
+        let cStr = terminal_pool_get_cwd(handle, terminalId)
+        guard let cStr = cStr else { return nil }
+
+        let result = String(cString: cStr)
+        rio_free_string(cStr)
+        return result
+    }
+
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool {
         guard let handle = handle else { return false }
@@ -219,8 +239,25 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
 
     @discardableResult
     func clearSelection(terminalId: Int) -> Bool {
-        // TODO: 需要在 Rust 侧添加此 API
-        return false
+        guard let handle = handle else { return false }
+        return terminal_pool_clear_selection(handle, terminalId)
+    }
+
+    /// 屏幕坐标转绝对坐标
+    func screenToAbsolute(terminalId: Int, screenRow: Int, screenCol: Int) -> (absoluteRow: Int64, col: Int)? {
+        guard let handle = handle else { return nil }
+        let result = terminal_pool_screen_to_absolute(handle, terminalId, screenRow, screenCol)
+        if result.success {
+            return (result.absolute_row, Int(result.col))
+        }
+        return nil
+    }
+
+    /// 设置选区
+    @discardableResult
+    func setSelection(terminalId: Int, startAbsoluteRow: Int64, startCol: Int, endAbsoluteRow: Int64, endCol: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_set_selection(handle, terminalId, startAbsoluteRow, startCol, endAbsoluteRow, endCol)
     }
 
     func getInputRow(terminalId: Int) -> UInt16? {
@@ -229,7 +266,20 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
-        // TODO: 需要在 Rust 侧添加此 API
+        guard let handle = handle else { return }
+        _ = terminal_pool_change_font_size(handle, operation.rawValue)
+    }
+
+    /// 获取字体度量（物理像素）
+    ///
+    /// 返回与渲染一致的字体度量
+    func getFontMetrics() -> SugarloafFontMetrics? {
+        guard let handle = handle else { return nil }
+        var metrics = SugarloafFontMetrics()
+        if terminal_pool_get_font_metrics(handle, &metrics) {
+            return metrics
+        }
+        return nil
     }
 
     // MARK: - New Architecture Methods

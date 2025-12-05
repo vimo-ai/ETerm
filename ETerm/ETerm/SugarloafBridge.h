@@ -577,8 +577,26 @@ int32_t terminal_pool_create_terminal(
     uint16_t rows
 );
 
+/// Create new terminal with working directory
+///
+/// Returns: Terminal ID (>= 1) on success, -1 on failure
+int32_t terminal_pool_create_terminal_with_cwd(
+    TerminalPoolHandle handle,
+    uint16_t cols,
+    uint16_t rows,
+    const char* working_dir
+);
+
 /// Close terminal
 bool terminal_pool_close_terminal(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Get terminal's current working directory
+///
+/// Returns a string that must be freed with rio_free_string
+char* terminal_pool_get_cwd(
     TerminalPoolHandle handle,
     size_t terminal_id
 );
@@ -655,6 +673,72 @@ bool terminal_pool_needs_render(TerminalPoolHandle handle);
 
 /// Clear render flag
 void terminal_pool_clear_render_flag(TerminalPoolHandle handle);
+
+// =============================================================================
+// Selection API (new architecture)
+// =============================================================================
+
+/// Screen to absolute coordinate result
+typedef struct {
+    int64_t absolute_row;
+    size_t col;
+    bool success;
+} ScreenToAbsoluteResult;
+
+/// Convert screen coordinates to absolute coordinates
+ScreenToAbsoluteResult terminal_pool_screen_to_absolute(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    size_t screen_row,
+    size_t screen_col
+);
+
+/// Set selection
+bool terminal_pool_set_selection(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    int64_t start_absolute_row,
+    size_t start_col,
+    int64_t end_absolute_row,
+    size_t end_col
+);
+
+/// Clear selection
+bool terminal_pool_clear_selection(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Get font metrics from TerminalPool (DDD architecture)
+///
+/// Returns font metrics consistent with rendering:
+/// - cell_width: Cell width (physical pixels)
+/// - cell_height: Base cell height (physical pixels, without line_height_factor)
+/// - line_height: Actual line height (physical pixels, = cell_height * line_height_factor)
+///
+/// Note: Mouse coordinate conversion should use line_height (not cell_height)
+bool terminal_pool_get_font_metrics(
+    TerminalPoolHandle handle,
+    SugarloafFontMetrics* out_metrics
+);
+
+/// Change font size
+///
+/// @param handle TerminalPool handle
+/// @param operation 0=reset(14pt), 1=decrease(-1pt), 2=increase(+1pt)
+/// @return true if successful, false if handle is invalid
+bool terminal_pool_change_font_size(
+    TerminalPoolHandle handle,
+    uint8_t operation
+);
+
+/// Get current font size
+///
+/// @param handle TerminalPool handle
+/// @return Current font size in pt, or 0.0 if handle is invalid
+float terminal_pool_get_font_size(
+    TerminalPoolHandle handle
+);
 
 // =============================================================================
 // RenderScheduler API (CVDisplayLink in Rust)

@@ -327,6 +327,15 @@ class RioTerminalPoolWrapper: TerminalPoolProtocol {
         // TODO: 实现字体大小调整
     }
 
+    func getFontMetrics() -> SugarloafFontMetrics? {
+        // RioTerminalPoolWrapper 使用老架构，从 sugarloaf 获取 metrics
+        var metrics = SugarloafFontMetrics()
+        if sugarloaf_get_font_metrics(sugarloafHandle, &metrics) {
+            return metrics
+        }
+        return nil
+    }
+
     // MARK: - Snapshot API
 
     /// 获取终端快照

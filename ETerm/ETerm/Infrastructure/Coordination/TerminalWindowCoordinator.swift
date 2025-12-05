@@ -436,8 +436,13 @@ class TerminalWindowCoordinator: ObservableObject {
             return manager.getCwd(terminalId: terminalId)
         }
 
-        // 否则尝试使用本地 RioTerminalPoolWrapper
+        // 尝试使用 RioTerminalPoolWrapper
         if let wrapper = terminalPool as? RioTerminalPoolWrapper {
+            return wrapper.getCwd(terminalId: terminalId)
+        }
+
+        // 尝试使用新架构 TerminalPoolWrapper
+        if let wrapper = terminalPool as? TerminalPoolWrapper {
             return wrapper.getCwd(terminalId: terminalId)
         }
 
@@ -567,12 +572,9 @@ class TerminalWindowCoordinator: ObservableObject {
             // 优先使用全局终端管理器
             if let manager = globalTerminalManager {
                 terminalId = manager.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath, for: self)
-            } else if let wrapper = terminalPool as? RioTerminalPoolWrapper {
-                terminalId = wrapper.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath)
             } else {
-                // 新架构 TerminalPoolWrapper: 暂不支持 CWD，使用默认创建
-                print("⚠️ [Coordinator] TerminalPoolWrapper doesn't support CWD, using default createTerminal")
-                terminalId = terminalPool.createTerminal(cols: cols, rows: rows, shell: shell)
+                // 使用协议方法（RioTerminalPoolWrapper 和其他实现都支持）
+                terminalId = terminalPool.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath)
             }
 
             if terminalId >= 0 {

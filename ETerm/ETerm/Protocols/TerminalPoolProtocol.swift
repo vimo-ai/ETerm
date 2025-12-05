@@ -24,6 +24,9 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 创建新终端
     func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int
 
+    /// 创建新终端（指定工作目录）
+    func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int
+
     /// 关闭终端
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool
@@ -90,6 +93,16 @@ protocol TerminalPoolProtocol: AnyObject {
 
     /// 调整字体大小
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation)
+
+    /// 获取字体度量（物理像素）
+    ///
+    /// 返回与渲染一致的字体度量：
+    /// - cell_width: 单元格宽度
+    /// - cell_height: 基础单元格高度（不含 line_height_factor）
+    /// - line_height: 实际行高（= cell_height * line_height_factor）
+    ///
+    /// 鼠标坐标转换应使用 line_height（而非 cell_height）
+    func getFontMetrics() -> SugarloafFontMetrics?
 }
 
 // MARK: - Mock Implementation
@@ -97,6 +110,7 @@ protocol TerminalPoolProtocol: AnyObject {
 /// Mock 终端池（用于测试或初始化时的占位）
 final class MockTerminalPool: TerminalPoolProtocol {
     func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int { -1 }
+    func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int { -1 }
     func closeTerminal(_ terminalId: Int) -> Bool { false }
     func getTerminalCount() -> Int { 0 }
     func writeInput(terminalId: Int, data: String) -> Bool { false }
@@ -111,4 +125,5 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func clearSelection(terminalId: Int) -> Bool { false }
     func getInputRow(terminalId: Int) -> UInt16? { nil }
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {}
+    func getFontMetrics() -> SugarloafFontMetrics? { nil }
 }
