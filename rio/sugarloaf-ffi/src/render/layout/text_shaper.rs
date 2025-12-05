@@ -1,7 +1,7 @@
 #[cfg(feature = "new_architecture")]
 use super::GlyphInfo;
 use crate::render::font::FontContext;
-use crate::render::cache::{GlyphLayout, CursorInfo};
+use crate::render::cache::GlyphLayout;
 use crate::domain::state::TerminalState;
 use sugarloaf::layout::BuilderLine;
 use skia_safe::{Font, Color4f};
@@ -112,31 +112,12 @@ impl TextShaper {
             }
         }
 
-        // 检测光标是否在本行
-        let has_cursor = state.cursor.is_visible() && state.cursor.line() == line_number;
-
-        // 🔍 调试日志：每行输出是否有光标
-        eprintln!("🔍 [TextShaper] line={:2} | cursor_line={} | has_cursor={}",
-                  line_number, state.cursor.line(), if has_cursor { "YES ✓" } else { "NO" });
-
-        let cursor_info = if has_cursor {
-            eprintln!("📍 [TextShaper] Cursor detected on line {}: col={}, shape={:?}",
-                      line_number, state.cursor.col(), state.cursor.shape);
-            // 从 RenderConfig 获取光标颜色
-            // TODO: 暂时使用白色，后续从 config.colors 中获取
-            Some(CursorInfo {
-                col: state.cursor.col(),
-                shape: state.cursor.shape,
-                color: [1.0, 1.0, 1.0, 1.0],  // 白色光标
-            })
-        } else {
-            None
-        };
+        // 注意：光标/选区/搜索等状态信息不在这里计算
+        // 它们在 Renderer.render_with_layout() 时从 TerminalState 动态获取
 
         GlyphLayout {
             glyphs,
             content_hash: 0,  // TODO: 计算实际 hash
-            cursor_info,
         }
     }
 }
@@ -192,8 +173,8 @@ mod tests {
         assert_eq!(layout.glyphs[1].x, 8.0);
         assert_eq!(layout.glyphs[2].x, 16.0);
 
-        // 验证光标不在本行
-        assert!(layout.cursor_info.is_none());
+        // 注意：cursor_info 已从 GlyphLayout 移除
+        // 光标信息在 render_with_layout 时从 state 动态计算
     }
 
     #[test]

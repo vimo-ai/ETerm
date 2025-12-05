@@ -1,5 +1,6 @@
 #[cfg(feature = "new_architecture")]
 use crate::render::cache::GlyphLayout;
+use crate::render::cache::CursorInfo;
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};
 use rio_backend::ansi::CursorShape;
 use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f};
@@ -19,6 +20,7 @@ impl LineRasterizer {
     ///
     /// 参数：
     /// - layout: 字形布局（字符 + 字体 + 位置）
+    /// - cursor_info: 光标信息（从 TerminalState 动态计算，不从 layout 缓存读取）
     /// - line_width: 行宽度（像素）
     /// - cell_width: 单元格宽度（像素）
     /// - cell_height: 单元格高度（像素）
@@ -31,14 +33,16 @@ impl LineRasterizer {
     /// 1. 创建 Skia surface（行尺寸）
     /// 2. 填充背景色
     /// 3. 遍历所有字形，绘制字符
-    /// 4. 返回 Image
+    /// 4. 绘制光标（如果有）
+    /// 5. 返回 Image
     pub fn render(
         &self,
         layout: &GlyphLayout,
+        cursor_info: Option<&CursorInfo>,
         line_width: f32,
         cell_width: f32,
         cell_height: f32,
-        line_height: f32,  // 🎯 恢复 line_height 参数
+        line_height: f32,
         baseline_offset: f32,
         background_color: Color4f,
         box_drawing_config: &BoxDrawingConfig,
@@ -105,7 +109,7 @@ impl LineRasterizer {
         }
 
         // ===== 步骤 4.5: 绘制光标（如果有）=====
-        if let Some(cursor) = &layout.cursor_info {
+        if let Some(cursor) = cursor_info {
             let cursor_x = cursor.col as f32 * cell_width;
             let cursor_color = Color4f::new(
                 cursor.color[0],
@@ -173,11 +177,11 @@ mod tests {
         let layout = GlyphLayout {
             glyphs: vec![],
             content_hash: 0,
-            cursor_info: None,
         };
 
         let image = rasterizer.render(
             &layout,
+            None,   // cursor_info
             800.0,  // line_width
             10.0,   // cell_width
             16.0,   // cell_height
@@ -209,11 +213,11 @@ mod tests {
                 width: 1.0,  // 单宽字符
             }],
             content_hash: 0,
-            cursor_info: None,
         };
 
         let image = rasterizer.render(
             &layout,
+            None,   // cursor_info
             800.0,
             10.0,
             16.0,

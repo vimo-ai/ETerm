@@ -1,6 +1,6 @@
 use crate::domain::TerminalState;
 use crate::domain::views::grid::CellData;
-use super::cache::{LineCache, GlyphLayout, CacheResult};
+use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo};
 use super::cache::{compute_text_hash, compute_state_hash_for_line};
 use super::font::FontContext;
 use super::layout::TextShaper;
@@ -68,6 +68,7 @@ impl Renderer {
             }
             CacheResult::LayoutHit(layout) => {
                 // Level 2: 外层命中 → 快速绘制（30%）
+                // 复用字体选择（layout），重新计算状态（cursor/选区/搜索）
                 self.stats.layout_hits += 1;
                 let image = self.render_with_layout(layout.clone(), line, state);
                 self.cache.insert(text_hash, state_hash, layout, image.clone());
@@ -169,15 +170,6 @@ impl Renderer {
     /// - `state`: 终端状态（用于检查光标、选区、搜索）
     fn cell_to_fragment_style(&self, cell: &CellData, line: usize, col: usize, state: &TerminalState) -> FragmentStyle {
         use rio_backend::config::colors::NamedColor;
-
-        // Debug: 在第一个单元格时打印状态总览（避免刷屏）
-        if line == 0 && col == 0 {
-            eprintln!("🖼️  [Renderer::cell_to_fragment_style] Processing line 0:");
-            eprintln!("   cursor_pos=({}, {}), selection={}, search={}",
-                      state.cursor.position.line, state.cursor.position.col,
-                      if state.selection.is_some() { "YES" } else { "NO" },
-                      if state.search.is_some() { "YES" } else { "NO" });
-        }
 
         // 获取颜色配置
         let colors = &self.config.colors;
@@ -363,7 +355,9 @@ impl Renderer {
     }
 
     /// 基于布局绘制（光栅化）
-    fn render_with_layout(&mut self, layout: GlyphLayout, _line: usize, state: &TerminalState) -> skia_safe::Image {
+    ///
+    /// 注意：cursor_info 从 state 动态计算，不从 layout 缓存读取
+    fn render_with_layout(&mut self, layout: GlyphLayout, line: usize, state: &TerminalState) -> skia_safe::Image {
         // 获取 metrics（自动缓存）
         let metrics = self.get_font_metrics();
 
@@ -377,16 +371,35 @@ impl Renderer {
         // 用于 box-drawing 字符的拉升填充
         let line_height = metrics.cell_height.value * self.config.line_height;
 
+        // 🔧 从 state 动态计算 cursor_info（不从 layout 缓存读取）
+        // 注意：cursor.line() 是绝对坐标，line 是屏幕行号，需要转换
+        // 绝对坐标 = history_size + 屏幕行号 - display_offset
+        // 所以：屏幕行号 = 绝对坐标 - history_size + display_offset
+        let cursor_screen_line = state.cursor.line()
+            .saturating_sub(state.grid.history_size())
+            .saturating_add(state.grid.display_offset());
+
+        let cursor_info = if state.cursor.is_visible() && cursor_screen_line == line {
+            Some(CursorInfo {
+                col: state.cursor.col(),
+                shape: state.cursor.shape,
+                color: [1.0, 1.0, 1.0, 0.8],  // TODO: 从 config.colors 读取
+            })
+        } else {
+            None
+        };
+
         self.rasterizer
             .render(
                 &layout,
+                cursor_info.as_ref(),
                 line_width,
-                metrics.cell_width.value,      // 使用 .value 访问
-                metrics.cell_height.value,     // 使用 .value 访问
-                line_height,                   // 🎯 传递完整行高
-                metrics.baseline_offset.value, // 使用 .value 访问
+                metrics.cell_width.value,
+                metrics.cell_height.value,
+                line_height,
+                metrics.baseline_offset.value,
                 background_color,
-                &self.config.box_drawing,      // 🎯 传递 box-drawing 配置
+                &self.config.box_drawing,
             )
             .expect("Failed to render line")
     }
@@ -778,6 +791,101 @@ mod tests {
     }
 
     /// 测试：统计信息重置
+    /// 创建所有行 hash 相同的 Mock State（模拟空行场景）
+    fn create_mock_state_same_hash() -> TerminalState {
+        // 所有行 hash 相同（模拟全空行）
+        let row_hashes: Vec<u64> = vec![9999; 24];
+        let grid_data = Arc::new(GridData::new_mock(80, 24, 0, row_hashes));
+        let grid = GridView::new(grid_data);
+
+        let cursor = CursorView {
+            position: AbsolutePoint::new(0, 0),  // 光标在第 0 行
+            shape: CursorShape::Block,
+        };
+
+        TerminalState {
+            grid,
+            cursor,
+            selection: None,
+            search: None,
+        }
+    }
+
+    /// 🐛 BUG 复现测试：相同内容的行，光标只应该出现在光标所在行
+    ///
+    /// 场景：
+    /// - Line 0: 空行 + 有光标 → 渲染出带光标的 image
+    /// - Line 1: 空行 + 无光标 → 应该渲染出无光标的 image
+    ///
+    /// Bug：Line 1 错误地复用了 Line 0 的 layout（带 cursor_info），导致也显示光标
+    #[test]
+    fn test_same_content_different_cursor_state() {
+        let mut renderer = create_test_renderer();
+        let state = create_mock_state_same_hash();
+
+        // 光标在第 0 行
+        assert_eq!(state.cursor.position.line, 0);
+
+        // 渲染 Line 0（有光标）→ Miss
+        let _img0 = renderer.render_line(0, &state);
+        assert_eq!(renderer.stats.cache_misses, 1, "Line 0 should be cache miss");
+
+        renderer.reset_stats();
+
+        // 渲染 Line 1（无光标，但 text_hash 相同）
+        // 期望：要么 Miss（重新计算），要么 LayoutHit 但 cursor_info 为 None
+        let _img1 = renderer.render_line(1, &state);
+
+        // 打印实际结果
+        eprintln!("Line 1 stats: misses={}, layout_hits={}, cache_hits={}",
+            renderer.stats.cache_misses,
+            renderer.stats.layout_hits,
+            renderer.stats.cache_hits);
+
+        // 关键断言：Line 1 不应该命中 Line 0 的带光标缓存
+        // 如果 layout_hits == 1，说明复用了 layout，需要检查 cursor_info 是否被正确处理
+        // 如果 cache_hits == 1，那就是严重 bug（直接返回了带光标的 image）
+
+        // 目前期望行为：由于 state_hash 不同（Line 0 有光标，Line 1 无光标），
+        // 应该是 LayoutHit 或 Miss，不应该是 FullHit
+        assert_eq!(renderer.stats.cache_hits, 0,
+            "BUG: Line 1 should NOT get FullHit from Line 0's cached image!");
+    }
+
+    /// 🐛 BUG 复现测试：LayoutHit 时 cursor_info 应该被正确处理
+    ///
+    /// 验证：当 Line 1 走 LayoutHit 分支时，不应该使用 Line 0 的 cursor_info
+    #[test]
+    fn test_layout_hit_cursor_info_not_inherited() {
+        let mut renderer = create_test_renderer();
+        let state = create_mock_state_same_hash();
+
+        // 光标在第 0 行
+        assert_eq!(state.cursor.position.line, 0);
+
+        // 渲染 Line 0（有光标）→ Miss，layout 里有 cursor_info
+        let _img0 = renderer.render_line(0, &state);
+        assert_eq!(renderer.stats.cache_misses, 1);
+
+        renderer.reset_stats();
+
+        // 渲染 Line 1（无光标）→ LayoutHit
+        // 在 LayoutHit 分支加日志，查看 layout.cursor_info 的值
+        let _img1 = renderer.render_line(1, &state);
+        assert_eq!(renderer.stats.layout_hits, 1, "Line 1 should be LayoutHit");
+
+        // 🐛 BUG：LayoutHit 时直接用了缓存的 layout，里面带着 Line 0 的 cursor_info
+        // 正确行为：LayoutHit 时应该根据当前 state 重新计算 cursor_info，或者忽略缓存的 cursor_info
+        //
+        // 这个测试目前会"通过"（因为我们只验证了统计数据），
+        // 但实际渲染结果是错的（Line 1 也会显示光标）
+        //
+        // TODO: 需要验证渲染出的 image 里没有光标
+        // 方法1: 检查 layout.cursor_info（但 LayoutHit 用的是缓存的 layout）
+        // 方法2: 像素级比较 image（复杂）
+        // 方法3: 在 LayoutHit 分支修复 cursor_info（正确方案）
+    }
+
     #[test]
     fn test_stats_reset() {
         let mut renderer = create_test_renderer();

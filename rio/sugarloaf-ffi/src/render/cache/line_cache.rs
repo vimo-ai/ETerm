@@ -18,14 +18,15 @@ pub struct LineCacheEntry {
 }
 
 /// 字形布局（真实版本）
+///
+/// 注意：只包含字体选择结果，不包含状态信息（光标、选区、搜索）
+/// 状态信息在渲染时从 TerminalState 动态获取
 #[derive(Debug, Clone)]
 pub struct GlyphLayout {
     /// 所有字形信息（字符 + 字体 + 像素坐标）
     pub glyphs: Vec<GlyphInfo>,
     /// 内容 hash（用于缓存 key 和调试）
     pub content_hash: u64,
-    /// 光标信息（如果光标在本行）
-    pub cursor_info: Option<CursorInfo>,
 }
 
 /// 光标信息（用于渲染）
@@ -133,7 +134,6 @@ mod tests {
         GlyphLayout {
             glyphs: vec![],
             content_hash,
-            cursor_info: None,
         }
     }
 
