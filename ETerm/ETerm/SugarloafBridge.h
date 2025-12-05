@@ -650,4 +650,79 @@ void terminal_pool_set_event_callback(
 /// Get terminal count
 size_t terminal_pool_terminal_count(TerminalPoolHandle handle);
 
+/// Check if needs render
+bool terminal_pool_needs_render(TerminalPoolHandle handle);
+
+/// Clear render flag
+void terminal_pool_clear_render_flag(TerminalPoolHandle handle);
+
+// =============================================================================
+// RenderScheduler API (CVDisplayLink in Rust)
+// =============================================================================
+
+/// RenderScheduler handle (opaque pointer)
+typedef void* RenderSchedulerHandle;
+
+/// Render layout info
+typedef struct {
+    size_t terminal_id;
+    float x;
+    float y;
+    float width;
+    float height;
+} RenderLayout;
+
+/// Render callback type
+///
+/// Called on VSync, Swift should execute render in callback:
+/// - terminal_pool_begin_frame
+/// - terminal_pool_render_terminal (for each layout item)
+/// - terminal_pool_end_frame
+typedef void (*RenderSchedulerCallback)(
+    void* context,
+    const RenderLayout* layout,
+    size_t layout_count
+);
+
+/// Create RenderScheduler
+RenderSchedulerHandle render_scheduler_create(void);
+
+/// Destroy RenderScheduler
+void render_scheduler_destroy(RenderSchedulerHandle handle);
+
+/// Set render callback
+///
+/// Callback is called on CVDisplayLink VSync
+void render_scheduler_set_callback(
+    RenderSchedulerHandle handle,
+    RenderSchedulerCallback callback,
+    void* context
+);
+
+/// Start RenderScheduler (start CVDisplayLink)
+bool render_scheduler_start(RenderSchedulerHandle handle);
+
+/// Stop RenderScheduler
+void render_scheduler_stop(RenderSchedulerHandle handle);
+
+/// Request render (mark dirty)
+void render_scheduler_request_render(RenderSchedulerHandle handle);
+
+/// Set render layout
+///
+/// Layout info will be passed to callback on next VSync
+void render_scheduler_set_layout(
+    RenderSchedulerHandle handle,
+    const RenderLayout* layout,
+    size_t count
+);
+
+/// Bind to TerminalPool's needs_render flag
+///
+/// Let RenderScheduler and TerminalPool share the same dirty flag
+void render_scheduler_bind_to_pool(
+    RenderSchedulerHandle scheduler_handle,
+    TerminalPoolHandle pool_handle
+);
+
 #endif /* SugarloafBridge_h */
