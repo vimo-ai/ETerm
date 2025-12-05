@@ -63,6 +63,19 @@ extern "C" {
 
 #[cfg(target_os = "macos")]
 fn default_shell_command(shell: &str) {
+    // 设置终端环境变量以支持颜色
+    unsafe {
+        // 使用 xterm-256color 作为 TERM 类型（广泛支持）
+        let term_name = CString::new("TERM").unwrap();
+        let term_value = CString::new("xterm-256color").unwrap();
+        libc::setenv(term_name.as_ptr(), term_value.as_ptr(), 1);
+
+        // 设置 COLORTERM 表示支持真彩色
+        let colorterm_name = CString::new("COLORTERM").unwrap();
+        let colorterm_value = CString::new("truecolor").unwrap();
+        libc::setenv(colorterm_name.as_ptr(), colorterm_value.as_ptr(), 1);
+    }
+
     let command_shell_string = CString::new(shell).unwrap();
     let command_pointer = command_shell_string.as_ptr();
     let args = CString::new("--login").unwrap();
@@ -74,6 +87,19 @@ fn default_shell_command(shell: &str) {
 
 #[cfg(not(target_os = "macos"))]
 fn default_shell_command(shell: &str) {
+    // 设置终端环境变量以支持颜色
+    unsafe {
+        // 使用 xterm-256color 作为 TERM 类型（广泛支持）
+        let term_name = CString::new("TERM").unwrap();
+        let term_value = CString::new("xterm-256color").unwrap();
+        libc::setenv(term_name.as_ptr(), term_value.as_ptr(), 1);
+
+        // 设置 COLORTERM 表示支持真彩色
+        let colorterm_name = CString::new("COLORTERM").unwrap();
+        let colorterm_value = CString::new("truecolor").unwrap();
+        libc::setenv(colorterm_name.as_ptr(), colorterm_value.as_ptr(), 1);
+    }
+
     let command_shell_string = CString::new(shell).unwrap();
     let command_pointer = command_shell_string.as_ptr();
     // let home = std::env::var("HOME").unwrap();

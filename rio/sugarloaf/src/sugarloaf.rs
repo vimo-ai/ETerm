@@ -231,7 +231,7 @@ impl Sugarloaf<'_> {
         let instance = Sugarloaf {
             state,
             ctx,
-            background_color: Some(Color4f::new(0.0, 0.0, 0.0, 1.0)),
+            background_color: None,  // 透明背景，不硬编码黑色
             graphics: Graphics::default(),
             #[cfg(target_os = "macos")]
             font_library: font_library.inner.clone(),
@@ -1038,7 +1038,7 @@ impl Sugarloaf<'_> {
 
         // 根据 damage 类型处理
         let is_full_damage = damaged_lines.is_none();
-        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 1.0));
+        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 0.0));  // 透明背景
 
         if is_full_damage {
             // Full damage: 清空整个 off-screen surface

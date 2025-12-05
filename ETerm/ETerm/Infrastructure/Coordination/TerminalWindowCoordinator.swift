@@ -569,6 +569,10 @@ class TerminalWindowCoordinator: ObservableObject {
                 terminalId = manager.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath, for: self)
             } else if let wrapper = terminalPool as? RioTerminalPoolWrapper {
                 terminalId = wrapper.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath)
+            } else {
+                // 新架构 TerminalPoolWrapper: 暂不支持 CWD，使用默认创建
+                print("⚠️ [Coordinator] TerminalPoolWrapper doesn't support CWD, using default createTerminal")
+                terminalId = terminalPool.createTerminal(cols: cols, rows: rows, shell: shell)
             }
 
             if terminalId >= 0 {
