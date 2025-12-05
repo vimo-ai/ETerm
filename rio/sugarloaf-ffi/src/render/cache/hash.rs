@@ -34,14 +34,15 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
     // 这样当滚动时，即使物理行内容不变，state_hash 也会改变
     hasher.write_usize(state.grid.display_offset());
 
-    // 注意：由于当前测试中没有历史缓冲区（history_size = 0），
-    // 绝对坐标 == 屏幕坐标，所以直接比较即可。
-    // 在真实场景中（有历史缓冲区时），需要将绝对坐标转换为屏幕坐标。
-    // TODO: 当实现真实的历史缓冲区时，需要添加坐标转换逻辑
+    // 🔧 将屏幕行号转换为绝对行号，用于和光标/选区/搜索比较
+    // 绝对行号 = history_size + screen_line - display_offset
+    let abs_line = state.grid.history_size()
+        .saturating_add(screen_line)
+        .saturating_sub(state.grid.display_offset());
 
     // 1. 光标状态
     // 🔑 关键：始终写入光标是否在本行，这样光标离开时 hash 也会变化
-    let cursor_on_this_line = state.cursor.position.line == screen_line;
+    let cursor_on_this_line = state.cursor.position.line == abs_line;
     hasher.write_u8(cursor_on_this_line as u8);
 
     if cursor_on_this_line {
@@ -49,21 +50,21 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
         hasher.write_u8(state.cursor.shape as u8);
     }
 
-    // 2. 选区覆盖本行？
+    // 2. 选区覆盖本行？（使用绝对行号比较）
     if let Some(sel) = &state.selection {
-        if line_in_selection(screen_line, sel) {
-            let (start_col, end_col) = selection_range_on_line(screen_line, sel);
+        if line_in_selection(abs_line, sel) {
+            let (start_col, end_col) = selection_range_on_line(abs_line, sel);
             hasher.write_usize(start_col);
             hasher.write_usize(end_col);
             hasher.write_u8(sel.ty as u8);
         }
     }
 
-    // 3. 搜索覆盖本行？
+    // 3. 搜索覆盖本行？（使用绝对行号比较）
     if let Some(search) = &state.search {
         for (i, m) in search.matches.iter().enumerate() {
-            if line_in_match(screen_line, m) {
-                let (start_col, end_col) = match_range_on_line(screen_line, m);
+            if line_in_match(abs_line, m) {
+                let (start_col, end_col) = match_range_on_line(abs_line, m);
                 hasher.write_usize(start_col);
                 hasher.write_usize(end_col);
                 let is_focused = i == search.focused_index;
@@ -76,26 +77,42 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
 }
 
 /// 判断选区是否覆盖本行
-fn line_in_selection(line: usize, sel: &SelectionView) -> bool {
-    line >= sel.start.line && line <= sel.end.line
+///
+/// # 参数
+/// - `abs_line`: 绝对行号（已转换）
+/// - `sel`: 选区视图（使用绝对坐标）
+fn line_in_selection(abs_line: usize, sel: &SelectionView) -> bool {
+    abs_line >= sel.start.line && abs_line <= sel.end.line
 }
 
 /// 获取选区在本行的范围
-fn selection_range_on_line(line: usize, sel: &SelectionView) -> (usize, usize) {
-    let start_col = if line == sel.start.line { sel.start.col } else { 0 };
-    let end_col = if line == sel.end.line { sel.end.col } else { usize::MAX };
+///
+/// # 参数
+/// - `abs_line`: 绝对行号（已转换）
+/// - `sel`: 选区视图（使用绝对坐标）
+fn selection_range_on_line(abs_line: usize, sel: &SelectionView) -> (usize, usize) {
+    let start_col = if abs_line == sel.start.line { sel.start.col } else { 0 };
+    let end_col = if abs_line == sel.end.line { sel.end.col } else { usize::MAX };
     (start_col, end_col)
 }
 
 /// 判断匹配是否覆盖本行
-fn line_in_match(line: usize, m: &MatchRange) -> bool {
-    line >= m.start.line && line <= m.end.line
+///
+/// # 参数
+/// - `abs_line`: 绝对行号（已转换）
+/// - `m`: 匹配范围（使用绝对坐标）
+fn line_in_match(abs_line: usize, m: &MatchRange) -> bool {
+    abs_line >= m.start.line && abs_line <= m.end.line
 }
 
 /// 获取匹配在本行的范围
-fn match_range_on_line(line: usize, m: &MatchRange) -> (usize, usize) {
-    let start_col = if line == m.start.line { m.start.col } else { 0 };
-    let end_col = if line == m.end.line { m.end.col } else { usize::MAX };
+///
+/// # 参数
+/// - `abs_line`: 绝对行号（已转换）
+/// - `m`: 匹配范围（使用绝对坐标）
+fn match_range_on_line(abs_line: usize, m: &MatchRange) -> (usize, usize) {
+    let start_col = if abs_line == m.start.line { m.start.col } else { 0 };
+    let end_col = if abs_line == m.end.line { m.end.col } else { usize::MAX };
     (start_col, end_col)
 }
 

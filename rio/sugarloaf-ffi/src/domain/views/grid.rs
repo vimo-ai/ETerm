@@ -68,6 +68,48 @@ impl GridView {
         self.data.history_size
     }
 
+    /// 将屏幕坐标转换为绝对坐标
+    ///
+    /// # 公式
+    /// absolute_line = history_size + screen_line - display_offset
+    ///
+    /// # 参数
+    /// - `screen_pos`: 屏幕坐标（ScreenPoint）
+    ///
+    /// # 返回
+    /// 绝对坐标（AbsolutePoint）
+    #[inline]
+    pub fn screen_to_absolute(&self, screen_line: usize, col: usize) -> crate::domain::AbsolutePoint {
+        let absolute_line = self.data.history_size
+            .saturating_add(screen_line)
+            .saturating_sub(self.data.display_offset);
+        crate::domain::AbsolutePoint::new(absolute_line, col)
+    }
+
+    /// 将绝对坐标转换为屏幕坐标
+    ///
+    /// # 公式
+    /// screen_line = absolute_line - history_size + display_offset
+    ///
+    /// # 参数
+    /// - `abs_pos`: 绝对坐标（AbsolutePoint）
+    ///
+    /// # 返回
+    /// - `Some(screen_line)`: 如果在可见区域内
+    /// - `None`: 如果不在可见区域内
+    #[inline]
+    pub fn absolute_to_screen(&self, abs_line: usize) -> Option<usize> {
+        let screen_line = abs_line
+            .checked_sub(self.data.history_size)?
+            .checked_add(self.data.display_offset)?;
+
+        if screen_line < self.data.screen_lines {
+            Some(screen_line)
+        } else {
+            None
+        }
+    }
+
     /// 获取指定屏幕行的哈希值（用于缓存查询）
     ///
     /// # 设计原理

@@ -86,9 +86,13 @@ impl Renderer {
     }
 
     /// 从 TerminalState 提取指定行的数据，转换为 BuilderLine
-    fn extract_line(&self, line: usize, state: &TerminalState) -> BuilderLine {
+    ///
+    /// # 参数
+    /// - `screen_line`: 屏幕行号（0 = 屏幕顶部）
+    /// - `state`: 终端状态
+    fn extract_line(&self, screen_line: usize, state: &TerminalState) -> BuilderLine {
         // 获取行数据
-        let row_view = match state.grid.row(line) {
+        let row_view = match state.grid.row(screen_line) {
             Some(row) => row,
             None => {
                 // 行不存在，返回空行
@@ -122,8 +126,10 @@ impl Renderer {
 
             let ch = cell.c;
 
-            // 从 CellData 构造 FragmentStyle（传递行号、列号和状态）
-            let style = self.cell_to_fragment_style(&cell, line, col, state);
+            // 从 CellData 构造 FragmentStyle
+            // 🔧 将屏幕坐标转换为绝对坐标，用于选区/搜索匹配检测
+            let abs_pos = state.grid.screen_to_absolute(screen_line, col);
+            let style = self.cell_to_fragment_style(&cell, &abs_pos, state);
 
             // 如果样式改变，创建新 fragment
             // styles_equal 已经比较了 width，所以 width 改变会自动分割 fragment
@@ -165,10 +171,9 @@ impl Renderer {
     ///
     /// # 参数
     /// - `cell`: 单元格数据
-    /// - `line`: 行号（绝对坐标）
-    /// - `col`: 列号
+    /// - `pos`: 绝对坐标（AbsolutePoint）
     /// - `state`: 终端状态（用于检查光标、选区、搜索）
-    fn cell_to_fragment_style(&self, cell: &CellData, line: usize, col: usize, state: &TerminalState) -> FragmentStyle {
+    fn cell_to_fragment_style(&self, cell: &CellData, pos: &crate::domain::AbsolutePoint, state: &TerminalState) -> FragmentStyle {
         use rio_backend::config::colors::NamedColor;
 
         // 获取颜色配置
@@ -193,15 +198,15 @@ impl Renderer {
         };
 
         // ===== 检查光标 =====
-        // 注意：光标现在在 LineRasterizer 中渲染（通过 GlyphLayout.cursor_info）
+        // 注意：光标现在在 LineRasterizer 中渲染（通过独立的 cursor_info 参数）
         // 这里的 FragmentStyle.cursor 已经不再使用，所以固定为 None
         let cursor = None;
 
         // ===== 检查选区 =====
         if let Some(selection) = &state.selection {
-            if let Some(_range) = get_selection_range_at(line, col, selection) {
+            if let Some(_range) = get_selection_range_at(pos, selection) {
                 eprintln!("🔷 [Renderer] SELECTION DETECTED at ({}, {}), fg={:?}, bg={:?}",
-                          line, col, colors.selection_foreground, colors.selection_background);
+                          pos.line, pos.col, colors.selection_foreground, colors.selection_background);
 
                 // 在选区内：使用选区颜色
                 fg_color = colors.selection_foreground;
@@ -211,7 +216,7 @@ impl Renderer {
 
         // ===== 检查搜索匹配 =====
         if let Some(search) = &state.search {
-            if let Some(is_focused) = get_search_match_at(line, col, search) {
+            if let Some(is_focused) = get_search_match_at(pos, search) {
                 // 在搜索匹配内
                 if is_focused {
                     // 聚焦的匹配：使用聚焦颜色
@@ -431,34 +436,33 @@ fn is_cursor_at(line: usize, col: usize, cursor_pos: &crate::domain::AbsolutePoi
 /// 判断位置是否在选区内
 ///
 /// # 参数
-/// - `line`: 行号（绝对坐标）
-/// - `col`: 列号
+/// - `pos`: 绝对坐标（AbsolutePoint）
 /// - `selection`: 选区视图
 ///
 /// # 返回
 /// - `Some((start_col, end_col))`: 在选区内，返回本行的选区列范围
 /// - `None`: 不在选区内
-fn get_selection_range_at(line: usize, col: usize, selection: &crate::domain::SelectionView) -> Option<(usize, usize)> {
+fn get_selection_range_at(pos: &crate::domain::AbsolutePoint, selection: &crate::domain::SelectionView) -> Option<(usize, usize)> {
     // 检查行是否在选区范围内
-    if line < selection.start.line || line > selection.end.line {
+    if pos.line < selection.start.line || pos.line > selection.end.line {
         return None;
     }
 
     // 计算本行的选区列范围
-    let start_col = if line == selection.start.line {
+    let start_col = if pos.line == selection.start.line {
         selection.start.col
     } else {
         0
     };
 
-    let end_col = if line == selection.end.line {
+    let end_col = if pos.line == selection.end.line {
         selection.end.col
     } else {
         usize::MAX
     };
 
     // 检查列是否在范围内
-    if col >= start_col && col <= end_col {
+    if pos.col >= start_col && pos.col <= end_col {
         Some((start_col, end_col))
     } else {
         None
@@ -468,35 +472,34 @@ fn get_selection_range_at(line: usize, col: usize, selection: &crate::domain::Se
 /// 判断位置是否在搜索匹配内
 ///
 /// # 参数
-/// - `line`: 行号（绝对坐标）
-/// - `col`: 列号
+/// - `pos`: 绝对坐标（AbsolutePoint）
 /// - `search`: 搜索视图
 ///
 /// # 返回
 /// - `Some(is_focused)`: 在匹配内，返回是否是聚焦的匹配
 /// - `None`: 不在匹配内
-fn get_search_match_at(line: usize, col: usize, search: &crate::domain::SearchView) -> Option<bool> {
+fn get_search_match_at(pos: &crate::domain::AbsolutePoint, search: &crate::domain::SearchView) -> Option<bool> {
     for (i, m) in search.matches.iter().enumerate() {
         // 检查行是否在匹配范围内
-        if line < m.start.line || line > m.end.line {
+        if pos.line < m.start.line || pos.line > m.end.line {
             continue;
         }
 
         // 计算本行的匹配列范围
-        let start_col = if line == m.start.line {
+        let start_col = if pos.line == m.start.line {
             m.start.col
         } else {
             0
         };
 
-        let end_col = if line == m.end.line {
+        let end_col = if pos.line == m.end.line {
             m.end.col
         } else {
             usize::MAX
         };
 
         // 检查列是否在范围内
-        if col >= start_col && col <= end_col {
+        if pos.col >= start_col && pos.col <= end_col {
             let is_focused = i == search.focused_index;
             return Some(is_focused);
         }
