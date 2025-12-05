@@ -562,6 +562,8 @@ pub fn create_pty_with_spawn(
 
     builder.env("USER", user.user);
     builder.env("HOME", user.home);
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
 
     unsafe {
         builder.pre_exec(move || {
