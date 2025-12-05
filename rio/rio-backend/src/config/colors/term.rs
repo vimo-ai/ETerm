@@ -209,6 +209,9 @@ impl List {
             self[NamedColor::DimWhite] =
                 (ColorRgb::from_color_arr(colors.white) * DIM_FACTOR).to_arr();
         }
+
+        // Cursor color
+        self[NamedColor::Cursor] = colors.cursor;
     }
 
     pub fn fill_cube(&mut self) {
