@@ -369,12 +369,6 @@ impl Terminal {
 
                 // 转换为绝对坐标
                 let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
-
-                eprintln!("📍 [Terminal::state] Cursor conversion:");
-                eprintln!("   row={}, col={}, display_offset={}, history_size={}",
-                          pos.row.0, pos.col.0, display_offset, history_size);
-                eprintln!("   → absolute_line={}, absolute_col={}", absolute_line, pos.col.0);
-
                 AbsolutePoint::new(absolute_line, pos.col.0 as usize)
             };
             let cursor_shape = crosswords.cursor_shape;

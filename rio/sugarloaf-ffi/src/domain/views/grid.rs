@@ -62,6 +62,12 @@ impl GridView {
         self.data.display_offset
     }
 
+    /// 获取历史缓冲区大小
+    #[inline]
+    pub fn history_size(&self) -> usize {
+        self.data.history_size
+    }
+
     /// 获取指定屏幕行的哈希值（用于缓存查询）
     ///
     /// # 设计原理

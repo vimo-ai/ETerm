@@ -71,7 +71,7 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
             cols: 80,
             rows: 24,
             font_size: fontSize,
-            line_height: 1.2,  // 行高因子：1.2 = 120%（舒适的行间距）
+            line_height: 1.0,  // 行高因子：1.0 = 100%（调试用）
             scale: scale,
             window_handle: windowHandle,
             display_handle: displayHandle,

@@ -45,7 +45,7 @@ pub struct BoxDrawingConfig {
 impl Default for BoxDrawingConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,  // 调试用：暂时禁用
         }
     }
 }
