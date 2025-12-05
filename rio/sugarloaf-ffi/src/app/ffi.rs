@@ -45,10 +45,12 @@ pub struct FontMetrics {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalEventType {
-    CursorBlink = 0,
-    Bell = 1,
-    TitleChanged = 2,
-    Damaged = 3,
+    Wakeup = 0,       // 对应 Swift: case wakeup = 0
+    Render = 1,       // 对应 Swift: case render = 1
+    CursorBlink = 2,  // 对应 Swift: case cursorBlink = 2
+    Bell = 3,         // 对应 Swift: case bell = 3
+    TitleChanged = 4, // 对应 Swift: case titleChanged = 4
+    Damaged = 5,      // 保留用于兼容
 }
 
 /// 终端事件

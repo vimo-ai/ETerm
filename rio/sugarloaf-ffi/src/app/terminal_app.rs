@@ -16,6 +16,10 @@ use std::ffi::c_void;
 use parking_lot::Mutex;
 use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
 use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, layout::RootStyle};
+use crate::rio_event::EventQueue;
+use crate::rio_machine::Machine;
+use corcovado::channel;
+use std::thread::JoinHandle;
 
 /// 终端应用（协调者）
 pub struct TerminalApp {
@@ -36,6 +40,16 @@ pub struct TerminalApp {
 
     /// 配置
     config: AppConfig,
+
+    /// ===== PTY 相关 =====
+    /// 事件队列
+    event_queue: EventQueue,
+
+    /// Machine 线程句柄
+    machine_handle: Option<JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>>,
+
+    /// PTY 输入通道
+    pty_tx: Option<channel::Sender<rio_backend::event::Msg>>,
 }
 
 impl TerminalApp {
@@ -46,32 +60,41 @@ impl TerminalApp {
             return Err(ErrorCode::InvalidConfig);
         }
 
-        // 创建 Terminal（使用 new_for_test，ID 固定为 0）
+        // 1. 创建 EventQueue
+        let event_queue = EventQueue::new();
+
+        // 2. 创建 Terminal（使用 new_with_pty，支持真实 PTY）
         let terminal_id = TerminalId(0);
-        let terminal = Terminal::new_for_test(
+        let terminal = Terminal::new_with_pty(
             terminal_id,
             config.cols as usize,
             config.rows as usize,
+            event_queue.clone(),
         );
 
-        // 创建 FontLibrary (为 FontContext 和 Sugarloaf 各创建一个)
+        // 3. 创建 PTY 和 Machine
+        eprintln!("🔧 [TerminalApp] Creating PTY and Machine...");
+        let (machine_handle, pty_tx) = Self::create_pty_and_machine(&terminal, event_queue.clone())?;
+        eprintln!("✅ [TerminalApp] PTY and Machine created successfully");
+
+        // 4. 创建 FontLibrary (为 FontContext 和 Sugarloaf 各创建一个)
         let (font_library_for_context, _) = FontLibrary::new(SugarloafFonts::default());
         let (font_library_for_sugarloaf, _) = FontLibrary::new(SugarloafFonts::default());
 
-        // 创建字体上下文
+        // 5. 创建字体上下文
         let font_context = Arc::new(FontContext::new(font_library_for_context));
 
-        // 创建渲染配置
+        // 6. 创建渲染配置
         let render_config = RenderConfig::new(
             config.font_size,
             config.line_height,
             config.scale,
         );
 
-        // 创建渲染器
+        // 7. 创建渲染器
         let renderer = Renderer::new(font_context.clone(), render_config);
 
-        // 创建 Sugarloaf (测试环境下允许失败)
+        // 8. 创建 Sugarloaf (测试环境下允许失败)
         let sugarloaf = if config.window_handle.is_null() {
             #[cfg(test)]
             {
@@ -92,7 +115,62 @@ impl TerminalApp {
             font_context,
             event_callback: None,
             config,
+            event_queue,
+            machine_handle: Some(machine_handle),
+            pty_tx: Some(pty_tx),
         })
+    }
+
+    /// 创建 PTY 和 Machine
+    fn create_pty_and_machine(
+        terminal: &Terminal,
+        event_queue: EventQueue,
+    ) -> Result<(JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>, channel::Sender<rio_backend::event::Msg>), ErrorCode> {
+        use teletypewriter::{create_pty_with_fork, WinsizeBuilder};
+        use crate::rio_event::FFIEventListener;
+        use std::os::unix::io::AsRawFd;
+
+        // 获取 inner_crosswords（给 Machine 使用）
+        let crosswords = terminal.inner_crosswords()
+            .ok_or(ErrorCode::InvalidConfig)?;
+
+        // 创建 PTY（使用系统默认 shell）
+        use std::borrow::Cow;
+        use std::env;
+
+        let cols = terminal.cols() as u16;
+        let rows = terminal.rows() as u16;
+
+        // 获取用户的默认 shell（从环境变量 SHELL）
+        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+
+        let pty = create_pty_with_fork(&Cow::Owned(shell), cols, rows)
+            .map_err(|_| ErrorCode::RenderError)?;
+
+        // 获取 PTY 的 fd 和 shell_pid（在 move 之前保存）
+        let pty_fd = *pty.child.id;
+        let shell_pid = *pty.child.pid as u32;
+
+        // 创建 FFIEventListener
+        let event_listener = FFIEventListener::new(event_queue.clone(), terminal.id().0);
+
+        // 创建 Machine
+        let machine = Machine::new(
+            crosswords,
+            pty,
+            event_listener.clone(),
+            terminal.id().0,
+            pty_fd,
+            shell_pid,
+        ).map_err(|_| ErrorCode::RenderError)?;
+
+        // 获取 sender (在 spawn 之前)
+        let pty_tx = machine.channel();
+
+        // 启动 Machine 线程
+        let handle = machine.spawn();
+
+        Ok((handle, pty_tx))
     }
 
     /// 创建 Sugarloaf 实例
@@ -145,10 +223,13 @@ impl TerminalApp {
         };
 
         // 创建 Sugarloaf
-        let sugarloaf = match Sugarloaf::new(window, renderer, font_library, layout) {
+        let mut sugarloaf = match Sugarloaf::new(window, renderer, font_library, layout) {
             Ok(instance) => instance,
             Err(with_errors) => with_errors.instance,
         };
+
+        // 设置透明背景（让窗口磨砂效果显示）
+        sugarloaf.set_background_color(Some(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0)));
 
         Ok(sugarloaf)
     }
@@ -156,6 +237,55 @@ impl TerminalApp {
     /// 设置事件回调
     pub fn set_event_callback(&mut self, callback: TerminalAppEventCallback, context: *mut c_void) {
         self.event_callback = Some((callback, context));
+
+        // 将 self 的指针作为 context 传递给 EventQueue
+        // 这样 event_queue_callback 就能访问 TerminalApp 实例
+        let app_ptr = self as *mut TerminalApp as *mut c_void;
+
+        // 同时设置 EventQueue 的回调
+        self.event_queue.set_callback(
+            Self::event_queue_callback,
+            None,  // 暂不需要字符串事件回调
+            app_ptr,
+        );
+    }
+
+    /// EventQueue 的回调（静态函数，转发给 Swift）
+    extern "C" fn event_queue_callback(context: *mut c_void, event: crate::rio_event::FFIEvent) {
+        eprintln!("🔔 [event_queue_callback] Received event_type: {}", event.event_type);
+        // 将 FFIEvent 转换为 TerminalEvent
+        let event_type = match event.event_type {
+            0 => TerminalEventType::Wakeup,      // Wakeup
+            1 => TerminalEventType::Render,      // Render ← 添加这个！
+            2 => TerminalEventType::CursorBlink, // CursorBlink
+            3 => TerminalEventType::Bell,        // Bell
+            4 => TerminalEventType::TitleChanged, // TitleChanged
+            _ => {
+                eprintln!("⚠️ [event_queue_callback] Ignoring unknown event_type: {}", event.event_type);
+                return; // 忽略其他事件
+            }
+        };
+
+        let terminal_event = TerminalEvent {
+            event_type,
+            data: 0,
+        };
+
+        // 调用 Swift 回调
+        if !context.is_null() {
+            unsafe {
+                // context 是 TerminalApp 实例的指针
+                let app = &*(context as *const TerminalApp);
+
+                // 从 TerminalApp 获取存储的 Swift 回调
+                if let Some((callback, swift_context)) = app.event_callback {
+                    eprintln!("🔔 [event_queue_callback] Calling Swift callback");
+                    callback(swift_context, terminal_event);
+                } else {
+                    eprintln!("⚠️ [event_queue_callback] No Swift callback set");
+                }
+            }
+        }
     }
 
     /// 触发事件
@@ -167,6 +297,9 @@ impl TerminalApp {
     }
 
     /// 写入数据（PTY → Terminal）
+    ///
+    /// ⚠️ 注意：在 PTY 模式下，此方法已废弃，因为 PTY 输出通过 Machine 自动喂给 Terminal
+    /// 仅保留用于测试
     pub fn write(&mut self, data: &[u8]) -> Result<(), ErrorCode> {
         // 验证 UTF-8（警告但不失败）
         if std::str::from_utf8(data).is_err() {
@@ -185,12 +318,33 @@ impl TerminalApp {
         Ok(())
     }
 
+    /// 处理键盘输入（Keyboard → PTY）
+    ///
+    /// # 参数
+    /// - `data`: 键盘输入的字节数据
+    ///
+    /// # 说明
+    /// 此方法将键盘输入发送给 PTY，由 Shell 处理
+    pub fn input(&mut self, data: &[u8]) -> Result<(), ErrorCode> {
+        if let Some(ref pty_tx) = self.pty_tx {
+            // 发送到 PTY
+            use crate::rio_machine::send_input;
+            send_input(pty_tx, data);
+            Ok(())
+        } else {
+            Err(ErrorCode::InvalidConfig) // 没有 PTY
+        }
+    }
+
     /// 渲染（批量渲染所有行）
     pub fn render(&mut self) -> Result<(), ErrorCode> {
+        let frame_start = std::time::Instant::now();
+        eprintln!("🎨 [TerminalApp::render] Called");
         // 1. 从 Terminal 获取状态
         let terminal = self.terminal.lock();
         let state = terminal.state();
         let rows = terminal.rows();
+        eprintln!("   Grid lines: {}, rows: {}", state.grid.lines(), rows);
         drop(terminal);
 
         // 2. 使用 Renderer 渲染所有行，得到 SkImage
@@ -226,25 +380,71 @@ impl TerminalApp {
             sugarloaf.render();
         }
 
+        let frame_time = frame_start.elapsed().as_micros();
+        eprintln!("🎯FRAME_PERF TerminalApp::render() took {}μs ({:.2}ms) | rows={}",
+                  frame_time, frame_time as f32 / 1000.0, rows);
+
         Ok(())
     }
 
-    /// 调整大小
+    /// 调整大小（行列数 + 像素尺寸）
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), ErrorCode> {
+        self.resize_with_pixels(cols, rows, 0.0, 0.0)
+    }
+
+    /// 调整大小（包含像素尺寸，用于更新 Sugarloaf）
+    pub fn resize_with_pixels(&mut self, cols: u16, rows: u16, width: f32, height: f32) -> Result<(), ErrorCode> {
         if cols == 0 || rows == 0 {
             return Err(ErrorCode::InvalidConfig);
         }
 
-        // 调整 Terminal 大小
+        eprintln!("📐 [TerminalApp::resize] Resizing to {}x{} ({}x{} px)", cols, rows, width, height);
+
+        // 1. 调整 Terminal 大小
         {
             let mut terminal = self.terminal.lock();
             terminal.resize(cols as usize, rows as usize);
         }
 
-        // 清空渲染缓存（尺寸变化需要重新渲染）
-        // TODO: renderer.clear_cache()
+        // 2. 通知 PTY 尺寸变化（重要！Shell 需要知道终端尺寸）
+        if let Some(ref pty_tx) = self.pty_tx {
+            use teletypewriter::WinsizeBuilder;
+            let winsize = WinsizeBuilder {
+                rows,
+                cols,
+                width: width as u16,
+                height: height as u16,
+            };
+            crate::rio_machine::send_resize(pty_tx, winsize);
+            eprintln!("   PTY notified of resize");
+        }
 
-        // 触发 Damaged 事件
+        // 3. 更新 Sugarloaf 尺寸（防止图像拉伸）
+        if width > 0.0 && height > 0.0 {
+            if let Some(ref sugarloaf) = self.sugarloaf {
+                let mut sugarloaf = sugarloaf.lock();
+                sugarloaf.resize(width as u32, height as u32);
+                eprintln!("   Sugarloaf resized to {}x{}", width as u32, height as u32);
+            }
+        }
+
+        // 4. 更新配置
+        self.config.cols = cols;
+        self.config.rows = rows;
+        if width > 0.0 {
+            self.config.window_width = width;
+        }
+        if height > 0.0 {
+            self.config.window_height = height;
+        }
+
+        // 5. 清空渲染缓存（尺寸变化需要重新渲染）
+        {
+            let mut renderer = self.renderer.lock();
+            renderer.clear_cache();
+        }
+
+        // 6. 触发 Damaged 事件
         self.emit_event(TerminalEventType::Damaged, 0);
 
         Ok(())

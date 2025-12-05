@@ -34,12 +34,14 @@ enum ErrorCode: UInt32 {
     case outOfBounds = 5
 }
 
-/// 终端事件类型
+/// 终端事件类型（与 Rust 侧 FFIEvent 对齐）
+/// 0 = Wakeup, 1 = Render, 2 = CursorBlinkingChange, 3 = Bell, ...
 enum TerminalEventType: UInt32 {
-    case cursorBlink = 0
-    case bell = 1
-    case titleChanged = 2
-    case damaged = 3
+    case wakeup = 0
+    case render = 1           // Rust: Render → Swift: 触发渲染
+    case cursorBlink = 2      // Rust: CursorBlinkingChange
+    case bell = 3             // Rust: Bell
+    case titleChanged = 4     // Rust: Title
 }
 
 /// 终端事件（FFI 类型，与 EventPayloads.swift 的 TerminalEvent 不同）
@@ -122,7 +124,25 @@ class TerminalAppWrapper {
         return result == .success
     }
 
-    /// 调整大小
+    /// 键盘输入（发送到 PTY）
+    func input(data: String) -> Bool {
+        guard let handle = appHandle else { return false }
+
+        guard let utf8Data = data.data(using: .utf8) else {
+            print("⚠️ [TerminalAppWrapper] Invalid UTF-8 string for input")
+            return false
+        }
+
+        let result = utf8Data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> ErrorCode in
+            let ptr = bytes.baseAddress?.assumingMemoryBound(to: UInt8.self)
+            let errorCode = terminal_app_input(handle, ptr, bytes.count)
+            return ErrorCode(rawValue: errorCode) ?? .nullPointer
+        }
+
+        return result == .success
+    }
+
+    /// 调整大小（行列数）
     func resize(cols: UInt16, rows: UInt16) -> Bool {
         guard let handle = appHandle else { return false }
 
@@ -131,6 +151,22 @@ class TerminalAppWrapper {
 
         if result == .success {
             print("✅ [TerminalAppWrapper] Resized to \(cols)x\(rows)")
+        } else {
+            print("⚠️ [TerminalAppWrapper] Resize failed: \(result)")
+        }
+
+        return result == .success
+    }
+
+    /// 调整大小（包含像素尺寸，用于正确更新 Sugarloaf）
+    func resizeWithPixels(cols: UInt16, rows: UInt16, width: Float, height: Float) -> Bool {
+        guard let handle = appHandle else { return false }
+
+        let errorCode = terminal_app_resize_with_pixels(handle, cols, rows, width, height)
+        let result = ErrorCode(rawValue: errorCode) ?? .nullPointer
+
+        if result == .success {
+            print("✅ [TerminalAppWrapper] Resized to \(cols)x\(rows) (\(width)x\(height) px)")
         } else {
             print("⚠️ [TerminalAppWrapper] Resize failed: \(result)")
         }
@@ -284,9 +320,17 @@ func terminal_app_write(_ handle: OpaquePointer, _ data: UnsafePointer<UInt8>?, 
 @_silgen_name("terminal_app_render")
 func terminal_app_render(_ handle: OpaquePointer) -> UInt32
 
+/// 键盘输入
+@_silgen_name("terminal_app_input")
+func terminal_app_input(_ handle: OpaquePointer, _ data: UnsafePointer<UInt8>?, _ len: Int) -> UInt32
+
 /// 调整大小
 @_silgen_name("terminal_app_resize")
 func terminal_app_resize(_ handle: OpaquePointer, _ cols: UInt16, _ rows: UInt16) -> UInt32
+
+/// 调整大小（包含像素尺寸）
+@_silgen_name("terminal_app_resize_with_pixels")
+func terminal_app_resize_with_pixels(_ handle: OpaquePointer, _ cols: UInt16, _ rows: UInt16, _ width: Float, _ height: Float) -> UInt32
 
 /// 开始选区
 @_silgen_name("terminal_app_start_selection")
