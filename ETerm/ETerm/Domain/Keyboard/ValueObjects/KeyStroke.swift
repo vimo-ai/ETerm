@@ -129,20 +129,22 @@ struct KeyStroke: Hashable {
     // MARK: - 转换为终端序列
 
     func toTerminalSequence() -> String {
-        // Option+Arrow 组合键（按单词移动）
+        // Option 组合键
         // macOS 终端标准：Option+Left/Right 用于按单词移动光标
         if modifiers.contains(.option) {
             switch keyCode {
+            case 51: return "\u{17}"      // Option+Delete: Ctrl+W (删除前一个单词)
             case 123: return "\u{1B}b"    // Option+Left: ESC+b (向左移动一个单词)
             case 124: return "\u{1B}f"    // Option+Right: ESC+f (向右移动一个单词)
             default: break
             }
         }
 
-        // Cmd+Arrow 组合键（跳到行首/行尾）
+        // Cmd 组合键
         // macOS 终端标准：Cmd+Left/Right 用于跳到行首/行尾
         if modifiers.contains(.command) {
             switch keyCode {
+            case 51: return "\u{15}"      // Cmd+Delete: Ctrl+U (删除到行首)
             case 123: return "\u{01}"     // Cmd+Left: Ctrl+A (跳到行首)
             case 124: return "\u{05}"     // Cmd+Right: Ctrl+E (跳到行尾)
             default: break
