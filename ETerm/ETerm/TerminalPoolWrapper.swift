@@ -37,6 +37,9 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
 
     private var handle: TerminalPoolHandle?
 
+    /// 暴露 handle 用于 RenderScheduler 绑定
+    var poolHandle: TerminalPoolHandle? { handle }
+
     /// 渲染回调
     private var renderCallback: (() -> Void)?
 

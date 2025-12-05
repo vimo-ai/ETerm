@@ -541,10 +541,10 @@ class RioMetalView: NSView, RenderViewProtocol {
     private var cachedSnapshots: [Int: TerminalSnapshot] = [:]
     private let snapshotCacheLock = NSLock()
 
-    // MARK: - CVDisplayLink（帧率限制）
+    // MARK: - Render Scheduler（帧率限制 - Rust CVDisplayLink）
 
-    /// CVDisplayLink - 同步屏幕刷新率
-    private var displayLink: CVDisplayLink?
+    /// Rust 侧的渲染调度器（新架构使用，替代 Swift CVDisplayLink）
+    private var renderScheduler: RenderSchedulerWrapper?
 
     /// 需要渲染的标记（原子操作）
     private var needsRender = false
@@ -820,8 +820,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             coordinateMapper = mapper
             coordinator?.setCoordinateMapper(mapper)
 
-            // 启动 CVDisplayLink
-            setupDisplayLink()
+            // 启动 Rust CVDisplayLink（替代 Swift CVDisplayLink）
+            setupRenderScheduler()
 
             // 初始渲染
             requestRender()
@@ -884,9 +884,39 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
     }
 
-    // MARK: - CVDisplayLink Setup
+    // MARK: - Render Scheduler Setup (Rust CVDisplayLink)
 
-    /// 设置 CVDisplayLink（同步屏幕刷新率）
+    /// 设置 Rust 侧的渲染调度器
+    private func setupRenderScheduler() {
+        guard let pool = terminalPool else {
+            print("⚠️ [RenderScheduler] TerminalPool not ready")
+            return
+        }
+
+        // 创建 RenderScheduler
+        let scheduler = RenderSchedulerWrapper()
+        self.renderScheduler = scheduler
+
+        // 绑定到 TerminalPool（共享 needs_render 标记）
+        scheduler.bind(to: pool)
+
+        // 设置渲染回调
+        scheduler.setRenderCallback { [weak self] in
+            self?.renderIfNeeded()
+        }
+
+        // 启动
+        if scheduler.start() {
+            print("✅ [RioMetalView] RenderScheduler started (Rust CVDisplayLink)")
+        }
+    }
+
+    // MARK: - Swift CVDisplayLink (旧架构使用)
+
+    /// CVDisplayLink - 同步屏幕刷新率（旧架构使用）
+    private var displayLink: CVDisplayLink?
+
+    /// 设置 CVDisplayLink（同步屏幕刷新率）- 旧架构使用
     private func setupDisplayLink() {
         // 创建 CVDisplayLink
         var link: CVDisplayLink?
@@ -974,6 +1004,11 @@ class RioMetalView: NSView, RenderViewProtocol {
         needsRender = true
         requestCount += 1
         needsRenderLock.unlock()
+
+        // 新架构：通知 Rust 侧的 RenderScheduler
+        if useNewArchitecture {
+            renderScheduler?.requestRender()
+        }
     }
 
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
@@ -1951,10 +1986,17 @@ class RioMetalView: NSView, RenderViewProtocol {
     ///
     /// 必须在主线程调用，确保 Metal 渲染完成后再释放资源
     func cleanup() {
-        // 停止 CVDisplayLink
-        if let displayLink = displayLink {
-            CVDisplayLinkStop(displayLink)
-            self.displayLink = nil
+        // 停止渲染调度
+        if useNewArchitecture {
+            // 新架构：停止 Rust RenderScheduler
+            renderScheduler?.stop()
+            renderScheduler = nil
+        } else {
+            // 旧架构：停止 Swift CVDisplayLink
+            if let displayLink = displayLink {
+                CVDisplayLinkStop(displayLink)
+                self.displayLink = nil
+            }
         }
 
         // 标记为未初始化，阻止后续渲染
