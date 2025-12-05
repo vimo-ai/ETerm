@@ -11,7 +11,7 @@ pub mod line_cache;
 pub mod hash;
 
 #[cfg(feature = "new_architecture")]
-pub use line_cache::{LineCache, LineCacheEntry, CacheResult, GlyphLayout};
+pub use line_cache::{LineCache, LineCacheEntry, CacheResult, GlyphLayout, CursorInfo};
 
 #[cfg(feature = "new_architecture")]
 pub use hash::{compute_text_hash, compute_state_hash_for_line};

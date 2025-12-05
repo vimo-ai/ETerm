@@ -1,7 +1,8 @@
 #[cfg(feature = "new_architecture")]
 use super::GlyphInfo;
 use crate::render::font::FontContext;
-use crate::render::cache::GlyphLayout;
+use crate::render::cache::{GlyphLayout, CursorInfo};
+use crate::domain::state::TerminalState;
 use sugarloaf::layout::BuilderLine;
 use skia_safe::{Font, Color4f};
 use std::sync::Arc;
@@ -28,6 +29,8 @@ impl TextShaper {
         line: &BuilderLine,
         font_size: f32,
         cell_width: f32,
+        line_number: usize,
+        state: &TerminalState,
     ) -> GlyphLayout {
         let mut glyphs = Vec::new();
         let mut x = 0.0;
@@ -109,9 +112,31 @@ impl TextShaper {
             }
         }
 
+        // 检测光标是否在本行
+        let has_cursor = state.cursor.is_visible() && state.cursor.line() == line_number;
+
+        // 🔍 调试日志：每行输出是否有光标
+        eprintln!("🔍 [TextShaper] line={:2} | cursor_line={} | has_cursor={}",
+                  line_number, state.cursor.line(), if has_cursor { "YES ✓" } else { "NO" });
+
+        let cursor_info = if has_cursor {
+            eprintln!("📍 [TextShaper] Cursor detected on line {}: col={}, shape={:?}",
+                      line_number, state.cursor.col(), state.cursor.shape);
+            // 从 RenderConfig 获取光标颜色
+            // TODO: 暂时使用白色，后续从 config.colors 中获取
+            Some(CursorInfo {
+                col: state.cursor.col(),
+                shape: state.cursor.shape,
+                color: [1.0, 1.0, 1.0, 1.0],  // 白色光标
+            })
+        } else {
+            None
+        };
+
         GlyphLayout {
             glyphs,
             content_hash: 0,  // TODO: 计算实际 hash
+            cursor_info,
         }
     }
 }
@@ -134,13 +159,26 @@ mod tests {
         BuilderLine::default()
     }
 
+    // 创建测试用的 TerminalState（光标在指定位置）
+    // 注意：这是 mock 函数，仅用于被 #[ignore] 的测试
+    #[allow(dead_code)]
+    fn create_test_state(_cursor_line: usize, _cursor_col: usize) -> TerminalState {
+        // TODO: 这个函数需要真实的 GridData 构造方法
+        // 由于 GridData 字段是私有的，暂时无法创建
+        // 等待实现 RioTerminal::extract_state() 后，使用真实数据
+        unimplemented!("create_test_state requires real GridData construction")
+    }
+
     #[test]
     #[ignore] // TODO: Step 1.4 移除 - FragmentData 不是公开类型，无法创建测试数据
     fn test_shape_ascii_line() {
         let shaper = create_test_shaper();
         let line = create_test_line("Hello");
 
-        let layout = shaper.shape_line(&line, 14.0, 8.0);
+        // 创建测试用的 TerminalState（光标不在第 0 行）
+        let state = create_test_state(5, 10);
+
+        let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
         // 验证字形数量
         assert_eq!(layout.glyphs.len(), 5);
@@ -153,6 +191,9 @@ mod tests {
         assert_eq!(layout.glyphs[0].x, 0.0);
         assert_eq!(layout.glyphs[1].x, 8.0);
         assert_eq!(layout.glyphs[2].x, 16.0);
+
+        // 验证光标不在本行
+        assert!(layout.cursor_info.is_none());
     }
 
     #[test]
@@ -161,7 +202,9 @@ mod tests {
         let shaper = create_test_shaper();
         let line = create_test_line("Hello世界");
 
-        let layout = shaper.shape_line(&line, 14.0, 8.0);
+        let state = create_test_state(5, 10);
+
+        let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
         // 验证字形数量
         assert_eq!(layout.glyphs.len(), 7);
@@ -178,7 +221,9 @@ mod tests {
         // ❤️ = ❤ (U+2764) + VS16 (U+FE0F)
         let line = create_test_line("❤️");
 
-        let layout = shaper.shape_line(&line, 14.0, 8.0);
+        let state = create_test_state(5, 10);
+
+        let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
         // 验证只有一个字形（VS16 被跳过）
         assert_eq!(layout.glyphs.len(), 1);
@@ -192,7 +237,9 @@ mod tests {
         // 1️⃣ = 1 (U+0031) + VS16 (U+FE0F) + Keycap (U+20E3)
         let line = create_test_line("1️⃣");
 
-        let layout = shaper.shape_line(&line, 14.0, 8.0);
+        let state = create_test_state(5, 10);
+
+        let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
         // 验证只有一个字形（VS16 和 Keycap 被跳过）
         assert_eq!(layout.glyphs.len(), 1);
@@ -206,7 +253,9 @@ mod tests {
         // 混合：普通字符 + emoji + keycap
         let line = create_test_line("A❤️1️⃣B");
 
-        let layout = shaper.shape_line(&line, 14.0, 8.0);
+        let state = create_test_state(5, 10);
+
+        let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
         // 验证字形（selector 被跳过）
         let chars: Vec<char> = layout.glyphs.iter().map(|g| g.ch).collect();

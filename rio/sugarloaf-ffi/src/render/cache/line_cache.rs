@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 #[cfg(feature = "new_architecture")]
 use crate::render::layout::GlyphInfo;
+use rio_backend::ansi::CursorShape;
 
 /// 两层缓存
 pub struct LineCache {
@@ -23,6 +24,19 @@ pub struct GlyphLayout {
     pub glyphs: Vec<GlyphInfo>,
     /// 内容 hash（用于缓存 key 和调试）
     pub content_hash: u64,
+    /// 光标信息（如果光标在本行）
+    pub cursor_info: Option<CursorInfo>,
+}
+
+/// 光标信息（用于渲染）
+#[derive(Debug, Clone, Copy)]
+pub struct CursorInfo {
+    /// 光标列号
+    pub col: usize,
+    /// 光标形状
+    pub shape: CursorShape,
+    /// 光标颜色 (RGBA)
+    pub color: [f32; 4],
 }
 
 /// 缓存查询结果
@@ -119,6 +133,7 @@ mod tests {
         GlyphLayout {
             glyphs: vec![],
             content_hash,
+            cursor_info: None,
         }
     }
 
