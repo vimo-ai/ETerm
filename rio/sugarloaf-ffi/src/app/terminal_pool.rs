@@ -98,14 +98,18 @@ impl TerminalPool {
         let font_context = Arc::new(FontContext::new(font_library_for_context));
 
         // 创建渲染配置（统一背景色配置源）
+        use crate::domain::primitives::LogicalPixels;
+        use rio_backend::config::colors::Colors;
+        let colors = Arc::new(Colors::default());
         let render_config = RenderConfig::new(
-            config.font_size,
+            LogicalPixels::new(config.font_size),
             config.line_height,
             config.scale,
+            colors,
         );
 
         // 创建渲染器
-        let renderer = Renderer::new(font_context.clone(), render_config);
+        let renderer = Renderer::new(font_context.clone(), render_config.clone());
 
         // 创建 Sugarloaf（使用 render_config 的背景色）
         let sugarloaf = Self::create_sugarloaf(&config, &font_library_for_sugarloaf, &render_config)?;
@@ -341,7 +345,7 @@ impl TerminalPool {
     ///   - 如果 > 0，会自动计算 cols/rows 并 resize
     ///   - 如果 = 0，不执行 resize
     pub fn render_terminal(&mut self, id: usize, x: f32, y: f32, width: f32, height: f32) -> bool {
-        // 获取字体度量（用于计算 cols/rows 和 Y 坐标）
+        // 获取字体度量（物理像素）
         let font_metrics = {
             let renderer = self.renderer.lock();
             crate::render::config::FontMetrics::compute(
@@ -349,23 +353,22 @@ impl TerminalPool {
                 &self.font_context,
             )
         };
-        let cell_width = font_metrics.cell_width;
-        let cell_height = font_metrics.cell_height;
+
+        let scale = self.config.scale;
 
         // 如果提供了 width/height，自动计算 cols/rows 并 resize
         if width > 0.0 && height > 0.0 {
-            // width/height 是逻辑坐标，转成物理像素
-            // cell_width/cell_height 已经是基于物理字体大小计算的（物理像素）
-            let scale = self.config.scale;
-            let physical_width = width * scale;
-            let physical_height = height * scale;
+            use crate::domain::primitives::PhysicalPixels;
 
-            // cell_width/cell_height 已经是物理像素，不需要再乘 scale
-            let new_cols = (physical_width / cell_width).floor() as u16;
-            let new_rows = (physical_height / cell_height).floor() as u16;
+            let physical_width = PhysicalPixels::new(width * scale);
+            let physical_height = PhysicalPixels::new(height * scale);
+            // 使用 line_height（= cell_height * factor）计算行数
+            let physical_line_height = font_metrics.cell_height.value * self.config.line_height;
+
+            let new_cols = (physical_width.value / font_metrics.cell_width.value).floor() as u16;
+            let new_rows = (physical_height.value / physical_line_height).floor() as u16;
 
             if new_cols > 0 && new_rows > 0 {
-                // 获取当前终端尺寸，只在变化时 resize
                 if let Some(entry) = self.terminals.get(&id) {
                     if entry.cols != new_cols || entry.rows != new_rows {
                         self.resize_terminal(id, new_cols, new_rows, width, height);
@@ -379,19 +382,16 @@ impl TerminalPool {
             None => return false,
         };
 
-        // 1. 获取 dirty lines
-        let dirty_lines = {
-            let mut terminal = entry.terminal.lock();
-            terminal.take_dirty_lines()
+        // 1. 检查是否有 damage（不清空标记）
+        let is_damaged = {
+            let terminal = entry.terminal.lock();
+            terminal.is_damaged()
         };
 
-        // 2. 如果没有 dirty lines，跳过渲染
-        if dirty_lines.is_none() {
-            // 注意：dirty_lines 由 event_queue_callback 在收到 Wakeup/Render 事件时标记
-            return true; // 返回 true 表示成功（只是没有渲染工作）
+        // 2. 如果没有 damage，跳过渲染
+        if !is_damaged {
+            return true;
         }
-
-        let _dirty_indices = dirty_lines.unwrap();
 
         // 3. 获取终端状态
         let terminal = entry.terminal.lock();
@@ -399,30 +399,31 @@ impl TerminalPool {
         let rows = terminal.rows();
         drop(terminal);
 
-        // 4. 渲染所有行
-        // TODO: 后续优化为只渲染 dirty lines（需要 cached_objects 持久化）
+        // 4. 渲染所有行（类型安全的坐标转换）
         let mut renderer = self.renderer.lock();
 
-        // 🎯 关键修复：ImageObject.position 需要逻辑坐标
-        // cell_height 是物理像素，需要除以 scale 转换为逻辑像素
-        let scale = self.config.scale;
-        let logical_cell_height = cell_height / scale;
+        use crate::domain::primitives::{LogicalPosition, LogicalPixels};
 
-        // eprintln!("🔍 terminal_pool | cell_height(physical)={:.6}, scale={:.2}, logical_cell_height={:.6}",
-        //           cell_height, scale, logical_cell_height);
+        let logical_cell_size = font_metrics.to_logical_size(scale);
+        // 行高 = cell_height * line_height_factor（用于行间距）
+        let logical_line_height = logical_cell_size.height * self.config.line_height;
+        let base_position = LogicalPosition::new(
+            LogicalPixels::new(x),
+            LogicalPixels::new(y),
+        );
 
         for line in 0..rows {
             let image = renderer.render_line(line, &state);
 
-            let y_position = y + line as f32 * logical_cell_height;
-
-            // if line < 3 {  // 只打印前3行
-            //     eprintln!("🔍 terminal_pool | line={}, y_position={:.6}, image_size={}x{}",
-            //               line, y_position, image.width(), image.height());
-            // }
+            // 计算该行位置（使用 line_height 作为行间距）
+            let y_offset = logical_line_height * (line as f32);
+            let line_position = LogicalPosition::new(
+                base_position.x,
+                base_position.y + y_offset,
+            );
 
             let image_obj = ImageObject {
-                position: [x, y_position],
+                position: line_position.as_array(),  // [f32; 2]
                 image,
             };
 
@@ -430,6 +431,13 @@ impl TerminalPool {
         }
 
         drop(renderer);
+
+        // 5. 渲染成功完成后，重置 damage 状态
+        {
+            let mut terminal = entry.terminal.lock();
+            terminal.reset_damage();
+        }
+
         true
     }
 
@@ -493,16 +501,11 @@ impl TerminalPool {
         };
 
         // 收到 Wakeup/Render 事件时：
-        // 1. 标记对应终端的 dirty_lines
-        // 2. 设置 needs_render 标记（供外部调度器查询）
+        // 设置 needs_render 标记（供外部调度器查询）
+        // 注意：Crosswords 在写入时已自动标记 damage，无需手动调用
         if event_type == TerminalEventType::Wakeup || event_type == TerminalEventType::Render {
             unsafe {
                 let pool = &mut *(context as *mut TerminalPool);
-                let terminal_id = event.route_id as usize;
-                if let Some(entry) = pool.terminals.get(&terminal_id) {
-                    let mut terminal = entry.terminal.lock();
-                    terminal.mark_all_dirty_pub();
-                }
                 // 设置 dirty 标记
                 pool.needs_render.store(true, Ordering::Release);
             }
@@ -566,11 +569,13 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> AppConfig {
+        use super::super::ffi::DEFAULT_LINE_HEIGHT;
+
         AppConfig {
             cols: 80,
             rows: 24,
             font_size: 14.0,
-            line_height: 1.2,
+            line_height: DEFAULT_LINE_HEIGHT,
             scale: 2.0,
             window_handle: std::ptr::null_mut(),  // 测试环境
             display_handle: std::ptr::null_mut(),

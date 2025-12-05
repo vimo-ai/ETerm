@@ -33,6 +33,9 @@ pub mod font;
 #[cfg(feature = "new_architecture")]
 pub mod rasterizer;
 
+#[cfg(feature = "new_architecture")]
+pub mod box_drawing;
+
 // Re-exports for convenience
 #[cfg(feature = "new_architecture")]
 pub use renderer::{Renderer, RenderStats};

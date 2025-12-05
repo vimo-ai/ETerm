@@ -121,8 +121,8 @@ impl Renderer {
 
             let ch = cell.c;
 
-            // 从 CellData 构造 FragmentStyle
-            let style = self.cell_to_fragment_style(&cell);
+            // 从 CellData 构造 FragmentStyle（传递行号、列号和状态）
+            let style = self.cell_to_fragment_style(&cell, line, col, state);
 
             // 如果样式改变，创建新 fragment
             // styles_equal 已经比较了 width，所以 width 改变会自动分割 fragment
@@ -161,21 +161,28 @@ impl Renderer {
     }
 
     /// 从 CellData 构造 FragmentStyle
-    fn cell_to_fragment_style(&self, cell: &CellData) -> FragmentStyle {
+    ///
+    /// # 参数
+    /// - `cell`: 单元格数据
+    /// - `line`: 行号（绝对坐标）
+    /// - `col`: 列号
+    /// - `state`: 终端状态（用于检查光标、选区、搜索）
+    fn cell_to_fragment_style(&self, cell: &CellData, line: usize, col: usize, state: &TerminalState) -> FragmentStyle {
         use rio_backend::config::colors::NamedColor;
 
-        // 转换颜色
-        let fg_color = ansi_color_to_rgba(&cell.fg);
-        let bg_color = ansi_color_to_rgba(&cell.bg);
+        // Debug: 在第一个单元格时打印状态总览（避免刷屏）
+        if line == 0 && col == 0 {
+            eprintln!("🖼️  [Renderer::cell_to_fragment_style] Processing line 0:");
+            eprintln!("   cursor_pos=({}, {}), selection={}, search={}",
+                      state.cursor.position.line, state.cursor.position.col,
+                      if state.selection.is_some() { "YES" } else { "NO" },
+                      if state.search.is_some() { "YES" } else { "NO" });
+        }
 
-        // 背景色：仅当不是默认背景时才设置
-        let background_color = match &cell.bg {
-            AnsiColor::Named(NamedColor::Background) => None, // 透明背景
-            _ => Some(bg_color),
-        };
+        // 获取颜色配置
+        let colors = &self.config.colors;
 
-        // 检查 WIDE_CHAR 标志（0x20 = 0b0000_0000_0010_0000）
-        // 参考：rio-backend/src/crosswords/square.rs:21
+        // 检查 WIDE_CHAR 标志（需要提前计算 width）
         const WIDE_CHAR_FLAG: u16 = 0b0000_0000_0010_0000;
         let width = if cell.flags & WIDE_CHAR_FLAG != 0 {
             2.0  // 双宽字符（中文、全角、emoji 等）
@@ -183,16 +190,59 @@ impl Renderer {
             1.0  // 单宽字符
         };
 
+        // 基础前景色和背景色（从单元格数据）
+        let mut fg_color = ansi_color_to_rgba(&cell.fg, colors);
+        let bg_color = ansi_color_to_rgba(&cell.bg, colors);
+
+        // 背景色：仅当不是默认背景时才设置
+        let mut background_color = match &cell.bg {
+            AnsiColor::Named(NamedColor::Background) => None, // 透明背景
+            _ => Some(bg_color),
+        };
+
+        // ===== 检查光标 =====
+        // 注意：光标现在在 LineRasterizer 中渲染（通过 GlyphLayout.cursor_info）
+        // 这里的 FragmentStyle.cursor 已经不再使用，所以固定为 None
+        let cursor = None;
+
+        // ===== 检查选区 =====
+        if let Some(selection) = &state.selection {
+            if let Some(_range) = get_selection_range_at(line, col, selection) {
+                eprintln!("🔷 [Renderer] SELECTION DETECTED at ({}, {}), fg={:?}, bg={:?}",
+                          line, col, colors.selection_foreground, colors.selection_background);
+
+                // 在选区内：使用选区颜色
+                fg_color = colors.selection_foreground;
+                background_color = Some(colors.selection_background);
+            }
+        }
+
+        // ===== 检查搜索匹配 =====
+        if let Some(search) = &state.search {
+            if let Some(is_focused) = get_search_match_at(line, col, search) {
+                // 在搜索匹配内
+                if is_focused {
+                    // 聚焦的匹配：使用聚焦颜色
+                    fg_color = colors.search_focused_match_foreground;
+                    background_color = Some(colors.search_focused_match_background);
+                } else {
+                    // 普通匹配：使用普通匹配颜色
+                    fg_color = colors.search_match_foreground;
+                    background_color = Some(colors.search_match_background);
+                }
+            }
+        }
+
         FragmentStyle {
             font_id: 0,  // 默认字体
-            width,       // 🔧 修复：动态计算宽度，支持双宽字符
+            width,       // 动态计算宽度，支持双宽字符
             font_attrs: Attributes::default(),
             color: fg_color,
             background_color,
             font_vars: 0,
             decoration: None,
             decoration_color: None,
-            cursor: None,
+            cursor,
             media: None,
             drawable_char: None,
         }
@@ -241,34 +291,50 @@ impl Renderer {
     // ===== 便捷方法：单独修改某个参数 =====
 
     /// 设置字体大小（常见操作，如用户按 Ctrl+Plus 缩放）
-    pub fn set_font_size(&mut self, font_size: f32) {
+    pub fn set_font_size(&mut self, font_size: crate::domain::primitives::LogicalPixels) {
         self.reconfigure(RenderConfig {
             font_size,
-            ..self.config
+            line_height: self.config.line_height,
+            scale: self.config.scale,
+            background_color: self.config.background_color,
+            colors: Arc::clone(&self.config.colors),
+            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
     /// 设置行高
     pub fn set_line_height(&mut self, line_height: f32) {
         self.reconfigure(RenderConfig {
+            font_size: self.config.font_size,
             line_height,
-            ..self.config
+            scale: self.config.scale,
+            background_color: self.config.background_color,
+            colors: Arc::clone(&self.config.colors),
+            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
     /// 设置 DPI 缩放（如窗口移动到不同显示器）
     pub fn set_scale(&mut self, scale: f32) {
         self.reconfigure(RenderConfig {
+            font_size: self.config.font_size,
+            line_height: self.config.line_height,
             scale,
-            ..self.config
+            background_color: self.config.background_color,
+            colors: Arc::clone(&self.config.colors),
+            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
     /// 设置背景颜色
     pub fn set_background_color(&mut self, color: skia_safe::Color4f) {
         self.reconfigure(RenderConfig {
+            font_size: self.config.font_size,
+            line_height: self.config.line_height,
+            scale: self.config.scale,
             background_color: color,
-            ..self.config
+            colors: Arc::clone(&self.config.colors),
+            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
@@ -284,10 +350,16 @@ impl Renderer {
 
         // 2. 获取 metrics（自动缓存）
         let metrics = self.get_font_metrics();
-        let font_size = self.config.font_size * self.config.scale;
+        let physical_font_size = self.config.physical_font_size();
 
-        // 3. 文本整形
-        self.text_shaper.shape_line(&builder_line, font_size, metrics.cell_width)
+        // 3. 文本整形（传递 line 和 state 用于光标检测）
+        self.text_shaper.shape_line(
+            &builder_line,
+            physical_font_size.value,
+            metrics.cell_width.value,
+            line,
+            state,
+        )
     }
 
     /// 基于布局绘制（光栅化）
@@ -295,20 +367,26 @@ impl Renderer {
         // 获取 metrics（自动缓存）
         let metrics = self.get_font_metrics();
 
-        // 计算行宽度
-        let line_width = metrics.cell_width * state.grid.columns() as f32;
+        // 计算行宽度（物理像素）
+        let line_width = metrics.cell_width.value * state.grid.columns() as f32;
 
         // 从配置获取背景色（不再硬编码）
         let background_color = self.config.background_color;
+
+        // 🎯 计算完整行高（= cell_height * line_height_factor）
+        // 用于 box-drawing 字符的拉升填充
+        let line_height = metrics.cell_height.value * self.config.line_height;
 
         self.rasterizer
             .render(
                 &layout,
                 line_width,
-                metrics.cell_width,
-                metrics.cell_height,
-                metrics.baseline_offset,
+                metrics.cell_width.value,      // 使用 .value 访问
+                metrics.cell_height.value,     // 使用 .value 访问
+                line_height,                   // 🎯 传递完整行高
+                metrics.baseline_offset.value, // 使用 .value 访问
                 background_color,
+                &self.config.box_drawing,      // 🎯 传递 box-drawing 配置
             )
             .expect("Failed to render line")
     }
@@ -327,31 +405,122 @@ fn styles_equal(a: &FragmentStyle, b: &FragmentStyle) -> bool {
         && a.background_color == b.background_color
 }
 
+/// 判断光标是否在指定位置
+///
+/// # 参数
+/// - `line`: 行号（绝对坐标）
+/// - `col`: 列号
+/// - `cursor_pos`: 光标位置（绝对坐标）
+fn is_cursor_at(line: usize, col: usize, cursor_pos: &crate::domain::AbsolutePoint) -> bool {
+    cursor_pos.line == line && cursor_pos.col == col
+}
+
+/// 判断位置是否在选区内
+///
+/// # 参数
+/// - `line`: 行号（绝对坐标）
+/// - `col`: 列号
+/// - `selection`: 选区视图
+///
+/// # 返回
+/// - `Some((start_col, end_col))`: 在选区内，返回本行的选区列范围
+/// - `None`: 不在选区内
+fn get_selection_range_at(line: usize, col: usize, selection: &crate::domain::SelectionView) -> Option<(usize, usize)> {
+    // 检查行是否在选区范围内
+    if line < selection.start.line || line > selection.end.line {
+        return None;
+    }
+
+    // 计算本行的选区列范围
+    let start_col = if line == selection.start.line {
+        selection.start.col
+    } else {
+        0
+    };
+
+    let end_col = if line == selection.end.line {
+        selection.end.col
+    } else {
+        usize::MAX
+    };
+
+    // 检查列是否在范围内
+    if col >= start_col && col <= end_col {
+        Some((start_col, end_col))
+    } else {
+        None
+    }
+}
+
+/// 判断位置是否在搜索匹配内
+///
+/// # 参数
+/// - `line`: 行号（绝对坐标）
+/// - `col`: 列号
+/// - `search`: 搜索视图
+///
+/// # 返回
+/// - `Some(is_focused)`: 在匹配内，返回是否是聚焦的匹配
+/// - `None`: 不在匹配内
+fn get_search_match_at(line: usize, col: usize, search: &crate::domain::SearchView) -> Option<bool> {
+    for (i, m) in search.matches.iter().enumerate() {
+        // 检查行是否在匹配范围内
+        if line < m.start.line || line > m.end.line {
+            continue;
+        }
+
+        // 计算本行的匹配列范围
+        let start_col = if line == m.start.line {
+            m.start.col
+        } else {
+            0
+        };
+
+        let end_col = if line == m.end.line {
+            m.end.col
+        } else {
+            usize::MAX
+        };
+
+        // 检查列是否在范围内
+        if col >= start_col && col <= end_col {
+            let is_focused = i == search.focused_index;
+            return Some(is_focused);
+        }
+    }
+
+    None
+}
+
 /// 将 AnsiColor 转换为 RGBA [f32; 4]
-fn ansi_color_to_rgba(color: &AnsiColor) -> [f32; 4] {
+///
+/// # 参数
+/// - `color`: ANSI 颜色
+/// - `colors`: 颜色配置（从用户配置加载）
+fn ansi_color_to_rgba(color: &AnsiColor, colors: &rio_backend::config::colors::Colors) -> [f32; 4] {
     use rio_backend::config::colors::NamedColor;
 
     match color {
         AnsiColor::Named(named) => match named {
-            NamedColor::Foreground => [1.0, 1.0, 1.0, 1.0],  // 白色
-            NamedColor::Background => [0.0, 0.0, 0.0, 1.0],  // 黑色
-            NamedColor::Black => [0.0, 0.0, 0.0, 1.0],
-            NamedColor::Red => [0.8, 0.0, 0.0, 1.0],
-            NamedColor::Green => [0.0, 0.8, 0.0, 1.0],
-            NamedColor::Yellow => [0.8, 0.8, 0.0, 1.0],
-            NamedColor::Blue => [0.0, 0.0, 0.8, 1.0],
-            NamedColor::Magenta => [0.8, 0.0, 0.8, 1.0],
-            NamedColor::Cyan => [0.0, 0.8, 0.8, 1.0],
-            NamedColor::White => [0.8, 0.8, 0.8, 1.0],
-            NamedColor::LightBlack => [0.4, 0.4, 0.4, 1.0],
-            NamedColor::LightRed => [1.0, 0.0, 0.0, 1.0],
-            NamedColor::LightGreen => [0.0, 1.0, 0.0, 1.0],
-            NamedColor::LightYellow => [1.0, 1.0, 0.0, 1.0],
-            NamedColor::LightBlue => [0.0, 0.0, 1.0, 1.0],
-            NamedColor::LightMagenta => [1.0, 0.0, 1.0, 1.0],
-            NamedColor::LightCyan => [0.0, 1.0, 1.0, 1.0],
-            NamedColor::LightWhite => [1.0, 1.0, 1.0, 1.0],
-            _ => [1.0, 1.0, 1.0, 1.0],  // 默认白色
+            NamedColor::Foreground => colors.foreground,
+            NamedColor::Background => colors.background.0,
+            NamedColor::Black => colors.black,
+            NamedColor::Red => colors.red,
+            NamedColor::Green => colors.green,
+            NamedColor::Yellow => colors.yellow,
+            NamedColor::Blue => colors.blue,
+            NamedColor::Magenta => colors.magenta,
+            NamedColor::Cyan => colors.cyan,
+            NamedColor::White => colors.white,
+            NamedColor::LightBlack => colors.light_black,
+            NamedColor::LightRed => colors.light_red,
+            NamedColor::LightGreen => colors.light_green,
+            NamedColor::LightYellow => colors.light_yellow,
+            NamedColor::LightBlue => colors.light_blue,
+            NamedColor::LightMagenta => colors.light_magenta,
+            NamedColor::LightCyan => colors.light_cyan,
+            NamedColor::LightWhite => colors.light_white,
+            _ => colors.foreground,  // 默认使用前景色
         },
         AnsiColor::Spec(rgb) => [
             rgb.r as f32 / 255.0,
@@ -360,33 +529,39 @@ fn ansi_color_to_rgba(color: &AnsiColor) -> [f32; 4] {
             1.0,
         ],
         AnsiColor::Indexed(idx) => {
-            // 简化处理：使用固定调色板
-            // TODO: 使用真实的 256 色调色板
-            let rgb = match idx {
-                0 => (0, 0, 0),
-                1 => (205, 0, 0),
-                2 => (0, 205, 0),
-                3 => (205, 205, 0),
-                4 => (0, 0, 238),
-                5 => (205, 0, 205),
-                6 => (0, 205, 205),
-                7 => (229, 229, 229),
-                8 => (127, 127, 127),
-                9 => (255, 0, 0),
-                10 => (0, 255, 0),
-                11 => (255, 255, 0),
-                12 => (92, 92, 255),
-                13 => (255, 0, 255),
-                14 => (0, 255, 255),
-                15 => (255, 255, 255),
-                _ => (255, 255, 255),  // 默认白色
-            };
-            [
-                rgb.0 as f32 / 255.0,
-                rgb.1 as f32 / 255.0,
-                rgb.2 as f32 / 255.0,
-                1.0,
-            ]
+            // 256 色索引：前 16 色从配置读取
+            match idx {
+                0 => colors.black,
+                1 => colors.red,
+                2 => colors.green,
+                3 => colors.yellow,
+                4 => colors.blue,
+                5 => colors.magenta,
+                6 => colors.cyan,
+                7 => colors.white,
+                8 => colors.light_black,
+                9 => colors.light_red,
+                10 => colors.light_green,
+                11 => colors.light_yellow,
+                12 => colors.light_blue,
+                13 => colors.light_magenta,
+                14 => colors.light_cyan,
+                15 => colors.light_white,
+                // 216 色立方体 (16-231)
+                16..=231 => {
+                    let i = idx - 16;
+                    let r = i / 36;
+                    let g = (i % 36) / 6;
+                    let b = i % 6;
+                    let to_value = |v: u8| if v == 0 { 0.0 } else { (55.0 + v as f32 * 40.0) / 255.0 };
+                    [to_value(r), to_value(g), to_value(b), 1.0]
+                }
+                // 24 级灰度 (232-255)
+                _ => {
+                    let gray = (8.0 + (idx - 232) as f32 * 10.0) / 255.0;
+                    [gray, gray, gray, 1.0]
+                }
+            }
         }
     }
 }
@@ -402,13 +577,20 @@ mod tests {
     use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
     use super::super::font::FontContext;
 
+    fn create_default_colors() -> Arc<rio_backend::config::colors::Colors> {
+        use rio_backend::config::colors::Colors;
+        Arc::new(Colors::default())
+    }
+
     /// 创建测试用 Renderer
     fn create_test_renderer() -> Renderer {
+        use crate::domain::primitives::LogicalPixels;
         let (font_library, _) = FontLibrary::new(SugarloafFonts::default());
         let font_context = Arc::new(FontContext::new(font_library));
 
         // 使用真实的配置
-        let config = RenderConfig::new(14.0, 1.0, 1.0);
+        let colors = create_default_colors();
+        let config = RenderConfig::new(LogicalPixels::new(14.0), 1.0, 1.0, colors);
         Renderer::new(font_context, config)
     }
 
@@ -628,26 +810,28 @@ mod tests {
         let metrics2 = renderer.get_font_metrics();
 
         // 验证返回的是相同的值
-        assert_eq!(metrics1.cell_width, metrics2.cell_width);
-        assert_eq!(metrics1.cell_height, metrics2.cell_height);
-        assert_eq!(metrics1.baseline_offset, metrics2.baseline_offset);
+        assert_eq!(metrics1.cell_width.value, metrics2.cell_width.value);
+        assert_eq!(metrics1.cell_height.value, metrics2.cell_height.value);
+        assert_eq!(metrics1.baseline_offset.value, metrics2.baseline_offset.value);
     }
 
     #[test]
     fn test_reconfigure_invalidates_cache() {
+        use crate::domain::primitives::LogicalPixels;
         let mut renderer = create_test_renderer();
 
         // 计算初始 metrics
         let metrics1 = renderer.get_font_metrics();
-        let cell_width1 = metrics1.cell_width;
+        let cell_width1 = metrics1.cell_width.value;
 
         // 修改字体大小
-        let new_config = RenderConfig::new(16.0, 1.0, 1.0);
+        let colors = create_default_colors();
+        let new_config = RenderConfig::new(LogicalPixels::new(16.0), 1.0, 1.0, colors);
         renderer.reconfigure(new_config);
 
         // 重新计算 metrics（缓存已失效）
         let metrics2 = renderer.get_font_metrics();
-        let cell_width2 = metrics2.cell_width;
+        let cell_width2 = metrics2.cell_width.value;
 
         // 验证 metrics 已改变
         assert_ne!(cell_width1, cell_width2);
@@ -656,27 +840,31 @@ mod tests {
 
     #[test]
     fn test_set_font_size() {
+        use crate::domain::primitives::LogicalPixels;
         let mut renderer = create_test_renderer();
 
         // 初始配置
-        assert_eq!(renderer.config().font_size, 14.0);
+        assert_eq!(renderer.config().font_size.value, 14.0);
 
         // 修改字体大小
-        renderer.set_font_size(16.0);
+        renderer.set_font_size(LogicalPixels::new(16.0));
 
         // 验证配置已更新
-        assert_eq!(renderer.config().font_size, 16.0);
+        assert_eq!(renderer.config().font_size.value, 16.0);
     }
 
     #[test]
     fn test_reconfigure_no_change() {
+        use crate::domain::primitives::LogicalPixels;
         let mut renderer = create_test_renderer();
 
         // 计算初始 metrics（填充缓存）
         let _ = renderer.get_font_metrics();
 
         // 使用相同配置重新配置（不应该清空缓存）
-        let config = RenderConfig::new(14.0, 1.0, 1.0);
+        // 注意：使用相同的 Arc<Colors> 实例，确保 PartialEq 返回 true
+        let colors = Arc::clone(&renderer.config().colors);
+        let config = RenderConfig::new(LogicalPixels::new(14.0), 1.0, 1.0, colors);
         renderer.reconfigure(config);
 
         // 缓存应该仍然有效
@@ -707,7 +895,7 @@ mod tests {
         // 验证图像生成
         assert!(img.width() > 0);
         assert!(img.height() > 0);
-        assert_eq!(img.width(), (80.0 * renderer.get_font_metrics().cell_width) as i32);
+        assert_eq!(img.width(), (80.0 * renderer.get_font_metrics().cell_width.value) as i32);
 
         // 验证没有统计错误
         assert_eq!(renderer.stats.cache_misses, 1);  // 首次渲染
