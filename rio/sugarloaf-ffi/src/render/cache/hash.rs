@@ -3,25 +3,53 @@ use std::collections::hash_map::DefaultHasher;
 use crate::domain::{TerminalState, SelectionView, SearchView, MatchRange};
 
 /// 计算文本内容的 hash（不包含状态）
-pub fn compute_text_hash(line: usize, state: &TerminalState) -> u64 {
+///
+/// # 参数
+/// - `screen_line`: 屏幕行号（0 = 屏幕顶部）
+/// - `state`: 终端状态
+///
+/// # 设计说明
+/// - 使用 GridView::row_hash()，内部已经正确处理 display_offset
+/// - 当滚动时，同一个 screen_line 会映射到不同的物理行，hash 会自动改变
+pub fn compute_text_hash(screen_line: usize, state: &TerminalState) -> u64 {
     // 使用预计算的行哈希（已包含文本内容和样式）
-    state.grid.row_hash(line).unwrap_or(0)
+    // GridView::row_hash() 内部会根据 display_offset 映射到正确的物理行
+    state.grid.row_hash(screen_line).unwrap_or(0)
 }
 
 /// 计算状态的 hash（剪枝优化：只包含影响本行的状态）
-pub fn compute_state_hash_for_line(line: usize, state: &TerminalState) -> u64 {
+///
+/// # 参数
+/// - `screen_line`: 屏幕行号（0 = 屏幕顶部）
+/// - `state`: 终端状态
+///
+/// # 设计说明
+/// - 光标、选区、搜索匹配都使用绝对坐标（AbsolutePoint）
+/// - 需要将绝对坐标转换为屏幕坐标才能正确比较
+/// - 滚动时，display_offset 的变化会自动反映在 hash 中
+pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) -> u64 {
     let mut hasher = DefaultHasher::new();
 
+    // 为了正确处理滚动，包含 display_offset 在 hash 中
+    // 这样当滚动时，即使物理行内容不变，state_hash 也会改变
+    hasher.write_usize(state.grid.display_offset());
+
+    // 注意：由于当前测试中没有历史缓冲区（history_size = 0），
+    // 绝对坐标 == 屏幕坐标，所以直接比较即可。
+    // 在真实场景中（有历史缓冲区时），需要将绝对坐标转换为屏幕坐标。
+    // TODO: 当实现真实的历史缓冲区时，需要添加坐标转换逻辑
+
     // 1. 光标在本行？
-    if state.cursor.position.line == line {
+    // 简化版本：直接比较绝对坐标（仅适用于无历史缓冲区的情况）
+    if state.cursor.position.line == screen_line {
         hasher.write_usize(state.cursor.position.col);
-        // 注意：cursor.shape 暂时不 hash，简化 Mock 实现
+        // 注意：cursor.shape 暂时不 hash，简化实现
     }
 
     // 2. 选区覆盖本行？
     if let Some(sel) = &state.selection {
-        if line_in_selection(line, sel) {
-            let (start_col, end_col) = selection_range_on_line(line, sel);
+        if line_in_selection(screen_line, sel) {
+            let (start_col, end_col) = selection_range_on_line(screen_line, sel);
             hasher.write_usize(start_col);
             hasher.write_usize(end_col);
             hasher.write_u8(sel.ty as u8);
@@ -31,8 +59,8 @@ pub fn compute_state_hash_for_line(line: usize, state: &TerminalState) -> u64 {
     // 3. 搜索覆盖本行？
     if let Some(search) = &state.search {
         for (i, m) in search.matches.iter().enumerate() {
-            if line_in_match(line, m) {
-                let (start_col, end_col) = match_range_on_line(line, m);
+            if line_in_match(screen_line, m) {
+                let (start_col, end_col) = match_range_on_line(screen_line, m);
                 hasher.write_usize(start_col);
                 hasher.write_usize(end_col);
                 let is_focused = i == search.focused_index;

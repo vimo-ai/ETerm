@@ -22,7 +22,7 @@ impl RenderConfig {
             font_size,
             line_height,
             scale,
-            background_color: Color4f::new(0.0, 0.0, 0.0, 1.0),  // 默认黑色
+            background_color: Color4f::new(0.0, 0.0, 0.0, 0.0),  // 默认透明，让窗口磨砂效果显示
         }
     }
 

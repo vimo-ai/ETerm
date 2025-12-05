@@ -50,10 +50,10 @@ impl GridView {
         self.data.columns
     }
 
-    /// 获取行数（可见区域）
+    /// 获取行数（屏幕可见区域）
     #[inline]
     pub fn lines(&self) -> usize {
-        self.data.lines
+        self.data.screen_lines
     }
 
     /// 获取滚动偏移
@@ -62,43 +62,45 @@ impl GridView {
         self.data.display_offset
     }
 
-    /// 获取指定行的哈希值（用于缓存查询）
+    /// 获取指定屏幕行的哈希值（用于缓存查询）
     ///
     /// # 设计原理
     /// 当行内容改变时，哈希值会变化，从而使缓存失效。
     /// 这是实现增量渲染的关键。
     ///
     /// # 参数
-    /// - `line`: 行号（0-based，相对于可见区域）
+    /// - `screen_line`: 屏幕行号（0-based，0 = 屏幕顶部）
     ///
     /// # 返回
     /// - `Some(hash)`: 行哈希值
     /// - `None`: 行不存在
-    pub fn row_hash(&self, line: usize) -> Option<u64> {
-        self.data.row_hashes.get(line).copied()
+    pub fn row_hash(&self, screen_line: usize) -> Option<u64> {
+        // 计算实际数组索引
+        let array_index = self.data.screen_line_to_array_index(screen_line)?;
+        self.data.row_hashes.get(array_index).copied()
     }
 
-    /// 获取指定行的视图（延迟加载）
+    /// 获取指定屏幕行的视图（延迟加载）
     ///
     /// # 参数
-    /// - `line`: 行号（0-based，相对于可见区域）
+    /// - `screen_line`: 屏幕行号（0-based，0 = 屏幕顶部）
     ///
     /// # 返回
     /// - `Some(RowView)`: 行视图
     /// - `None`: 行不存在
-    pub fn row(&self, line: usize) -> Option<RowView> {
-        if line < self.data.lines {
-            Some(RowView::new(self.data.clone(), line))
+    pub fn row(&self, screen_line: usize) -> Option<RowView> {
+        if screen_line < self.data.screen_lines {
+            Some(RowView::new(self.data.clone(), screen_line))
         } else {
             None
         }
     }
 
-    /// 迭代所有可见行（延迟加载）
+    /// 迭代所有可见屏幕行（延迟加载）
     pub fn rows(&self) -> impl Iterator<Item = RowView> {
         let data = self.data.clone();
-        let lines = self.data.lines;
-        (0..lines).map(move |line| RowView::new(data.clone(), line))
+        let screen_lines = self.data.screen_lines;
+        (0..screen_lines).map(move |screen_line| RowView::new(data.clone(), screen_line))
     }
 }
 
@@ -116,26 +118,29 @@ impl GridView {
 pub struct RowView {
     /// 底层网格数据（Arc 共享）
     data: Arc<GridData>,
-    /// 行号
-    line: usize,
+    /// 屏幕行号（0 = 屏幕顶部）
+    screen_line: usize,
 }
 
 impl RowView {
     /// 创建新的 RowView
-    fn new(data: Arc<GridData>, line: usize) -> Self {
-        Self { data, line }
+    fn new(data: Arc<GridData>, screen_line: usize) -> Self {
+        Self { data, screen_line }
     }
 
-    /// 获取行号
+    /// 获取屏幕行号
     #[inline]
     pub fn line(&self) -> usize {
-        self.line
+        self.screen_line
     }
 
     /// 获取行哈希值
     #[inline]
     pub fn hash(&self) -> u64 {
-        self.data.row_hashes[self.line]
+        // 计算实际数组索引
+        let array_index = self.data.screen_line_to_array_index(self.screen_line)
+            .expect("RowView should always have valid screen_line");
+        self.data.row_hashes[array_index]
     }
 
     /// 获取列数
@@ -148,7 +153,10 @@ impl RowView {
     #[cfg(feature = "new_architecture")]
     #[inline]
     pub fn cells(&self) -> &[CellData] {
-        &self.data.rows[self.line].cells
+        // 计算实际数组索引
+        let array_index = self.data.screen_line_to_array_index(self.screen_line)
+            .expect("RowView should always have valid screen_line");
+        &self.data.rows[array_index].cells
     }
 }
 
@@ -204,15 +212,23 @@ impl RowData {
 /// - GridData 是纯数据（可以被多个 GridView 共享）
 /// - GridView 是视图（提供访问接口）
 /// - 这样可以灵活组合（例如：不同的 display_offset）
+///
+/// 数据存储布局：
+/// - `rows` 存储所有行（历史缓冲区 + 屏幕行）
+/// - 索引 0 是历史缓冲区的最顶部
+/// - 索引 history_size 是屏幕的第一行
+/// - 索引映射：array_index = history_size - display_offset + screen_line
 #[derive(Debug)]
 pub struct GridData {
     /// 列数
     columns: usize,
-    /// 行数（总行数：历史缓冲区 + 屏幕行）
-    lines: usize,
-    /// 滚动偏移
+    /// 屏幕行数（可见区域）
+    screen_lines: usize,
+    /// 历史缓冲区大小
+    history_size: usize,
+    /// 滚动偏移（0 = 在底部，> 0 = 向上滚动）
     display_offset: usize,
-    /// 行哈希列表（预计算）
+    /// 行哈希列表（预计算，与 rows 一一对应）
     row_hashes: Vec<u64>,
     /// 行数据（包含实际的 cells）
     #[cfg(feature = "new_architecture")]
@@ -220,41 +236,89 @@ pub struct GridData {
 }
 
 impl GridData {
+    /// 将屏幕行号转换为数组索引
+    ///
+    /// # 参数
+    /// - `screen_line`: 屏幕行号（0 = 屏幕顶部）
+    ///
+    /// # 返回
+    /// - `Some(array_index)`: 实际数组索引
+    /// - `None`: 行不存在
+    ///
+    /// # 映射公式
+    /// ```
+    /// array_index = history_size - display_offset + screen_line
+    /// ```
+    ///
+    /// # 示例
+    /// - 假设 history_size = 1000, display_offset = 0（在底部）
+    ///   - screen_line 0 → array_index 1000（屏幕第一行）
+    ///   - screen_line 23 → array_index 1023（屏幕最后一行）
+    /// - 假设 history_size = 1000, display_offset = 5（向上滚动 5 行）
+    ///   - screen_line 0 → array_index 995（历史缓冲区的某一行）
+    ///   - screen_line 23 → array_index 1018
+    #[inline]
+    fn screen_line_to_array_index(&self, screen_line: usize) -> Option<usize> {
+        if screen_line >= self.screen_lines {
+            return None;
+        }
+
+        // 计算数组索引
+        // 注意：当 display_offset > 0 时，我们向上滚动，看到的是更早的历史行
+        let array_index = self.history_size
+            .checked_sub(self.display_offset)?
+            .checked_add(screen_line)?;
+
+        // 验证索引在有效范围内
+        if array_index < self.rows.len() {
+            Some(array_index)
+        } else {
+            None
+        }
+    }
+
     /// 创建新的 GridData（用于测试）
     ///
     /// # 参数
     /// - `columns`: 列数
-    /// - `lines`: 行数
+    /// - `screen_lines`: 屏幕行数
     /// - `display_offset`: 滚动偏移
     /// - `row_hashes`: 行哈希列表
     #[cfg(test)]
     pub fn new_mock(
         columns: usize,
-        lines: usize,
+        screen_lines: usize,
         display_offset: usize,
         row_hashes: Vec<u64>,
     ) -> Self {
-        assert_eq!(row_hashes.len(), lines, "row_hashes length must match lines");
+        // 对于测试，假设没有历史缓冲区（或历史缓冲区为空）
+        let history_size = 0;
+        let total_lines = screen_lines;
+
+        assert_eq!(row_hashes.len(), total_lines, "row_hashes length must match total_lines");
+
         Self {
             columns,
-            lines,
+            screen_lines,
+            history_size,
             display_offset,
             row_hashes: row_hashes.clone(),
             #[cfg(feature = "new_architecture")]
-            rows: vec![RowData::empty(columns); lines],
+            rows: vec![RowData::empty(columns); total_lines],
         }
     }
 
     /// 创建空的 GridData（用于测试）
     #[cfg(test)]
-    pub fn empty(columns: usize, lines: usize) -> Self {
+    pub fn empty(columns: usize, screen_lines: usize) -> Self {
         Self {
             columns,
-            lines,
+            screen_lines,
+            history_size: 0,
             display_offset: 0,
-            row_hashes: vec![0; lines],
+            row_hashes: vec![0; screen_lines],
             #[cfg(feature = "new_architecture")]
-            rows: vec![RowData::empty(columns); lines],
+            rows: vec![RowData::empty(columns); screen_lines],
         }
     }
 
@@ -279,6 +343,8 @@ impl GridData {
         // Crosswords 的 Line 是 i32，Line(0) 是屏幕顶部，负数是历史缓冲区
         for line_index in 0..total_lines {
             // 计算相对于屏幕顶部的行号
+            // line_index 0 = 历史缓冲区最顶部
+            // line_index history_size = 屏幕第一行（Line(0)）
             let line = Line((line_index as i32) - (history_size as i32));
 
             // 获取该行数据
@@ -289,7 +355,8 @@ impl GridData {
 
         Self {
             columns,
-            lines: total_lines,
+            screen_lines,
+            history_size,
             display_offset,
             row_hashes,
             rows,

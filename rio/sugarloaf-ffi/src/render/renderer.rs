@@ -151,15 +151,24 @@ impl Renderer {
 
     /// 从 CellData 构造 FragmentStyle
     fn cell_to_fragment_style(&self, cell: &CellData) -> FragmentStyle {
+        use rio_backend::config::colors::NamedColor;
+
         // 转换颜色
         let fg_color = ansi_color_to_rgba(&cell.fg);
+        let bg_color = ansi_color_to_rgba(&cell.bg);
+
+        // 背景色：仅当不是默认背景时才设置
+        let background_color = match &cell.bg {
+            AnsiColor::Named(NamedColor::Background) => None, // 透明背景
+            _ => Some(bg_color),
+        };
 
         FragmentStyle {
             font_id: 0,  // 默认字体
             width: 1.0,  // 单宽字符
             font_attrs: Attributes::default(),
             color: fg_color,
-            background_color: None,  // TODO: Step 1.5 处理背景色
+            background_color,
             font_vars: 0,
             decoration: None,
             decoration_color: None,
@@ -202,6 +211,11 @@ impl Renderer {
         self.cache = LineCache::new();    // 清空行缓存
 
         // 注意：不重置 stats，保留统计信息
+    }
+
+    /// 清空缓存（窗口 resize 时调用）
+    pub fn clear_cache(&mut self) {
+        self.cache.clear();
     }
 
     // ===== 便捷方法：单独修改某个参数 =====

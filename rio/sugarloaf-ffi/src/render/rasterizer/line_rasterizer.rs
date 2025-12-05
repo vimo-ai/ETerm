@@ -55,10 +55,22 @@ impl LineRasterizer {
 
         // ===== 步骤 4: 遍历字形，绘制字符（567-622 行）=====
         for glyph in &layout.glyphs {
-            // 设置字符颜色（572-578 行）
-            // TODO: Step 1.5 - 从 fragment.style.color 获取颜色
-            // 暂时用白色
-            paint.set_color(Color::WHITE);
+            // 先绘制背景色（如果有）
+            if let Some(bg_color) = &glyph.background_color {
+                let mut bg_paint = Paint::default();
+                bg_paint.set_color4f(*bg_color, None);
+                // 计算单元格宽度（假设等宽字体）
+                let cell_w = if layout.glyphs.len() > 1 {
+                    layout.glyphs.get(1).map(|g| g.x - layout.glyphs[0].x).unwrap_or(10.0)
+                } else {
+                    10.0  // 默认宽度
+                };
+                let rect = skia_safe::Rect::from_xywh(glyph.x, 0.0, cell_w, cell_height);
+                canvas.draw_rect(rect, &bg_paint);
+            }
+
+            // 设置字符颜色（从 glyph.color 获取）
+            paint.set_color4f(glyph.color, None);
 
             // 计算绘制位置（594-596 行）
             let x = glyph.x;
@@ -118,6 +130,8 @@ mod tests {
                 ch: 'A',
                 font,
                 x: 0.0,
+                color: Color4f::new(1.0, 1.0, 1.0, 1.0),  // 白色
+                background_color: None,
             }],
             content_hash: 0,
         };

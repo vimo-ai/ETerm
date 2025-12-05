@@ -30,6 +30,8 @@ use crate::domain::state::TerminalState;
 use crate::domain::events::TerminalEvent;
 #[cfg(feature = "new_architecture")]
 use crate::domain::views::{GridData, GridView, CursorView};
+#[cfg(feature = "new_architecture")]
+use crate::rio_event::{EventQueue, FFIEventListener};
 
 /// Terminal ID
 #[cfg(feature = "new_architecture")]
@@ -105,11 +107,12 @@ pub struct Terminal {
     /// 终端 ID
     id: TerminalId,
 
-    /// 终端状态（Crosswords）
-    crosswords: Arc<RwLock<Crosswords<EventCollector>>>,
+    /// 终端状态（Crosswords）- 支持两种事件监听器
+    crosswords_ffi: Option<Arc<RwLock<Crosswords<FFIEventListener>>>>,
+    crosswords_test: Option<Arc<RwLock<Crosswords<EventCollector>>>>,
 
-    /// 事件收集器
-    event_collector: EventCollector,
+    /// 事件监听器（根据创建方式二选一）
+    event_listener: EventListenerType,
 
     /// 列数
     cols: usize,
@@ -121,9 +124,48 @@ pub struct Terminal {
     parser: Processor<StdSyncHandler>,
 }
 
+/// 事件监听器类型
+#[cfg(feature = "new_architecture")]
+enum EventListenerType {
+    FFI(FFIEventListener),
+    Test(EventCollector),
+}
+
+/// 宏：访问可变 Crosswords（write）
+#[cfg(feature = "new_architecture")]
+macro_rules! with_crosswords_mut {
+    ($self:expr, $crosswords:ident, $body:expr) => {
+        if let Some(ref cw) = $self.crosswords_ffi {
+            let mut $crosswords = cw.write();
+            $body
+        } else if let Some(ref cw) = $self.crosswords_test {
+            let mut $crosswords = cw.write();
+            $body
+        } else {
+            unreachable!("Terminal must have either crosswords_ffi or crosswords_test")
+        }
+    };
+}
+
+/// 宏：访问只读 Crosswords（read）
+#[cfg(feature = "new_architecture")]
+macro_rules! with_crosswords {
+    ($self:expr, $crosswords:ident, $body:expr) => {
+        if let Some(ref cw) = $self.crosswords_ffi {
+            let $crosswords = cw.read();
+            $body
+        } else if let Some(ref cw) = $self.crosswords_test {
+            let $crosswords = cw.read();
+            $body
+        } else {
+            unreachable!("Terminal must have either crosswords_ffi or crosswords_test")
+        }
+    };
+}
+
 #[cfg(feature = "new_architecture")]
 impl Terminal {
-    /// 创建新的 Terminal（暂时用于测试，不处理真实 PTY）
+    /// 创建新的 Terminal（用于测试，不处理真实 PTY）
     pub fn new_for_test(id: TerminalId, cols: usize, rows: usize) -> Self {
         let event_collector = EventCollector::new();
 
@@ -150,12 +192,70 @@ impl Terminal {
 
         Self {
             id,
-            crosswords: Arc::new(RwLock::new(crosswords)),
-            event_collector,
+            crosswords_ffi: None,
+            crosswords_test: Some(Arc::new(RwLock::new(crosswords))),
+            event_listener: EventListenerType::Test(event_collector),
             cols,
             rows,
             parser,
         }
+    }
+
+    /// 创建新的 Terminal（支持真实 PTY）
+    ///
+    /// # 参数
+    /// - `id`: 终端 ID
+    /// - `cols`: 列数
+    /// - `rows`: 行数
+    /// - `event_queue`: 事件队列（用于接收终端事件）
+    pub fn new_with_pty(
+        id: TerminalId,
+        cols: usize,
+        rows: usize,
+        event_queue: EventQueue,
+    ) -> Self {
+        // 创建 FFIEventListener
+        let event_listener = FFIEventListener::new(event_queue.clone(), id.0);
+
+        // 创建 Crosswords
+        let dimensions = SimpleDimensions {
+            columns: cols,
+            screen_lines: rows,
+            history_size: 10_000,
+        };
+
+        let window_id = WindowId::from(id.0 as u64);
+        let route_id = id.0;
+
+        let crosswords = Crosswords::new(
+            dimensions,
+            CursorShape::Block,
+            event_listener.clone(),
+            window_id,
+            route_id,
+        );
+
+        // 创建 ANSI 解析器
+        let parser = Processor::new();
+
+        Self {
+            id,
+            crosswords_ffi: Some(Arc::new(RwLock::new(crosswords))),
+            crosswords_test: None,
+            event_listener: EventListenerType::FFI(event_listener),
+            cols,
+            rows,
+            parser,
+        }
+    }
+
+    /// 暴露 inner_crosswords（给 Machine 使用）
+    ///
+    /// # 返回
+    /// - `Some(Arc<RwLock<Crosswords<FFIEventListener>>>)` - 如果是 PTY 模式
+    /// - `None` - 如果是测试模式
+    pub fn inner_crosswords(&self) -> Option<Arc<RwLock<Crosswords<FFIEventListener>>>> {
+        self.crosswords_ffi.clone()
     }
 
     /// 获取终端 ID
@@ -182,12 +282,25 @@ impl Terminal {
     /// 这个方法会：
     /// 1. 将数据喂给 Processor 进行 ANSI 解析
     /// 2. Processor 调用 Crosswords (Handler trait) 更新内部 Grid 状态
-    /// 3. 可能产生事件（通过 EventCollector）
+    /// 3. 可能产生事件（通过 EventListener）
     pub fn write(&mut self, data: &[u8]) {
-        let mut crosswords = self.crosswords.write();
+        eprintln!("✍️ [Terminal::write] Writing {} bytes: {:?}", data.len(), String::from_utf8_lossy(data));
+        if let Some(ref crosswords_ffi) = self.crosswords_ffi {
+            eprintln!("   Using FFI crosswords");
+            let mut crosswords = crosswords_ffi.write();
+            self.parser.advance(&mut *crosswords, data);
+            eprintln!("   After advance, parser finished");
 
-        // 使用结构体字段的 parser 解析数据
-        self.parser.advance(&mut *crosswords, data);
+            // 手动触发 Render 事件（Crosswords 不会自动标记 damage）
+            if let EventListenerType::FFI(ref listener) = self.event_listener {
+                eprintln!("   📤 Manually sending Render event");
+                listener.send_event(crate::rio_event::RioEvent::Render);
+            }
+        } else if let Some(ref crosswords_test) = self.crosswords_test {
+            eprintln!("   Using Test crosswords");
+            let mut crosswords = crosswords_test.write();
+            self.parser.advance(&mut *crosswords, data);
+        }
     }
 
     /// 调整终端大小
@@ -204,129 +317,126 @@ impl Terminal {
         let new_size = SimpleDimensions {
             columns: cols,
             screen_lines: rows,
-            history_size: 10_000, // 保持历史大小不变
+            history_size: 10_000,
         };
 
-        // 调整 Crosswords 的大小（传值而不是引用）
-        let mut crosswords = self.crosswords.write();
-        crosswords.resize(new_size);
-
-        // 注意：这里暂时不处理真实 PTY 的 resize
-        // 真实 PTY 的 resize 会在 Phase 4 实现
+        // 调整 Crosswords 的大小
+        if let Some(ref crosswords_ffi) = self.crosswords_ffi {
+            let mut crosswords = crosswords_ffi.write();
+            crosswords.resize(new_size);
+        } else if let Some(ref crosswords_test) = self.crosswords_test {
+            let mut crosswords = crosswords_test.write();
+            crosswords.resize(new_size);
+        }
     }
 
-    /// 驱动终端，返回产生的事件
+    /// 驱动终端，返回产生的事件（仅测试模式）
     ///
     /// # 返回
     /// - `Vec<TerminalEvent>` - 自上次 tick 以来产生的所有事件
     ///
     /// # 说明
-    /// 这个方法会：
-    /// 1. 从 PTY 读取可用数据（Phase 4 会实现真实 PTY I/O）
-    /// 2. 将数据喂给解析器（当前阶段通过外部 write() 模拟）
-    /// 3. 收集并返回事件
-    ///
-    /// Phase 3 简化实现：
-    /// - 只收集事件，不处理 PTY I/O
-    /// - 真实的 PTY I/O 会在 Phase 4 实现
-    /// - 当前阶段，事件通过 write() → Parser → Handler → EventCollector 产生
+    /// - PTY 模式：事件通过 EventQueue 传递，不需要 tick()
+    /// - 测试模式：通过此方法收集 EventCollector 的事件
     pub fn tick(&mut self) -> Vec<TerminalEvent> {
-        // 收集并返回事件
-        self.event_collector.take_events()
+        match &self.event_listener {
+            EventListenerType::Test(collector) => collector.take_events(),
+            EventListenerType::FFI(_) => Vec::new(), // PTY 模式不需要 tick
+        }
     }
 
     /// 获取终端状态快照
     pub fn state(&self) -> TerminalState {
-        let crosswords = self.crosswords.read();
+        with_crosswords!(self, crosswords, {
+            // 1. 转换 Grid
+            let grid_data = GridData::from_crosswords(&*crosswords);
+            let grid = GridView::new(Arc::new(grid_data));
 
-        // 1. 转换 Grid
-        let grid_data = GridData::from_crosswords(&*crosswords);
-        let grid = GridView::new(Arc::new(grid_data));
-
-        // 2. 转换 Cursor
-        let cursor_pos = {
-            use crate::domain::primitives::AbsolutePoint;
-            let cursor = &crosswords.grid.cursor;
-            let pos = cursor.pos;
-            let display_offset = crosswords.grid.display_offset();
-            let history_size = crosswords.grid.history_size();
-
-            // 转换为绝对坐标
-            let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
-            AbsolutePoint::new(absolute_line, pos.col.0 as usize)
-        };
-        let cursor_shape = crosswords.cursor_shape;
-        let cursor = CursorView::new(cursor_pos, cursor_shape);
-
-        // 3. 转换 Selection（如果有）
-        let selection = crosswords.selection.as_ref().and_then(|sel| {
-            use crate::domain::primitives::AbsolutePoint;
-            use crate::domain::views::SelectionType;
-
-            // 获取选区范围（可能返回 None）
-            sel.to_range(&crosswords).map(|sel_range| {
+            // 2. 转换 Cursor
+            let cursor_pos = {
+                use crate::domain::primitives::AbsolutePoint;
+                let cursor = &crosswords.grid.cursor;
+                let pos = cursor.pos;
                 let display_offset = crosswords.grid.display_offset();
                 let history_size = crosswords.grid.history_size();
 
                 // 转换为绝对坐标
-                let start_line = (history_size as i32 + sel_range.start.row.0 - display_offset as i32) as usize;
-                let end_line = (history_size as i32 + sel_range.end.row.0 - display_offset as i32) as usize;
+                let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
+                AbsolutePoint::new(absolute_line, pos.col.0 as usize)
+            };
+            let cursor_shape = crosswords.cursor_shape;
+            let cursor = CursorView::new(cursor_pos, cursor_shape);
 
-                let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
-                let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
+            // 3. 转换 Selection（如果有）
+            let selection = crosswords.selection.as_ref().and_then(|sel| {
+                use crate::domain::primitives::AbsolutePoint;
+                use crate::domain::views::SelectionType;
 
-                // 转换选区类型
-                let ty = match sel.ty {
-                    rio_backend::selection::SelectionType::Simple => SelectionType::Simple,
-                    rio_backend::selection::SelectionType::Block => SelectionType::Block,
-                    rio_backend::selection::SelectionType::Lines => SelectionType::Lines,
-                    rio_backend::selection::SelectionType::Semantic => SelectionType::Simple, // Semantic 转为 Simple
-                };
+                // 获取选区范围（可能返回 None）
+                sel.to_range(&crosswords).map(|sel_range| {
+                    let display_offset = crosswords.grid.display_offset();
+                    let history_size = crosswords.grid.history_size();
 
-                crate::domain::views::SelectionView::new(start, end, ty)
-            })
-        });
+                    // 转换为绝对坐标
+                    let start_line = (history_size as i32 + sel_range.start.row.0 - display_offset as i32) as usize;
+                    let end_line = (history_size as i32 + sel_range.end.row.0 - display_offset as i32) as usize;
 
-        // 4. 转换 Search
-        let search = crosswords.search_state.as_ref().map(|search_state| {
-            use crate::domain::primitives::AbsolutePoint;
-            use crate::domain::views::{SearchView, MatchRange};
+                    let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
+                    let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
 
-            let display_offset = crosswords.grid.display_offset();
-            let history_size = crosswords.grid.history_size();
+                    // 转换选区类型
+                    let ty = match sel.ty {
+                        rio_backend::selection::SelectionType::Simple => SelectionType::Simple,
+                        rio_backend::selection::SelectionType::Block => SelectionType::Block,
+                        rio_backend::selection::SelectionType::Lines => SelectionType::Lines,
+                        rio_backend::selection::SelectionType::Semantic => SelectionType::Simple, // Semantic 转为 Simple
+                    };
 
-            // 转换所有匹配
-            let matches: Vec<MatchRange> = search_state
-                .all_matches
-                .iter()
-                .map(|match_range| {
-                    // match_range 是 RangeInclusive<Pos>
-                    let start_pos = match_range.start();
-                    let end_pos = match_range.end();
-
-                    // 转换起点
-                    let start_line = (history_size as i32 + start_pos.row.0 - display_offset as i32) as usize;
-                    let start = AbsolutePoint::new(start_line, start_pos.col.0 as usize);
-
-                    // 转换终点
-                    let end_line = (history_size as i32 + end_pos.row.0 - display_offset as i32) as usize;
-                    let end = AbsolutePoint::new(end_line, end_pos.col.0 as usize);
-
-                    MatchRange::new(start, end)
+                    crate::domain::views::SelectionView::new(start, end, ty)
                 })
-                .collect();
+            });
 
-            SearchView::new(matches, search_state.focused_index)
-        });
+            // 4. 转换 Search
+            let search = crosswords.search_state.as_ref().map(|search_state| {
+                use crate::domain::primitives::AbsolutePoint;
+                use crate::domain::views::{SearchView, MatchRange};
 
-        // 构造 TerminalState
-        if let Some(sel) = selection {
-            TerminalState::with_selection(grid, cursor, sel)
-        } else if let Some(srch) = search {
-            TerminalState::with_search(grid, cursor, srch)
-        } else {
-            TerminalState::new(grid, cursor)
-        }
+                let display_offset = crosswords.grid.display_offset();
+                let history_size = crosswords.grid.history_size();
+
+                // 转换所有匹配
+                let matches: Vec<MatchRange> = search_state
+                    .all_matches
+                    .iter()
+                    .map(|match_range| {
+                        // match_range 是 RangeInclusive<Pos>
+                        let start_pos = match_range.start();
+                        let end_pos = match_range.end();
+
+                        // 转换起点
+                        let start_line = (history_size as i32 + start_pos.row.0 - display_offset as i32) as usize;
+                        let start = AbsolutePoint::new(start_line, start_pos.col.0 as usize);
+
+                        // 转换终点
+                        let end_line = (history_size as i32 + end_pos.row.0 - display_offset as i32) as usize;
+                        let end = AbsolutePoint::new(end_line, end_pos.col.0 as usize);
+
+                        MatchRange::new(start, end)
+                    })
+                    .collect();
+
+                SearchView::new(matches, search_state.focused_index)
+            });
+
+            // 构造 TerminalState
+            if let Some(sel) = selection {
+                TerminalState::with_selection(grid, cursor, sel)
+            } else if let Some(srch) = search {
+                TerminalState::with_search(grid, cursor, srch)
+            } else {
+                TerminalState::new(grid, cursor)
+            }
+        })
     }
 
     // ==================== Step 5: Selection ====================
@@ -340,23 +450,23 @@ impl Terminal {
         use rio_backend::crosswords::pos::{Line, Column, Pos, Side};
         use rio_backend::selection::{Selection, SelectionType as BackendSelectionType};
 
-        let mut crosswords = self.crosswords.write();
+        with_crosswords_mut!(self, crosswords, {
+            // 转换坐标：AbsolutePoint → Crosswords Pos
+            let history_size = crosswords.grid.history_size();
+            let line = Line((pos.line as i32) - (history_size as i32));
+            let col = Column(pos.col);
+            let crosswords_pos = Pos::new(line, col);
 
-        // 转换坐标：AbsolutePoint → Crosswords Pos
-        let history_size = crosswords.grid.history_size();
-        let line = Line((pos.line as i32) - (history_size as i32));
-        let col = Column(pos.col);
-        let crosswords_pos = Pos::new(line, col);
+            // 转换选区类型
+            let backend_kind = match kind {
+                crate::domain::views::SelectionType::Simple => BackendSelectionType::Simple,
+                crate::domain::views::SelectionType::Block => BackendSelectionType::Block,
+                crate::domain::views::SelectionType::Lines => BackendSelectionType::Lines,
+            };
 
-        // 转换选区类型
-        let backend_kind = match kind {
-            crate::domain::views::SelectionType::Simple => BackendSelectionType::Simple,
-            crate::domain::views::SelectionType::Block => BackendSelectionType::Block,
-            crate::domain::views::SelectionType::Lines => BackendSelectionType::Lines,
-        };
-
-        // 创建新的 Selection
-        crosswords.selection = Some(Selection::new(backend_kind, crosswords_pos, Side::Left));
+            // 创建新的 Selection
+            crosswords.selection = Some(Selection::new(backend_kind, crosswords_pos, Side::Left));
+        });
     }
 
     /// 更新选区
@@ -366,24 +476,25 @@ impl Terminal {
     pub fn update_selection(&mut self, pos: crate::domain::primitives::AbsolutePoint) {
         use rio_backend::crosswords::pos::{Line, Column, Pos, Side};
 
-        let mut crosswords = self.crosswords.write();
+        with_crosswords_mut!(self, crosswords, {
+            // 转换坐标
+            let history_size = crosswords.grid.history_size();
+            let line = Line((pos.line as i32) - (history_size as i32));
+            let col = Column(pos.col);
+            let crosswords_pos = Pos::new(line, col);
 
-        // 转换坐标
-        let history_size = crosswords.grid.history_size();
-        let line = Line((pos.line as i32) - (history_size as i32));
-        let col = Column(pos.col);
-        let crosswords_pos = Pos::new(line, col);
-
-        // 更新选区
-        if let Some(ref mut selection) = crosswords.selection {
-            selection.update(crosswords_pos, Side::Right);
-        }
+            // 更新选区
+            if let Some(ref mut selection) = crosswords.selection {
+                selection.update(crosswords_pos, Side::Right);
+            }
+        });
     }
 
     /// 清除选区
     pub fn clear_selection(&mut self) {
-        let mut crosswords = self.crosswords.write();
-        crosswords.selection = None;
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.selection = None;
+        });
     }
 
     /// 获取选中的文本
@@ -392,8 +503,9 @@ impl Terminal {
     /// - `Some(String)` - 选中的文本
     /// - `None` - 没有选区
     pub fn selection_text(&self) -> Option<String> {
-        let crosswords = self.crosswords.read();
-        crosswords.selection_to_string()
+        with_crosswords!(self, crosswords, {
+            crosswords.selection_to_string()
+        })
     }
 
     // ==================== Step 6: Search ====================
@@ -406,34 +518,37 @@ impl Terminal {
     /// # 返回
     /// - 匹配的数量
     pub fn search(&mut self, query: &str) -> usize {
-        let mut crosswords = self.crosswords.write();
+        with_crosswords_mut!(self, crosswords, {
+            // 执行搜索（非正则，不区分大小写，不限制行数）
+            let _ = crosswords.start_search(query, false, false, None);
 
-        // 执行搜索（非正则，不区分大小写，不限制行数）
-        let _ = crosswords.start_search(query, false, false, None);
-
-        // 返回匹配数量
-        crosswords.search_state
-            .as_ref()
-            .map(|s| s.all_matches.len())
-            .unwrap_or(0)
+            // 返回匹配数量
+            crosswords.search_state
+                .as_ref()
+                .map(|s| s.all_matches.len())
+                .unwrap_or(0)
+        })
     }
 
     /// 跳到下一个搜索匹配
     pub fn next_match(&mut self) {
-        let mut crosswords = self.crosswords.write();
-        crosswords.search_goto_next();
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.search_goto_next();
+        });
     }
 
     /// 跳到上一个搜索匹配
     pub fn prev_match(&mut self) {
-        let mut crosswords = self.crosswords.write();
-        crosswords.search_goto_prev();
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.search_goto_prev();
+        });
     }
 
     /// 清除搜索
     pub fn clear_search(&mut self) {
-        let mut crosswords = self.crosswords.write();
-        crosswords.clear_search();
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.clear_search();
+        });
     }
 
     // ==================== Step 7: Scroll ====================
@@ -445,24 +560,27 @@ impl Terminal {
     pub fn scroll(&mut self, delta: i32) {
         use rio_backend::crosswords::grid::Scroll;
 
-        let mut crosswords = self.crosswords.write();
-        crosswords.scroll_display(Scroll::Delta(delta));
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.scroll_display(Scroll::Delta(delta));
+        });
     }
 
     /// 滚动到顶部
     pub fn scroll_to_top(&mut self) {
         use rio_backend::crosswords::grid::Scroll;
 
-        let mut crosswords = self.crosswords.write();
-        crosswords.scroll_display(Scroll::Top);
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.scroll_display(Scroll::Top);
+        });
     }
 
     /// 滚动到底部
     pub fn scroll_to_bottom(&mut self) {
         use rio_backend::crosswords::grid::Scroll;
 
-        let mut crosswords = self.crosswords.write();
-        crosswords.scroll_display(Scroll::Bottom);
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.scroll_display(Scroll::Bottom);
+        });
     }
 }
 

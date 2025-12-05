@@ -3,7 +3,7 @@ use super::GlyphInfo;
 use crate::render::font::FontContext;
 use crate::render::cache::GlyphLayout;
 use sugarloaf::layout::BuilderLine;
-use skia_safe::Font;
+use skia_safe::{Font, Color4f};
 use std::sync::Arc;
 
 /// 文本整形器（Text Shaper）
@@ -76,10 +76,23 @@ impl TextShaper {
                 };
 
                 // ===== 记录字形（1418-1422 行）=====
+                // 从 fragment.style 获取颜色
+                let color = Color4f::new(
+                    fragment.style.color[0],
+                    fragment.style.color[1],
+                    fragment.style.color[2],
+                    fragment.style.color[3],
+                );
+                let background_color = fragment.style.background_color.map(|c| {
+                    Color4f::new(c[0], c[1], c[2], c[3])
+                });
+
                 glyphs.push(GlyphInfo {
                     ch,
                     font: best_font,
                     x,
+                    color,
+                    background_color,
                 });
 
                 x += cell_width * fragment_cell_width;

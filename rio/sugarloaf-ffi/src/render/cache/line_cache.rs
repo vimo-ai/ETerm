@@ -76,6 +76,11 @@ impl LineCache {
         // 插入内层缓存
         entry.renders.insert(state_hash, image);
     }
+
+    /// 清空缓存（窗口 resize 时调用）
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
 }
 
 impl Default for LineCache {
