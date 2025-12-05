@@ -1404,6 +1404,7 @@ pub extern "C" fn terminal_app_destroy(handle: *mut TerminalAppHandle) {
 // ===== 核心功能 =====
 
 /// 写入数据（PTY → Terminal）
+/// ⚠️ 已废弃：在 PTY 模式下，PTY 输出通过 Machine 自动喂给 Terminal
 #[cfg(feature = "new_architecture")]
 #[no_mangle]
 pub extern "C" fn terminal_app_write(
@@ -1419,6 +1420,27 @@ pub extern "C" fn terminal_app_write(
     let data_slice = unsafe { std::slice::from_raw_parts(data, len) };
 
     match app.write(data_slice) {
+        Ok(()) => ErrorCode::Success,
+        Err(e) => e,
+    }
+}
+
+/// 处理键盘输入（Keyboard → PTY）
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_app_input(
+    handle: *mut TerminalAppHandle,
+    data: *const u8,
+    len: usize,
+) -> ErrorCode {
+    if handle.is_null() || data.is_null() {
+        return ErrorCode::NullPointer;
+    }
+
+    let app = unsafe { &mut *(handle as *mut TerminalApp) };
+    let data_slice = unsafe { std::slice::from_raw_parts(data, len) };
+
+    match app.input(data_slice) {
         Ok(()) => ErrorCode::Success,
         Err(e) => e,
     }
@@ -1453,6 +1475,27 @@ pub extern "C" fn terminal_app_resize(
 
     let app = unsafe { &mut *(handle as *mut TerminalApp) };
     match app.resize(cols, rows) {
+        Ok(()) => ErrorCode::Success,
+        Err(e) => e,
+    }
+}
+
+/// 调整大小（包含像素尺寸）
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_app_resize_with_pixels(
+    handle: *mut TerminalAppHandle,
+    cols: u16,
+    rows: u16,
+    width: f32,
+    height: f32,
+) -> ErrorCode {
+    if handle.is_null() {
+        return ErrorCode::NullPointer;
+    }
+
+    let app = unsafe { &mut *(handle as *mut TerminalApp) };
+    match app.resize_with_pixels(cols, rows, width, height) {
         Ok(()) => ErrorCode::Success,
         Err(e) => e,
     }
@@ -1694,4 +1737,229 @@ pub extern "C" fn terminal_app_set_event_callback(
 
     let app = unsafe { &mut *(handle as *mut TerminalApp) };
     app.set_event_callback(callback, context);
+}
+
+// ============================================================================
+// TerminalPool FFI - 多终端管理 + 统一渲染
+// ============================================================================
+
+#[cfg(feature = "new_architecture")]
+use app::TerminalPool;
+
+/// TerminalPool 句柄（不透明指针）
+#[cfg(feature = "new_architecture")]
+#[repr(C)]
+pub struct TerminalPoolHandle {
+    _private: [u8; 0],
+}
+
+/// 创建 TerminalPool
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_create(config: AppConfig) -> *mut TerminalPoolHandle {
+    match TerminalPool::new(config) {
+        Ok(pool) => {
+            let boxed = Box::new(pool);
+            Box::into_raw(boxed) as *mut TerminalPoolHandle
+        }
+        Err(e) => {
+            eprintln!("[TerminalPool FFI] Create failed: {:?}", e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// 销毁 TerminalPool
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_destroy(handle: *mut TerminalPoolHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    unsafe {
+        let _ = Box::from_raw(handle as *mut TerminalPool);
+    }
+}
+
+/// 创建新终端
+///
+/// 返回终端 ID（>= 1），失败返回 -1
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_create_terminal(
+    handle: *mut TerminalPoolHandle,
+    cols: u16,
+    rows: u16,
+) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.create_terminal(cols, rows)
+}
+
+/// 关闭终端
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_close_terminal(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.close_terminal(terminal_id)
+}
+
+/// 调整终端大小
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_resize_terminal(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    cols: u16,
+    rows: u16,
+    width: f32,
+    height: f32,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.resize_terminal(terminal_id, cols, rows, width, height)
+}
+
+/// 发送输入到终端
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_input(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    data: *const u8,
+    len: usize,
+) -> bool {
+    if handle.is_null() || data.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    let data_slice = unsafe { std::slice::from_raw_parts(data, len) };
+    pool.input(terminal_id, data_slice)
+}
+
+/// 滚动终端
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_scroll(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    delta: i32,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.scroll(terminal_id, delta)
+}
+
+// ===== 渲染流程（统一提交）=====
+
+/// 开始新的一帧（清空待渲染列表）
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_begin_frame(handle: *mut TerminalPoolHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.begin_frame();
+}
+
+/// 渲染终端到指定位置（累积到待渲染列表）
+///
+/// # 参数
+/// - terminal_id: 终端 ID
+/// - x, y: 渲染位置（逻辑坐标）
+/// - width, height: 终端区域大小（逻辑坐标）
+///   - 如果 > 0，会自动计算 cols/rows 并 resize
+///   - 如果 = 0，不执行 resize（保持当前尺寸）
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_render_terminal(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.render_terminal(terminal_id, x, y, width, height)
+}
+
+/// 结束帧（统一提交渲染）
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_end_frame(handle: *mut TerminalPoolHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.end_frame();
+}
+
+/// 调整 Sugarloaf 渲染表面大小
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_resize_sugarloaf(
+    handle: *mut TerminalPoolHandle,
+    width: f32,
+    height: f32,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.resize_sugarloaf(width, height);
+}
+
+/// 设置事件回调
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_event_callback(
+    handle: *mut TerminalPoolHandle,
+    callback: TerminalAppEventCallback,
+    context: *mut c_void,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.set_event_callback(callback, context);
+}
+
+/// 获取终端数量
+#[cfg(feature = "new_architecture")]
+#[no_mangle]
+pub extern "C" fn terminal_pool_terminal_count(handle: *mut TerminalPoolHandle) -> usize {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.terminal_count()
 }

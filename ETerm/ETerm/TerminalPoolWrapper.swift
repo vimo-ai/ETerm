@@ -1,0 +1,292 @@
+//
+//  TerminalPoolWrapper.swift
+//  ETerm
+//
+//  新架构：多终端管理 + 统一渲染
+//
+//  使用方式：
+//    pool.beginFrame()
+//    for panel in visiblePanels {
+//        pool.renderTerminal(id, x: panel.x, y: panel.y)
+//    }
+//    pool.endFrame()
+//
+
+import Foundation
+import AppKit
+
+/// 终端事件类型
+enum TerminalPoolSwiftEventType: UInt32 {
+    case wakeup = 0
+    case render = 1
+    case cursorBlink = 2
+    case bell = 3
+    case titleChanged = 4
+    case damaged = 5
+}
+
+/// 终端池 Wrapper（新架构）
+///
+/// 职责分离：
+/// - TerminalPool 管理多个终端实例（状态 + PTY）
+/// - 渲染位置由调用方指定（Swift 控制布局）
+/// - 统一提交：beginFrame → renderTerminal × N → endFrame
+class TerminalPoolWrapper: TerminalPoolProtocol {
+
+    // MARK: - Properties
+
+    private var handle: TerminalPoolHandle?
+
+    /// 渲染回调
+    private var renderCallback: (() -> Void)?
+
+    /// 终端关闭回调
+    var onTerminalClose: ((Int) -> Void)?
+
+    /// Bell 回调
+    var onBell: ((Int) -> Void)?
+
+    // MARK: - Initialization
+
+    /// 创建终端池
+    ///
+    /// - Parameters:
+    ///   - windowHandle: NSView 的原始指针
+    ///   - displayHandle: NSWindow 的原始指针
+    ///   - width: 窗口宽度（逻辑像素）
+    ///   - height: 窗口高度（逻辑像素）
+    ///   - scale: DPI 缩放因子
+    ///   - fontSize: 字体大小
+    init?(windowHandle: UnsafeMutableRawPointer,
+          displayHandle: UnsafeMutableRawPointer,
+          width: Float,
+          height: Float,
+          scale: Float,
+          fontSize: Float = 14.0) {
+
+        let config = TerminalPoolConfig(
+            cols: 80,
+            rows: 24,
+            font_size: fontSize,
+            line_height: 1.2,
+            scale: scale,
+            window_handle: windowHandle,
+            display_handle: displayHandle,
+            window_width: width,
+            window_height: height,
+            history_size: 10000
+        )
+
+        handle = terminal_pool_create(config)
+
+        guard handle != nil else {
+            print("❌ [TerminalPoolWrapper] Failed to create pool")
+            return nil
+        }
+
+        print("✅ [TerminalPoolWrapper] Pool created")
+        setupEventCallback()
+    }
+
+    deinit {
+        if let handle = handle {
+            terminal_pool_destroy(handle)
+            print("🗑️ [TerminalPoolWrapper] Pool destroyed")
+        }
+    }
+
+    // MARK: - Event Callback
+
+    private func setupEventCallback() {
+        guard let handle = handle else { return }
+
+        let contextPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        terminal_pool_set_event_callback(
+            handle,
+            { (context, event) in
+                guard let context = context else { return }
+                let wrapper = Unmanaged<TerminalPoolWrapper>.fromOpaque(context).takeUnretainedValue()
+                wrapper.handleEvent(event)
+            },
+            contextPtr
+        )
+    }
+
+    private func handleEvent(_ event: TerminalPoolEvent) {
+        let terminalId = Int(event.data)
+
+        switch event.event_type {
+        case TerminalEventType_Wakeup, TerminalEventType_Render:
+            DispatchQueue.main.async { [weak self] in
+                self?.renderCallback?()
+            }
+
+        case TerminalEventType_Bell:
+            DispatchQueue.main.async { [weak self] in
+                self?.onBell?(terminalId)
+            }
+
+        case TerminalEventType_Damaged:
+            DispatchQueue.main.async { [weak self] in
+                self?.renderCallback?()
+            }
+
+        default:
+            break
+        }
+    }
+
+    // MARK: - TerminalPoolProtocol Implementation
+
+    func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int {
+        guard let handle = handle else { return -1 }
+        let id = terminal_pool_create_terminal(handle, cols, rows)
+        print("🆕 [TerminalPoolWrapper] Created terminal \(id)")
+        return Int(id)
+    }
+
+    @discardableResult
+    func closeTerminal(_ terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        let result = terminal_pool_close_terminal(handle, terminalId)
+        print("🗑️ [TerminalPoolWrapper] Closed terminal \(terminalId): \(result)")
+        return result
+    }
+
+    func getTerminalCount() -> Int {
+        guard let handle = handle else { return 0 }
+        return Int(terminal_pool_terminal_count(handle))
+    }
+
+    @discardableResult
+    func writeInput(terminalId: Int, data: String) -> Bool {
+        guard let handle = handle,
+              let dataBytes = data.data(using: .utf8) else { return false }
+        return dataBytes.withUnsafeBytes { ptr in
+            guard let baseAddress = ptr.baseAddress else { return false }
+            return terminal_pool_input(handle, terminalId, baseAddress.assumingMemoryBound(to: UInt8.self), dataBytes.count)
+        }
+    }
+
+    @discardableResult
+    func readAllOutputs() -> Bool {
+        // 事件驱动模式，不需要轮询
+        return false
+    }
+
+    @discardableResult
+    func scroll(terminalId: Int, deltaLines: Int32) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_scroll(handle, terminalId, deltaLines)
+    }
+
+    @discardableResult
+    func resize(terminalId: Int, cols: UInt16, rows: UInt16) -> Bool {
+        guard let handle = handle else { return false }
+        // 使用默认的像素尺寸（会在 Rust 侧计算）
+        return terminal_pool_resize_terminal(handle, terminalId, cols, rows, 0, 0)
+    }
+
+    func setRenderCallback(_ callback: @escaping () -> Void) {
+        renderCallback = callback
+    }
+
+    @discardableResult
+    func render(terminalId: Int, x: Float, y: Float, width: Float, height: Float, cols: UInt16, rows: UInt16) -> Bool {
+        guard let handle = handle else { return false }
+        // 新架构：直接调用 renderTerminal（传递 width/height 用于自动 resize）
+        return terminal_pool_render_terminal(handle, terminalId, x, y, width, height)
+    }
+
+    func flush() {
+        // 新架构中 flush 在 endFrame 中完成
+        endFrame()
+    }
+
+    func clear() {
+        // 新架构中 clear 在 beginFrame 中完成
+        beginFrame()
+    }
+
+    func getCursorPosition(terminalId: Int) -> CursorPosition? {
+        // TODO: 需要在 Rust 侧添加此 API
+        return nil
+    }
+
+    @discardableResult
+    func clearSelection(terminalId: Int) -> Bool {
+        // TODO: 需要在 Rust 侧添加此 API
+        return false
+    }
+
+    func getInputRow(terminalId: Int) -> UInt16? {
+        // TODO: 需要在 Rust 侧添加此 API
+        return nil
+    }
+
+    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
+        // TODO: 需要在 Rust 侧添加此 API
+    }
+
+    // MARK: - New Architecture Methods
+
+    /// 调整终端大小（包含像素尺寸）
+    func resizeTerminal(_ id: Int, cols: UInt16, rows: UInt16, width: Float, height: Float) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_resize_terminal(handle, id, cols, rows, width, height)
+    }
+
+    /// 开始新的一帧
+    func beginFrame() {
+        guard let handle = handle else { return }
+        terminal_pool_begin_frame(handle)
+    }
+
+    /// 渲染终端到指定位置
+    ///
+    /// - Parameters:
+    ///   - id: 终端 ID
+    ///   - x, y: 渲染位置（逻辑坐标）
+    ///   - width, height: 终端区域大小（逻辑坐标）
+    ///     - 如果 > 0，自动计算 cols/rows 并 resize
+    ///     - 如果 = 0，不执行 resize
+    func renderTerminal(_ id: Int, x: Float, y: Float, width: Float = 0, height: Float = 0) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_render_terminal(handle, id, x, y, width, height)
+    }
+
+    /// 结束帧（统一提交渲染）
+    func endFrame() {
+        guard let handle = handle else { return }
+        terminal_pool_end_frame(handle)
+    }
+
+    /// 调整渲染表面大小
+    func resizeSugarloaf(width: Float, height: Float) {
+        guard let handle = handle else { return }
+        terminal_pool_resize_sugarloaf(handle, width, height)
+    }
+}
+
+// MARK: - Convenience Extensions
+
+extension TerminalPoolWrapper {
+
+    /// 渲染多个终端（便捷方法）
+    ///
+    /// 使用示例：
+    /// ```swift
+    /// pool.renderTerminals([
+    ///     (id: 1, x: 0, y: 0),
+    ///     (id: 2, x: 400, y: 0),
+    /// ])
+    /// ```
+    func renderTerminals(_ terminals: [(id: Int, x: Float, y: Float)]) {
+        beginFrame()
+        for terminal in terminals {
+            _ = renderTerminal(terminal.id, x: terminal.x, y: terminal.y)
+        }
+        endFrame()
+    }
+}

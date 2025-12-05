@@ -520,4 +520,134 @@ void rio_terminal_clear_search(
     int32_t terminal_id
 );
 
+// =============================================================================
+// TerminalPool API (New Architecture - Multi-terminal + Unified Render)
+// =============================================================================
+
+/// TerminalPool handle (opaque pointer)
+typedef void* TerminalPoolHandle;
+
+/// App configuration for TerminalPool
+typedef struct {
+    uint16_t cols;
+    uint16_t rows;
+    float font_size;
+    float line_height;
+    float scale;
+    void* window_handle;
+    void* display_handle;
+    float window_width;
+    float window_height;
+    uint32_t history_size;
+} TerminalPoolConfig;
+
+/// Terminal event types
+typedef enum {
+    TerminalEventType_Wakeup = 0,
+    TerminalEventType_Render = 1,
+    TerminalEventType_CursorBlink = 2,
+    TerminalEventType_Bell = 3,
+    TerminalEventType_TitleChanged = 4,
+    TerminalEventType_Damaged = 5,
+} TerminalPoolEventType;
+
+/// Terminal event
+typedef struct {
+    TerminalPoolEventType event_type;
+    uint64_t data;  // terminal_id for multi-terminal events
+} TerminalPoolEvent;
+
+/// Event callback type
+typedef void (*TerminalPoolEventCallback)(void* context, TerminalPoolEvent event);
+
+/// Create TerminalPool
+///
+/// Returns: Handle on success, NULL on failure
+TerminalPoolHandle terminal_pool_create(TerminalPoolConfig config);
+
+/// Destroy TerminalPool
+void terminal_pool_destroy(TerminalPoolHandle handle);
+
+/// Create new terminal
+///
+/// Returns: Terminal ID (>= 1) on success, -1 on failure
+int32_t terminal_pool_create_terminal(
+    TerminalPoolHandle handle,
+    uint16_t cols,
+    uint16_t rows
+);
+
+/// Close terminal
+bool terminal_pool_close_terminal(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Resize terminal
+bool terminal_pool_resize_terminal(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    uint16_t cols,
+    uint16_t rows,
+    float width,
+    float height
+);
+
+/// Send input to terminal
+bool terminal_pool_input(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    const uint8_t* data,
+    size_t len
+);
+
+/// Scroll terminal
+bool terminal_pool_scroll(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    int32_t delta
+);
+
+// ===== Render Flow (Unified Submit) =====
+
+/// Begin new frame (clear pending objects)
+void terminal_pool_begin_frame(TerminalPoolHandle handle);
+
+/// Render terminal at position (accumulate to pending list)
+///
+/// Parameters:
+/// - terminal_id: Terminal to render
+/// - x, y: Position (logical coordinates, Y from top)
+/// - width, height: Terminal area size (logical coordinates)
+///   - If > 0, auto-calculate cols/rows and resize
+///   - If = 0, don't resize (keep current size)
+bool terminal_pool_render_terminal(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    float x,
+    float y,
+    float width,
+    float height
+);
+
+/// End frame (unified submit to GPU)
+void terminal_pool_end_frame(TerminalPoolHandle handle);
+
+/// Resize Sugarloaf render surface
+void terminal_pool_resize_sugarloaf(
+    TerminalPoolHandle handle,
+    float width,
+    float height
+);
+
+/// Set event callback
+void terminal_pool_set_event_callback(
+    TerminalPoolHandle handle,
+    TerminalPoolEventCallback callback,
+    void* context
+);
+
+/// Get terminal count
+size_t terminal_pool_terminal_count(TerminalPoolHandle handle);
+
 #endif /* SugarloafBridge_h */
