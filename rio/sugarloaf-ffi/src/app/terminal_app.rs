@@ -85,10 +85,14 @@ impl TerminalApp {
         let font_context = Arc::new(FontContext::new(font_library_for_context));
 
         // 6. 创建渲染配置
+        use crate::domain::primitives::LogicalPixels;
+        use rio_backend::config::colors::Colors;
+        let colors = Arc::new(Colors::default());
         let render_config = RenderConfig::new(
-            config.font_size,
+            LogicalPixels::new(config.font_size),
             config.line_height,
             config.scale,
+            colors,
         );
 
         // 7. 创建渲染器
@@ -272,10 +276,11 @@ impl TerminalApp {
         };
 
         // 调用 Swift 回调
+        // 注意：Crosswords 在写入时已自动标记 damage，无需手动调用 mark_all_dirty
         if !context.is_null() {
             unsafe {
                 // context 是 TerminalApp 实例的指针
-                let app = &*(context as *const TerminalApp);
+                let app = &mut *(context as *mut TerminalApp);
 
                 // 从 TerminalApp 获取存储的 Swift 回调
                 if let Some((callback, swift_context)) = app.event_callback {
@@ -336,33 +341,50 @@ impl TerminalApp {
         }
     }
 
-    /// 渲染
-    ///
-    /// TODO: dirty_lines 追踪暂时禁用
-    /// 原因：Machine 直接写入 Crosswords，绕过了 Terminal::write()，
-    /// 导致 dirty_lines 不会被标记。需要在事件回调中标记 dirty。
+    /// 渲染（支持 damage 检测的增量渲染）
     pub fn render(&mut self) -> Result<(), ErrorCode> {
         let frame_start = std::time::Instant::now();
 
         // 从 Terminal 获取状态
         let terminal = self.terminal.lock();
+
+        // 检查是否有 damage
+        if !terminal.is_damaged() {
+            eprintln!("⏭️  [TerminalApp::render] No damage, skipping render");
+            return Ok(());
+        }
+
         let state = terminal.state();
         let rows = terminal.rows();
         drop(terminal);
 
-        // 使用 Renderer 渲染所有行
+        // 使用 Renderer 渲染 dirty 行
         let mut renderer = self.renderer.lock();
         let font_metrics = crate::render::config::FontMetrics::compute(
             renderer.config(),
             &self.font_context,
         );
-        let cell_height = font_metrics.cell_height;
+
+        let scale = self.config.scale;
+        let logical_cell_height = font_metrics.cell_height.to_logical(scale);
+
+        eprintln!("🎨 [TerminalApp::render] State summary:");
+        eprintln!("   cursor=({}, {}), shape={:?}",
+                  state.cursor.position.line, state.cursor.position.col, state.cursor.shape);
+        eprintln!("   selection={}, search={}",
+                  if state.selection.is_some() { "YES" } else { "NO" },
+                  if state.search.is_some() { "YES" } else { "NO" });
 
         let mut objects = Vec::with_capacity(rows);
+
+        // ⚠️ 暂时方案：全部重新渲染（因为没有实现缓存持久化）
+        // 原因：光标移动时，如果不重新渲染所有行，旧的光标图像会残留在缓存中
+        // TODO: 实现 cached_objects: Vec<Option<Image>>，只更新 dirty 行
         for line in 0..rows {
             let image = renderer.render_line(line, &state);
+
             let image_obj = sugarloaf::ImageObject {
-                position: [0.0, line as f32 * cell_height],
+                position: [0.0, line as f32 * logical_cell_height.value],
                 image,
             };
             objects.push(Object::Image(image_obj));
@@ -376,9 +398,15 @@ impl TerminalApp {
             sugarloaf.render();
         }
 
+        // 渲染成功后，重置 damage 状态
+        {
+            let mut terminal = self.terminal.lock();
+            terminal.reset_damage();
+        }
+
         let frame_time = frame_start.elapsed().as_micros();
-        eprintln!("🎯FRAME_PERF TerminalApp::render() took {}μs ({:.2}ms) | rows={}",
-                  frame_time, frame_time as f32 / 1000.0, rows);
+        eprintln!("🎯FRAME_PERF TerminalApp::render() took {}μs ({:.2}ms)",
+                  frame_time, frame_time as f32 / 1000.0);
 
         Ok(())
     }
@@ -561,10 +589,14 @@ impl TerminalApp {
         self.config = config;
 
         // 更新渲染配置
+        use crate::domain::primitives::LogicalPixels;
+        use rio_backend::config::colors::Colors;
+        let colors = Arc::new(Colors::default());
         let render_config = RenderConfig::new(
-            config.font_size,
+            LogicalPixels::new(config.font_size),
             config.line_height,
             config.scale,
+            colors,
         );
 
         {
@@ -587,10 +619,10 @@ impl TerminalApp {
         let metrics = crate::render::config::FontMetrics::compute(config, &self.font_context);
 
         FontMetrics {
-            cell_width: metrics.cell_width,
-            cell_height: metrics.cell_height,
-            baseline_offset: metrics.baseline_offset,
-            line_height: metrics.cell_height,
+            cell_width: metrics.cell_width.value,
+            cell_height: metrics.cell_height.value,
+            baseline_offset: metrics.baseline_offset.value,
+            line_height: metrics.cell_height.value,
         }
     }
 
@@ -609,11 +641,13 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> AppConfig {
+        use crate::app::ffi::DEFAULT_LINE_HEIGHT;
+
         AppConfig {
             cols: 80,
             rows: 24,
             font_size: 14.0,
-            line_height: 1.2,
+            line_height: DEFAULT_LINE_HEIGHT,
             scale: 1.0,
             window_handle: std::ptr::null_mut(),
             display_handle: std::ptr::null_mut(),

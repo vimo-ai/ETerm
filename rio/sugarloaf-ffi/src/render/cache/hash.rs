@@ -39,11 +39,14 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
     // 在真实场景中（有历史缓冲区时），需要将绝对坐标转换为屏幕坐标。
     // TODO: 当实现真实的历史缓冲区时，需要添加坐标转换逻辑
 
-    // 1. 光标在本行？
-    // 简化版本：直接比较绝对坐标（仅适用于无历史缓冲区的情况）
-    if state.cursor.position.line == screen_line {
+    // 1. 光标状态
+    // 🔑 关键：始终写入光标是否在本行，这样光标离开时 hash 也会变化
+    let cursor_on_this_line = state.cursor.position.line == screen_line;
+    hasher.write_u8(cursor_on_this_line as u8);
+
+    if cursor_on_this_line {
         hasher.write_usize(state.cursor.position.col);
-        // 注意：cursor.shape 暂时不 hash，简化实现
+        hasher.write_u8(state.cursor.shape as u8);
     }
 
     // 2. 选区覆盖本行？

@@ -122,9 +122,6 @@ pub struct Terminal {
 
     /// ANSI 解析器
     parser: Processor<StdSyncHandler>,
-
-    /// Dirty lines 追踪（每行是否需要重绘）
-    dirty_lines: Vec<bool>,
 }
 
 /// 事件监听器类型
@@ -201,7 +198,6 @@ impl Terminal {
             cols,
             rows,
             parser,
-            dirty_lines: vec![true; rows],  // 初始化为 dirty，确保首次渲染
         }
     }
 
@@ -250,7 +246,6 @@ impl Terminal {
             cols,
             rows,
             parser,
-            dirty_lines: vec![true; rows],  // 初始化为 dirty，确保首次渲染
         }
     }
 
@@ -296,14 +291,11 @@ impl Terminal {
             {
                 let mut crosswords = crosswords_ffi.write();
                 self.parser.advance(&mut *crosswords, data);
+                // Machine 会调用 Crosswords 的 Handler trait 方法，这些方法内部已经自动标记 damage
                 // eprintln!("   After advance, parser finished");
             } // 释放 crosswords 的锁
 
-            // 标记所有行为 dirty（简单实现）
-            // TODO: 未来优化为只标记实际受影响的行（通过 Crosswords 的 damage API）
-            self.mark_all_dirty();
-
-            // 手动触发 Render 事件（Crosswords 不会自动标记 damage）
+            // 手动触发 Render 事件（Crosswords 不会自动发送事件）
             if let EventListenerType::FFI(ref listener) = self.event_listener {
                 // eprintln!("   📤 Manually sending Render event");
                 listener.send_event(crate::rio_event::RioEvent::Render);
@@ -313,10 +305,8 @@ impl Terminal {
             {
                 let mut crosswords = crosswords_test.write();
                 self.parser.advance(&mut *crosswords, data);
+                // Machine 会调用 Crosswords 的 Handler trait 方法，这些方法内部已经自动标记 damage
             } // 释放 crosswords 的锁
-
-            // 标记所有行为 dirty
-            self.mark_all_dirty();
         }
     }
 
@@ -337,7 +327,7 @@ impl Terminal {
             history_size: 10_000,
         };
 
-        // 调整 Crosswords 的大小
+        // 调整 Crosswords 的大小（内部会自动标记 full damage）
         if let Some(ref crosswords_ffi) = self.crosswords_ffi {
             let mut crosswords = crosswords_ffi.write();
             crosswords.resize(new_size);
@@ -345,9 +335,6 @@ impl Terminal {
             let mut crosswords = crosswords_test.write();
             crosswords.resize(new_size);
         }
-
-        // 重置 dirty_lines 大小（resize 时标记所有行为 dirty）
-        self.dirty_lines = vec![true; rows];
     }
 
     /// 驱动终端，返回产生的事件（仅测试模式）
@@ -382,6 +369,12 @@ impl Terminal {
 
                 // 转换为绝对坐标
                 let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
+
+                eprintln!("📍 [Terminal::state] Cursor conversion:");
+                eprintln!("   row={}, col={}, display_offset={}, history_size={}",
+                          pos.row.0, pos.col.0, display_offset, history_size);
+                eprintln!("   → absolute_line={}, absolute_col={}", absolute_line, pos.col.0);
+
                 AbsolutePoint::new(absolute_line, pos.col.0 as usize)
             };
             let cursor_shape = crosswords.cursor_shape;
@@ -391,6 +384,8 @@ impl Terminal {
             let selection = crosswords.selection.as_ref().and_then(|sel| {
                 use crate::domain::primitives::AbsolutePoint;
                 use crate::domain::views::SelectionType;
+
+                eprintln!("🔷 [Terminal::state] Selection exists: {:?}", sel);
 
                 // 获取选区范围（可能返回 None）
                 sel.to_range(&crosswords).map(|sel_range| {
@@ -403,6 +398,9 @@ impl Terminal {
 
                     let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
                     let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
+
+                    eprintln!("   → start=({}, {}), end=({}, {})",
+                              start.line, start.col, end.line, end.col);
 
                     // 转换选区类型
                     let ty = match sel.ty {
@@ -582,10 +580,8 @@ impl Terminal {
 
         with_crosswords_mut!(self, crosswords, {
             crosswords.scroll_display(Scroll::Delta(delta));
+            // 滚动后 display_offset 变化，屏幕内容变化，Crosswords 内部已自动标记 full damage
         });
-
-        // 滚动后 display_offset 变化，屏幕内容变化，需要重绘
-        self.mark_all_dirty();
     }
 
     /// 滚动到顶部
@@ -594,9 +590,8 @@ impl Terminal {
 
         with_crosswords_mut!(self, crosswords, {
             crosswords.scroll_display(Scroll::Top);
+            // Crosswords 内部已自动标记 full damage
         });
-
-        self.mark_all_dirty();
     }
 
     /// 滚动到底部
@@ -605,49 +600,33 @@ impl Terminal {
 
         with_crosswords_mut!(self, crosswords, {
             crosswords.scroll_display(Scroll::Bottom);
+            // Crosswords 内部已自动标记 full damage
         });
-
-        self.mark_all_dirty();
     }
 
-    // ==================== Dirty Lines 管理 ====================
+    // ==================== Damage 管理（代理到 Crosswords）====================
 
-    /// 标记所有行为 dirty（内部使用）
-    fn mark_all_dirty(&mut self) {
-        for dirty in &mut self.dirty_lines {
-            *dirty = true;
-        }
-    }
-
-    /// 标记所有行为 dirty（公开方法，供事件回调使用）
-    ///
-    /// 当收到 Wakeup/Render 事件时调用，表示终端内容已变化
-    pub fn mark_all_dirty_pub(&mut self) {
-        self.mark_all_dirty();
-    }
-
-    /// 获取并清空 dirty lines
+    /// 检查是否有 damage（需要重绘）
     ///
     /// # 返回
-    /// - `Some(Vec<usize>)` - 如果有 dirty lines，返回行号列表
-    /// - `None` - 如果没有 dirty lines
-    pub fn take_dirty_lines(&mut self) -> Option<Vec<usize>> {
-        let dirty_indices: Vec<usize> = self.dirty_lines
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &dirty)| if dirty { Some(i) } else { None })
-            .collect();
+    /// - `true` - 如果有 damage（full 或 partial）
+    /// - `false` - 如果没有 damage
+    pub fn is_damaged(&self) -> bool {
+        with_crosswords!(self, crosswords, {
+            // 检查 full damage
+            if crosswords.is_fully_damaged() {
+                return true;
+            }
+            // 检查 partial damage（检查是否有任何行被标记）
+            crosswords.peek_damage_event().is_some()
+        })
+    }
 
-        if dirty_indices.is_empty() {
-            return None;
-        }
-
-        // 清空 dirty 标记
-        for dirty in &mut self.dirty_lines {
-            *dirty = false;
-        }
-
-        Some(dirty_indices)
+    /// 重置 damage 状态（渲染完成后调用）
+    pub fn reset_damage(&mut self) {
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.reset_damage();
+        });
     }
 }
 

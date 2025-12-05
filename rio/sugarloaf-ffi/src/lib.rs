@@ -12,6 +12,16 @@ mod sync;
 pub use sync::*;
 
 // ============================================================================
+// 全局常量
+// ============================================================================
+
+/// 默认行高倍数（1.0 = 无额外行间距）
+///
+/// 注意：line_height > 1.0 会在每行底部增加空白，导致行间缝隙
+/// 建议使用 1.0 以获得最佳渲染效果
+pub const DEFAULT_LINE_HEIGHT: f32 = 1.0;
+
+// ============================================================================
 // 新架构模块（DDD 分层架构，使用 feature flag 隔离）
 // ============================================================================
 
@@ -53,19 +63,6 @@ pub struct SugarloafFontMetrics {
     pub cell_width: f32,
     pub cell_height: f32,
     pub line_height: f32,
-}
-
-impl SugarloafFontMetrics {
-    /// 临时 fallback 值，创建 RichText 后会被 get_rich_text_dimensions 替换
-    fn fallback(scaled_font_size: f32) -> Self {
-        let cell_width = scaled_font_size * 0.6;
-        let cell_height = scaled_font_size * 1.2;
-        Self {
-            cell_width,
-            cell_height,
-            line_height: cell_height,
-        }
-    }
 }
 
 static GLOBAL_FONT_METRICS: RwLock<Option<SugarloafFontMetrics>> = RwLock::new(None);
@@ -238,14 +235,18 @@ pub extern "C" fn sugarloaf_new(
 
         let (font_library, _font_errors) = FontLibrary::new(font_spec);
 
-        // 🎯 初始使用 fallback 值，真实值在创建 RichText 后通过 get_rich_text_dimensions 获取
-        let scaled_font_size = font_size * scale;
-        let font_metrics = SugarloafFontMetrics::fallback(scaled_font_size);
-        set_global_font_metrics(font_metrics);
+        // 🎯 延迟初始化：真实值在创建 RichText 后通过 get_font_metrics_skia 获取
+        // 初始使用零值，调用方已有 unwrap_or_else 兜底逻辑
+        let font_metrics = SugarloafFontMetrics {
+            cell_width: 0.0,
+            cell_height: 0.0,
+            line_height: 0.0,
+        };
+        // 不设置 global_font_metrics，等 create_rich_text() 时再设置真实值
 
         let layout = RootStyle {
             font_size,
-            line_height: 1.0,  // 和 Rio 保持一致
+            line_height: DEFAULT_LINE_HEIGHT,
             scale_factor: scale,
         };
 

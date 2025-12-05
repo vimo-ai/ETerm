@@ -1004,8 +1004,14 @@ impl RioTerminal {
             AnsiColor::Named(named) => {
                 // 使用终端的颜色配置
                 if let Some(arr) = terminal.colors[*named] {
+                    // 🔍 调试：只打印 Red 颜色
+                    if *named == NamedColor::Red {
+                        eprintln!("🔴 [ansi_color_to_rgba] Red from terminal.colors: {:?}", arr);
+                    }
                     color_arr_to_rgba(arr)
                 } else {
+                    // 🔍 调试：这个分支不应该被执行！
+                    eprintln!("⚠️ [ansi_color_to_rgba] terminal.colors[{:?}] is None!", named);
                     // 默认颜色（alpha = 255）
                     match named {
                         NamedColor::Foreground => (255, 255, 255, 255),
