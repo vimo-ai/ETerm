@@ -596,8 +596,3 @@ pub fn send_input(sender: &channel::Sender<Msg>, data: &[u8]) -> bool {
 pub fn send_resize(sender: &channel::Sender<Msg>, winsize: teletypewriter::WinsizeBuilder) -> bool {
     sender.send(Msg::Resize(winsize)).is_ok()
 }
-
-/// 用于发送 shutdown 消息的辅助函数
-pub fn send_shutdown(sender: &channel::Sender<Msg>) -> bool {
-    sender.send(Msg::Shutdown).is_ok()
-}

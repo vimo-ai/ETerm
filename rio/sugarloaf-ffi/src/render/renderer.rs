@@ -539,16 +539,6 @@ fn styles_equal(a: &FragmentStyle, b: &FragmentStyle) -> bool {
         && a.decoration == b.decoration
 }
 
-/// 判断光标是否在指定位置
-///
-/// # 参数
-/// - `line`: 行号（绝对坐标）
-/// - `col`: 列号
-/// - `cursor_pos`: 光标位置（绝对坐标）
-fn is_cursor_at(line: usize, col: usize, cursor_pos: &crate::domain::AbsolutePoint) -> bool {
-    cursor_pos.line == line && cursor_pos.col == col
-}
-
 /// 判断位置是否在选区内
 ///
 /// # 参数

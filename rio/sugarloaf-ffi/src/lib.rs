@@ -111,11 +111,6 @@ pub(crate) fn set_global_font_metrics(metrics: SugarloafFontMetrics) {
     *GLOBAL_FONT_METRICS.write() = Some(metrics);
 }
 
-pub(crate) fn global_font_metrics() -> Option<SugarloafFontMetrics> {
-    let guard = GLOBAL_FONT_METRICS.read();
-    guard.as_ref().copied()
-}
-
 /// Opaque pointer to Sugarloaf instance
 pub struct SugarloafHandle {
     instance: Sugarloaf<'static>,
