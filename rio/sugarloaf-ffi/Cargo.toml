@@ -6,10 +6,6 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
-[features]
-# 新架构模块（DDD 分层架构），暂时不启用
-new_architecture = []
-
 [dependencies]
 sugarloaf = { path = "../sugarloaf" }
 raw-window-handle = "0.6.2"

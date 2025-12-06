@@ -12,13 +12,13 @@
 
 use std::sync::Arc;
 
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::crosswords::Crosswords;
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::crosswords::grid::Dimensions;
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::crosswords::pos::{Line, Column};
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::event::EventListener;
 
 /// Grid View - Zero-copy Grid Snapshot
@@ -198,7 +198,6 @@ impl RowView {
     }
 
     /// 获取行的所有 cell 数据
-    #[cfg(feature = "new_architecture")]
     #[inline]
     pub fn cells(&self) -> &[CellData] {
         // 计算实际数组索引
@@ -209,7 +208,7 @@ impl RowView {
 }
 
 /// Cell Data - 单个字符的数据
-#[cfg(feature = "new_architecture")]
+
 #[derive(Debug, Clone)]
 pub struct CellData {
     pub c: char,
@@ -222,7 +221,7 @@ pub struct CellData {
     pub underline_color: Option<rio_backend::config::colors::AnsiColor>,
 }
 
-#[cfg(feature = "new_architecture")]
+
 impl Default for CellData {
     fn default() -> Self {
         use rio_backend::config::colors::{AnsiColor, NamedColor};
@@ -238,14 +237,14 @@ impl Default for CellData {
 }
 
 /// Row Data - 单行的数据
-#[cfg(feature = "new_architecture")]
+
 #[derive(Debug, Clone)]
 pub struct RowData {
     pub cells: Vec<CellData>,
     pub content_hash: u64,
 }
 
-#[cfg(feature = "new_architecture")]
+
 impl RowData {
     pub fn empty(columns: usize) -> Self {
         Self {
@@ -285,7 +284,6 @@ pub struct GridData {
     /// 行哈希列表（预计算，与 rows 一一对应）
     row_hashes: Vec<u64>,
     /// 行数据（包含实际的 cells）
-    #[cfg(feature = "new_architecture")]
     rows: Vec<RowData>,
 }
 
@@ -357,7 +355,6 @@ impl GridData {
             history_size,
             display_offset,
             row_hashes: row_hashes.clone(),
-            #[cfg(feature = "new_architecture")]
             rows: vec![RowData::empty(columns); total_lines],
         }
     }
@@ -371,13 +368,11 @@ impl GridData {
             history_size: 0,
             display_offset: 0,
             row_hashes: vec![0; screen_lines],
-            #[cfg(feature = "new_architecture")]
             rows: vec![RowData::empty(columns); screen_lines],
         }
     }
 
     /// 从 Crosswords 构造 GridData
-    #[cfg(feature = "new_architecture")]
     pub fn from_crosswords<T: EventListener>(crosswords: &Crosswords<T>) -> Self {
         let grid = &crosswords.grid;
         let display_offset = grid.display_offset();
@@ -418,7 +413,6 @@ impl GridData {
     }
 
     /// 转换 Crosswords 的一行到 RowData
-    #[cfg(feature = "new_architecture")]
     fn convert_row<T>(
         grid: &rio_backend::crosswords::grid::Grid<rio_backend::crosswords::square::Square>,
         line: Line,

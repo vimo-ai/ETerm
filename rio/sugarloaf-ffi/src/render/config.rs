@@ -1,4 +1,4 @@
-#[cfg(feature = "new_architecture")]
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use skia_safe::Color4f;

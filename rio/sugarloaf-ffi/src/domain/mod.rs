@@ -14,37 +14,37 @@
 //! - 复用基础设施（teletypewriter/Crosswords/copa）
 
 // 聚合根
-#[cfg(feature = "new_architecture")]
+
 pub mod aggregates;
 
 // 事件
-#[cfg(feature = "new_architecture")]
+
 pub mod events;
 
 // 核心状态契约
-#[cfg(feature = "new_architecture")]
+
 pub mod state;
 
 // 视图层
-#[cfg(feature = "new_architecture")]
+
 pub mod views;
 
 // 基础类型
-#[cfg(feature = "new_architecture")]
+
 pub mod primitives;
 
 // Re-exports for convenience
-#[cfg(feature = "new_architecture")]
+
 pub use aggregates::{Terminal, TerminalId};
 
-#[cfg(feature = "new_architecture")]
+
 pub use events::TerminalEvent;
 
-#[cfg(feature = "new_architecture")]
+
 pub use state::TerminalState;
 
-#[cfg(feature = "new_architecture")]
+
 pub use views::{GridView, RowView, GridData, CursorView, SelectionView, SelectionType, SearchView, MatchRange};
 
-#[cfg(feature = "new_architecture")]
+
 pub use primitives::{GridPoint, Absolute, AbsolutePoint, Screen, ScreenPoint};

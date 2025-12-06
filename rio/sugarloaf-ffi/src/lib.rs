@@ -61,25 +61,25 @@ pub fn create_default_font_spec(font_size: f32) -> SugarloafFonts {
 // 新架构模块（DDD 分层架构，使用 feature flag 隔离）
 // ============================================================================
 
-#[cfg(feature = "new_architecture")]
+
 pub mod domain;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod render;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod app;
 
 // CVDisplayLink Rust 绑定（macOS only）
-#[cfg(all(feature = "new_architecture", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub mod display_link;
 
 // FFI 模块（统一导出所有 FFI 接口）
-#[cfg(feature = "new_architecture")]
+
 pub mod ffi;
 
 // Re-export FFI 符号，保持对外可见性
-#[cfg(feature = "new_architecture")]
+
 pub use ffi::*;
 
 // ============================================================================

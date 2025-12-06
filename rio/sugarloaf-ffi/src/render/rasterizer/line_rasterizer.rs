@@ -1,4 +1,4 @@
-#[cfg(feature = "new_architecture")]
+
 use crate::render::cache::GlyphLayout;
 use crate::render::cache::{CursorInfo, SelectionInfo};
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};

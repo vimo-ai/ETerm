@@ -1,4 +1,4 @@
-#[cfg(feature = "new_architecture")]
+
 use super::GlyphInfo;
 use crate::render::font::FontContext;
 use crate::render::cache::GlyphLayout;

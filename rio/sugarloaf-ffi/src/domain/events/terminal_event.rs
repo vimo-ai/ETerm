@@ -6,7 +6,7 @@
 //! - 简化的事件类型，只包含必要信息
 //! - 从 rio-backend 的 RioEvent 转换而来
 
-#[cfg(feature = "new_architecture")]
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalEvent {
     /// 终端响铃

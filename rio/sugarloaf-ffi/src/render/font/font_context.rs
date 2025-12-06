@@ -1,4 +1,4 @@
-#[cfg(feature = "new_architecture")]
+
 use sugarloaf::font::{FontLibrary, FontLibraryData};
 use skia_safe::{FontMgr, FontStyle, Font, Typeface};
 use std::sync::Arc;

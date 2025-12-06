@@ -1,4 +1,4 @@
-#[cfg(feature = "new_architecture")]
+
 use skia_safe::{Font, Color4f};
 use sugarloaf::layout::FragmentStyleDecoration;
 

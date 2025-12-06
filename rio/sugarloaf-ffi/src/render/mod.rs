@@ -12,39 +12,39 @@
 //! - 内层 Hash：state_hash → MockImage（零开销，0% 耗时）
 //! - 剪枝优化：state_hash 只包含影响本行的状态参数
 
-#[cfg(feature = "new_architecture")]
+
 pub mod renderer;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod context;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod cache;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod config;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod layout;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod font;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod rasterizer;
 
-#[cfg(feature = "new_architecture")]
+
 pub mod box_drawing;
 
 // Re-exports for convenience
-#[cfg(feature = "new_architecture")]
+
 pub use renderer::{Renderer, RenderStats};
 
-#[cfg(feature = "new_architecture")]
+
 pub use context::RenderContext;
 
-#[cfg(feature = "new_architecture")]
+
 pub use cache::{LineCache, CacheResult};
 
-#[cfg(feature = "new_architecture")]
+
 pub use config::{RenderConfig, FontMetrics};

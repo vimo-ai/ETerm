@@ -7,45 +7,45 @@
 //! - 封装 Crosswords：不暴露底层实现
 //! - 提供 state() 方法：返回只读快照
 
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::crosswords::Crosswords;
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::crosswords::grid::Dimensions;
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::event::EventListener;
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::event::{RioEvent as BackendRioEvent, WindowId};
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::ansi::CursorShape;
-#[cfg(feature = "new_architecture")]
+
 use rio_backend::performer::handler::{Processor, StdSyncHandler};
-#[cfg(feature = "new_architecture")]
+
 use std::sync::Arc;
-#[cfg(feature = "new_architecture")]
+
 use parking_lot::RwLock;
 
-#[cfg(feature = "new_architecture")]
+
 use crate::domain::state::TerminalState;
-#[cfg(feature = "new_architecture")]
+
 use crate::domain::events::TerminalEvent;
-#[cfg(feature = "new_architecture")]
+
 use crate::domain::views::{GridData, GridView, CursorView};
-#[cfg(feature = "new_architecture")]
+
 use crate::rio_event::{EventQueue, FFIEventListener};
 
 /// Terminal ID
-#[cfg(feature = "new_architecture")]
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerminalId(pub usize);
 
 /// 事件收集器（用于从 Crosswords 收集事件）
-#[cfg(feature = "new_architecture")]
+
 #[derive(Clone)]
 struct EventCollector {
     events: Arc<RwLock<Vec<TerminalEvent>>>,
 }
 
-#[cfg(feature = "new_architecture")]
+
 impl EventCollector {
     fn new() -> Self {
         Self {
@@ -59,7 +59,7 @@ impl EventCollector {
 }
 
 /// 实现 rio_backend::event::EventListener trait
-#[cfg(feature = "new_architecture")]
+
 impl EventListener for EventCollector {
     fn event(&self) -> (Option<BackendRioEvent>, bool) {
         (None, false)
@@ -79,14 +79,14 @@ impl EventListener for EventCollector {
 }
 
 /// 简单的 Dimensions 实现（用于测试）
-#[cfg(feature = "new_architecture")]
+
 struct SimpleDimensions {
     columns: usize,
     screen_lines: usize,
     history_size: usize,
 }
 
-#[cfg(feature = "new_architecture")]
+
 impl Dimensions for SimpleDimensions {
     fn total_lines(&self) -> usize {
         self.history_size + self.screen_lines
@@ -102,7 +102,7 @@ impl Dimensions for SimpleDimensions {
 }
 
 /// Terminal 聚合根
-#[cfg(feature = "new_architecture")]
+
 pub struct Terminal {
     /// 终端 ID
     id: TerminalId,
@@ -125,14 +125,14 @@ pub struct Terminal {
 }
 
 /// 事件监听器类型
-#[cfg(feature = "new_architecture")]
+
 enum EventListenerType {
     FFI(FFIEventListener),
     Test(EventCollector),
 }
 
 /// 宏：访问可变 Crosswords（write）
-#[cfg(feature = "new_architecture")]
+
 macro_rules! with_crosswords_mut {
     ($self:expr, $crosswords:ident, $body:expr) => {
         if let Some(ref cw) = $self.crosswords_ffi {
@@ -148,7 +148,7 @@ macro_rules! with_crosswords_mut {
 }
 
 /// 宏：访问只读 Crosswords（read）
-#[cfg(feature = "new_architecture")]
+
 macro_rules! with_crosswords {
     ($self:expr, $crosswords:ident, $body:expr) => {
         if let Some(ref cw) = $self.crosswords_ffi {
@@ -163,7 +163,7 @@ macro_rules! with_crosswords {
     };
 }
 
-#[cfg(feature = "new_architecture")]
+
 impl Terminal {
     /// 创建新的 Terminal（用于测试，不处理真实 PTY）
     pub fn new_for_test(id: TerminalId, cols: usize, rows: usize) -> Self {
@@ -676,7 +676,7 @@ impl Terminal {
     }
 }
 
-#[cfg(all(test, feature = "new_architecture"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

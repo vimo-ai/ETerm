@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[cfg(feature = "new_architecture")]
+
 use crate::render::layout::GlyphInfo;
 use rio_backend::ansi::CursorShape;
 
