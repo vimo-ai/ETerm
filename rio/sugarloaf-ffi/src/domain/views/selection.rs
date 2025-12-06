@@ -25,12 +25,6 @@ pub enum SelectionType {
     Lines,
 }
 
-/// 选区端点（兼容性导出）
-///
-/// 表示选区的一个端点（起点或终点）
-#[deprecated(note = "Use AbsolutePoint instead")]
-pub type SelectionPoint = AbsolutePoint;
-
 /// 选区视图
 ///
 /// 代表一个文本选区的只读快照，用于渲染。

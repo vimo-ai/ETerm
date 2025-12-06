@@ -24,7 +24,7 @@ use crate::create_default_font_spec;
 use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, ImageObject, layout::RootStyle};
 use std::ffi::c_void;
 
-use super::ffi::{AppConfig, ErrorCode, TerminalEvent, TerminalEventType, TerminalAppEventCallback};
+use super::ffi::{AppConfig, ErrorCode, TerminalEvent, TerminalEventType, TerminalPoolEventCallback};
 
 /// 单个终端条目
 struct TerminalEntry {
@@ -73,7 +73,7 @@ pub struct TerminalPool {
     event_queue: EventQueue,
 
     /// 事件回调
-    event_callback: Option<(TerminalAppEventCallback, *mut c_void)>,
+    event_callback: Option<(TerminalPoolEventCallback, *mut c_void)>,
 
     /// 配置
     config: AppConfig,
@@ -553,7 +553,7 @@ impl TerminalPool {
     }
 
     /// 设置事件回调
-    pub fn set_event_callback(&mut self, callback: TerminalAppEventCallback, context: *mut c_void) {
+    pub fn set_event_callback(&mut self, callback: TerminalPoolEventCallback, context: *mut c_void) {
         self.event_callback = Some((callback, context));
 
         // 设置 EventQueue 回调

@@ -44,7 +44,7 @@ pub use events::TerminalEvent;
 pub use state::TerminalState;
 
 #[cfg(feature = "new_architecture")]
-pub use views::{GridView, RowView, GridData, CursorView, SelectionView, SelectionPoint, SelectionType, SearchView, MatchRange};
+pub use views::{GridView, RowView, GridData, CursorView, SelectionView, SelectionType, SearchView, MatchRange};
 
 #[cfg(feature = "new_architecture")]
 pub use primitives::{GridPoint, Absolute, AbsolutePoint, Screen, ScreenPoint};

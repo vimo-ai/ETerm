@@ -85,4 +85,4 @@ pub enum ErrorCode {
 }
 
 /// 事件回调类型
-pub type TerminalAppEventCallback = extern "C" fn(context: *mut c_void, event: TerminalEvent);
+pub type TerminalPoolEventCallback = extern "C" fn(context: *mut c_void, event: TerminalEvent);

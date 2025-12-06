@@ -1,7 +1,7 @@
 //! TerminalPool FFI - 多终端管理 + 统一渲染
 
 use crate::app::{TerminalPool, AppConfig};
-use crate::app::ffi::TerminalAppEventCallback;
+use crate::app::ffi::TerminalPoolEventCallback;
 use crate::SugarloafFontMetrics;
 use std::ffi::c_void;
 
@@ -236,7 +236,7 @@ pub extern "C" fn terminal_pool_resize_sugarloaf(
 #[no_mangle]
 pub extern "C" fn terminal_pool_set_event_callback(
     handle: *mut TerminalPoolHandle,
-    callback: TerminalAppEventCallback,
+    callback: TerminalPoolEventCallback,
     context: *mut c_void,
 ) {
     if handle.is_null() {

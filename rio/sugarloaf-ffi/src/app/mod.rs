@@ -15,5 +15,5 @@ pub use terminal_pool::TerminalPool;
 pub use render_scheduler::RenderScheduler;
 pub use ffi::{
     AppConfig, ErrorCode, FontMetrics, GridPoint, TerminalEvent, TerminalEventType,
-    TerminalAppEventCallback,
+    TerminalPoolEventCallback,
 };

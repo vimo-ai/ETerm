@@ -12,6 +12,6 @@ pub use grid::{GridView, RowView, GridData};
 #[cfg(feature = "new_architecture")]
 pub use cursor::CursorView;
 #[cfg(feature = "new_architecture")]
-pub use selection::{SelectionView, SelectionPoint, SelectionType};
+pub use selection::{SelectionView, SelectionType};
 #[cfg(feature = "new_architecture")]
 pub use search::{SearchView, MatchRange};
