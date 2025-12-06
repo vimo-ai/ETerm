@@ -8,6 +8,6 @@
 #ifndef ETerm_Bridging_Header_h
 #define ETerm_Bridging_Header_h
 
-#import "SugarloafBridge.h"
+#import "Infrastructure/FFI/SugarloafBridge.h"
 
 #endif /* ETerm_Bridging_Header_h */
