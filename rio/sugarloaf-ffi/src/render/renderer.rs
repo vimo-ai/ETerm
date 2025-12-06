@@ -149,6 +149,12 @@ impl Renderer {
             }
 
             current_content.push(ch);
+
+            // 🔧 关键修复：添加零宽字符（如 VS16 U+FE0F emoji 变体选择符）
+            // 这样 text_shaper 才能检测到 next_is_vs16 并使用 emoji 字体
+            for &zw in &cell.zerowidth {
+                current_content.push(zw);
+            }
         }
 
         // 添加最后一个 fragment

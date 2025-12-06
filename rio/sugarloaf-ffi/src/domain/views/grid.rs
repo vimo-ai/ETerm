@@ -216,6 +216,8 @@ pub struct CellData {
     pub fg: rio_backend::config::colors::AnsiColor,
     pub bg: rio_backend::config::colors::AnsiColor,
     pub flags: u16,
+    /// 零宽字符（如 VS16 U+FE0F emoji 变体选择符）
+    pub zerowidth: Vec<char>,
 }
 
 #[cfg(feature = "new_architecture")]
@@ -227,6 +229,7 @@ impl Default for CellData {
             fg: AnsiColor::Named(NamedColor::Foreground),
             bg: AnsiColor::Named(NamedColor::Background),
             flags: 0,
+            zerowidth: Vec::new(),
         }
     }
 }
@@ -435,6 +438,10 @@ impl GridData {
                 fg: square.fg,
                 bg: square.bg,
                 flags: square.flags.bits(),
+                // 复制零宽字符（如 VS16 emoji 变体选择符）
+                zerowidth: square.zerowidth()
+                    .map(|chars| chars.to_vec())
+                    .unwrap_or_default(),
             };
 
             // 计算 hash（只基于字符内容）
