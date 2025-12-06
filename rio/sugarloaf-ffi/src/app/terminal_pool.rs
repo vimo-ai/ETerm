@@ -473,17 +473,13 @@ impl TerminalPool {
         }
 
         // 3. 获取终端状态
-        let state_start = std::time::Instant::now();
         let terminal = entry.terminal.lock();
         let state = terminal.state();
         let rows = terminal.rows();
         drop(terminal);
-        let state_time = state_start.elapsed().as_micros();
 
         // 4. 渲染所有行（类型安全的坐标转换）
-        let render_start = std::time::Instant::now();
         let mut renderer = self.renderer.lock();
-        let lock_time = render_start.elapsed().as_micros();
 
         use crate::domain::primitives::{LogicalPosition, LogicalPixels};
 
@@ -495,10 +491,6 @@ impl TerminalPool {
             LogicalPixels::new(y),
         );
 
-        // 记录渲染前的统计
-        let stats_before = renderer.stats.clone();
-
-        let loop_start = std::time::Instant::now();
         for line in 0..rows {
             let image = renderer.render_line(line, &state);
 
@@ -516,23 +508,8 @@ impl TerminalPool {
 
             self.pending_objects.push(Object::Image(image_obj));
         }
-        let loop_time = loop_start.elapsed().as_micros();
-
-        // 计算本帧的缓存统计
-        let hits = renderer.stats.cache_hits - stats_before.cache_hits;
-        let layout_hits = renderer.stats.layout_hits - stats_before.layout_hits;
-        let misses = renderer.stats.cache_misses - stats_before.cache_misses;
 
         drop(renderer);
-
-        let total_time = state_start.elapsed().as_micros();
-
-        // 输出完整的帧统计
-        eprintln!("🔥 FRAME: total={:.1}ms | state={:.1}ms loop={:.1}ms | rows={} | hits={} layout={} miss={}",
-                  total_time as f64 / 1000.0,
-                  state_time as f64 / 1000.0,
-                  loop_time as f64 / 1000.0,
-                  rows, hits, layout_hits, misses);
 
         // 5. 渲染成功完成后，重置 damage 状态
         {

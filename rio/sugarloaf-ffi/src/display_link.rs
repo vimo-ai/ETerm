@@ -120,8 +120,6 @@ impl DisplayLink {
             return None;
         }
 
-        eprintln!("✅ [DisplayLink] Created successfully");
-
         Some(Self {
             link,
             context: context_ptr,
@@ -131,25 +129,13 @@ impl DisplayLink {
     /// 启动 DisplayLink
     pub fn start(&self) -> bool {
         let result = unsafe { CVDisplayLinkStart(self.link) };
-        if result == kCVReturnSuccess {
-            eprintln!("▶️ [DisplayLink] Started");
-            true
-        } else {
-            eprintln!("❌ [DisplayLink] Failed to start: {}", result);
-            false
-        }
+        result == kCVReturnSuccess
     }
 
     /// 停止 DisplayLink
     pub fn stop(&self) -> bool {
         let result = unsafe { CVDisplayLinkStop(self.link) };
-        if result == kCVReturnSuccess {
-            eprintln!("⏹️ [DisplayLink] Stopped");
-            true
-        } else {
-            eprintln!("❌ [DisplayLink] Failed to stop: {}", result);
-            false
-        }
+        result == kCVReturnSuccess
     }
 
     /// 请求渲染（兼容接口，实际不做任何事）
@@ -187,8 +173,6 @@ impl DisplayLink {
 
 impl Drop for DisplayLink {
     fn drop(&mut self) {
-        eprintln!("🗑️ [DisplayLink] Dropping");
-
         // 停止
         unsafe { CVDisplayLinkStop(self.link) };
 

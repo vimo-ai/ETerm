@@ -316,7 +316,7 @@ class TerminalWindowCoordinator: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + renderDebounceInterval, execute: workItem)
     }
 
-    // MARK: - Event Handlers (from GlobalTerminalManager)
+    // MARK: - Event Handlers
 
     /// 处理终端关闭事件
     func handleTerminalClosed(terminalId: Int) {
@@ -1034,7 +1034,6 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 输入行号，如果不在输入模式返回 nil
     func getInputRow(terminalId: UInt32) -> UInt16? {
-        // getInputRow 目前只有旧的终端池支持，GlobalTerminalManager 不需要
         return terminalPool.getInputRow(terminalId: Int(terminalId))
     }
 

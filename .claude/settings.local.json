@@ -63,7 +63,21 @@
       "Bash(python3:*)",
       "Bash(swift:*)",
       "Bash(wc:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(/Users/higuaifan/Desktop/hi/小工具/english/scripts/update_sugarloaf.sh)",
+      "Bash(/Users/higuaifan/Desktop/hi/小工具/english/scripts/update_sugarloaf_dev.sh:*)",
+      "Bash(sh:*)",
+      "Bash(./scripts/update_sugarloaf_dev.sh:*)",
+      "Bash(grep:*)",
+      "Bash(ETerm/ETerm/Infrastructure/Terminal/GlobalTerminalManager.swift )",
+      "Bash(ETerm/ETerm/Protocols/TerminalPoolProtocol.swift )",
+      "Bash(ETerm/ETerm/RioTerminalPoolWrapper.swift )",
+      "Bash(ETerm/ETerm/SugarloafBridge.h )",
+      "Bash(ETerm/ETerm/TerminalPoolWrapper.swift )",
+      "Bash(rio/sugarloaf-ffi/src/app/terminal_pool.rs )",
+      "Bash(rio/sugarloaf-ffi/src/lib.rs )",
+      "Bash(rio/sugarloaf-ffi/src/render/layout/text_shaper.rs )",
+      "Bash(rio/sugarloaf-ffi/src/rio_terminal.rs)"
     ],
     "deny": [],
     "ask": []

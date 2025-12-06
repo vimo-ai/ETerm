@@ -2,12 +2,12 @@
 //  RioTerminalView.swift
 //  ETerm
 //
-//  照抄 Rio 渲染逻辑的终端视图（支持多窗口）
+//  终端视图（支持多窗口）
 //
 //  架构说明：
 //  - 使用 TerminalWindowCoordinator 管理多窗口（Page/Panel/Tab）
 //  - 复用 PageBarView 和 DomainPanelView 组件
-//  - 使用 RioTerminalPoolWrapper 进行渲染
+//  - 使用 TerminalPoolWrapper 进行渲染（DDD 新架构）
 //
 
 import SwiftUI
@@ -503,12 +503,7 @@ class RioContainerView: NSView {
 
 class RioMetalView: NSView, RenderViewProtocol {
 
-    // MARK: - Feature Flag
-    private let useNewArchitecture = true  // 硬编码 feature flag
-
     weak var coordinator: TerminalWindowCoordinator?
-
-    private var sugarloaf: SugarloafHandle?
 
     // 新架构：TerminalPool wrapper（多终端管理 + 统一渲染）
     private var terminalPool: TerminalPoolWrapper?
@@ -660,8 +655,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 窗口切换屏幕时更新 scale（DPI 变化）
     @objc private func windowDidChangeScreen() {
-        guard let window = window,
-              let sugarloaf = sugarloaf else { return }
+        guard let window = window else { return }
 
         let newScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
         let currentScale = layer?.contentsScale ?? 2.0
@@ -671,28 +665,19 @@ class RioMetalView: NSView, RenderViewProtocol {
             // 1. 更新 layer 的 scale
             layer?.contentsScale = newScale
 
-            // 2. 通知 Sugarloaf 更新 scale（内部会自动更新 fontMetrics）
-            sugarloaf_rescale(sugarloaf, Float(newScale))
-
-            // 3. 不要在这里调用 resize！
-            // layout() 会被自动调用，它会用正确的 scale 计算物理像素并调用 resize
-
-            // 4. 更新 fontMetrics（rescale 后需要重新获取）
-            updateFontMetricsFromSugarloaf(sugarloaf)
-
-            // 5. 更新 CoordinateMapper
+            // 2. 更新 CoordinateMapper
             let mapper = CoordinateMapper(scale: newScale, containerBounds: bounds)
             coordinateMapper = mapper
             coordinator?.setCoordinateMapper(mapper)
 
-            // 6. 触发 layout（确保 resize 被正确调用）
+            // 3. 触发 layout（确保 resize 被正确调用）
             needsLayout = true
             layoutSubtreeIfNeeded()
 
-            // 7. 同步布局到 Rust（DPI 变化）
+            // 4. 同步布局到 Rust（DPI 变化）
             coordinator?.syncLayoutToRust()
 
-            // 8. 重新渲染
+            // 5. 重新渲染
             requestRender()
         }
     }
@@ -820,43 +805,9 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
     }
 
-    // MARK: - Swift CVDisplayLink (旧架构使用)
+    // MARK: - Rendering
 
-    /// CVDisplayLink - 同步屏幕刷新率（旧架构使用）
-    private var displayLink: CVDisplayLink?
-
-    /// 设置 CVDisplayLink（同步屏幕刷新率）- 旧架构使用
-    private func setupDisplayLink() {
-        // 创建 CVDisplayLink
-        var link: CVDisplayLink?
-        CVDisplayLinkCreateWithActiveCGDisplays(&link)
-
-        guard let displayLink = link else {
-            print("⚠️ [CVDisplayLink] Failed to create CVDisplayLink")
-            return
-        }
-
-        self.displayLink = displayLink
-
-        // 设置回调
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        CVDisplayLinkSetOutputCallback(displayLink, { (displayLink, inNow, inOutputTime, flagsIn, flagsOut, context) -> CVReturn in
-            guard let context = context else { return kCVReturnSuccess }
-            let view = Unmanaged<RioMetalView>.fromOpaque(context).takeUnretainedValue()
-
-            // 在主线程执行渲染
-            DispatchQueue.main.async {
-                view.renderIfNeeded()
-            }
-
-            return kCVReturnSuccess
-        }, context)
-
-        // 启动 CVDisplayLink
-        CVDisplayLinkStart(displayLink)
-    }
-
-    /// 仅在需要时渲染（由 CVDisplayLink 调用）
+    /// 仅在需要时渲染（由 RenderScheduler 调用）
     private func renderIfNeeded() {
         needsRenderLock.lock()
         let shouldRender = needsRender
@@ -935,28 +886,13 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
     }
 
-    /// 从 Sugarloaf 更新 fontMetrics
-    private func updateFontMetricsFromSugarloaf(_ sugarloaf: SugarloafHandle) {
-        var metrics = SugarloafFontMetrics()
-        if sugarloaf_get_font_metrics(sugarloaf, &metrics) {
-            cellWidth = CGFloat(metrics.cell_width)
-            cellHeight = CGFloat(metrics.cell_height)
-            lineHeight = CGFloat(metrics.line_height > 0 ? metrics.line_height : metrics.cell_height)
-            coordinator?.updateFontMetrics(metrics)
-        }
-    }
-
-    // 旧架构的缓存函数已移除（getCachedSnapshot, updateSnapshotCache）
-    // 新架构不需要快照缓存
 
     /// 渲染所有 Panel（多终端支持）
     ///
-    /// 🎯 新架构三层分离：
+    /// 三层分离架构：
     /// - 高层数据层：TerminalWindowCoordinator 管理布局信息
     /// - 同步层：布局变化时主动调用 syncLayoutToRust()
     /// - 渲染层：每帧只负责纯渲染，不管布局
-    ///
-    /// 这个方法是渲染层，只调用 rio_pool_render_all()
     private func render() {
         // 关键检查：如果已清理或未初始化，不执行渲染
         guard isInitialized else { return }
@@ -989,9 +925,6 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 结束帧（统一提交渲染）
         pool.endFrame()
     }
-
-
-    // 旧架构渲染代码已移除（新架构渲染完全在 Rust 侧处理）
 
     /// 检查位置是否在选区内
     private func isInSelection(
@@ -1048,10 +981,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         let paths = urls.map { $0.path }
         let payload = paths.joined(separator: " ") + " "
 
-        // 新架构：使用 terminalPool
-        if useNewArchitecture {
-            _ = terminalPool?.writeInput(terminalId: Int(terminalId), data: payload)
-        }
+        _ = terminalPool?.writeInput(terminalId: Int(terminalId), data: payload)
         return true
     }
 
@@ -1127,39 +1057,32 @@ class RioMetalView: NSView, RenderViewProtocol {
         isBlinkingCursorVisible = true
         lastBlinkToggle = nil
 
-        // 新架构：发送到当前激活的终端
-        if useNewArchitecture {
-            guard let pool = terminalPool,
-                  let terminalId = coordinator?.getActiveTerminalId() else {
-                super.keyDown(with: event)
-                return
-            }
-
-            let keyStroke = KeyStroke.from(event)
-
-            // 处理编辑快捷键（Cmd+C/V）
-            if handleEditShortcutNewArch(keyStroke, pool: pool) {
-                return
-            }
-
-            // 转换为终端序列并发送到当前激活终端
-            if shouldHandleDirectly(keyStroke) {
-                let sequence = keyStroke.toTerminalSequence()
-                if !sequence.isEmpty {
-                    _ = pool.writeInput(terminalId: Int(terminalId), data: sequence)
-                }
-            } else {
-                interpretKeyEvents([event])
-            }
+        guard let pool = terminalPool,
+              let terminalId = coordinator?.getActiveTerminalId() else {
+            super.keyDown(with: event)
             return
         }
 
-        // 旧架构已移除（useNewArchitecture = true 硬编码）
-        super.keyDown(with: event)
+        let keyStroke = KeyStroke.from(event)
+
+        // 处理编辑快捷键（Cmd+C/V）
+        if handleEditShortcut(keyStroke, pool: pool) {
+            return
+        }
+
+        // 转换为终端序列并发送到当前激活终端
+        if shouldHandleDirectly(keyStroke) {
+            let sequence = keyStroke.toTerminalSequence()
+            if !sequence.isEmpty {
+                _ = pool.writeInput(terminalId: Int(terminalId), data: sequence)
+            }
+        } else {
+            interpretKeyEvents([event])
+        }
     }
 
-    /// 处理编辑快捷键（新架构）
-    private func handleEditShortcutNewArch(_ keyStroke: KeyStroke, pool: TerminalPoolWrapper) -> Bool {
+    /// 处理编辑快捷键
+    private func handleEditShortcut(_ keyStroke: KeyStroke, pool: TerminalPoolWrapper) -> Bool {
         guard let terminalId = coordinator?.getActiveTerminalId() else {
             return false
         }
@@ -1491,16 +1414,9 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 从 fontMetrics 获取实际的 cell 尺寸
-        // 🔧 新架构：优先使用 terminalPool.getFontMetrics()，它返回与渲染一致的值
-        // 老架构的 coordinator.fontMetrics 中 cell_height 已含 line_height_factor（导致偏移）
         let cellWidthVal: CGFloat
         let cellHeightVal: CGFloat
-        if useNewArchitecture, let metrics = terminalPool?.getFontMetrics() {
-            // 新架构：line_height = cell_height * line_height_factor
-            cellWidthVal = CGFloat(metrics.cell_width) / mapper.scale
-            cellHeightVal = CGFloat(metrics.line_height) / mapper.scale
-        } else if let metrics = coordinator.fontMetrics {
-            // 老架构 fallback
+        if let metrics = terminalPool?.getFontMetrics() {
             cellWidthVal = CGFloat(metrics.cell_width) / mapper.scale
             cellHeightVal = CGFloat(metrics.line_height) / mapper.scale
         } else {
@@ -1538,40 +1454,33 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        // 新架构：调用 TerminalPoolWrapper
-        if useNewArchitecture {
-            guard let pool = terminalPool,
-                  let coordinator = coordinator else {
-                super.scrollWheel(with: event)
-                return
-            }
-
-            // 使用鼠标所在位置确定目标终端
-            let locationInView = convert(event.locationInWindow, from: nil)
-            let terminalId = coordinator.getTerminalIdAtPoint(locationInView, containerBounds: bounds)
-
-            guard let terminalId else {
-                super.scrollWheel(with: event)
-                return
-            }
-
-            let deltaY = event.scrollingDeltaY
-            let scrollLines: Int32
-            if event.hasPreciseScrollingDeltas {
-                scrollLines = Int32(round(deltaY / 10.0))
-            } else {
-                scrollLines = Int32(deltaY * 3)
-            }
-
-            if scrollLines != 0 {
-                _ = pool.scroll(terminalId: Int(terminalId), deltaLines: scrollLines)
-                requestRender()
-            }
+        guard let pool = terminalPool,
+              let coordinator = coordinator else {
+            super.scrollWheel(with: event)
             return
         }
 
-        // 旧架构已移除（useNewArchitecture = true 硬编码）
-        super.scrollWheel(with: event)
+        // 使用鼠标所在位置确定目标终端
+        let locationInView = convert(event.locationInWindow, from: nil)
+        let terminalId = coordinator.getTerminalIdAtPoint(locationInView, containerBounds: bounds)
+
+        guard let terminalId else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let deltaY = event.scrollingDeltaY
+        let scrollLines: Int32
+        if event.hasPreciseScrollingDeltas {
+            scrollLines = Int32(round(deltaY / 10.0))
+        } else {
+            scrollLines = Int32(deltaY * 3)
+        }
+
+        if scrollLines != 0 {
+            _ = pool.scroll(terminalId: Int(terminalId), deltaLines: scrollLines)
+            requestRender()
+        }
     }
 
     /// 清理资源（在窗口关闭前调用）
