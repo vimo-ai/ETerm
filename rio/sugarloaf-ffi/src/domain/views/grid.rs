@@ -218,6 +218,8 @@ pub struct CellData {
     pub flags: u16,
     /// 零宽字符（如 VS16 U+FE0F emoji 变体选择符）
     pub zerowidth: Vec<char>,
+    /// 下划线颜色（ANSI escape 支持自定义下划线颜色）
+    pub underline_color: Option<rio_backend::config::colors::AnsiColor>,
 }
 
 #[cfg(feature = "new_architecture")]
@@ -230,6 +232,7 @@ impl Default for CellData {
             bg: AnsiColor::Named(NamedColor::Background),
             flags: 0,
             zerowidth: Vec::new(),
+            underline_color: None,
         }
     }
 }
@@ -442,6 +445,7 @@ impl GridData {
                 zerowidth: square.zerowidth()
                     .map(|chars| chars.to_vec())
                     .unwrap_or_default(),
+                underline_color: square.underline_color(),
             };
 
             // 计算 hash（只基于字符内容）
