@@ -192,8 +192,8 @@ class RioContainerView: NSView {
               window == self.window else { return }
 
         // 向所有启用了 Focus Reporting 的终端发送焦点获得事件
-        if let rioPool = coordinator?.getTerminalPool() as? RioTerminalPoolWrapper {
-            // RioTerminalPoolWrapper 暂不支持 Focus Reporting
+        if let _pool = coordinator?.getTerminalPool() as? TerminalPoolWrapper {
+            // TerminalPoolWrapper 暂不支持 Focus Reporting
         }
     }
 
@@ -202,8 +202,8 @@ class RioContainerView: NSView {
               window == self.window else { return }
 
         // 向所有启用了 Focus Reporting 的终端发送焦点失去事件
-        if let rioPool = coordinator?.getTerminalPool() as? RioTerminalPoolWrapper {
-            // RioTerminalPoolWrapper 暂不支持 Focus Reporting
+        if let _pool = coordinator?.getTerminalPool() as? TerminalPoolWrapper {
+            // TerminalPoolWrapper 暂不支持 Focus Reporting
         }
     }
 
@@ -522,9 +522,6 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 多终端支持：每个终端一个独立的 richTextId
     private var richTextIds: [Int: Int] = [:]
 
-    /// 全局终端管理器（便捷访问）
-    private var terminalManager: GlobalTerminalManager { GlobalTerminalManager.shared }
-
     /// 字体度量（从 Sugarloaf 获取）
     private var cellWidth: CGFloat = 8.0
     private var cellHeight: CGFloat = 16.0
@@ -536,10 +533,6 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 坐标映射器
     private var coordinateMapper: CoordinateMapper?
 
-    /// Snapshot 缓存（避免渲染时加锁等待）
-    /// 键为 terminalId，值为 TerminalSnapshot
-    private var cachedSnapshots: [Int: TerminalSnapshot] = [:]
-    private let snapshotCacheLock = NSLock()
 
     // MARK: - Render Scheduler（帧率限制 - Rust CVDisplayLink）
 
@@ -722,50 +715,24 @@ class RioMetalView: NSView, RenderViewProtocol {
     override func layout() {
         super.layout()
 
-        if useNewArchitecture {
-            guard isInitialized, let pool = terminalPool else { return }
+        guard isInitialized, let pool = terminalPool else { return }
 
-            // 优先使用 window 关联的 screen 的 scale
-            let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        // 优先使用 window 关联的 screen 的 scale
+        let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
 
-            if bounds.width > 0 && bounds.height > 0 {
-                // 1. 调整 Sugarloaf 渲染表面大小
-                pool.resizeSugarloaf(width: Float(bounds.width), height: Float(bounds.height))
+        if bounds.width > 0 && bounds.height > 0 {
+            // 1. 调整 Sugarloaf 渲染表面大小
+            pool.resizeSugarloaf(width: Float(bounds.width), height: Float(bounds.height))
 
-                // 2. 更新 coordinateMapper
-                let mapper = CoordinateMapper(scale: scale, containerBounds: bounds)
-                coordinateMapper = mapper
-                coordinator?.setCoordinateMapper(mapper)
+            // 2. 更新 coordinateMapper
+            let mapper = CoordinateMapper(scale: scale, containerBounds: bounds)
+            coordinateMapper = mapper
+            coordinator?.setCoordinateMapper(mapper)
 
-                // 3. 同步布局到 Rust（通知各终端尺寸变化）
-                coordinator?.syncLayoutToRust()
+            // 3. 同步布局到 Rust（通知各终端尺寸变化）
+            coordinator?.syncLayoutToRust()
 
-                requestRender()
-            }
-        } else {
-            guard isInitialized, let sugarloaf = sugarloaf else { return }
-
-            // 优先使用 window 关联的 screen 的 scale，更可靠
-            let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-
-            // ⚠️ 重要：resize 应该传逻辑像素，而不是物理像素
-            // Rust 侧的 resize 会自动用 scale 计算物理像素
-            let width = Float(bounds.width)
-            let height = Float(bounds.height)
-
-            if width > 0 && height > 0 {
-                sugarloaf_resize(sugarloaf, width, height)
-
-                // 更新 coordinateMapper
-                let mapper = CoordinateMapper(scale: scale, containerBounds: bounds)
-                coordinateMapper = mapper
-                coordinator?.setCoordinateMapper(mapper)
-
-                // 同步布局到 Rust（窗口 resize）
-                coordinator?.syncLayoutToRust()
-
-                requestRender()
-            }
+            requestRender()
         }
     }
 
@@ -774,114 +741,56 @@ class RioMetalView: NSView, RenderViewProtocol {
     private func initializeSugarloaf() {
         guard let window = window else { return }
 
-        if useNewArchitecture {
-            // 新架构：创建 TerminalPoolWrapper（多终端管理 + 统一渲染）
-            let viewPointer = Unmanaged.passUnretained(self).toOpaque()
+        // 新架构：创建 TerminalPoolWrapper（多终端管理 + 统一渲染）
+        let viewPointer = Unmanaged.passUnretained(self).toOpaque()
 
-            // 优先使用 window 关联的 screen 的 scale，更可靠
-            let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
+        // 优先使用 window 关联的 screen 的 scale，更可靠
+        let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
 
-            print("📐 [RioMetalView] Initializing TerminalPoolWrapper (bounds: \(bounds.width)x\(bounds.height), scale: \(effectiveScale))")
+        print("📐 [RioMetalView] Initializing TerminalPoolWrapper (bounds: \(bounds.width)x\(bounds.height), scale: \(effectiveScale))")
 
-            // 创建 TerminalPoolWrapper
-            terminalPool = TerminalPoolWrapper(
-                windowHandle: viewPointer,
-                displayHandle: viewPointer,
-                width: Float(bounds.width),
-                height: Float(bounds.height),
-                scale: Float(effectiveScale),
-                fontSize: 14.0
-            )
+        // 创建 TerminalPoolWrapper
+        terminalPool = TerminalPoolWrapper(
+            windowHandle: viewPointer,
+            displayHandle: viewPointer,
+            width: Float(bounds.width),
+            height: Float(bounds.height),
+            scale: Float(effectiveScale),
+            fontSize: 14.0
+        )
 
-            guard let pool = terminalPool else {
-                print("⚠️ [RioMetalView] Failed to create TerminalPoolWrapper")
-                return
-            }
-
-            // 设置渲染回调
-            pool.setRenderCallback { [weak self] in
-                self?.requestRender()
-            }
-
-            // 设置 Bell 回调
-            pool.onBell = { _ in
-                DispatchQueue.main.async {
-                    NSSound.beep()
-                }
-            }
-
-            // 将 TerminalPool 注册到 Coordinator
-            if let coordinator = coordinator {
-                coordinator.setTerminalPool(pool)
-            }
-
-            // 更新 coordinateMapper
-            let mapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
-            coordinateMapper = mapper
-            coordinator?.setCoordinateMapper(mapper)
-
-            // 启动 Rust CVDisplayLink（替代 Swift CVDisplayLink）
-            setupRenderScheduler()
-
-            // 初始渲染
-            requestRender()
-
-        } else {
-            // 旧架构：保持不变
-            // 优先使用 window 关联的 screen 的 scale，更可靠
-            let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
-            let scale = Float(effectiveScale)
-
-            // ⚠️ 重要：传递逻辑像素，Rust 侧会用 scale 计算物理像素
-            let width = Float(bounds.width)
-            let height = Float(bounds.height)
-
-            layer?.contentsScale = effectiveScale
-
-            let viewPointer = Unmanaged.passUnretained(self).toOpaque()
-            let windowHandle = UnsafeMutableRawPointer(mutating: viewPointer)
-
-            sugarloaf = sugarloaf_new(
-                windowHandle,
-                windowHandle,
-                width,
-                height,
-                scale,
-                14.0
-            )
-
-            guard let sugarloaf = sugarloaf else { return }
-
-            // fontMetrics 会在第一次创建 RichText 后更新为真实值
-            // 这里先不获取，等 renderTerminal 中创建 RichText 后再更新
-
-            // 创建 CoordinateMapper（使用前面定义的 effectiveScale）
-            let mapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
-            coordinateMapper = mapper
-            coordinator?.setCoordinateMapper(mapper)
-
-            // 初始化全局终端管理器（第一个窗口时）
-            if !terminalManager.isInitialized {
-                terminalManager.initialize(with: sugarloaf)
-            }
-
-            // 注册 coordinator 到全局终端管理器
-            if let coordinator = coordinator {
-                coordinator.setGlobalTerminalManager(terminalManager)
-            }
-
-            // 启动 CVDisplayLink
-            setupDisplayLink()
-
-            // 初始化时同步一次布局
-            // 延迟执行，确保 fontMetrics 已经更新
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                self?.coordinator?.syncLayoutToRust()
-            }
-
-            // 初始渲染
-            requestRender()
+        guard let pool = terminalPool else {
+            print("⚠️ [RioMetalView] Failed to create TerminalPoolWrapper")
+            return
         }
+
+        // 设置渲染回调
+        pool.setRenderCallback { [weak self] in
+            self?.requestRender()
+        }
+
+        // 设置 Bell 回调
+        pool.onBell = { _ in
+            DispatchQueue.main.async {
+                NSSound.beep()
+            }
+        }
+
+        // 将 TerminalPool 注册到 Coordinator
+        if let coordinator = coordinator {
+            coordinator.setTerminalPool(pool)
+        }
+
+        // 更新 coordinateMapper
+        let mapper = CoordinateMapper(scale: effectiveScale, containerBounds: bounds)
+        coordinateMapper = mapper
+        coordinator?.setCoordinateMapper(mapper)
+
+        // 启动 Rust CVDisplayLink（替代 Swift CVDisplayLink）
+        setupRenderScheduler()
+
+        // 初始渲染
+        requestRender()
     }
 
     // MARK: - Render Scheduler Setup (Rust CVDisplayLink)
@@ -1005,33 +914,15 @@ class RioMetalView: NSView, RenderViewProtocol {
         requestCount += 1
         needsRenderLock.unlock()
 
-        // 新架构：通知 Rust 侧的 RenderScheduler
-        if useNewArchitecture {
-            renderScheduler?.requestRender()
-        }
+        // 通知 Rust 侧的 RenderScheduler
+        renderScheduler?.requestRender()
     }
 
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
-        if useNewArchitecture {
-            // 新架构：通过 TerminalPoolWrapper 调整字体大小
-            terminalPool?.changeFontSize(operation: operation)
-            // 重新渲染
-            requestRender()
-        } else {
-            // 旧架构：通过 Sugarloaf 调整字体大小
-            guard let sugarloaf = sugarloaf else { return }
-
-            // 对所有 RichText 调整字体大小
-            for (_, richTextId) in richTextIds {
-                sugarloaf_change_font_size(sugarloaf, richTextId, operation.rawValue)
-            }
-
-            // 更新 fontMetrics
-            updateFontMetricsFromSugarloaf(sugarloaf)
-
-            // 重新渲染
-            requestRender()
-        }
+        // 新架构：通过 TerminalPoolWrapper 调整字体大小
+        terminalPool?.changeFontSize(operation: operation)
+        // 重新渲染
+        requestRender()
     }
 
     func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
@@ -1055,41 +946,8 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
     }
 
-    /// 获取缓存的 Snapshot（优先使用缓存，降级到实时查询）
-    private func getCachedSnapshot(terminalId: Int) -> TerminalSnapshot? {
-        // 1. 先尝试从缓存读取（无锁，快速路径）
-        snapshotCacheLock.lock()
-        let cached = cachedSnapshots[terminalId]
-        snapshotCacheLock.unlock()
-
-        if let cached = cached {
-            return cached
-        }
-
-        // 2. 缓存未命中，降级到实时查询（可能加锁等待）
-        return terminalManager.getSnapshot(terminalId: terminalId)
-    }
-
-    /// 更新 Snapshot 缓存（异步，不阻塞渲染）
-    private func updateSnapshotCache(for terminalIds: [Int]) {
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let self = self else { return }
-
-            var newSnapshots: [Int: TerminalSnapshot] = [:]
-            for terminalId in terminalIds {
-                if let snapshot = self.terminalManager.getSnapshot(terminalId: terminalId) {
-                    newSnapshots[terminalId] = snapshot
-                }
-            }
-
-            // 批量更新缓存（减少锁持有时间）
-            self.snapshotCacheLock.lock()
-            for (terminalId, snapshot) in newSnapshots {
-                self.cachedSnapshots[terminalId] = snapshot
-            }
-            self.snapshotCacheLock.unlock()
-        }
-    }
+    // 旧架构的缓存函数已移除（getCachedSnapshot, updateSnapshotCache）
+    // 新架构不需要快照缓存
 
     /// 渲染所有 Panel（多终端支持）
     ///
@@ -1103,236 +961,37 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 关键检查：如果已清理或未初始化，不执行渲染
         guard isInitialized else { return }
 
-        if useNewArchitecture {
-            // 新架构：统一提交模式
-            // beginFrame() → renderTerminal(id, x, y) × N → endFrame()
-            guard let pool = terminalPool,
-                  let coordinator = coordinator else { return }
+        // 新架构：统一提交模式
+        // beginFrame() → renderTerminal(id, x, y) × N → endFrame()
+        guard let pool = terminalPool,
+              let coordinator = coordinator else { return }
 
-            // 获取所有需要渲染的终端及其位置
-            let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
-                containerBounds: bounds,
-                headerHeight: 30.0
-            )
+        // 获取所有需要渲染的终端及其位置
+        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
+            containerBounds: bounds,
+            headerHeight: 30.0
+        )
 
-            // 开始新的一帧
-            pool.beginFrame()
+        // 开始新的一帧
+        pool.beginFrame()
 
-            // 渲染每个终端到指定位置
-            for (terminalId, contentBounds) in tabsToRender {
-                // contentBounds 是 Swift 坐标系（左下角原点）
-                // 需要转换为 Rust 坐标系（左上角原点）
-                let x = Float(contentBounds.origin.x)
-                let y = Float(bounds.height - contentBounds.origin.y - contentBounds.height)
-                let width = Float(contentBounds.width)
-                let height = Float(contentBounds.height)
-                _ = pool.renderTerminal(Int(terminalId), x: x, y: y, width: width, height: height)
-            }
-
-            // 结束帧（统一提交渲染）
-            pool.endFrame()
-        } else {
-            // 旧架构：保持不变
-            guard let sugarloaf = sugarloaf,
-                  let coordinator = coordinator else { return }
-
-            guard let poolHandle = terminalManager.poolHandleForRender else { return }
-
-            // 确保 RichText 已创建（第一次渲染时）
-            // 从 coordinator 获取所有需要渲染的终端
-            let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
-                containerBounds: bounds,
-                headerHeight: 30.0
-            )
-
-            for (terminalId, _) in tabsToRender {
-                if richTextIds[Int(terminalId)] == nil {
-                    let richTextId = Int(sugarloaf_create_rich_text(sugarloaf))
-                    richTextIds[Int(terminalId)] = richTextId
-
-                    // 第一次创建时更新 fontMetrics
-                    if richTextIds.count == 1 {
-                        updateFontMetricsFromSugarloaf(sugarloaf)
-                        DispatchQueue.main.async { [weak self] in
-                            self?.requestRender()
-                        }
-                    }
-                }
-            }
-
-            // 纯渲染：调用 Rust 统一渲染函数
-            // 布局已经由 syncLayoutToRust() 在布局变化时设置好了
-            rio_pool_render_all(poolHandle)
+        // 渲染每个终端到指定位置
+        for (terminalId, contentBounds) in tabsToRender {
+            // contentBounds 是 Swift 坐标系（左下角原点）
+            // 需要转换为 Rust 坐标系（左上角原点）
+            let x = Float(contentBounds.origin.x)
+            let y = Float(bounds.height - contentBounds.origin.y - contentBounds.height)
+            let width = Float(contentBounds.width)
+            let height = Float(contentBounds.height)
+            _ = pool.renderTerminal(Int(terminalId), x: x, y: y, width: width, height: height)
         }
+
+        // 结束帧（统一提交渲染）
+        pool.endFrame()
     }
 
 
-    /// 计算光标可见性
-    private func calculateCursorVisibility(snapshot: TerminalSnapshot) -> Bool {
-        // 滚动历史内容时隐藏光标（光标在底部，已滚出屏幕）
-        if snapshot.display_offset > 0 {
-            return false
-        }
-
-        if snapshot.cursor_visible == 0 {
-            return false
-        }
-
-        if snapshot.blinking_cursor != 0 {
-            let hasSelection = snapshot.has_selection != 0
-            if !hasSelection {
-                var shouldBlink = true
-
-                if let lastTyping = lastTypingTime, Date().timeIntervalSince(lastTyping) < 1.0 {
-                    shouldBlink = false
-                }
-
-                if shouldBlink {
-                    let now = Date()
-                    let shouldToggle: Bool
-
-                    if let lastBlink = lastBlinkToggle {
-                        shouldToggle = now.timeIntervalSince(lastBlink) >= blinkInterval
-                    } else {
-                        isBlinkingCursorVisible = true
-                        lastBlinkToggle = now
-                        shouldToggle = false
-                    }
-
-                    if shouldToggle {
-                        isBlinkingCursorVisible = !isBlinkingCursorVisible
-                        lastBlinkToggle = now
-                    }
-                } else {
-                    isBlinkingCursorVisible = true
-                    lastBlinkToggle = nil
-                }
-
-                return isBlinkingCursorVisible
-            } else {
-                isBlinkingCursorVisible = true
-                lastBlinkToggle = nil
-                return true
-            }
-        }
-
-        return true
-    }
-
-    /// 渲染单行
-    private func renderLine(
-        content: SugarloafHandle,
-        cells: [FFICell],
-        rowIndex: Int,
-        snapshot: TerminalSnapshot,
-        isCursorVisible: Bool
-    ) {
-        // Ignore cursor position reports (ESC[row;colR) that can leak into the buffer
-        if isCursorPositionReportLine(cells) {
-            return
-        }
-
-        let cursorRow = Int(snapshot.cursor_row)
-        let cursorCol = Int(snapshot.cursor_col)
-
-        let INVERSE: UInt32 = 0x0001
-        let WIDE_CHAR: UInt32 = 0x0020
-        let WIDE_CHAR_SPACER: UInt32 = 0x0040
-        let LEADING_WIDE_CHAR_SPACER: UInt32 = 0x0400
-
-        for (colIndex, cell) in cells.enumerated() {
-            let isSpacerFlag = cell.flags & (WIDE_CHAR_SPACER | LEADING_WIDE_CHAR_SPACER)
-            if isSpacerFlag != 0 {
-                continue
-            }
-
-            guard let scalar = UnicodeScalar(cell.character) else { continue }
-
-            // 如果 cell 有 VS16 标记，追加 VS16 形成 emoji 样式
-            let charToRender: String
-            if cell.has_vs16 {
-                charToRender = String(Character(scalar)) + "\u{FE0F}"
-            } else {
-                charToRender = String(Character(scalar))
-            }
-
-            let isWideChar = cell.flags & WIDE_CHAR != 0
-            let glyphWidth: Float = isWideChar ? 2.0 : 1.0
-
-            let isInverse = cell.flags & INVERSE != 0
-
-            var fgR = Float(cell.fg_r) / 255.0
-            var fgG = Float(cell.fg_g) / 255.0
-            var fgB = Float(cell.fg_b) / 255.0
-            var fgA = Float(cell.fg_a) / 255.0
-
-            var bgR = Float(cell.bg_r) / 255.0
-            var bgG = Float(cell.bg_g) / 255.0
-            var bgB = Float(cell.bg_b) / 255.0
-            var bgA = Float(cell.bg_a) / 255.0
-
-            var hasBg = false
-            if isInverse {
-                // 🔧 修复：INVERSE 时交换前景和背景颜色（包括 alpha）
-                let origFgR = fgR, origFgG = fgG, origFgB = fgB, origFgA = fgA
-                fgR = bgR; fgG = bgG; fgB = bgB; fgA = bgA
-                bgR = origFgR; bgG = origFgG; bgB = origFgB; bgA = origFgA
-                hasBg = true
-            } else {
-                hasBg = bgR > 0.01 || bgG > 0.01 || bgB > 0.01
-            }
-
-            let hasCursor = isCursorVisible && rowIndex == cursorRow && colIndex == cursorCol
-
-            let cursorR: Float = 1.0
-            let cursorG: Float = 1.0
-            let cursorB: Float = 1.0
-            let cursorA: Float = 0.8
-
-
-            if hasCursor && snapshot.cursor_shape == 0 {
-                fgR = 0.0
-                fgG = 0.0
-                fgB = 0.0
-            }
-
-            // 搜索高亮现在由 Rust 侧实现，无需在 Swift 侧处理
-
-            sugarloaf_content_add_text_decorated(
-                content,
-                charToRender,
-                fgR, fgG, fgB, fgA,
-                hasBg,
-                bgR, bgG, bgB, bgA,
-                glyphWidth,
-                hasCursor && snapshot.cursor_shape == 0,
-                cursorR, cursorG, cursorB, cursorA,
-                cell.flags
-            )
-        }
-    }
-
-    /// 检测是否为光标位置报告行（如 ESC[25;19R），用于过滤掉被 echo 到屏幕的 DSR 响应
-    private func isCursorPositionReportLine(_ cells: [FFICell]) -> Bool {
-        guard let first = cells.first, first.character == 27 else { return false }  // 必须以 ESC 开头
-
-        var scalars: [UnicodeScalar] = []
-        for cell in cells {
-            // 停在第一个空字符，避免遍历整行的空白单元
-            guard cell.character != 0 else { break }
-            if let scalar = UnicodeScalar(cell.character) {
-                scalars.append(scalar)
-            }
-            // 限制长度，防止异常长行走正则
-            if scalars.count > 32 { return false }
-        }
-
-        guard !scalars.isEmpty else { return false }
-        let text = String(String.UnicodeScalarView(scalars))
-
-        // ^\e\[\d+;\d+R$ 形式的 DSR 响应
-        return text.range(of: #"^\u{1B}\[\d+;\d+R$"#, options: .regularExpression) != nil
-    }
+    // 旧架构渲染代码已移除（新架构渲染完全在 Rust 侧处理）
 
     /// 检查位置是否在选区内
     private func isInSelection(
@@ -1388,7 +1047,11 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         let paths = urls.map { $0.path }
         let payload = paths.joined(separator: " ") + " "
-        _ = terminalManager.writeInput(terminalId: Int(terminalId), data: payload)
+
+        // 新架构：使用 terminalPool
+        if useNewArchitecture {
+            _ = terminalPool?.writeInput(terminalId: Int(terminalId), data: payload)
+        }
         return true
     }
 
@@ -1491,58 +1154,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 旧架构：使用键盘系统处理
-        if let keyboardSystem = coordinator?.keyboardSystem {
-            let result = keyboardSystem.handleKeyDown(event)
-
-            switch result {
-            case .handled:
-                return
-
-            case .passToIME:
-                interpretKeyEvents([event])
-                return
-            }
-        }
-
-        // 降级处理：直接发送到当前终端
-        guard let terminalId = coordinator?.getActiveTerminalId() else {
-            super.keyDown(with: event)
-            return
-        }
-
-        let keyStroke = KeyStroke.from(event)
-
-        if handleEditShortcut(keyStroke, terminalId: Int(terminalId)) {
-            return
-        }
-
-        if shouldHandleDirectly(keyStroke) {
-            let sequence = keyStroke.toTerminalSequence()
-            if !sequence.isEmpty {
-                _ = terminalManager.writeInput(terminalId: Int(terminalId), data: sequence)
-            }
-        } else {
-            interpretKeyEvents([event])
-        }
-    }
-
-    /// 处理编辑快捷键（旧架构）
-    private func handleEditShortcut(_ keyStroke: KeyStroke, terminalId: Int) -> Bool {
-        // Cmd+C 复制选中文本
-        if keyStroke.matches(.cmd("c")) {
-            return handleCopy(terminalId: UInt32(terminalId))
-        }
-
-        // Cmd+V 粘贴
-        if keyStroke.matches(.cmd("v")) {
-            if let text = NSPasteboard.general.string(forType: .string) {
-                _ = terminalManager.writeInput(terminalId: terminalId, data: text)
-            }
-            return true
-        }
-
-        return false
+        // 旧架构已移除（useNewArchitecture = true 硬编码）
+        super.keyDown(with: event)
     }
 
     /// 处理编辑快捷键（新架构）
@@ -1634,52 +1247,41 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - 鼠标事件
 
     override func mouseDown(with event: NSEvent) {
-        print("🖱️ [Selection] mouseDown triggered!")  // 🔍 DEBUG
-
         window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
-        print("🖱️ [Selection] location: \(location), bounds: \(bounds)")  // 🔍 DEBUG
 
         guard let coordinator = coordinator else {
-            print("🖱️ [Selection] FAILED: coordinator is nil")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
 
         // 根据位置找到对应的 Panel
         guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds) else {
-            print("🖱️ [Selection] FAILED: findPanel returned nil")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
 
         guard let panel = coordinator.terminalWindow.getPanel(panelId) else {
-            print("🖱️ [Selection] FAILED: getPanel returned nil for panelId=\(panelId)")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
 
         guard let activeTab = panel.activeTab else {
-            print("🖱️ [Selection] FAILED: activeTab is nil")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
 
         guard let terminalId = activeTab.rustTerminalId else {
-            print("🖱️ [Selection] FAILED: rustTerminalId is nil")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
-
-        print("🖱️ [Selection] Found terminal: panelId=\(panelId), terminalId=\(terminalId)")  // 🔍 DEBUG
 
         // 设置激活的 Panel
         coordinator.setActivePanel(panelId)
 
         // 转换为网格坐标
         let gridPos = screenToGrid(location: location, panelId: panelId)
-        print("🖱️ [Selection] gridPos: row=\(gridPos.row), col=\(gridPos.col)")  // 🔍 DEBUG
 
         // 双击选中单词
         if event.clickCount == 2 {
@@ -1695,31 +1297,25 @@ class RioMetalView: NSView, RenderViewProtocol {
                   screenRow: Int(gridPos.row),
                   screenCol: Int(gridPos.col)
               ) else {
-            print("🖱️ [Selection] FAILED: screenToAbsolute returned nil for screenRow=\(gridPos.row), screenCol=\(gridPos.col)")  // 🔍 DEBUG
             super.mouseDown(with: event)
             return
         }
 
         activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
-        // 🔍 DEBUG: 打印选区起点
-        print("🖱️ [Selection] mouseDown: absoluteRow=\(absoluteRow), col=\(col), terminalId=\(terminalId)")
-
         // 通知 Rust 层渲染高亮（新架构使用 terminalPool）
         if let selection = activeTab.textSelection {
-            print("🖱️ [Selection] setSelection: start=(\(selection.startAbsoluteRow), \(selection.startCol)), end=(\(selection.endAbsoluteRow), \(selection.endCol))")
-            let success = pool.setSelection(
+            _ = pool.setSelection(
                 terminalId: Int(terminalId),
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
                 endAbsoluteRow: selection.endAbsoluteRow,
                 endCol: Int(selection.endCol)
             )
-            print("🖱️ [Selection] setSelection result: \(success)")
         }
 
         // 触发渲染
-        requestRender()  // 🔍 恢复：确保选区立即渲染
+        requestRender()
 
         // 记录选中状态
         isDraggingSelection = true
@@ -1743,30 +1339,8 @@ class RioMetalView: NSView, RenderViewProtocol {
         let row = Int(gridPos.row)
         let col = Int(gridPos.col)
 
-        // 获取快照以转换坐标（使用缓存）
-        guard let snapshot = getCachedSnapshot(terminalId: Int(terminalId)) else { return }
-
-        // 转换屏幕坐标为绝对行号
-        let absoluteRowForCells = Int64(snapshot.scrollback_lines) - Int64(snapshot.display_offset) + Int64(row)
-
-        // 获取该行的所有单元格（仍使用老架构 API，后续需要添加新架构支持）
-        let cells = terminalManager.getRowCells(terminalId: Int(terminalId), absoluteRow: absoluteRowForCells, maxCells: 500)
-        guard !cells.isEmpty else { return }
-
-        // 将单元格转换为字符串
-        let lineText = cells.map { cell in
-            guard let scalar = UnicodeScalar(cell.character) else { return " " }
-            return String(Character(scalar))
-        }.joined()
-
-        // 使用 WordBoundaryDetector 查找词边界
-        let detector = WordBoundaryDetector()
-        guard let boundary = detector.findBoundary(in: lineText, at: col) else {
-            return
-        }
-
-        // 将 Screen 坐标转换为真实行号（新架构：使用 terminalPool）
-        guard let (absoluteRow, _) = pool.screenToAbsolute(
+        // 直接调用 Rust API 获取单词边界（支持中文分词）
+        guard let boundary = pool.getWordAt(
             terminalId: Int(terminalId),
             screenRow: row,
             screenCol: col
@@ -1774,9 +1348,9 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 设置选区（使用真实行号）
-        activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(boundary.startIndex))
-        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(boundary.endIndex - 1))
+        // 设置选区（使用绝对行号）
+        activeTab.startSelection(absoluteRow: boundary.absoluteRow, col: UInt16(boundary.startCol))
+        activeTab.updateSelection(absoluteRow: boundary.absoluteRow, col: UInt16(boundary.endCol))
 
         // 通知 Rust 层渲染高亮（新架构：使用 terminalPool）
         if let selection = activeTab.textSelection {
@@ -1841,20 +1415,15 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 更新 Domain 层状态
         activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
-        // 🔍 DEBUG: 打印选区更新
-        print("🖱️ [Selection] mouseDragged: absoluteRow=\(absoluteRow), col=\(col)")
-
         // 通知 Rust 层渲染高亮（新架构：使用 terminalPool）
         if let selection = activeTab.textSelection {
-            print("🖱️ [Selection] updateSelection: start=(\(selection.startAbsoluteRow), \(selection.startCol)), end=(\(selection.endAbsoluteRow), \(selection.endCol))")
-            let success = pool.setSelection(
+            _ = pool.setSelection(
                 terminalId: Int(terminalId),
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
                 endAbsoluteRow: selection.endAbsoluteRow,
                 endCol: Int(selection.endCol)
             )
-            print("🖱️ [Selection] setSelection result: \(success)")
         }
 
         // 触发渲染（事件驱动模式下必须手动触发）
@@ -2001,75 +1570,17 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 旧架构
-        guard let coordinator = coordinator else {
-            super.scrollWheel(with: event)
-            return
-        }
-
-        // 使用鼠标所在位置确定目标 Panel/Tab，再滚动对应终端
-        let locationInView = convert(event.locationInWindow, from: nil)
-        let terminalId = coordinator.getTerminalIdAtPoint(locationInView, containerBounds: bounds)
-
-        guard let terminalId else {
-            super.scrollWheel(with: event)
-            return
-        }
-
-        // 根据实际滚动量计算行数，提供更流畅的滚动体验
-        let deltaY = event.scrollingDeltaY
-
-        // 根据滚动类型调整滚动速度
-        let scrollLines: Int32
-        if event.hasPreciseScrollingDeltas {
-            // 精确滚动（触控板）：每 10 像素滚动 1 行
-            let scrollSensitivity: CGFloat = 10.0
-            scrollLines = Int32(round(deltaY / scrollSensitivity))
-        } else {
-            // 普通滚轮：使用 deltaY 的实际值，并放大 3 倍以提升流畅度
-            scrollLines = Int32(deltaY * 3)
-        }
-
-        let delta = scrollLines
-
-        if delta != 0 {
-            _ = terminalManager.scroll(terminalId: Int(terminalId), deltaLines: delta)
-
-            // 同步 displayOffset（仅用于记录滚动位置）
-            // ✅ 使用缓存的 Snapshot，避免加锁等待
-            if let snapshot = getCachedSnapshot(terminalId: Int(terminalId)),
-               let panel = coordinator.terminalWindow.allPanels.first(where: {
-                   $0.activeTab?.rustTerminalId == terminalId
-               }),
-               let tab = panel.activeTab {
-                // 更新偏移量
-                tab.updateDisplayOffset(Int(snapshot.display_offset))
-
-                // 注意：不要重新同步选区！
-                // Rust 内部已经存储了选区的 Grid 坐标，滚动不应该改变它
-                // 重新同步会导致选区使用新的 display_offset 重新计算 Grid 坐标，位置错误
-            }
-
-            requestRender()
-        }
+        // 旧架构已移除（useNewArchitecture = true 硬编码）
+        super.scrollWheel(with: event)
     }
 
     /// 清理资源（在窗口关闭前调用）
     ///
     /// 必须在主线程调用，确保 Metal 渲染完成后再释放资源
     func cleanup() {
-        // 停止渲染调度
-        if useNewArchitecture {
-            // 新架构：停止 Rust RenderScheduler
-            renderScheduler?.stop()
-            renderScheduler = nil
-        } else {
-            // 旧架构：停止 Swift CVDisplayLink
-            if let displayLink = displayLink {
-                CVDisplayLinkStop(displayLink)
-                self.displayLink = nil
-            }
-        }
+        // 停止 Rust RenderScheduler
+        renderScheduler?.stop()
+        renderScheduler = nil
 
         // 标记为未初始化，阻止后续渲染
         isInitialized = false
@@ -2083,19 +1594,8 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 清除坐标映射器
         coordinateMapper = nil
 
-        // 清除 Snapshot 缓存
-        snapshotCacheLock.lock()
-        cachedSnapshots.removeAll()
-        snapshotCacheLock.unlock()
-
-        if useNewArchitecture {
-            // 新架构：清理 TerminalPoolWrapper
-            terminalPool = nil
-        } else {
-            // 注意：不在这里释放 sugarloaf handle
-            // 因为 GlobalTerminalManager 可能还在使用同一个 Sugarloaf 实例
-            // Sugarloaf 的生命周期由 GlobalTerminalManager 管理
-        }
+        // 清理 TerminalPoolWrapper
+        terminalPool = nil
     }
 
     deinit {
@@ -2162,9 +1662,10 @@ extension RioMetalView: NSTextInputClient {
             return .zero
         }
 
-        // 获取光标位置用于输入法候选框定位
+        // 获取光标位置用于输入法候选框定位（新架构：使用 terminalPool）
         if let terminalId = coordinator?.getActiveTerminalId(),
-           let cursor = terminalManager.getCursor(terminalId: Int(terminalId)),
+           let pool = terminalPool,
+           let cursor = pool.getCursorPosition(terminalId: Int(terminalId)),
            let mapper = coordinateMapper {
 
             // ✅ 关键修复：cellWidth/cellHeight 是物理像素，需要转换为逻辑点
@@ -2200,15 +1701,9 @@ extension RioMetalView: NSTextInputClient {
         let imeCoord = coordinator?.keyboardSystem?.imeCoordinator ?? imeCoordinator
         let committedText = imeCoord.commitText(text)
 
-        if useNewArchitecture {
-            // 新架构：发送键盘输入到当前激活的终端
-            if let terminalId = coordinator?.getActiveTerminalId() {
-                _ = terminalPool?.writeInput(terminalId: Int(terminalId), data: committedText)
-            }
-        } else {
-            // 旧架构：写入到 GlobalTerminalManager
-            guard let terminalId = coordinator?.getActiveTerminalId() else { return }
-            _ = terminalManager.writeInput(terminalId: Int(terminalId), data: committedText)
+        // 新架构：发送键盘输入到当前激活的终端
+        if let terminalId = coordinator?.getActiveTerminalId() {
+            _ = terminalPool?.writeInput(terminalId: Int(terminalId), data: committedText)
         }
     }
 }

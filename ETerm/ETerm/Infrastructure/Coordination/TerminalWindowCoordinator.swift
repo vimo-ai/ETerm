@@ -89,9 +89,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
     // MARK: - Infrastructure
 
-    /// 全局终端管理器（基础设施）
-    private var globalTerminalManager: GlobalTerminalManager?
-
     /// 终端池（兼容旧代码，用于渲染）
     private var terminalPool: TerminalPoolProtocol
 
@@ -263,18 +260,8 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 关闭终端
         for terminalId in terminalIds {
-            if let manager = globalTerminalManager {
-                _ = manager.closeTerminal(terminalId)
-            } else {
-                _ = terminalPool.closeTerminal(terminalId)
-            }
+            _ = terminalPool.closeTerminal(terminalId)
         }
-
-        // 清理全局终端管理器中的路由
-        globalTerminalManager?.cleanupRoutes(for: self)
-
-        // 清除全局终端管理器的引用
-        globalTerminalManager = nil
     }
 
     deinit {
@@ -297,71 +284,13 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - 分栏/合并 Panel
     ///
     /// 调用时机：布局变化时主动触发，而非每帧调用
+    ///
+    /// 注意：新架构中，布局同步在渲染过程中自动处理（通过 renderTerminal()）
+    /// 这里只需要触发渲染更新即可
     func syncLayoutToRust() {
-        guard let poolHandle = globalTerminalManager?.poolHandleForRender,
-              let mapper = coordinateMapper,
-              let fontMetrics = fontMetrics else {
-//            print("⚠️ [syncLayoutToRust] Missing required dependencies")
-            return
-        }
-
-        // 计算内容区域（需要 bounds）
-        // 从 RioMetalView 获取 bounds（通过 renderView 协议）
-        // 这是一个类型转换，安全且不会产生循环依赖
-        guard let metalView = renderView as? RioMetalView else {
-//            print("⚠️ [syncLayoutToRust] renderView is not RioMetalView")
-            return
-        }
-
-        let contentBounds = metalView.bounds
-
-        // 从 AR 获取所有需要渲染的终端
-        let tabsToRender = terminalWindow.getActiveTabsForRendering(
-            containerBounds: contentBounds,
-            headerHeight: headerHeight
-        )
-
-//        print("🔄 [syncLayoutToRust] Syncing layout for \(tabsToRender.count) terminals")
-
-        // 清空 Rust 侧的 active_terminals 集合
-        rio_pool_clear_active_terminals(poolHandle)
-
-        // 设置每个终端的布局
-        for (terminalId, contentBounds) in tabsToRender {
-            // 坐标转换：Swift 坐标 → Rust 逻辑坐标
-            let logicalRect = mapper.swiftToRust(rect: contentBounds)
-
-            // 设置布局到 Rust 侧
-            _ = rio_terminal_set_layout(
-                poolHandle,
-                Int32(terminalId),
-                Float(logicalRect.origin.x),
-                Float(logicalRect.origin.y),
-                Float(logicalRect.width),
-                Float(logicalRect.height),
-                true  // visible
-            )
-
-            // 处理 resize（只在尺寸变化时）
-            if let snapshot = globalTerminalManager?.getSnapshot(terminalId: Int(terminalId)) {
-                let physicalWidth = logicalRect.width * mapper.scale
-                let physicalHeight = logicalRect.height * mapper.scale
-
-                let cellWidth = CGFloat(fontMetrics.cell_width)
-                let lineHeight = CGFloat(fontMetrics.line_height)
-
-                let cols = UInt16(max(1, min(physicalWidth / cellWidth, CGFloat(UInt16.max - 1))))
-                let rows = UInt16(max(1, min(physicalHeight / lineHeight, CGFloat(UInt16.max - 1))))
-
-                // 只在尺寸真的变化时才调用 resize
-                if cols != snapshot.columns || rows != snapshot.screen_lines {
-//                    print("📐 [syncLayoutToRust] Resizing terminal \(terminalId): \(snapshot.columns)x\(snapshot.screen_lines) -> \(cols)x\(rows)")
-                    _ = globalTerminalManager?.resize(terminalId: Int(terminalId), cols: cols, rows: rows)
-                }
-            }
-        }
-
-//        print("✅ [syncLayoutToRust] Layout sync complete")
+        // 新架构：布局同步已集成到 renderAllPanels() 中
+        // 这里只需触发一次渲染更新
+        scheduleRender()
     }
 
     // MARK: - Render Scheduling
@@ -431,22 +360,8 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: CWD 路径，失败返回 nil
     func getCwd(terminalId: Int) -> String? {
-        // 优先使用 GlobalTerminalManager
-        if let manager = globalTerminalManager {
-            return manager.getCwd(terminalId: terminalId)
-        }
-
-        // 尝试使用 RioTerminalPoolWrapper
-        if let wrapper = terminalPool as? RioTerminalPoolWrapper {
-            return wrapper.getCwd(terminalId: terminalId)
-        }
-
-        // 尝试使用新架构 TerminalPoolWrapper
-        if let wrapper = terminalPool as? TerminalPoolWrapper {
-            return wrapper.getCwd(terminalId: terminalId)
-        }
-
-        return nil
+        // 使用终端池协议获取 CWD
+        return terminalPool.getCwd(terminalId: terminalId)
     }
 
     /// 调整字体大小
@@ -481,45 +396,6 @@ class TerminalWindowCoordinator: ObservableObject {
         // print("🟢 [Coordinator] setTerminalPool completed, keyboardSystem initialized")
     }
 
-    /// 设置全局终端管理器（新的架构）
-    ///
-    /// 使用全局终端管理器代替本地终端池，支持跨窗口终端迁移
-    func setGlobalTerminalManager(_ manager: GlobalTerminalManager) {
-        self.globalTerminalManager = manager
-
-        // 清空旧终端的 rustTerminalId
-        for panel in terminalWindow.allPanels {
-            for tab in panel.tabs {
-                tab.setRustTerminalId(nil)
-            }
-        }
-
-        // 为所有 Tab 创建终端（使用全局管理器）
-        createTerminalsWithGlobalManager()
-
-        // 初始化键盘系统
-        self.keyboardSystem = KeyboardSystem(coordinator: self)
-    }
-
-    /// 使用全局终端管理器为所有 Tab 创建终端
-    private func createTerminalsWithGlobalManager() {
-        guard globalTerminalManager != nil else { return }
-
-        for panel in terminalWindow.allPanels {
-            for tab in panel.tabs {
-                if tab.rustTerminalId == nil {
-                    // 检查是否有待恢复的 CWD（用于 Session 恢复）
-                    let cwdToUse = tab.takePendingCwd()
-
-                    // 使用 createTerminalInternal 以支持 CWD 继承/恢复
-                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: cwdToUse)
-                    if terminalId >= 0 {
-                        tab.setRustTerminalId(UInt32(terminalId))
-                    }
-                }
-            }
-        }
-    }
 
     /// 设置坐标映射器（初始化时使用）
     func setCoordinateMapper(_ mapper: CoordinateMapper) {
@@ -539,20 +415,13 @@ class TerminalWindowCoordinator: ObservableObject {
     // MARK: - Terminal Lifecycle
 
     /// 关闭终端（统一入口）
-    ///
-    /// 优先使用全局终端管理器，否则使用本地终端池
     @discardableResult
     private func closeTerminalInternal(_ terminalId: Int) -> Bool {
-        if let manager = globalTerminalManager {
-            return manager.closeTerminal(terminalId)
-        } else {
-            return terminalPool.closeTerminal(terminalId)
-        }
+        return terminalPool.closeTerminal(terminalId)
     }
 
     /// 创建终端（统一入口）
     ///
-    /// 优先使用全局终端管理器，否则使用本地终端池
     /// 如果有 initialCwd，则使用指定的工作目录创建第一个终端
     private func createTerminalInternal(cols: UInt16, rows: UInt16, shell: String, cwd: String? = nil) -> Int {
         // 优先使用传入的 CWD
@@ -567,80 +436,44 @@ class TerminalWindowCoordinator: ObservableObject {
         if let cwdPath = effectiveCwd {
             print("🚀 [Coordinator] Creating terminal with CWD: \(cwdPath)")
 
-            var terminalId: Int = -1
-
-            // 优先使用全局终端管理器
-            if let manager = globalTerminalManager {
-                terminalId = manager.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath, for: self)
-            } else {
-                // 使用协议方法（RioTerminalPoolWrapper 和其他实现都支持）
-                terminalId = terminalPool.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath)
-            }
+            let terminalId = terminalPool.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath)
 
             if terminalId >= 0 {
-//                print("✅ [Coordinator] Terminal created with ID \(terminalId)")
-
                 // 如果使用的是 initialCwd，清除它（只有第一个终端使用）
                 if cwd == nil && initialCwd != nil {
-//                    print("🧹 [Coordinator] Clearing initialCwd after first terminal creation")
                     initialCwd = nil
                 }
 
                 return terminalId
             }
             // 如果带 CWD 创建失败，继续走默认逻辑
-//            print("⚠️ [Coordinator] Failed to create terminal with CWD, falling back to default")
         }
 
-//        print("📌 [Coordinator] Creating terminal with default CWD")
         // 默认行为：不指定 CWD
-        if let manager = globalTerminalManager {
-            return manager.createTerminal(cols: cols, rows: rows, shell: shell, for: self)
-        } else {
-            return terminalPool.createTerminal(cols: cols, rows: rows, shell: shell)
-        }
+        return terminalPool.createTerminal(cols: cols, rows: rows, shell: shell)
     }
 
     /// 写入输入（统一入口）
     @discardableResult
     private func writeInputInternal(terminalId: Int, data: String) -> Bool {
-        if let manager = globalTerminalManager {
-            return manager.writeInput(terminalId: terminalId, data: data)
-        } else {
-            return terminalPool.writeInput(terminalId: terminalId, data: data)
-        }
+        return terminalPool.writeInput(terminalId: terminalId, data: data)
     }
 
     /// 滚动（统一入口）
     @discardableResult
     private func scrollInternal(terminalId: Int, deltaLines: Int32) -> Bool {
-        if let manager = globalTerminalManager {
-            return manager.scroll(terminalId: terminalId, deltaLines: deltaLines)
-        } else {
-            return terminalPool.scroll(terminalId: terminalId, deltaLines: deltaLines)
-        }
+        return terminalPool.scroll(terminalId: terminalId, deltaLines: deltaLines)
     }
 
     /// 清除选区（统一入口）
     @discardableResult
     private func clearSelectionInternal(terminalId: Int) -> Bool {
-        if let manager = globalTerminalManager {
-            return manager.clearSelection(terminalId: terminalId)
-        } else {
-            return terminalPool.clearSelection(terminalId: terminalId)
-        }
+        return terminalPool.clearSelection(terminalId: terminalId)
     }
 
     /// 获取光标位置（统一入口）
     private func getCursorPositionInternal(terminalId: Int) -> CursorPosition? {
-        if let manager = globalTerminalManager {
-            if let cursor = manager.getCursor(terminalId: terminalId) {
-                return CursorPosition(col: cursor.col, row: cursor.row)
-            }
-            return nil
-        } else {
-            return terminalPool.getCursorPosition(terminalId: terminalId)
-        }
+        return terminalPool.getCursorPosition(terminalId: terminalId)
     }
 
     /// 为所有 Tab 创建终端（只创建当前激活Page的终端）
@@ -1087,13 +920,8 @@ class TerminalWindowCoordinator: ObservableObject {
             return nil
         }
 
-        // 使用 GlobalTerminalManager 获取 CWD
-        if let manager = globalTerminalManager {
-            return manager.getCwd(terminalId: Int(terminalId))
-        }
-
-        // Fallback：如果没有 GlobalTerminalManager，返回 Home 目录
-        return NSHomeDirectory()
+        // 使用终端池获取 CWD
+        return getCwd(terminalId: Int(terminalId)) ?? NSHomeDirectory()
     }
 
     /// 根据滚轮事件位置获取应滚动的终端 ID（鼠标所在 Panel 的激活 Tab）
@@ -1154,14 +982,18 @@ class TerminalWindowCoordinator: ObservableObject {
     func setSelection(terminalId: UInt32, selection: TextSelection) -> Bool {
         let (startRow, startCol, endRow, endCol) = selection.normalized()
 
-        // 使用真实行号设置选区
-        let success = globalTerminalManager?.setSelection(
+        // 使用终端池设置选区
+        guard let wrapper = terminalPool as? TerminalPoolWrapper else {
+            return false
+        }
+
+        let success = wrapper.setSelection(
             terminalId: Int(terminalId),
             startAbsoluteRow: startRow,
             startCol: Int(startCol),
             endAbsoluteRow: endRow,
             endCol: Int(endCol)
-        ) ?? false
+        )
 
         if success {
             // 触发渲染更新
@@ -1192,9 +1024,9 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - selection: 选中范围（使用真实行号）
     /// - Returns: 选中的文本，失败返回 nil
     func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
-        // 使用绝对坐标系统直接获取
-        // 前提：selection 已经通过 setSelection 同步到 Rust 层
-        return globalTerminalManager?.getSelectedText(terminalId: Int(terminalId))
+        // TODO: 新架构中需要添加 FFI 支持以获取选中文本
+        // 目前暂时返回 nil
+        return nil
     }
 
     /// 获取指定终端的当前输入行号
@@ -1242,10 +1074,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 🧹 清除渲染缓冲区（在渲染新内容前）
         // 这确保切换 Page 时旧内容不会残留
-        // 注意：GlobalTerminalManager 使用单独的 Sugarloaf，不需要清除
-        if globalTerminalManager == nil {
-            terminalPool.clear()
-        }
+        terminalPool.clear()
 
         // 渲染每个 Tab（支持 TerminalPoolWrapper 和 EventDrivenTerminalPoolWrapper）
         // 🎯 PTY 读取现在在 CVDisplayLink 回调中统一处理
@@ -1681,152 +1510,38 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - isRegex: 是否为正则表达式
     ///   - caseSensitive: 是否区分大小写
     func startSearch(pattern: String, isRegex: Bool = false, caseSensitive: Bool = false) {
+        // TODO: 新架构中需要添加搜索功能的 FFI 支持
+        // 暂时禁用搜索功能
         guard let activePanelId = activePanelId,
               let panel = terminalWindow.getPanel(activePanelId),
-              let activeTab = panel.activeTab,
-              let terminalId = activeTab.rustTerminalId,
-              let manager = globalTerminalManager else {
+              let activeTab = panel.activeTab else {
             return
         }
 
-        // 在后台线程执行搜索，避免阻塞主线程
-        let terminalIdValue = Int(terminalId)
-        Task.detached { [weak self] in
-            // 后台线程：调用 FFI 执行搜索
-            let result = manager.startSearch(
-                terminalId: terminalIdValue,
-                pattern: pattern,
-                isRegex: isRegex,
-                caseSensitive: caseSensitive
-            )
-
-            // 回到主线程更新 UI
-            await MainActor.run {
-                guard let self = self,
-                      let activePanelId = self.activePanelId,
-                      let panel = self.terminalWindow.getPanel(activePanelId),
-                      let activeTab = panel.activeTab else {
-                    return
-                }
-
-                if let result = result {
-                    // 更新 Tab 的搜索信息
-                    activeTab.setSearchInfo(TabSearchInfo(
-                        pattern: pattern,
-                        totalCount: result.totalCount,
-                        currentIndex: result.currentIndex
-                    ))
-
-                    // 如果需要滚动到匹配位置
-                    if let scrollToRow = result.scrollToRow {
-                        _ = manager.scroll(terminalId: terminalIdValue, deltaLines: Int32(scrollToRow))
-                    }
-
-                    // 触发渲染更新
-                    self.objectWillChange.send()
-                    self.updateTrigger = UUID()
-                    self.scheduleRender()
-                } else {
-                    // 失败，清除搜索信息
-                    activeTab.setSearchInfo(nil)
-                    self.objectWillChange.send()
-                }
-            }
-        }
+        // 清除搜索信息
+        activeTab.setSearchInfo(nil)
+        objectWillChange.send()
     }
 
     /// 跳转到下一个匹配
     func searchNext() {
-        guard let activePanelId = activePanelId,
-              let panel = terminalWindow.getPanel(activePanelId),
-              let activeTab = panel.activeTab,
-              let terminalId = activeTab.rustTerminalId,
-              let manager = globalTerminalManager,
-              activeTab.searchInfo != nil else {
-            return
-        }
-
-        let terminalIdValue = Int(terminalId)
-        let totalCount = activeTab.searchInfo?.totalCount ?? 0
-
-        Task.detached { [weak self] in
-            let newIndex = manager.searchNext(terminalId: terminalIdValue)
-
-            await MainActor.run {
-                guard let self = self,
-                      let activePanelId = self.activePanelId,
-                      let panel = self.terminalWindow.getPanel(activePanelId),
-                      let activeTab = panel.activeTab,
-                      let newIndex = newIndex else {
-                    return
-                }
-
-                // 更新索引
-                activeTab.updateSearchIndex(
-                    currentIndex: newIndex,
-                    totalCount: totalCount
-                )
-
-                // 触发渲染更新
-                self.objectWillChange.send()
-                self.updateTrigger = UUID()
-                self.scheduleRender()
-            }
-        }
+        // TODO: 新架构中需要添加搜索功能的 FFI 支持
+        // 暂时禁用
     }
 
     /// 跳转到上一个匹配
     func searchPrev() {
-        guard let activePanelId = activePanelId,
-              let panel = terminalWindow.getPanel(activePanelId),
-              let activeTab = panel.activeTab,
-              let terminalId = activeTab.rustTerminalId,
-              let manager = globalTerminalManager,
-              activeTab.searchInfo != nil else {
-            return
-        }
-
-        let terminalIdValue = Int(terminalId)
-        let totalCount = activeTab.searchInfo?.totalCount ?? 0
-
-        Task.detached { [weak self] in
-            let newIndex = manager.searchPrev(terminalId: terminalIdValue)
-
-            await MainActor.run {
-                guard let self = self,
-                      let activePanelId = self.activePanelId,
-                      let panel = self.terminalWindow.getPanel(activePanelId),
-                      let activeTab = panel.activeTab,
-                      let newIndex = newIndex else {
-                    return
-                }
-
-                // 更新索引
-                activeTab.updateSearchIndex(
-                    currentIndex: newIndex,
-                    totalCount: totalCount
-                )
-
-                // 触发渲染更新
-                self.objectWillChange.send()
-                self.updateTrigger = UUID()
-                self.scheduleRender()
-            }
-        }
+        // TODO: 新架构中需要添加搜索功能的 FFI 支持
+        // 暂时禁用
     }
 
     /// 清除当前 Tab 的搜索
     func clearSearch() {
         guard let activePanelId = activePanelId,
               let panel = terminalWindow.getPanel(activePanelId),
-              let activeTab = panel.activeTab,
-              let terminalId = activeTab.rustTerminalId,
-              let manager = globalTerminalManager else {
+              let activeTab = panel.activeTab else {
             return
         }
-
-        // 调用 FFI 清除搜索
-        manager.clearSearch(terminalId: Int(terminalId))
 
         // 清除 Tab 的搜索信息
         activeTab.setSearchInfo(nil)

@@ -25,6 +25,22 @@ enum TerminalPoolSwiftEventType: UInt32 {
     case damaged = 5
 }
 
+/// 终端单词边界信息（网格坐标）
+///
+/// 与 WordBoundary 的区别：
+/// - WordBoundary: NaturalLanguage 分词结果（字符串索引）
+/// - TerminalWordBoundary: 终端网格单词（行列坐标）
+struct TerminalWordBoundary {
+    /// 单词起始列（屏幕坐标）
+    let startCol: Int
+    /// 单词结束列（屏幕坐标，包含）
+    let endCol: Int
+    /// 绝对行号
+    let absoluteRow: Int64
+    /// 单词文本
+    let text: String
+}
+
 /// 终端池 Wrapper（新架构）
 ///
 /// 职责分离：
@@ -233,8 +249,41 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func getCursorPosition(terminalId: Int) -> CursorPosition? {
-        // TODO: 需要在 Rust 侧添加此 API
-        return nil
+        guard let handle = handle else { return nil }
+
+        let result = terminal_pool_get_cursor(handle, terminalId)
+        guard result.valid else { return nil }
+
+        return CursorPosition(col: result.col, row: result.row)
+    }
+
+    /// 获取指定位置的单词边界（终端网格）
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - screenRow: 屏幕行号（相对于可见区域，从 0 开始）
+    ///   - screenCol: 屏幕列号（从 0 开始）
+    /// - Returns: 单词边界信息，失败返回 nil
+    func getWordAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalWordBoundary? {
+        guard let handle = handle else { return nil }
+        guard screenRow >= 0 && screenCol >= 0 else { return nil }
+
+        let result = terminal_pool_get_word_at(handle, Int32(terminalId), Int32(screenRow), Int32(screenCol))
+        guard result.valid else { return nil }
+
+        // 转换 C 字符串为 Swift String
+        guard let textPtr = result.text_ptr else { return nil }
+        let text = String(cString: textPtr)
+
+        // 释放 Rust 分配的内存
+        terminal_pool_free_word_boundary(result)
+
+        return TerminalWordBoundary(
+            startCol: Int(result.start_col),
+            endCol: Int(result.end_col),
+            absoluteRow: result.absolute_row,
+            text: text
+        )
     }
 
     @discardableResult

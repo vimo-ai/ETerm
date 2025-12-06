@@ -510,12 +510,7 @@ final class WindowManager: NSObject {
             return false
         }
 
-        // 3. 批量迁移终端路由到目标 Coordinator
-        if !terminalIds.isEmpty {
-            GlobalTerminalManager.shared.migrateTerminals(terminalIds, to: targetCoordinator)
-        }
-
-        // 4. 添加到目标窗口
+        // 3. 添加到目标窗口
         targetCoordinator.addPage(page)
 
         // 5. 激活目标窗口
@@ -611,25 +606,18 @@ final class WindowManager: NSObject {
             return false
         }
 
-        // 1. 获取 Tab 对象和终端 ID
+        // 1. 获取 Tab 对象
         guard let sourcePanel = sourceCoordinator.terminalWindow.getPanel(sourcePanelId),
               let tab = sourcePanel.tabs.first(where: { $0.tabId == tabId }) else {
             return false
         }
-
-        let terminalId = tab.rustTerminalId
 
         // 2. 从源 Panel 移除（不关闭终端）
         guard sourceCoordinator.removeTab(tabId, from: sourcePanelId, closeTerminal: false) else {
             return false
         }
 
-        // 3. 迁移终端路由到目标 Coordinator
-        if let terminalId = terminalId {
-            GlobalTerminalManager.shared.migrateTerminal(Int(terminalId), to: targetCoordinator)
-        }
-
-        // 4. 添加到目标 Panel
+        // 3. 添加到目标 Panel
         targetCoordinator.addTab(tab, to: targetPanelId)
 
         // 5. 激活目标窗口

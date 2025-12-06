@@ -479,6 +479,7 @@ impl TerminalPool {
         drop(terminal);
 
         // 4. 渲染所有行（类型安全的坐标转换）
+        let render_start = std::time::Instant::now();
         let mut renderer = self.renderer.lock();
 
         use crate::domain::primitives::{LogicalPosition, LogicalPixels};
@@ -511,6 +512,12 @@ impl TerminalPool {
 
         drop(renderer);
 
+        let render_time = render_start.elapsed().as_micros();
+        if render_time > 1000 {
+            eprintln!("⚡ render_terminal({}) took {}μs | rows={}",
+                      id, render_time, rows);
+        }
+
         // 5. 渲染成功完成后，重置 damage 状态
         {
             let mut terminal = entry.terminal.lock();
@@ -522,25 +529,28 @@ impl TerminalPool {
 
     /// 结束帧（统一提交渲染）
     pub fn end_frame(&mut self) {
+        // 如果没有待渲染对象，直接返回
+        if self.pending_objects.is_empty() {
+            return;
+        }
+
         let frame_start = std::time::Instant::now();
 
         let mut sugarloaf = self.sugarloaf.lock();
+        let lock_time = frame_start.elapsed().as_micros();
 
         // 设置所有待渲染对象
-        sugarloaf.set_objects(self.pending_objects.clone());
+        let object_count = self.pending_objects.len();
+        sugarloaf.set_objects(std::mem::take(&mut self.pending_objects));
+        let set_time = frame_start.elapsed().as_micros() - lock_time;
 
         // 触发 GPU 渲染
         sugarloaf.render();
+        let render_time = frame_start.elapsed().as_micros() - lock_time - set_time;
 
-        // 清空缓冲区
-        let object_count = self.pending_objects.len();
-        self.pending_objects.clear();
-
-        drop(sugarloaf);
-
-        let frame_time = frame_start.elapsed().as_micros();
-        eprintln!("🎯FRAME_PERF TerminalPool::end_frame() took {}μs ({:.2}ms) | objects={}",
-                  frame_time, frame_time as f32 / 1000.0, object_count);
+        let total_time = frame_start.elapsed().as_micros();
+        eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | objects={}",
+                  total_time, total_time as f64 / 1000.0, lock_time, set_time, render_time, object_count);
     }
 
     /// 调整 Sugarloaf 尺寸

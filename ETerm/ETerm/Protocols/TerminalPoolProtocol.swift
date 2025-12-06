@@ -77,10 +77,24 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 清除所有渲染对象（切换 Page 时使用）
     func clear()
 
+    // MARK: - 工作目录
+
+    /// 获取终端的当前工作目录
+    func getCwd(terminalId: Int) -> String?
+
     // MARK: - 光标和选区
 
     /// 获取光标位置
     func getCursorPosition(terminalId: Int) -> CursorPosition?
+
+    /// 获取指定位置的单词边界（终端网格）
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - screenRow: 屏幕行号（相对于可见区域，从 0 开始）
+    ///   - screenCol: 屏幕列号（从 0 开始）
+    /// - Returns: 单词边界信息，失败返回 nil
+    func getWordAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalWordBoundary?
 
     /// 清除选区
     @discardableResult
@@ -121,7 +135,9 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func render(terminalId: Int, x: Float, y: Float, width: Float, height: Float, cols: UInt16, rows: UInt16) -> Bool { false }
     func flush() {}
     func clear() {}
+    func getCwd(terminalId: Int) -> String? { nil }
     func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
+    func getWordAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalWordBoundary? { nil }
     func clearSelection(terminalId: Int) -> Bool { false }
     func getInputRow(terminalId: Int) -> UInt16? { nil }
     func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {}

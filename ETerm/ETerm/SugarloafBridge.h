@@ -172,360 +172,14 @@ void sugarloaf_change_font_size(
 void sugarloaf_free(SugarloafHandle handle);
 
 // =============================================================================
-// Rio Terminal Pool API - 照抄 Rio 的事件系统
-// =============================================================================
-//
-// 这是一个全新的实现，照抄 Rio 的事件系统：
-// - FFIEvent 结构传递事件类型和参数
-// - EventCallback 在 PTY 线程中被调用
-// - Swift 侧有事件队列消费事件
-
-typedef void* RioTerminalPoolHandle;
-
-// FFI 事件类型
-typedef struct {
-    uint32_t event_type;    // 0=Wakeup, 1=Render, 2=CursorBlinkingChange, 3=Bell, 8=Exit, etc.
-    size_t route_id;        // 终端 ID
-    int32_t scroll_delta;   // 滚动量（用于 Scroll 事件）
-} FFIEvent;
-
-// 终端快照 - 一次性获取所有渲染需要的状态
-typedef struct {
-    size_t display_offset;      // 滚动偏移
-    size_t scrollback_lines;    // 历史缓冲区行数
-    int blinking_cursor;        // 光标是否闪烁
-    size_t cursor_col;          // 光标列
-    size_t cursor_row;          // 光标行（相对于可见区域）
-    uint8_t cursor_shape;       // 光标形状 (0=Block, 1=Underline, 2=Beam, 3=Hidden)
-    int cursor_visible;         // 光标是否可见
-    size_t columns;             // 列数
-    size_t screen_lines;        // 行数
-    int has_selection;          // 是否有选区
-    size_t selection_start_col; // 选区开始列
-    int32_t selection_start_row;// 选区开始行
-    size_t selection_end_col;   // 选区结束列
-    int32_t selection_end_row;  // 选区结束行
-} TerminalSnapshot;
-
-// 单个单元格 - FFI 友好的结构
-typedef struct {
-    uint32_t character;     // UTF-32 字符
-    uint8_t fg_r;           // 前景色 R
-    uint8_t fg_g;           // 前景色 G
-    uint8_t fg_b;           // 前景色 B
-    uint8_t fg_a;           // 前景色 A
-    uint8_t bg_r;           // 背景色 R
-    uint8_t bg_g;           // 背景色 G
-    uint8_t bg_b;           // 背景色 B
-    uint8_t bg_a;           // 背景色 A
-    uint32_t flags;         // 标志位
-    bool has_vs16;          // 是否有 VS16 (U+FE0F) emoji 变体选择符
-} FFICell;
-
-// 事件回调类型
-typedef void (*EventCallback)(void* context, FFIEvent event);
-typedef void (*StringEventCallback)(void* context, uint32_t event_type, const char* str);
-
-/// 创建 Rio 风格终端池
-RioTerminalPoolHandle rio_pool_new(SugarloafHandle sugarloaf);
-
-/// 创建独立终端池（不需要 Sugarloaf，用于 Skia 渲染器）
-RioTerminalPoolHandle rio_pool_new_headless(void);
-
-/// 设置事件回调
-void rio_pool_set_event_callback(
-    RioTerminalPoolHandle pool,
-    EventCallback callback,
-    StringEventCallback string_callback,  // 可以为 NULL
-    void* context
-);
-
-/// 创建终端（返回 terminal_id，失败返回 -1）
-int rio_pool_create_terminal(
-    RioTerminalPoolHandle pool,
-    unsigned short cols,
-    unsigned short rows,
-    const char* shell
-);
-
-/// 创建终端（指定工作目录，返回 terminal_id，失败返回 -1）
-int rio_pool_create_terminal_with_cwd(
-    RioTerminalPoolHandle pool,
-    unsigned short cols,
-    unsigned short rows,
-    const char* shell,
-    const char* working_dir
-);
-
-/// 关闭终端
-int rio_pool_close_terminal(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id
-);
-
-/// 终端数量
-size_t rio_pool_count(RioTerminalPoolHandle pool);
-
-/// 写入输入
-int rio_pool_write_input(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    const char* data
-);
-
-/// 调整尺寸
-int rio_pool_resize(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    unsigned short cols,
-    unsigned short rows
-);
-
-/// 滚动
-int rio_pool_scroll(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    int delta
-);
-
-/// 获取终端快照
-int rio_pool_get_snapshot(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    TerminalSnapshot* out_snapshot
-);
-
-/// 获取指定行的单元格数据（支持历史缓冲区）
-///
-/// 绝对行号坐标系统：
-/// - 0 到 (scrollback_lines - 1): 历史缓冲区
-/// - scrollback_lines 到 (scrollback_lines + screen_lines - 1): 屏幕可见行
-///
-/// 参数：
-/// - absolute_row: 绝对行号（0-based，包含历史缓冲区）
-/// - out_cells: 输出缓冲区
-/// - max_cells: 缓冲区最大容量
-///
-/// 返回：实际写入的单元格数量
-size_t rio_pool_get_row_cells(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    int64_t absolute_row,
-    FFICell* out_cells,
-    size_t max_cells
-);
-
-/// 获取光标位置
-int rio_pool_get_cursor(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    unsigned short* out_col,
-    unsigned short* out_row
-);
-
-/// 清除选区
-int rio_pool_clear_selection(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id
-);
-
-/// 获取选中的文本
-/// 直接使用当前 terminal.selection，不需要传入坐标参数
-/// 返回需要用 rio_free_string 释放的字符串
-char* rio_pool_get_selected_text(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id
-);
-
-/// 获取终端当前工作目录（返回需要用 rio_free_string 释放的字符串）
-char* rio_pool_get_cwd(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id
-);
-
-// =============================================================================
-// 坐标转换 API - 支持真实行号（绝对坐标系统）
-// =============================================================================
-
-/// 绝对坐标（真实行号）
-typedef struct {
-    int64_t absolute_row;  // 真实行号（可能为负数）
-    size_t col;            // 列号
-} AbsolutePosition;
-
-/// 屏幕坐标 → 真实行号
-///
-/// 参数：
-///   screen_row: 相对于当前可见区域的行号（0-based）
-///   screen_col: 列号
-/// 返回：
-///   真实行号坐标
-AbsolutePosition rio_pool_screen_to_absolute(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    size_t screen_row,
-    size_t screen_col
-);
-
-/// 设置选区
-///
-/// 参数：
-///   start_absolute_row: 起始真实行号
-///   start_col: 起始列号
-///   end_absolute_row: 结束真实行号
-///   end_col: 结束列号
-///
-/// 注意：Rust 内部会转换为 Grid 坐标
-/// 返回：成功返回 0，失败返回 -1
-int rio_pool_set_selection(
-    RioTerminalPoolHandle pool,
-    size_t terminal_id,
-    int64_t start_absolute_row,
-    size_t start_col,
-    int64_t end_absolute_row,
-    size_t end_col
-);
-
-/// 释放从 Rust 返回的字符串
-void rio_free_string(char* s);
-
-/// 释放终端池
-void rio_pool_free(RioTerminalPoolHandle pool);
-
-// =============================================================================
-// Terminal Rendering API - Batch rendering in Rust
-// =============================================================================
-
-/// Render terminal content directly from Rust (batch rendering)
-///
-/// This function moves all rendering logic from Swift to Rust, reducing FFI calls
-/// from ~14000 per frame to just 1.
-///
-/// Parameters:
-/// - pool_handle: Terminal pool handle
-/// - terminal_id: Terminal ID
-/// - sugarloaf_handle: Sugarloaf handle
-/// - rich_text_id: RichText ID to render into
-/// - cursor_visible: Whether cursor is visible
-///
-/// Returns:
-/// - 0: Success
-/// - -1: Error (null pointer, terminal not found, etc.)
-int rio_terminal_render_to_richtext(
-    RioTerminalPoolHandle pool_handle,
-    int terminal_id,
-    SugarloafHandle sugarloaf_handle,
-    int rich_text_id,
-    bool cursor_visible
-);
-
-/// Set terminal layout position (for batch rendering)
-///
-/// Parameters:
-/// - pool_handle: Terminal pool handle
-/// - terminal_id: Terminal ID
-/// - x: X position (logical coordinates)
-/// - y: Y position (logical coordinates)
-/// - width: Width (logical coordinates)
-/// - height: Height (logical coordinates)
-/// - visible: Whether terminal is visible
-///
-/// Returns:
-/// - 0: Success
-/// - -1: Error
-int rio_terminal_set_layout(
-    RioTerminalPoolHandle pool_handle,
-    int terminal_id,
-    float x,
-    float y,
-    float width,
-    float height,
-    bool visible
-);
-
-/// Render all terminals (Rust-side batch rendering)
-///
-/// This function renders all terminals in the pool using their stored layout.
-/// It performs:
-/// 1. Clear render list
-/// 2. Render each visible terminal to RichText
-/// 3. Add all RichText objects to render queue
-/// 4. Execute unified render
-///
-/// Parameters:
-/// - pool_handle: Terminal pool handle
-void rio_pool_render_all(RioTerminalPoolHandle pool_handle);
-
-/// Clear active terminals set (called before setting new layouts)
-///
-/// Clears the set of active terminals, so only newly set terminals will be rendered
-///
-/// Parameters:
-/// - pool_handle: Terminal pool handle
-void rio_pool_clear_active_terminals(RioTerminalPoolHandle pool_handle);
-
-// =============================================================================
-// Search API
-// =============================================================================
-
-/// Search result information
-typedef struct {
-    int32_t total_count;    // Total match count, -1=error, -2=terminal not found
-    int32_t current_index;  // Current index (1-based), 0=no matches
-    int64_t scroll_to_row;  // Row to scroll to, -1=no scroll needed
-} FFISearchInfo;
-
-/// Start a new search
-///
-/// Parameters:
-/// - pool: Terminal pool handle
-/// - terminal_id: Terminal ID
-/// - pattern: Search pattern (UTF-8 string)
-/// - pattern_len: Length of pattern in bytes
-/// - is_regex: Whether pattern is a regular expression
-/// - case_sensitive: Whether search is case-sensitive
-///
-/// Returns:
-/// - FFISearchInfo with search results
-FFISearchInfo rio_terminal_start_search(
-    RioTerminalPoolHandle pool,
-    int32_t terminal_id,
-    const char* pattern,
-    size_t pattern_len,
-    bool is_regex,
-    bool case_sensitive
-);
-
-/// Move to next match
-///
-/// Returns:
-/// - Current index (1-based), 0=no matches, -1=error, -2=terminal not found
-int32_t rio_terminal_search_next(
-    RioTerminalPoolHandle pool,
-    int32_t terminal_id
-);
-
-/// Move to previous match
-///
-/// Returns:
-/// - Current index (1-based), 0=no matches, -1=error, -2=terminal not found
-int32_t rio_terminal_search_prev(
-    RioTerminalPoolHandle pool,
-    int32_t terminal_id
-);
-
-/// Clear current search
-void rio_terminal_clear_search(
-    RioTerminalPoolHandle pool,
-    int32_t terminal_id
-);
-
-// =============================================================================
 // TerminalPool API (New Architecture - Multi-terminal + Unified Render)
 // =============================================================================
 
 /// TerminalPool handle (opaque pointer)
 typedef void* TerminalPoolHandle;
+
+/// Free string returned from Rust
+void rio_free_string(char* s);
 
 /// App configuration for TerminalPool
 typedef struct {
@@ -739,6 +393,68 @@ bool terminal_pool_change_font_size(
 float terminal_pool_get_font_size(
     TerminalPoolHandle handle
 );
+
+// =============================================================================
+// Cursor & Word Boundary API (new architecture)
+// =============================================================================
+
+/// Cursor position (screen coordinates)
+typedef struct {
+    uint16_t col;       // Column (0-based)
+    uint16_t row;       // Row (0-based, relative to visible area)
+    bool valid;         // Whether the result is valid
+} FFICursorPosition;
+
+/// Word boundary information
+typedef struct {
+    uint16_t start_col;     // Start column (screen coordinates)
+    uint16_t end_col;       // End column (screen coordinates, inclusive)
+    int64_t absolute_row;   // Absolute row number
+    char* text_ptr;         // Word text (must be freed with terminal_pool_free_word_boundary)
+    size_t text_len;        // Text length in bytes
+    bool valid;             // Whether the result is valid
+} FFIWordBoundary;
+
+/// Get cursor position
+///
+/// Returns the cursor position in screen coordinates (relative to visible area).
+/// If the terminal is scrolling through history, the cursor may not be visible.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return Cursor position, valid=false if terminal not found
+FFICursorPosition terminal_pool_get_cursor(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Get word boundary at specified position
+///
+/// Word segmentation rules (similar to Swift WordBoundaryDetector):
+/// 1. CJK characters: consecutive CJK characters form one word
+/// 2. Alphanumeric/underscore: consecutive characters form one word
+/// 3. Whitespace: acts as separator
+/// 4. Other symbols: form individual words
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param screen_row Screen row (0-based, relative to visible area)
+/// @param screen_col Screen column (0-based)
+/// @return Word boundary, valid=false if terminal not found or position invalid
+///         If valid=true, text_ptr must be freed with terminal_pool_free_word_boundary
+FFIWordBoundary terminal_pool_get_word_at(
+    TerminalPoolHandle handle,
+    int32_t terminal_id,
+    int32_t screen_row,
+    int32_t screen_col
+);
+
+/// Free word boundary resources
+///
+/// @param boundary Word boundary returned by terminal_pool_get_word_at
+///
+/// Note: Only call this for valid=true boundaries, do not free the same boundary twice
+void terminal_pool_free_word_boundary(FFIWordBoundary boundary);
 
 // =============================================================================
 // RenderScheduler API (CVDisplayLink in Rust)

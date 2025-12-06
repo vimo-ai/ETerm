@@ -148,9 +148,7 @@ mod tests {
     // 注意：这是 mock 函数，仅用于被 #[ignore] 的测试
     #[allow(dead_code)]
     fn create_test_state(_cursor_line: usize, _cursor_col: usize) -> TerminalState {
-        // TODO: 这个函数需要真实的 GridData 构造方法
-        // 由于 GridData 字段是私有的，暂时无法创建
-        // 等待实现 RioTerminal::extract_state() 后，使用真实数据
+        // 需要真实的 GridData 构造方法
         unimplemented!("create_test_state requires real GridData construction")
     }
 
