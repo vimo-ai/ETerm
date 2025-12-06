@@ -14,9 +14,9 @@ import Foundation
 /// 终端池协议
 ///
 /// 定义终端池的核心功能：创建、销毁、查询终端实例。
-/// 支持两种实现：
-/// - TerminalPoolWrapper: 轮询模式（CVDisplayLink 每帧读取 PTY）
-/// - EventDrivenTerminalPoolWrapper: 事件驱动模式（PTY 有数据时回调）
+/// 实现：
+/// - TerminalPoolWrapper: 生产环境实现（事件驱动 + CVDisplayLink 渲染）
+/// - MockTerminalPool: 测试环境的模拟实现
 protocol TerminalPoolProtocol: AnyObject {
 
     // MARK: - 终端生命周期
@@ -40,8 +40,7 @@ protocol TerminalPoolProtocol: AnyObject {
     @discardableResult
     func writeInput(terminalId: Int, data: String) -> Bool
 
-    /// 读取所有终端的 PTY 输出（轮询模式使用）
-    /// 事件驱动模式下返回 false（PTY 线程自动读取）
+    /// 读取所有终端的 PTY 输出（已弃用，PTY 线程自动读取）
     @discardableResult
     func readAllOutputs() -> Bool
 

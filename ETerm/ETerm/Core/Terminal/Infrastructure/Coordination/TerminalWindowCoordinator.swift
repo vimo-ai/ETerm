@@ -1073,9 +1073,8 @@ class TerminalWindowCoordinator: ObservableObject {
         // 这确保切换 Page 时旧内容不会残留
         terminalPool.clear()
 
-        // 渲染每个 Tab（支持 TerminalPoolWrapper 和 EventDrivenTerminalPoolWrapper）
-        // 🎯 PTY 读取现在在 CVDisplayLink 回调中统一处理
-        // 不再在这里调用 readAllOutputs()，避免重复读取
+        // 渲染每个 Tab
+        // PTY 读取在 Rust 侧事件驱动处理，这里只负责渲染
 
         var renderTimes: [(Int, Double)] = []
 

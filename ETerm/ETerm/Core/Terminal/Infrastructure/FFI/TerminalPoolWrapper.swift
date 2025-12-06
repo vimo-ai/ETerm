@@ -219,7 +219,7 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
 
     @discardableResult
     func readAllOutputs() -> Bool {
-        // 事件驱动模式，不需要轮询
+        // PTY 读取由 Rust 侧事件驱动处理，此方法已弃用
         return false
     }
 
