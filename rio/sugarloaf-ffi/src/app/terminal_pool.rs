@@ -473,14 +473,17 @@ impl TerminalPool {
         }
 
         // 3. 获取终端状态
+        let state_start = std::time::Instant::now();
         let terminal = entry.terminal.lock();
         let state = terminal.state();
         let rows = terminal.rows();
         drop(terminal);
+        let state_time = state_start.elapsed().as_micros();
 
         // 4. 渲染所有行（类型安全的坐标转换）
         let render_start = std::time::Instant::now();
         let mut renderer = self.renderer.lock();
+        let lock_time = render_start.elapsed().as_micros();
 
         use crate::domain::primitives::{LogicalPosition, LogicalPixels};
 
@@ -492,6 +495,10 @@ impl TerminalPool {
             LogicalPixels::new(y),
         );
 
+        // 记录渲染前的统计
+        let stats_before = renderer.stats.clone();
+
+        let loop_start = std::time::Instant::now();
         for line in 0..rows {
             let image = renderer.render_line(line, &state);
 
@@ -509,14 +516,23 @@ impl TerminalPool {
 
             self.pending_objects.push(Object::Image(image_obj));
         }
+        let loop_time = loop_start.elapsed().as_micros();
+
+        // 计算本帧的缓存统计
+        let hits = renderer.stats.cache_hits - stats_before.cache_hits;
+        let layout_hits = renderer.stats.layout_hits - stats_before.layout_hits;
+        let misses = renderer.stats.cache_misses - stats_before.cache_misses;
 
         drop(renderer);
 
-        let render_time = render_start.elapsed().as_micros();
-        if render_time > 1000 {
-            eprintln!("⚡ render_terminal({}) took {}μs | rows={}",
-                      id, render_time, rows);
-        }
+        let total_time = state_start.elapsed().as_micros();
+
+        // 输出完整的帧统计
+        eprintln!("🔥 FRAME: total={:.1}ms | state={:.1}ms loop={:.1}ms | rows={} | hits={} layout={} miss={}",
+                  total_time as f64 / 1000.0,
+                  state_time as f64 / 1000.0,
+                  loop_time as f64 / 1000.0,
+                  rows, hits, layout_hits, misses);
 
         // 5. 渲染成功完成后，重置 damage 状态
         {
@@ -806,5 +822,94 @@ mod tests {
             font_size = (font_size - 1.0).max(6.0);
         }
         assert_eq!(font_size, 6.0);
+    }
+
+    /// 顶层集成测试：选区变化时的渲染性能
+    ///
+    /// 模拟真实场景：Terminal + Renderer，选区从 (0,0)-(3,10) 扩展到 (0,0)-(3,20)
+    #[test]
+    fn test_selection_change_full_pipeline() {
+        use crate::domain::aggregates::{Terminal, TerminalId};
+        use crate::domain::{SelectionView, SelectionType, AbsolutePoint};
+        use crate::render::{Renderer, RenderConfig};
+        use crate::render::font::FontContext;
+        use crate::domain::primitives::LogicalPixels;
+        use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
+        use rio_backend::config::colors::Colors;
+        use std::sync::Arc;
+
+        // 1. 创建 100 行的 Terminal
+        let mut terminal = Terminal::new_for_test(TerminalId(1), 80, 100);
+
+        // 写入一些内容让每行不同
+        for i in 0..100 {
+            terminal.write(format!("Line {:03} - some content here\r\n", i).as_bytes());
+        }
+
+        // 2. 创建 Renderer
+        let (font_library, _) = FontLibrary::new(SugarloafFonts::default());
+        let font_context = Arc::new(FontContext::new(font_library));
+        let colors = Arc::new(Colors::default());
+        let config = RenderConfig::new(LogicalPixels::new(14.0), 1.0, 1.0, colors);
+        let mut renderer = Renderer::new(font_context, config);
+
+        // 3. 第一帧：设置初始选区 (0,0)-(3,10)，渲染所有行
+        let mut state = terminal.state();
+        state.selection = Some(SelectionView::new(
+            AbsolutePoint::new(0, 0),
+            AbsolutePoint::new(3, 10),
+            SelectionType::Simple,
+        ));
+
+        let frame1_start = std::time::Instant::now();
+        for line in 0..100 {
+            let _img = renderer.render_line(line, &state);
+        }
+        let frame1_time = frame1_start.elapsed();
+        let frame1_stats = renderer.stats.clone();
+
+        eprintln!("Frame 1: {:?} | misses={} hits={} layout_hits={}",
+            frame1_time, frame1_stats.cache_misses, frame1_stats.cache_hits, frame1_stats.layout_hits);
+
+        renderer.reset_stats();
+
+        // 4. 第二帧：选区扩展到 (0,0)-(3,20)
+        // 注意：需要重新获取 state，模拟真实场景
+        let state_start = std::time::Instant::now();
+        let mut state2 = terminal.state();
+        let state_time = state_start.elapsed();
+
+        state2.selection = Some(SelectionView::new(
+            AbsolutePoint::new(0, 0),
+            AbsolutePoint::new(3, 20),
+            SelectionType::Simple,
+        ));
+
+        let render_start = std::time::Instant::now();
+        for line in 0..100 {
+            let _img = renderer.render_line(line, &state2);
+        }
+        let render_time = render_start.elapsed();
+        let frame2_stats = renderer.stats.clone();
+
+        let total_time = state_start.elapsed();
+
+        eprintln!("Frame 2: total={:?} | state={:?} render={:?}",
+            total_time, state_time, render_time);
+        eprintln!("Frame 2 stats: misses={} hits={} layout_hits={}",
+            frame2_stats.cache_misses, frame2_stats.cache_hits, frame2_stats.layout_hits);
+
+        // 5. 验证
+        // 第一帧应该全部 miss
+        assert_eq!(frame1_stats.cache_misses, 100, "Frame 1: all lines should miss");
+
+        // 第二帧：只有 row3 需要重绘
+        assert_eq!(frame2_stats.cache_hits, 99,
+            "Frame 2: 99 lines should hit cache, got {} hits {} misses {} layout_hits",
+            frame2_stats.cache_hits, frame2_stats.cache_misses, frame2_stats.layout_hits);
+
+        eprintln!("Speedup: {:.1}x (render only: {:.1}x)",
+            frame1_time.as_micros() as f64 / total_time.as_micros() as f64,
+            frame1_time.as_micros() as f64 / render_time.as_micros() as f64);
     }
 }
