@@ -352,16 +352,8 @@ extension TerminalWindowCoordinator {
         // 获取当前激活的终端
         guard let terminalId = getActiveTerminalId() else { return }
 
-        // 获取选中的文本（需要从 TerminalTab 获取 textSelection）
-        guard let panelId = activePanelId,
-              let panel = terminalWindow.getPanel(panelId),
-              let activeTab = panel.activeTab,
-              let selection = activeTab.textSelection else {
-            return
-        }
-
-        // 获取选中的文本
-        if let text = getSelectedText(terminalId: terminalId, selection: selection) {
+        // 直接从 Rust 获取选中的文本
+        if let text = getSelectionText(terminalId: terminalId) {
             // 复制到剪贴板
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()

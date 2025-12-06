@@ -869,7 +869,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         renderScheduler?.requestRender()
     }
 
-    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
+    func changeFontSize(operation: FontSizeOperation) {
         // 新架构：通过 TerminalPoolWrapper 调整字体大小
         terminalPool?.changeFontSize(operation: operation)
         // 重新渲染
@@ -1089,11 +1089,8 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // Cmd+C 复制
         if keyStroke.matches(.cmd("c")) {
-            // 通过 Coordinator 获取选中文本
-            if let activeTab = selectionTab,
-               let selection = activeTab.textSelection,
-               !selection.isEmpty,
-               let text = coordinator?.getSelectedText(terminalId: terminalId, selection: selection) {
+            // 直接从 Rust 获取选中文本
+            if let text = pool.getSelectionText(terminalId: Int(terminalId)) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
                 return true
@@ -1106,26 +1103,6 @@ class RioMetalView: NSView, RenderViewProtocol {
             if let text = NSPasteboard.general.string(forType: .string) {
                 _ = pool.writeInput(terminalId: Int(terminalId), data: text)
             }
-            return true
-        }
-
-        return false
-    }
-
-    /// 处理复制操作
-    private func handleCopy(terminalId: UInt32) -> Bool {
-        guard let activeTab = selectionTab,
-              let selection = activeTab.textSelection,
-              !selection.isEmpty,
-              let coordinator = coordinator else {
-            return false
-        }
-
-        // 从 Rust 获取选中的文本
-        if let text = coordinator.getSelectedText(terminalId: terminalId, selection: selection) {
-            // 复制到剪贴板
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
             return true
         }
 
@@ -1359,32 +1336,30 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 检查选中内容是否全为空白，如果是则清除选区
+        // 完成选区（业务逻辑在 Rust 端处理）
+        // - 如果选区全是空白，Rust 会自动清除选区并返回 nil
+        // - 如果有内容，返回选中的文本
         if let activeTab = selectionTab,
            let terminalId = activeTab.rustTerminalId,
-           let selection = activeTab.textSelection,
-           let coordinator = coordinator {
-            if let text = coordinator.getSelectedText(terminalId: terminalId, selection: selection) {
-                // 检查是否全为空白字符
-                let isAllWhitespace = text.allSatisfy { $0.isWhitespace }
-                if isAllWhitespace {
-                    // 清除选区
-                    activeTab.clearSelection()
-                    _ = coordinator.clearSelection(terminalId: terminalId)
-                    // requestRender()  // 🔍 注释：clearSelection 内部已经调用了 requestRender()
-                } else {
-                    // 发布选中结束事件（拖拽选中）
-                    let mouseLoc = self.convert(event.locationInWindow, from: nil)
-                    let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
+           let pool = terminalPool {
+            if let text = pool.finalizeSelection(terminalId: Int(terminalId)) {
+                // 有有效选区，发布选中结束事件
+                let mouseLoc = self.convert(event.locationInWindow, from: nil)
+                let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
 
-                    let payload = SelectionEndPayload(
-                        text: text,
-                        screenRect: rect,
-                        sourceView: self
-                    )
-                    EventBus.shared.publish(TerminalEvent.selectionEnd, payload: payload)
-                }
+                let payload = SelectionEndPayload(
+                    text: text,
+                    screenRect: rect,
+                    sourceView: self
+                )
+                EventBus.shared.publish(TerminalEvent.selectionEnd, payload: payload)
+            } else {
+                // 选区被清除（全是空白），同步清除 Swift 侧状态
+                activeTab.clearSelection()
             }
+
+            // 触发重新渲染
+            requestRender()
         }
 
         // 重置选中状态

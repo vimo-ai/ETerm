@@ -111,3 +111,130 @@ pub extern "C" fn terminal_pool_clear_selection(
         false
     }
 }
+
+/// 完成选区结果
+#[repr(C)]
+pub struct FinalizeSelectionResult {
+    /// 选中的文本（UTF-8，调用者负责释放）
+    pub text: *mut std::os::raw::c_char,
+    /// 文本长度（不含 null 终止符）
+    pub text_len: usize,
+    /// 是否有有效选区（非空白内容）
+    pub has_selection: bool,
+}
+
+/// 完成选区（mouseUp 时调用）
+///
+/// 业务逻辑：
+/// - 检查选区内容是否全为空白
+/// - 如果全是空白，自动清除选区，返回 has_selection=false
+/// - 如果有内容，保留选区，返回选中的文本
+///
+/// 调用者需要用 `terminal_pool_free_string` 释放返回的文本
+#[no_mangle]
+pub extern "C" fn terminal_pool_finalize_selection(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> FinalizeSelectionResult {
+    if handle.is_null() {
+        return FinalizeSelectionResult {
+            text: std::ptr::null_mut(),
+            text_len: 0,
+            has_selection: false,
+        };
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+
+    if let Some(mut terminal) = pool.get_terminal_mut(terminal_id) {
+        match terminal.finalize_selection() {
+            Some(text) => {
+                let text_len = text.len();
+                let c_string = std::ffi::CString::new(text).unwrap_or_default();
+                FinalizeSelectionResult {
+                    text: c_string.into_raw(),
+                    text_len,
+                    has_selection: true,
+                }
+            }
+            None => FinalizeSelectionResult {
+                text: std::ptr::null_mut(),
+                text_len: 0,
+                has_selection: false,
+            },
+        }
+    } else {
+        FinalizeSelectionResult {
+            text: std::ptr::null_mut(),
+            text_len: 0,
+            has_selection: false,
+        }
+    }
+}
+
+/// 释放 finalize_selection 返回的字符串
+#[no_mangle]
+pub extern "C" fn terminal_pool_free_string(ptr: *mut std::os::raw::c_char) {
+    if !ptr.is_null() {
+        unsafe {
+            let _ = std::ffi::CString::from_raw(ptr);
+        }
+    }
+}
+
+/// 获取选中文本结果
+#[repr(C)]
+pub struct GetSelectionTextResult {
+    /// 选中的文本（UTF-8，调用者负责释放）
+    pub text: *mut std::os::raw::c_char,
+    /// 文本长度（不含 null 终止符）
+    pub text_len: usize,
+    /// 是否成功
+    pub success: bool,
+}
+
+/// 获取选中的文本（不清除选区）
+///
+/// 用于 Cmd+C 复制等场景
+///
+/// 调用者需要用 `terminal_pool_free_string` 释放返回的文本
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_selection_text(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> GetSelectionTextResult {
+    if handle.is_null() {
+        return GetSelectionTextResult {
+            text: std::ptr::null_mut(),
+            text_len: 0,
+            success: false,
+        };
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    if let Some(terminal) = pool.get_terminal(terminal_id) {
+        match terminal.selection_text() {
+            Some(text) => {
+                let text_len = text.len();
+                let c_string = std::ffi::CString::new(text).unwrap_or_default();
+                GetSelectionTextResult {
+                    text: c_string.into_raw(),
+                    text_len,
+                    success: true,
+                }
+            }
+            None => GetSelectionTextResult {
+                text: std::ptr::null_mut(),
+                text_len: 0,
+                success: false,
+            },
+        }
+    } else {
+        GetSelectionTextResult {
+            text: std::ptr::null_mut(),
+            text_len: 0,
+            success: false,
+        }
+    }
+}

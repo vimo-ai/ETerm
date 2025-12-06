@@ -100,13 +100,18 @@ protocol TerminalPoolProtocol: AnyObject {
     @discardableResult
     func clearSelection(terminalId: Int) -> Bool
 
+    /// 获取选中的文本（不清除选区）
+    ///
+    /// 用于 Cmd+C 复制等场景
+    func getSelectionText(terminalId: Int) -> String?
+
     /// 获取当前输入行号
     func getInputRow(terminalId: Int) -> UInt16?
 
     // MARK: - 字体
 
     /// 调整字体大小
-    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation)
+    func changeFontSize(operation: FontSizeOperation)
 
     /// 获取字体度量（物理像素）
     ///
@@ -139,7 +144,8 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
     func getWordAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalWordBoundary? { nil }
     func clearSelection(terminalId: Int) -> Bool { false }
+    func getSelectionText(terminalId: Int) -> String? { nil }
     func getInputRow(terminalId: Int) -> UInt16? { nil }
-    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {}
+    func changeFontSize(operation: FontSizeOperation) {}
     func getFontMetrics() -> SugarloafFontMetrics? { nil }
 }

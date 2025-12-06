@@ -265,22 +265,6 @@ final class TerminalTab {
         return selection.isInCurrentInputLine(inputAbsoluteRow: inputAbsoluteRow)
     }
 
-    /// 获取选中的文本
-    ///
-    /// 注意：此方法需要通过 TerminalPoolProtocol 获取文本
-    /// 返回 nil 表示需要从外部获取
-    ///
-    /// - Returns: 选中的文本，如果没有选中则返回 nil
-    func getSelectedText() -> String? {
-        guard let selection = textSelection,
-              !selection.isEmpty else {
-            return nil
-        }
-        // 文本获取现在由 TerminalPoolProtocol 处理
-        // 返回 nil 让调用者从 pool 获取
-        return nil
-    }
-
     // MARK: - 输入管理
 
     /// 插入文本（核心业务逻辑）

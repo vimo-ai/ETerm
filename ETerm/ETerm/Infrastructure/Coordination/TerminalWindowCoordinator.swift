@@ -26,7 +26,7 @@ protocol RenderViewProtocol: AnyObject {
     func requestRender()
 
     /// 调整字体大小
-    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation)
+    func changeFontSize(operation: FontSizeOperation)
 
     /// 设置指定 Page 的提醒状态
     func setPageNeedsAttention(_ pageId: UUID, attention: Bool)
@@ -367,7 +367,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 调整字体大小
     ///
     /// - Parameter operation: 字体大小操作（增大、减小、重置）
-    func changeFontSize(operation: SugarloafWrapper.FontSizeOperation) {
+    func changeFontSize(operation: FontSizeOperation) {
         renderView?.changeFontSize(operation: operation)
     }
 
@@ -1017,16 +1017,14 @@ class TerminalWindowCoordinator: ObservableObject {
         return success
     }
 
-    /// 获取指定终端的选中文本
+    /// 获取选中的文本（不清除选区）
     ///
-    /// - Parameters:
-    ///   - terminalId: 终端 ID
-    ///   - selection: 选中范围（使用真实行号）
-    /// - Returns: 选中的文本，失败返回 nil
-    func getSelectedText(terminalId: UInt32, selection: TextSelection) -> String? {
-        // TODO: 新架构中需要添加 FFI 支持以获取选中文本
-        // 目前暂时返回 nil
-        return nil
+    /// 用于 Cmd+C 复制等场景
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 选中的文本，或 nil（无选区）
+    func getSelectionText(terminalId: UInt32) -> String? {
+        return terminalPool.getSelectionText(terminalId: Int(terminalId))
     }
 
     /// 获取指定终端的当前输入行号

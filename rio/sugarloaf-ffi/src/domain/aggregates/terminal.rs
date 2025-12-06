@@ -554,6 +554,31 @@ impl Terminal {
         })
     }
 
+    /// 完成选区（mouseUp 时调用）
+    ///
+    /// 业务逻辑：
+    /// - 检查选区内容是否全为空白
+    /// - 如果全是空白，自动清除选区，返回 None
+    /// - 如果有内容，保留选区，返回选中的文本
+    ///
+    /// # 返回
+    /// - `Some(String)` - 选中的文本（非空白）
+    /// - `None` - 没有选区或选区内容全为空白（已自动清除）
+    pub fn finalize_selection(&mut self) -> Option<String> {
+        // 先获取选中的文本
+        let text = self.selection_text();
+
+        match text {
+            Some(ref t) if t.chars().all(|c| c.is_whitespace()) => {
+                // 全是空白，清除选区
+                self.clear_selection();
+                None
+            }
+            Some(t) => Some(t),
+            None => None,
+        }
+    }
+
     // ==================== Step 6: Search ====================
 
     /// 搜索文本
