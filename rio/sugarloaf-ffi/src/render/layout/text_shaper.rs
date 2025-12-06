@@ -119,10 +119,7 @@ impl TextShaper {
         // 注意：光标/选区/搜索等状态信息不在这里计算
         // 它们在 Renderer.render_with_layout() 时从 TerminalState 动态获取
 
-        GlyphLayout {
-            glyphs,
-            content_hash: 0,  // TODO: 计算实际 hash
-        }
+        GlyphLayout { glyphs }
     }
 }
 
@@ -130,7 +127,10 @@ impl TextShaper {
 mod tests {
     use super::*;
     use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
-    use sugarloaf::layout::BuilderLine;
+    use sugarloaf::layout::{BuilderLine, FragmentData, FragmentStyle};
+    use crate::domain::views::{GridView, GridData, CursorView};
+    use crate::domain::primitives::AbsolutePoint;
+    use rio_backend::ansi::CursorShape;
 
     fn create_test_shaper() -> TextShaper {
         let (font_library, _) = FontLibrary::new(SugarloafFonts::default());
@@ -138,28 +138,29 @@ mod tests {
         TextShaper::new(font_context)
     }
 
-    fn create_test_line(_content: &str) -> BuilderLine {
-        // TODO: 因为 FragmentData 不是公开类型，暂时跳过测试
-        // 等 Step 1.4 实现 TerminalState -> BuilderLine 转换时，使用真实数据
-        BuilderLine::default()
+    fn create_test_line(content: &str) -> BuilderLine {
+        BuilderLine {
+            fragments: vec![FragmentData {
+                content: content.to_string(),
+                style: FragmentStyle::default(),
+            }],
+            ..Default::default()
+        }
     }
 
-    // 创建测试用的 TerminalState（光标在指定位置）
-    // 注意：这是 mock 函数，仅用于被 #[ignore] 的测试
-    #[allow(dead_code)]
-    fn create_test_state(_cursor_line: usize, _cursor_col: usize) -> TerminalState {
-        // 需要真实的 GridData 构造方法
-        unimplemented!("create_test_state requires real GridData construction")
+    fn create_test_state() -> TerminalState {
+        // 创建最小化的测试 state
+        let grid_data = Arc::new(GridData::empty(80, 24));
+        let grid = GridView::new(grid_data);
+        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
+        TerminalState::new(grid, cursor)
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.4 移除 - FragmentData 不是公开类型，无法创建测试数据
     fn test_shape_ascii_line() {
         let shaper = create_test_shaper();
         let line = create_test_line("Hello");
-
-        // 创建测试用的 TerminalState（光标不在第 0 行）
-        let state = create_test_state(5, 10);
+        let state = create_test_state();
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
@@ -174,18 +175,13 @@ mod tests {
         assert_eq!(layout.glyphs[0].x, 0.0);
         assert_eq!(layout.glyphs[1].x, 8.0);
         assert_eq!(layout.glyphs[2].x, 16.0);
-
-        // 注意：cursor_info 已从 GlyphLayout 移除
-        // 光标信息在 render_with_layout 时从 state 动态计算
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.4 移除 - FragmentData 不是公开类型，无法创建测试数据
     fn test_shape_mixed_line() {
         let shaper = create_test_shaper();
         let line = create_test_line("Hello世界");
-
-        let state = create_test_state(5, 10);
+        let state = create_test_state();
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
@@ -198,13 +194,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.4 移除 - FragmentData 不是公开类型，无法创建测试数据
     fn test_vs16_emoji_selector() {
         let shaper = create_test_shaper();
         // ❤️ = ❤ (U+2764) + VS16 (U+FE0F)
         let line = create_test_line("❤️");
-
-        let state = create_test_state(5, 10);
+        let state = create_test_state();
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
@@ -214,13 +208,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.4 移除 - FragmentData 不是公开类型，无法创建测试数据
     fn test_keycap_sequence() {
         let shaper = create_test_shaper();
         // 1️⃣ = 1 (U+0031) + VS16 (U+FE0F) + Keycap (U+20E3)
         let line = create_test_line("1️⃣");
-
-        let state = create_test_state(5, 10);
+        let state = create_test_state();
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
@@ -230,13 +222,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.4 移除 - FragmentData 不是公开类型，无法创建测试数据
     fn test_mixed_selectors() {
         let shaper = create_test_shaper();
         // 混合：普通字符 + emoji + keycap
         let line = create_test_line("A❤️1️⃣B");
-
-        let state = create_test_state(5, 10);
+        let state = create_test_state();
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 

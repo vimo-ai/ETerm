@@ -25,8 +25,6 @@ pub struct LineCacheEntry {
 pub struct GlyphLayout {
     /// 所有字形信息（字符 + 字体 + 像素坐标）
     pub glyphs: Vec<GlyphInfo>,
-    /// 内容 hash（用于缓存 key 和调试）
-    pub content_hash: u64,
 }
 
 /// 光标信息（用于渲染）
@@ -120,7 +118,7 @@ impl Default for LineCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skia_safe::{Image, ImageInfo, ColorType, AlphaType};
+    use skia_safe::{images, ImageInfo, ColorType, AlphaType, Image};
 
     /// 创建 Mock Image（用于测试）
     fn create_mock_image(width: i32, height: i32) -> Image {
@@ -135,7 +133,7 @@ mod tests {
         let data_size = row_bytes * height as usize;
         let data = vec![0u8; data_size];
 
-        Image::from_raster_data(
+        images::raster_from_data(
             &info,
             skia_safe::Data::new_copy(&data),
             row_bytes,
@@ -143,15 +141,13 @@ mod tests {
     }
 
     /// 创建 Mock Layout（用于测试）
-    fn create_mock_layout(content_hash: u64) -> GlyphLayout {
+    fn create_mock_layout(_content_hash: u64) -> GlyphLayout {
         GlyphLayout {
             glyphs: vec![],
-            content_hash,
         }
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.5 移除，实现真实渲染后恢复
     fn test_cache_insert_and_get() {
         let mut cache = LineCache::new();
 
@@ -173,7 +169,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.5 移除，实现真实渲染后恢复
     fn test_two_layer_lookup() {
         let mut cache = LineCache::new();
 
@@ -204,8 +199,8 @@ mod tests {
         // 查询新状态：外层命中
         let state_hash_3 = 400;
         match cache.get(text_hash, state_hash_3) {
-            CacheResult::LayoutHit(l) => {
-                assert_eq!(l.content_hash, text_hash);
+            CacheResult::LayoutHit(_) => {
+                // LayoutHit 成功
             }
             _ => panic!("Expected LayoutHit for state_hash_3"),
         }
@@ -223,7 +218,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Step 1.5 移除，实现真实渲染后恢复
     fn test_multiple_text_hashes() {
         let mut cache = LineCache::new();
 
