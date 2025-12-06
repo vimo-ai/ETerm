@@ -357,13 +357,13 @@ final class PageBarHostingView: NSView {
         layoutPageItems()
     }
 
-    /// 设置 Page 列表（兼容旧接口）
+    /// 设置 Page 列表
     func setPages(_ newPages: [(id: UUID, title: String)]) {
         pages = newPages.map { PageItem(id: $0.id, title: $0.title) }
         rebuildPageItemViews()
     }
 
-    /// 设置激活的 Page（兼容旧接口）
+    /// 设置激活的 Page
     func setActivePage(_ pageId: UUID) {
         activePageId = pageId
         // 更新激活状态，并清除被激活 Page 的提醒状态
@@ -410,18 +410,12 @@ extension PageBarHostingView {
         guard pasteboardString.hasPrefix("page:") else { return nil }
 
         let components = pasteboardString.components(separatedBy: ":")
-        // 兼容旧格式 page:{pageId} 和新格式 page:{windowNumber}:{pageId}
-        if components.count == 2 {
-            // 旧格式
-            guard let pageId = UUID(uuidString: components[1]) else { return nil }
-            return (window?.windowNumber ?? 0, pageId)
-        } else if components.count == 3 {
-            // 新格式
-            guard let windowNumber = Int(components[1]),
-                  let pageId = UUID(uuidString: components[2]) else { return nil }
-            return (windowNumber, pageId)
+        guard components.count == 3,
+              let windowNumber = Int(components[1]),
+              let pageId = UUID(uuidString: components[2]) else {
+            return nil
         }
-        return nil
+        return (windowNumber, pageId)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

@@ -770,7 +770,7 @@ struct InlineComposerView: View {
                                 }
                             }
 
-                            // 兼容旧的纯文本结果
+                            // 纯文本结果（无结构化分析时的后备显示）
                             if !suggestion.isEmpty && analysisResult == nil {
                                 Text(markdownAttributedString)
                                     .font(.system(size: 13))
@@ -962,34 +962,6 @@ struct InlineComposerView: View {
         }
     }
 
-    /// 旧的写作检查方法（保留作为后备）
-    private func checkWriting() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isLoading else { return }
-
-        isLoading = true
-        suggestion = ""
-
-        Task { @MainActor in
-            do {
-                // 从插件配置读取模型
-                let pluginConfig = TranslationPluginConfigManager.shared.config
-
-                var hasReceivedContent = false
-                try await AIService.shared.checkWriting(text, model: pluginConfig.analysisModel) { result in
-                    if !hasReceivedContent {
-                        hasReceivedContent = true
-                        self.isLoading = false
-                    }
-                    self.suggestion = result
-                }
-                self.isLoading = false
-            } catch {
-                self.isLoading = false
-                self.suggestion = "❌ Error: \(error.localizedDescription)"
-            }
-        }
-    }
 }
 
 #Preview {

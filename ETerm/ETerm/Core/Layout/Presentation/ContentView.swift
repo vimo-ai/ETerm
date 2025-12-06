@@ -167,9 +167,9 @@ struct ModelContainerModifier: ViewModifier {
     }
 }
 
-// 翻译管理器（单例）
-// 注意: 当前 Rust+Sugarloaf 方案暂未实现文本选择功能
-// 此类保留用于 TranslationPopover 兼容性,将来实现文本选择时会用到
+// MARK: - Translation Manager
+
+/// 翻译管理器（单例）
 class TranslationManager: ObservableObject {
     static let shared = TranslationManager()
 

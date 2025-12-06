@@ -89,7 +89,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
     // MARK: - Infrastructure
 
-    /// 终端池（兼容旧代码，用于渲染）
+    /// 终端池（用于渲染）
     private var terminalPool: TerminalPoolProtocol
 
     /// 坐标映射器

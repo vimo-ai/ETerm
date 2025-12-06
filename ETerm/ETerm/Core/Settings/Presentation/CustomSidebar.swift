@@ -146,7 +146,6 @@ struct SidebarItemRow: View {
     let action: () -> Void
     let isSubItem: Bool  // 是否为子项（缩进显示）
 
-    // 为了向后兼容，提供默认值
     init(
         title: String,
         icon: String,

@@ -237,13 +237,13 @@ final class PanelHeaderHostingView: NSView {
         layoutTabItems()
     }
 
-    /// 设置 Tab 列表（兼容旧接口）
+    /// 设置 Tab 列表
     func setTabs(_ newTabs: [(id: UUID, title: String, rustTerminalId: Int?)]) {
         tabs = newTabs.map { TabItem(id: $0.id, title: $0.title, rustTerminalId: $0.rustTerminalId) }
         rebuildTabItemViews()
     }
 
-    /// 设置激活的 Tab（兼容旧接口）
+    /// 设置激活的 Tab
     func setActiveTab(_ tabId: UUID) {
         activeTabId = tabId
         // 更新激活状态，只有当 Page 也激活时才清除提醒
@@ -323,19 +323,13 @@ extension PanelHeaderHostingView {
         guard pasteboardString.hasPrefix("tab:") else { return nil }
 
         let components = pasteboardString.components(separatedBy: ":")
-        // 兼容旧格式 tab:{tabId} 和新格式 tab:{windowNumber}:{panelId}:{tabId}
-        if components.count == 2 {
-            // 旧格式
-            guard let tabId = UUID(uuidString: components[1]) else { return nil }
-            return (window?.windowNumber ?? 0, panelId ?? UUID(), tabId)
-        } else if components.count == 4 {
-            // 新格式
-            guard let windowNumber = Int(components[1]),
-                  let sourcePanelId = UUID(uuidString: components[2]),
-                  let tabId = UUID(uuidString: components[3]) else { return nil }
-            return (windowNumber, sourcePanelId, tabId)
+        guard components.count == 4,
+              let windowNumber = Int(components[1]),
+              let sourcePanelId = UUID(uuidString: components[2]),
+              let tabId = UUID(uuidString: components[3]) else {
+            return nil
         }
-        return nil
+        return (windowNumber, sourcePanelId, tabId)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

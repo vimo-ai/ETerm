@@ -218,12 +218,6 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     @discardableResult
-    func readAllOutputs() -> Bool {
-        // PTY 读取由 Rust 侧事件驱动处理，此方法已弃用
-        return false
-    }
-
-    @discardableResult
     func scroll(terminalId: Int, deltaLines: Int32) -> Bool {
         guard let handle = handle else { return false }
         return terminal_pool_scroll(handle, terminalId, deltaLines)

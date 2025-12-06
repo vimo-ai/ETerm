@@ -40,10 +40,6 @@ protocol TerminalPoolProtocol: AnyObject {
     @discardableResult
     func writeInput(terminalId: Int, data: String) -> Bool
 
-    /// 读取所有终端的 PTY 输出（已弃用，PTY 线程自动读取）
-    @discardableResult
-    func readAllOutputs() -> Bool
-
     /// 滚动指定终端
     @discardableResult
     func scroll(terminalId: Int, deltaLines: Int32) -> Bool
@@ -132,7 +128,6 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func closeTerminal(_ terminalId: Int) -> Bool { false }
     func getTerminalCount() -> Int { 0 }
     func writeInput(terminalId: Int, data: String) -> Bool { false }
-    func readAllOutputs() -> Bool { false }
     func scroll(terminalId: Int, deltaLines: Int32) -> Bool { false }
     func resize(terminalId: Int, cols: UInt16, rows: UInt16) -> Bool { false }
     func setRenderCallback(_ callback: @escaping () -> Void) {}

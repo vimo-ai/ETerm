@@ -52,11 +52,6 @@ final class TranslationController: NSObject {
         return p
     }()
 
-    /// 翻译内容窗口（已废弃，改用 InfoWindow）
-    // private lazy var translationWindow: TranslationWindow = {
-    //     TranslationWindow(state: state)
-    // }()
-
     /// 来源视图
     private weak var sourceView: NSView?
     private var sourceRect: NSRect = .zero
@@ -170,98 +165,6 @@ struct HintButtonView: View {
         .contentShape(Rectangle())
     }
 }
-
-// MARK: - Translation Window（已废弃，改用 InfoWindow）
-
-/// 独立翻译窗口
-/// 已废弃：现在使用全局 InfoWindow 替代
-/*
-final class TranslationWindow: NSPanel {
-
-    private let bubbleState: BubbleState
-    private var hostingView: NSHostingView<TranslationContentView>?
-
-    init(state: BubbleState) {
-        self.bubbleState = state
-
-        super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
-            styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
-            backing: .buffered,
-            defer: true
-        )
-
-        setupWindow()
-        setupContent()
-    }
-
-    private func setupWindow() {
-        title = "翻译"
-        level = .floating
-        isOpaque = false
-        backgroundColor = NSColor.windowBackgroundColor
-
-        // 允许在所有 Space 显示
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-        // 点击时不抢焦点
-        becomesKeyOnlyIfNeeded = true
-
-        // 关闭时隐藏而不是释放
-        isReleasedWhenClosed = false
-
-        // 最小尺寸（适应双栏布局）
-        minSize = NSSize(width: 500, height: 300)
-    }
-
-    private func setupContent() {
-        let content = TranslationContentView(state: bubbleState)
-        let hosting = NSHostingView(rootView: content)
-        hosting.translatesAutoresizingMaskIntoConstraints = true
-        hosting.autoresizingMask = [.width, .height]
-        self.contentView = hosting
-        self.hostingView = hosting
-    }
-
-    /// 定位到屏幕坐标附近
-    func positionNear(screenPoint: NSPoint) {
-        let size = frame.size
-        var origin = NSPoint(
-            x: screenPoint.x - size.width / 2,
-            y: screenPoint.y
-        )
-
-        // 边界检查
-        if let screen = NSScreen.main {
-            let screenFrame = screen.visibleFrame
-
-            if origin.x + size.width > screenFrame.maxX {
-                origin.x = screenFrame.maxX - size.width - 10
-            }
-            if origin.x < screenFrame.minX {
-                origin.x = screenFrame.minX + 10
-            }
-            if origin.y + size.height > screenFrame.maxY {
-                origin.y = screenPoint.y - size.height - 30
-            }
-            if origin.y < screenFrame.minY {
-                origin.y = screenFrame.minY + 10
-            }
-        }
-
-        super.setFrameOrigin(origin)
-    }
-
-    // 关闭时同步状态
-    override func close() {
-        bubbleState.hide()
-        super.close()
-    }
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
-*/
 
 // MARK: - Translation Content View
 
@@ -622,9 +525,8 @@ struct AnalysisView: View {
     }
 }
 
-// MARK: - Legacy Aliases
+// MARK: - Type Aliases
 
-/// 兼容旧 API
 typealias TranslationPopover = TranslationController
 
 enum TranslationPanel {
