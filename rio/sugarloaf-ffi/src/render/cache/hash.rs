@@ -52,7 +52,8 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
 
     // 2. 选区覆盖本行？（使用绝对行号比较）
     if let Some(sel) = &state.selection {
-        if line_in_selection(abs_line, sel) {
+        let in_sel = line_in_selection(abs_line, sel);
+        if in_sel {
             let (start_col, end_col) = selection_range_on_line(abs_line, sel);
             hasher.write_usize(start_col);
             hasher.write_usize(end_col);
@@ -303,5 +304,64 @@ mod tests {
 
         // state_hash 应该不同（焦点改变）
         assert_ne!(hash1, hash2);
+    }
+
+    /// 测试：选区从 row3 col10 移动到 col20，只有 row3 的 hash 应该变化
+    ///
+    /// 场景：100 行终端，选中 row0-row3，选区从 (0,0)-(3,10) 变为 (0,0)-(3,20)
+    /// 期望：只有 row3 的 state_hash 变化，row0-row2 和 row4-row99 都不变
+    #[test]
+    fn test_selection_expand_only_affects_end_line() {
+        // 创建 100 行的 mock state
+        let row_hashes: Vec<u64> = (0..100).map(|i| 1000 + i as u64).collect();
+        let grid_data = Arc::new(GridData::new_mock(80, 100, 0, row_hashes));
+        let grid = GridView::new(grid_data);
+        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
+
+        // 初始选区：(0,0) 到 (3,10)
+        let mut state1 = TerminalState {
+            grid: grid.clone(),
+            cursor: cursor.clone(),
+            selection: Some(SelectionView::new(
+                AbsolutePoint::new(0, 0),
+                AbsolutePoint::new(3, 10),
+                SelectionType::Simple,
+            )),
+            search: None,
+        };
+
+        // 计算所有 100 行的 state_hash
+        let hashes_before: Vec<u64> = (0..100)
+            .map(|line| compute_state_hash_for_line(line, &state1))
+            .collect();
+
+        // 选区扩展：(0,0) 到 (3,20)
+        state1.selection = Some(SelectionView::new(
+            AbsolutePoint::new(0, 0),
+            AbsolutePoint::new(3, 20),
+            SelectionType::Simple,
+        ));
+
+        // 计算扩展后的 state_hash
+        let hashes_after: Vec<u64> = (0..100)
+            .map(|line| compute_state_hash_for_line(line, &state1))
+            .collect();
+
+        // 统计变化的行数
+        let mut changed_lines = Vec::new();
+        for line in 0..100 {
+            if hashes_before[line] != hashes_after[line] {
+                changed_lines.push(line);
+            }
+        }
+
+        println!("Changed lines: {:?}", changed_lines);
+        println!("Total changed: {}", changed_lines.len());
+
+        // 期望：只有 row3 变化（选区末端所在行）
+        // row0, row1, row2 的选区范围是 (0, MAX)，没有变化
+        // row4-row99 不在选区内，也没有变化
+        assert_eq!(changed_lines, vec![3],
+            "Only row 3 should change, but got: {:?}", changed_lines);
     }
 }

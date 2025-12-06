@@ -1236,4 +1236,83 @@ mod tests {
         assert_eq!(img1.width(), img2.width());
         assert_eq!(img1.height(), img2.height());
     }
+
+    /// 性能测试：选区从 (0,0)-(3,10) 扩展到 (0,0)-(3,20)
+    ///
+    /// 场景：100 行终端，选区末端从 col10 移动到 col20
+    /// 期望：只有 row3 需要重新渲染，其他 99 行应该缓存命中
+    #[test]
+    fn test_selection_expand_performance() {
+        let mut renderer = create_test_renderer();
+
+        // 创建 100 行的 mock state
+        let row_hashes: Vec<u64> = (0..100).map(|i| 1000 + i as u64).collect();
+        let grid_data = Arc::new(GridData::new_mock(80, 100, 0, row_hashes));
+        let grid = GridView::new(grid_data);
+        let cursor = CursorView::new(AbsolutePoint::new(50, 0), CursorShape::Block);
+
+        // 初始选区：(0,0) 到 (3,10)
+        let mut state = TerminalState {
+            grid: grid.clone(),
+            cursor: cursor.clone(),
+            selection: Some(SelectionView::new(
+                AbsolutePoint::new(0, 0),
+                AbsolutePoint::new(3, 10),
+                SelectionType::Simple,
+            )),
+            search: None,
+        };
+
+        // === 第一帧：渲染所有 100 行（全部 cache miss）===
+        let frame1_start = std::time::Instant::now();
+        for line in 0..100 {
+            let _img = renderer.render_line(line, &state);
+        }
+        let frame1_time = frame1_start.elapsed();
+
+        eprintln!("Frame 1 (cold): {:?} | misses={} hits={} layout_hits={}",
+            frame1_time,
+            renderer.stats.cache_misses,
+            renderer.stats.cache_hits,
+            renderer.stats.layout_hits);
+
+        assert_eq!(renderer.stats.cache_misses, 100, "Frame 1: all lines should miss");
+        renderer.reset_stats();
+
+        // === 第二帧：选区扩展到 (0,0)-(3,20) ===
+        state.selection = Some(SelectionView::new(
+            AbsolutePoint::new(0, 0),
+            AbsolutePoint::new(3, 20),
+            SelectionType::Simple,
+        ));
+
+        let frame2_start = std::time::Instant::now();
+        for line in 0..100 {
+            let _img = renderer.render_line(line, &state);
+        }
+        let frame2_time = frame2_start.elapsed();
+
+        eprintln!("Frame 2 (selection expanded): {:?} | misses={} hits={} layout_hits={}",
+            frame2_time,
+            renderer.stats.cache_misses,
+            renderer.stats.cache_hits,
+            renderer.stats.layout_hits);
+
+        // 期望：
+        // - row 0,1,2: 选区范围是 (0, MAX)，没变化 → cache_hits
+        // - row 3: 选区范围从 (0,10) 变为 (0,20) → layout_hits
+        // - row 4-99: 不在选区内 → cache_hits
+        // 总计：99 hits + 1 layout_hit
+        assert_eq!(renderer.stats.cache_hits, 99,
+            "Frame 2: 99 lines should hit cache (row 0-2 and row 4-99)");
+        assert_eq!(renderer.stats.layout_hits, 1,
+            "Frame 2: only row 3 should need re-render (layout hit)");
+        assert_eq!(renderer.stats.cache_misses, 0,
+            "Frame 2: no cache misses expected");
+
+        // 性能断言：第二帧应该比第一帧快很多
+        eprintln!("Speedup: {:.1}x", frame1_time.as_micros() as f64 / frame2_time.as_micros() as f64);
+        assert!(frame2_time < frame1_time / 2,
+            "Frame 2 should be at least 2x faster than Frame 1");
+    }
 }
