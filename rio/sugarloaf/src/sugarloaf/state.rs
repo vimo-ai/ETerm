@@ -8,12 +8,13 @@ use crate::layout::RootStyle;
 use crate::layout::RichTextLayout;
 // use crate::sugarloaf::graphics::Graphics; // Unused after WGPU cleanup
 use crate::{Content, Object, Quad, SugarDimensions};
-use crate::sugarloaf::primitives::RichText;
+use crate::sugarloaf::primitives::{RichText, ImageObject};
 use std::collections::HashSet;
 
 pub struct SugarState {
     objects: Vec<Object>,
     pub rich_texts: Vec<RichText>,
+    pub images: Vec<ImageObject>,
     rich_text_repaint: HashSet<usize>,
     rich_text_to_be_removed: Vec<usize>,
     pub style: RootStyle,
@@ -35,6 +36,7 @@ impl SugarState {
         SugarState {
             content: Content::new(font_library),
             quads: vec![],
+            images: vec![],
             style,
             objects: vec![],
             rich_texts: vec![],
@@ -106,6 +108,7 @@ impl SugarState {
     #[inline]
     pub fn reset(&mut self) {
         self.quads.clear();
+        self.images.clear();
         for rte_id in &self.rich_text_to_be_removed {
             self.content.remove_state(rte_id);
         }
@@ -208,10 +211,22 @@ impl SugarState {
 
     #[inline]
     pub fn compute_dimensions_skia(&mut self) {
-        // Process objects to extract quads
+        // 清空上一帧的 quads 和 images，避免叠加
+        self.quads.clear();
+        self.images.clear();
+
+        // Process objects to extract quads and images
         for object in &self.objects {
-            if let Object::Quad(composed_quad) = object {
-                self.quads.push(*composed_quad);
+            match object {
+                Object::Quad(composed_quad) => {
+                    self.quads.push(*composed_quad);
+                }
+                Object::Image(image_obj) => {
+                    self.images.push(image_obj.clone());
+                }
+                Object::RichText(_) => {
+                    // RichText is already handled in compute_objects
+                }
             }
         }
     }

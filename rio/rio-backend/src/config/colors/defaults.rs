@@ -214,14 +214,16 @@ pub fn split() -> ColorArray {
 
 #[inline]
 pub fn selection_foreground() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#44C9F0"), Format::SRGB0_1)
+    // 选区前景色：白色（保持文字清晰可读）
+    ColorBuilder::from_hex(String::from("#FFFFFF"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 
 #[inline]
 pub fn selection_background() -> ColorArray {
-    ColorBuilder::from_hex(String::from("#1C191A"), Format::SRGB0_1)
+    // 选区背景色：淡蓝色（macOS 风格选区高亮）
+    ColorBuilder::from_hex(String::from("#3584E4"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }

@@ -3,10 +3,6 @@
 //! 架构说明: 参见 `sugarloaf/RENDERING_ARCHITECTURE.md`
 //!
 //! 当前实现: 纯 Skia 渲染，通过 CAMetalLayer 使用 Metal backend
-//!
-//! TODO: 待清理项 (第二阶段):
-//! - [ ] 未使用的 Skia 高级特性 (阴影、复杂滤镜等)
-//! - [ ] 冗余的性能优化代码
 
 pub mod graphics;
 pub mod primitives;
@@ -103,10 +99,6 @@ pub struct Sugarloaf<'a> {
     /// 布局计算结果缓存（脏区优化）
     #[cfg(target_os = "macos")]
     layout_cache: std::cell::RefCell<LineLayoutCache>,
-    /// Font 对象缓存池 - Key: (typeface_id, font_size_bits)
-    /// 避免每个字符都创建 Font 对象，显著减少渲染循环的对象创建开销
-    #[cfg(target_os = "macos")]
-    font_cache: std::cell::RefCell<std::collections::HashMap<(usize, u32), Font>>,
 }
 
 #[derive(Debug)]
@@ -225,7 +217,7 @@ impl Sugarloaf<'_> {
         let instance = Sugarloaf {
             state,
             ctx,
-            background_color: Some(Color4f::new(0.0, 0.0, 0.0, 1.0)),
+            background_color: None,  // 透明背景，不硬编码黑色
             graphics: Graphics::default(),
             #[cfg(target_os = "macos")]
             font_library: font_library.inner.clone(),
@@ -239,8 +231,6 @@ impl Sugarloaf<'_> {
             font_mgr,
             #[cfg(target_os = "macos")]
             layout_cache: std::cell::RefCell::new(LineLayoutCache::new()),
-            #[cfg(target_os = "macos")]
-            font_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         };
 
         Ok(instance)
@@ -263,7 +253,6 @@ impl Sugarloaf<'_> {
             self.typeface_cache.borrow_mut().clear();
             self.char_font_cache.borrow_mut().clear();
             self.layout_cache.borrow_mut().clear();
-            self.font_cache.borrow_mut().clear();
         }
     }
 
@@ -452,11 +441,10 @@ impl Sugarloaf<'_> {
         self.ctx.scale = scale;
         self.state.compute_layout_rescale_skia(scale);
 
-        // Clear layout cache and font cache when rescaling
+        // Clear layout cache when rescaling
         #[cfg(target_os = "macos")]
         {
             self.layout_cache.borrow_mut().clear();
-            self.font_cache.borrow_mut().clear();
         }
 
         // TODO: Handle background image rescale when implemented
@@ -470,33 +458,18 @@ impl Sugarloaf<'_> {
         self.state.reset();
     }
 
-    /// 从缓存中获取 Font 对象，如果不存在则创建并缓存
-    /// 使用 typeface 的指针地址作为唯一标识，结合 font_size 作为缓存 key
+    /// 创建 Font 对象（移除了 cache，因为 typeface 地址不稳定导致 cache 无效）
     #[cfg(target_os = "macos")]
     fn get_or_create_font(&self, typeface: &Typeface, font_size: f32) -> Font {
-        // 使用 typeface 的内存地址作为唯一标识
-        let typeface_id = typeface as *const _ as usize;
-        let font_size_bits = font_size.to_bits();
-        let cache_key = (typeface_id, font_size_bits);
-
-        let mut cache = self.font_cache.borrow_mut();
-
-        // 尝试从缓存获取
-        if let Some(font) = cache.get(&cache_key) {
-            return font.clone();
-        }
-
-        // 缓存未命中，创建新的 Font 对象
-        let font = Font::from_typeface(typeface, font_size);
-        cache.insert(cache_key, font.clone());
-        font
+        // 直接创建 Font，不使用 cache
+        // 原因：typeface 来自 layout cache 的 Vec<Typeface>，每次 clone 地址都变
+        // 使用指针地址作为 cache key 会导致几乎 100% miss
+        Font::from_typeface(typeface, font_size)
     }
 
     #[inline]
     #[cfg(target_os = "macos")]
     pub fn render(&mut self) {
-        let render_start = std::time::Instant::now();
-
         // Compute dimensions for rich text
         self.state.compute_dimensions_skia();
 
@@ -509,16 +482,29 @@ impl Sugarloaf<'_> {
         let (mut surface, drawable) = frame.unwrap();
         let canvas = surface.canvas();
 
-        // Clear background
-        if let Some(bg_color) = self.background_color {
-            canvas.clear(bg_color);
-        }
+        // 清理上一帧（必须！否则内容会叠加）
+        // 使用背景色，如果没设置则用黑色
+        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 1.0));
+        canvas.clear(clear_color);
 
         let scale = self.ctx.scale;
 
         // Render quads (backgrounds, borders, etc.)
         for quad in &self.state.quads {
             self.render_quad(canvas, quad, scale);
+        }
+
+        // Render images (pre-rasterized SkImages)
+        let image_count = self.state.images.len();
+        for image_obj in &self.state.images {
+            self.render_image(canvas, image_obj, scale);
+        }
+
+        // 如果有 images，跳过 rich_text 渲染（新架构）
+        if image_count > 0 {
+            // 直接提交帧，不渲染 rich_texts
+            self.ctx.end_frame(drawable);
+            return;
         }
 
         let font_size = self.font_size * scale;
@@ -537,17 +523,6 @@ impl Sugarloaf<'_> {
 
         // Get line height from style
         let line_height = self.state.style.line_height;
-
-        // 性能统计变量（在主字体块外声明，确保作用域覆盖整个渲染过程）
-        let mut total_chars = 0usize;
-        let mut _font_lookup_count = 0usize;
-        let mut _font_lookup_time = 0u128;
-        let mut _style_segments = 0usize;
-
-        // 缓存统计
-        let mut cache_hits = 0usize;
-        let mut cache_misses = 0usize;
-        let mut total_lines = 0usize;
 
         // 获取主字体 (font_id=0) 的度量信息用于行高计算
         let font_library = self.font_library.read();
@@ -580,19 +555,13 @@ impl Sugarloaf<'_> {
                         // 🔥 使用 content_hash 查找缓存
                         let content_hash = line.content_hash;
 
-                        // 更新统计
-                        total_lines += 1;
-
                         let layout = {
                             let cache = self.layout_cache.borrow();
                             if let Some(cached_layout) = cache.get(content_hash) {
-                                // 缓存命中
-                                cache_hits += 1;
                                 cached_layout.clone()
                             } else {
                                 // 缓存未命中，需要重新计算
                                 drop(cache);  // 释放借用，避免冲突
-                                cache_misses += 1;
 
                                 let new_layout = self.generate_line_layout(
                                     line,
@@ -611,8 +580,6 @@ impl Sugarloaf<'_> {
                         // 使用缓存的布局数据渲染
                         let mut char_idx = 0;
                         for fragment in &line.fragments {
-                            // 统计样式段数量
-                            _style_segments += 1;
                             // 设置颜色
                             let color = skia_safe::Color::from_argb(
                                 (fragment.style.color[3] * 255.0) as u8,
@@ -638,9 +605,6 @@ impl Sugarloaf<'_> {
                                 let ch = layout.chars[char_idx];
                                 let typeface = &layout.typefaces[char_idx];
                                 let x = base_x + layout.positions[char_idx];
-
-                                // 统计字符总数
-                                total_chars += 1;
 
                                 // 从缓存获取 Font 对象，避免重复创建
                                 let font = self.get_or_create_font(typeface, font_size);
@@ -849,25 +813,43 @@ impl Sugarloaf<'_> {
         // End frame and present
         self.ctx.end_frame(drawable);
         self.reset();
-
-        // 性能日志：只在渲染较多内容时打印，避免日志噪音
-        let render_time = render_start.elapsed().as_micros();
-        if total_chars > 100 {  // 降低阈值，方便查看
-            let hit_rate = if total_lines > 0 {
-                (cache_hits as f32 / total_lines as f32) * 100.0
-            } else { 0.0 };
-
-            let font_cache_size = self.font_cache.borrow().len();
-
-            println!("🎨 [Sugarloaf Render]");
-            println!("   Total chars: {}", total_chars);
-            println!("   Total lines: {}", total_lines);
-            println!("   💾 Layout cache: {} hits, {} misses (hit rate: {:.1}%)",
-                cache_hits, cache_misses, hit_rate);
-            println!("   🔤 Font cache: {} fonts cached", font_cache_size);
-            println!("   ⏱️  Render time: {}μs ({}ms)", render_time, render_time / 1000);
-        }
     }
+
+    // ========================================================================
+    // 🚀 未来优化方向：合并 Image 渲染
+    // ========================================================================
+    //
+    // 当前架构瓶颈分析（2024-12 探索记录）：
+    //
+    // 现状：
+    //   terminal_pool.render_terminal() 为每行生成一个 Image object
+    //   → 114 行 = 114 个 objects
+    //   → sugarloaf.render() 处理 114 个 objects，耗时约 440μs
+    //
+    // 问题：
+    //   即使 sugarloaf-ffi 的 Renderer 有三级缓存（FullHit 时零开销），
+    //   objects 数量不变，GPU 仍需处理 114 次绘制命令。
+    //
+    // 优化思路：
+    //   1. 将 114 个小 Image 合并为 1 个完整终端 Image
+    //   2. 使用 off-screen surface 作为持久缓冲区
+    //   3. 只重绘 damaged 行到 off-screen surface
+    //   4. 每帧只提交 1 个 object
+    //
+    // 预期收益：
+    //   - 光标闪烁：从 440μs 降到 < 10μs（只更新 2 行）
+    //   - 打字输入：从 440μs 降到 < 10μs（只更新 1 行）
+    //
+    // 实现复杂度：
+    //   - 需要管理 off-screen surface 生命周期
+    //   - 需要处理 resize 时的 surface 重建
+    //   - 光标渲染需要特殊处理（不能缓存到 off-screen，每帧重绘）
+    //   - 选区/搜索高亮需要考虑擦除和重绘
+    //
+    // 暂不实现原因：
+    //   当前 440μs 的帧时间对于 60Hz 刷新率（16.6ms）完全足够，
+    //   优化优先级不高。当需要支持高刷新率或更大终端时再考虑。
+    // ========================================================================
 
     /// 生成单行的布局计算结果（字符、字体、位置）
     /// 这是脏区渲染优化的核心：缓存耗时的字体查找和布局计算
@@ -1149,10 +1131,14 @@ impl Sugarloaf<'_> {
         }
     }
 
-    // #[cfg(not(target_os = "macos"))]
-    // pub fn render(&mut self) {
-    //     panic!("Skia rendering is only supported on macOS currently");
-    // }
+    /// Render a pre-rasterized image at the specified position
+    fn render_image(&self, canvas: &skia_safe::Canvas, image_obj: &crate::sugarloaf::primitives::ImageObject, scale: f32) {
+        let x = image_obj.position[0] * scale;
+        let y = image_obj.position[1] * scale;
+
+        // Draw the image directly at the position
+        canvas.draw_image(&image_obj.image, (x, y), None);
+    }
 
     #[inline]
     pub fn set_visual_bell_overlay(&mut self, overlay: Option<Quad>) {

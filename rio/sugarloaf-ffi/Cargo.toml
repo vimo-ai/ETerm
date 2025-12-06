@@ -6,10 +6,6 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
-[[example]]
-name = "visual_test"
-path = "examples/visual_test.rs"
-
 [dependencies]
 sugarloaf = { path = "../sugarloaf" }
 raw-window-handle = "0.6.2"
@@ -30,3 +26,6 @@ corcovado = { path = "../corcovado" }
 
 # 并发渲染优化
 rayon = "1.8"
+
+# 搜索优化
+regex = "1"

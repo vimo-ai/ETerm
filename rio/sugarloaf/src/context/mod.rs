@@ -143,7 +143,11 @@ impl Context<'_> {
             let _: () = msg_send![layer_ptr as *mut AnyObject, setPixelFormat: pixel_format];
 
             // 3. 设置 maximumDrawableCount 来重置 drawable 池
-            let _: () = msg_send![layer_ptr as *mut AnyObject, setMaximumDrawableCount: 2u64];
+            // 使用 3 个 drawable：1 显示中 + 1 等待显示 + 1 空闲可用
+            let _: () = msg_send![layer_ptr as *mut AnyObject, setMaximumDrawableCount: 3u64];
+
+            // 4. 禁用 displaySync，避免 nextDrawable 等待 VSync
+            let _: () = msg_send![layer_ptr as *mut AnyObject, setDisplaySyncEnabled: false];
         }
 
         let backend = unsafe {
