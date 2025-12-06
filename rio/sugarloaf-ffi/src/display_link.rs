@@ -3,6 +3,10 @@
 //! CVDisplayLink 是 macOS 的帧同步 API，回调在 VSync 时触发。
 //! 用于替代 Swift 侧的 CVDisplayLink，让渲染调度完全在 Rust 侧完成。
 
+// 保持与 Apple CoreVideo API 文档一致的命名风格
+#![allow(non_upper_case_globals)]
+#![allow(non_snake_case)]
+
 use std::ffi::c_void;
 
 // ============================================================================

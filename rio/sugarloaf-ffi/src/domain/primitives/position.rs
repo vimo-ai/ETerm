@@ -1,4 +1,4 @@
-use super::pixels::{Pixels, Logical, Physical, LogicalPixels, PhysicalPixels};
+use super::pixels::{Pixels, Logical, Physical};
 
 /// 位置值对象（x + y）
 ///

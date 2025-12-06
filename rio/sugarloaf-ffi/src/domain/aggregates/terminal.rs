@@ -483,12 +483,8 @@ impl Terminal {
             // 转换公式（不考虑滚动）：
             // grid_line = absolute_row - history_size
             //
-            // 考虑滚动（display_offset 向上滚动了多少行）：
-            // 屏幕显示的是 Line(-display_offset) 到 Line(screen_lines-1-display_offset)
-            // 但选区坐标不受 display_offset 影响，因为选区是相对于 Grid 的
+            // 选区坐标不受 display_offset 影响，因为选区是相对于 Grid 的
             let history_size = crosswords.grid.history_size();
-            let display_offset = crosswords.display_offset();
-            let screen_lines = crosswords.screen_lines();
 
             // 正确的转换：absolute → grid_line
             // grid_line = absolute_row - history_size
@@ -519,11 +515,8 @@ impl Terminal {
         with_crosswords_mut!(self, crosswords, {
             // 转换坐标（与 start_selection 相同的逻辑）
             let history_size = crosswords.grid.history_size();
-            let display_offset = crosswords.display_offset();
-            let screen_lines = crosswords.screen_lines();
 
             // 正确的转换：absolute → grid_line
-            // grid_line = absolute_row - history_size
             let grid_line = pos.line as i32 - history_size as i32;
             let line = Line(grid_line);
             let col = Column(pos.col);

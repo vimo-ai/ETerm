@@ -695,7 +695,7 @@ impl TerminalPool {
 
         // 更新 Sugarloaf（需要同步字体大小以便 Sugarloaf 内部使用）
         {
-            let mut sugarloaf = self.sugarloaf.lock();
+            let sugarloaf = self.sugarloaf.lock();
             // 注意：Sugarloaf 的字体大小通过 RichText 设置
             // 这里直接更新 config，渲染时会使用新的字体大小
             // TODO: 如果需要更新 Sugarloaf 内部状态，使用 set_rich_text_font_size

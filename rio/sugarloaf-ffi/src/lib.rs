@@ -1,5 +1,4 @@
 use sugarloaf::font::fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle};
-use parking_lot::RwLock;
 
 // 同步原语（FairMutex）
 mod sync;
@@ -102,12 +101,6 @@ pub struct SugarloafFontMetrics {
     pub cell_width: f32,
     pub cell_height: f32,
     pub line_height: f32,
-}
-
-static GLOBAL_FONT_METRICS: RwLock<Option<SugarloafFontMetrics>> = RwLock::new(None);
-
-pub(crate) fn set_global_font_metrics(metrics: SugarloafFontMetrics) {
-    *GLOBAL_FONT_METRICS.write() = Some(metrics);
 }
 
 /// 释放 Rust 分配的字符串

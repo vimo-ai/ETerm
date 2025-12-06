@@ -29,8 +29,8 @@ impl TextShaper {
         line: &BuilderLine,
         font_size: f32,
         cell_width: f32,
-        line_number: usize,
-        state: &TerminalState,
+        _line_number: usize,
+        _state: &TerminalState,
     ) -> GlyphLayout {
         let mut glyphs = Vec::new();
         let mut x = 0.0;

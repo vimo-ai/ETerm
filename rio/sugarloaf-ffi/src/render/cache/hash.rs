@@ -1,6 +1,8 @@
 use std::hash::Hasher;
 use std::collections::hash_map::DefaultHasher;
-use crate::domain::{TerminalState, SelectionView, SearchView, MatchRange};
+use crate::domain::{TerminalState, SelectionView, MatchRange};
+#[cfg(test)]
+use crate::domain::SearchView;
 
 /// 计算文本内容的 hash（不包含状态）
 ///

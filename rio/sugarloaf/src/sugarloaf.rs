@@ -3,10 +3,6 @@
 //! 架构说明: 参见 `sugarloaf/RENDERING_ARCHITECTURE.md`
 //!
 //! 当前实现: 纯 Skia 渲染，通过 CAMetalLayer 使用 Metal backend
-//!
-//! TODO: 待清理项 (第二阶段):
-//! - [ ] 未使用的 Skia 高级特性 (阴影、复杂滤镜等)
-//! - [ ] 冗余的性能优化代码
 
 pub mod graphics;
 pub mod primitives;
@@ -26,7 +22,7 @@ use raw_window_handle::{
 use state::SugarState;
 
 #[cfg(target_os = "macos")]
-use skia_safe::{Color4f, Font, FontMgr, FontStyle, Paint, Point, Surface, Typeface};
+use skia_safe::{Color4f, Font, FontMgr, FontStyle, Paint, Point, Typeface};
 
 // ========== 脏区渲染优化：布局缓存数据结构 ==========
 
@@ -103,16 +99,6 @@ pub struct Sugarloaf<'a> {
     /// 布局计算结果缓存（脏区优化）
     #[cfg(target_os = "macos")]
     layout_cache: std::cell::RefCell<LineLayoutCache>,
-    /// Off-screen surface for persistent buffer rendering (macOS only)
-    #[cfg(target_os = "macos")]
-    off_screen_surface: Option<Surface>,
-    /// Off-screen surface size (width, height)
-    #[cfg(target_os = "macos")]
-    off_screen_size: (i32, i32),
-    /// Raster cache: 缓存每行渲染后的像素（hash → Image）
-    /// 滚动时大部分行 hash 不变 → 直接 blit 缓存的 Image，跳过栅格化
-    #[cfg(target_os = "macos")]
-    raster_cache: std::cell::RefCell<std::collections::HashMap<u64, skia_safe::Image>>,
 }
 
 #[derive(Debug)]
@@ -245,12 +231,6 @@ impl Sugarloaf<'_> {
             font_mgr,
             #[cfg(target_os = "macos")]
             layout_cache: std::cell::RefCell::new(LineLayoutCache::new()),
-            #[cfg(target_os = "macos")]
-            off_screen_surface: None,
-            #[cfg(target_os = "macos")]
-            off_screen_size: (0, 0),
-            #[cfg(target_os = "macos")]
-            raster_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         };
 
         Ok(instance)
@@ -273,7 +253,6 @@ impl Sugarloaf<'_> {
             self.typeface_cache.borrow_mut().clear();
             self.char_font_cache.borrow_mut().clear();
             self.layout_cache.borrow_mut().clear();
-            self.raster_cache.borrow_mut().clear();  // 字体变化时清空 raster cache
         }
     }
 
@@ -454,14 +433,6 @@ impl Sugarloaf<'_> {
     #[inline]
     pub fn resize(&mut self, width: u32, height: u32) {
         self.ctx.resize(width, height);
-
-        // Clear off-screen surface on resize - it will be recreated with new size
-        #[cfg(target_os = "macos")]
-        {
-            self.off_screen_surface = None;
-            self.off_screen_size = (0, 0);
-        }
-
         // TODO: Handle background image resize when implemented
     }
 
@@ -470,11 +441,10 @@ impl Sugarloaf<'_> {
         self.ctx.scale = scale;
         self.state.compute_layout_rescale_skia(scale);
 
-        // Clear layout cache and raster cache when rescaling
+        // Clear layout cache when rescaling
         #[cfg(target_os = "macos")]
         {
             self.layout_cache.borrow_mut().clear();
-            self.raster_cache.borrow_mut().clear();  // 缩放变化时清空 raster cache
         }
 
         // TODO: Handle background image rescale when implemented
@@ -488,37 +458,6 @@ impl Sugarloaf<'_> {
         self.state.reset();
     }
 
-    /// 确保 off-screen surface 存在且尺寸正确
-    /// 如果不存在或尺寸不匹配，则创建新的 off-screen surface
-    #[cfg(target_os = "macos")]
-    fn ensure_off_screen_surface(&mut self, width: i32, height: i32) {
-        // 检查是否需要重建
-        if let Some(ref _surface) = self.off_screen_surface {
-            if self.off_screen_size == (width, height) {
-                return; // 尺寸匹配，复用
-            }
-        }
-
-        // 创建新的 off-screen surface
-        let image_info = skia_safe::ImageInfo::new(
-            (width, height),
-            skia_safe::ColorType::BGRA8888,
-            skia_safe::AlphaType::Opaque,  // 使用 Opaque 而非 Premul，避免透明问题
-            None,
-        );
-
-        // 尝试创建 GPU surface（需要 DirectContext）
-        // 如果失败则回退到 raster surface
-        self.off_screen_surface = skia_safe::surfaces::raster(&image_info, None, None);
-        self.off_screen_size = (width, height);
-
-        if self.off_screen_surface.is_some() {
-            tracing::info!("Created off-screen surface: {}x{}", width, height);
-        } else {
-            tracing::error!("Failed to create off-screen surface: {}x{}", width, height);
-        }
-    }
-
     /// 创建 Font 对象（移除了 cache，因为 typeface 地址不稳定导致 cache 无效）
     #[cfg(target_os = "macos")]
     fn get_or_create_font(&self, typeface: &Typeface, font_size: f32) -> Font {
@@ -526,104 +465,6 @@ impl Sugarloaf<'_> {
         // 原因：typeface 来自 layout cache 的 Vec<Typeface>，每次 clone 地址都变
         // 使用指针地址作为 cache key 会导致几乎 100% miss
         Font::from_typeface(typeface, font_size)
-    }
-
-    /// 渲染单行到 Image（不含光标等叠加层）
-    ///
-    /// 返回的 Image 可被 raster_cache 缓存，用于后续快速 blit
-    #[cfg(target_os = "macos")]
-    fn render_line_to_image(
-        &self,
-        line: &crate::layout::BuilderLine,
-        layout: &CachedLineLayout,
-        line_width: f32,
-        cell_height: f32,
-        cell_width: f32,
-        font_size: f32,
-        baseline_offset: f32,
-        background_color: Color4f,
-    ) -> Option<skia_safe::Image> {
-        // 创建行尺寸的 surface
-        let image_info = skia_safe::ImageInfo::new(
-            (line_width as i32, cell_height as i32),
-            skia_safe::ColorType::BGRA8888,
-            skia_safe::AlphaType::Premul,
-            None,
-        );
-
-        let mut line_surface = skia_safe::surfaces::raster(&image_info, None, None)?;
-        let line_canvas = line_surface.canvas();
-
-        // 填充背景色
-        line_canvas.clear(background_color);
-
-        // 创建 Paint 对象
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-
-        let mut bg_paint = Paint::default();
-
-        // 渲染所有 fragments（背景 + 文字，不含光标）
-        let mut char_idx = 0;
-        for fragment in &line.fragments {
-            // 跳过光标渲染（叠加层单独处理）
-            // fragment.style.cursor 不在这里处理
-
-            let color = skia_safe::Color::from_argb(
-                (fragment.style.color[3] * 255.0) as u8,
-                (fragment.style.color[0] * 255.0) as u8,
-                (fragment.style.color[1] * 255.0) as u8,
-                (fragment.style.color[2] * 255.0) as u8,
-            );
-            paint.set_color(color);
-
-            let fragment_cell_width = fragment.style.width;
-
-            let fragment_chars: Vec<char> = fragment.content.chars()
-                .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}' && c != '\u{20E3}')
-                .collect();
-
-            for _ in 0..fragment_chars.len() {
-                if char_idx >= layout.chars.len() {
-                    break;
-                }
-
-                let ch = layout.chars[char_idx];
-                let typeface = &layout.typefaces[char_idx];
-                // 使用相对 x 坐标（在行内的位置）
-                let x = layout.positions[char_idx];
-                // y 坐标：baseline 在 baseline_offset 处
-                let y = baseline_offset;
-
-                let font = self.get_or_create_font(typeface, font_size);
-                let char_cell_advance = cell_width * fragment_cell_width;
-                let ch_str = ch.to_string();
-
-                // 绘制背景（如果有）- 不包含光标背景
-                if let Some(bg) = fragment.style.background_color {
-                    if bg[3] > 0.01 {
-                        bg_paint.set_color(skia_safe::Color::from_argb(
-                            (bg[3] * 255.0) as u8,
-                            (bg[0] * 255.0) as u8,
-                            (bg[1] * 255.0) as u8,
-                            (bg[2] * 255.0) as u8,
-                        ));
-                        line_canvas.draw_rect(
-                            skia_safe::Rect::from_xywh(x, 0.0, char_cell_advance, cell_height),
-                            &bg_paint,
-                        );
-                    }
-                }
-
-                // 绘制字符
-                line_canvas.draw_str(&ch_str, Point::new(x, y), &font, &paint);
-
-                char_idx += 1;
-            }
-        }
-
-        // 获取 Image
-        line_surface.image_snapshot().into()
     }
 
     #[inline]
@@ -683,17 +524,6 @@ impl Sugarloaf<'_> {
         // Get line height from style
         let line_height = self.state.style.line_height;
 
-        // 性能统计变量（在主字体块外声明，确保作用域覆盖整个渲染过程）
-        let mut total_chars = 0usize;
-        let mut _font_lookup_count = 0usize;
-        let mut _font_lookup_time = 0u128;
-        let mut _style_segments = 0usize;
-
-        // 缓存统计
-        let mut cache_hits = 0usize;
-        let mut cache_misses = 0usize;
-        let mut total_lines = 0usize;
-
         // 获取主字体 (font_id=0) 的度量信息用于行高计算
         let font_library = self.font_library.read();
         let primary_typeface = self.get_or_create_typeface(&font_library, 0);
@@ -725,19 +555,13 @@ impl Sugarloaf<'_> {
                         // 🔥 使用 content_hash 查找缓存
                         let content_hash = line.content_hash;
 
-                        // 更新统计
-                        total_lines += 1;
-
                         let layout = {
                             let cache = self.layout_cache.borrow();
                             if let Some(cached_layout) = cache.get(content_hash) {
-                                // 缓存命中
-                                cache_hits += 1;
                                 cached_layout.clone()
                             } else {
                                 // 缓存未命中，需要重新计算
                                 drop(cache);  // 释放借用，避免冲突
-                                cache_misses += 1;
 
                                 let new_layout = self.generate_line_layout(
                                     line,
@@ -756,8 +580,6 @@ impl Sugarloaf<'_> {
                         // 使用缓存的布局数据渲染
                         let mut char_idx = 0;
                         for fragment in &line.fragments {
-                            // 统计样式段数量
-                            _style_segments += 1;
                             // 设置颜色
                             let color = skia_safe::Color::from_argb(
                                 (fragment.style.color[3] * 255.0) as u8,
@@ -783,9 +605,6 @@ impl Sugarloaf<'_> {
                                 let ch = layout.chars[char_idx];
                                 let typeface = &layout.typefaces[char_idx];
                                 let x = base_x + layout.positions[char_idx];
-
-                                // 统计字符总数
-                                total_chars += 1;
 
                                 // 从缓存获取 Font 对象，避免重复创建
                                 let font = self.get_or_create_font(typeface, font_size);
@@ -996,347 +815,41 @@ impl Sugarloaf<'_> {
         self.reset();
     }
 
-    /// 带脏区信息的渲染（使用 off-screen surface 作为持久缓冲区）
-    ///
-    /// damaged_lines: None = Full damage (重绘所有), Some(lines) = Partial (只绘制指定行)
-    ///
-    /// 架构：
-    /// 1. 确保 off-screen surface 存在且尺寸正确
-    /// 2. 根据 damage 类型渲染到 off-screen surface
-    /// 3. 将 off-screen surface blit 到 drawable
-    #[cfg(target_os = "macos")]
-    pub fn render_with_damage(&mut self, damaged_lines: Option<&[usize]>) {
-        // Compute dimensions for rich text
-        self.state.compute_dimensions_skia();
-
-        let scale = self.ctx.scale;
-        let width = (self.ctx.size.width * scale) as i32;
-        let height = (self.ctx.size.height * scale) as i32;
-
-        // 确保 off-screen surface 存在且尺寸正确
-        self.ensure_off_screen_surface(width, height);
-
-        // 检查 off-screen surface 是否存在
-        if self.off_screen_surface.is_none() {
-            tracing::warn!("Failed to get off-screen surface, falling back to direct rendering");
-            return self.render();
-        }
-
-        // 获取 off-screen canvas
-        // Safety: 我们需要同时访问 off_screen_surface (可变) 和 self 的其他字段 (不可变)
-        // 这是安全的因为 off_screen_surface 与其他字段不重叠
-        let off_canvas = unsafe {
-            let off_screen_ptr = self.off_screen_surface.as_mut().unwrap() as *mut Surface;
-            (*off_screen_ptr).canvas()
-        };
-
-        // 根据 damage 类型处理
-        let is_full_damage = damaged_lines.is_none();
-        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 0.0));  // 透明背景
-
-        if is_full_damage {
-            // Full damage: 清空整个 off-screen surface
-            off_canvas.clear(clear_color);
-        } else if let Some(lines) = damaged_lines {
-            // Partial damage: 只清除 damaged 行的矩形区域
-            // 需要先计算行高等度量信息
-            let font_library = self.font_library.read();
-            let primary_typeface = self.get_or_create_typeface(&font_library, 0);
-
-            if let Some(ref typeface) = primary_typeface {
-                let font_size = self.font_size * scale;
-                let line_height = self.state.style.line_height;
-                let primary_font = Font::from_typeface(typeface, font_size);
-                let (_, metrics) = primary_font.metrics();
-                let raw_cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height;
-                let cell_height = (raw_cell_height * scale).round() / scale;
-
-                // 清除 damaged 行（必须用 Src blend mode 完全覆盖，否则会叠加）
-                let mut clear_paint = Paint::default();
-                clear_paint.set_color4f(clear_color, None);
-                clear_paint.set_blend_mode(skia_safe::BlendMode::Src);
-
-                for &line_idx in lines {
-                    // 假设所有 rich_text 的 base_y 都相同（单终端场景）
-                    // 如果是多终端，需要根据每个 rich_text 的位置计算
-                    // 这里我们简化处理，只考虑第一个 rich_text
-                    if let Some(rich_text) = self.state.rich_texts.first() {
-                        let base_y = rich_text.position[1] * scale;
-                        let y = base_y + (line_idx as f32) * cell_height;
-                        let rect = skia_safe::Rect::from_xywh(0.0, y, width as f32, cell_height);
-                        off_canvas.draw_rect(rect, &clear_paint);
-                    }
-                }
-            }
-            drop(font_library);
-        }
-
-        // Render quads (backgrounds, borders, etc.)
-        for quad in &self.state.quads {
-            self.render_quad(off_canvas, quad, scale);
-        }
-
-        // Render images (pre-rasterized SkImages)
-        for image_obj in &self.state.images {
-            self.render_image(off_canvas, image_obj, scale);
-        }
-
-        let font_size = self.font_size * scale;
-
-        // 光标叠加层 Paint
-        let mut cursor_paint = Paint::default();
-        cursor_paint.set_anti_alias(true);
-
-        // 收集所有光标信息（稍后在最终 surface 上绘制，不是 off_canvas）
-        let mut all_cursor_overlays: Vec<(f32, f32, f32, f32, crate::SugarCursor)> = Vec::new();
-
-        // Get line height from style
-        let line_height = self.state.style.line_height;
-
-        // 性能统计变量
-        let mut total_chars = 0usize;
-        let mut cache_hits = 0usize;
-        let mut cache_misses = 0usize;
-        let mut total_lines = 0usize;
-
-        // 获取主字体的度量信息
-        let font_library = self.font_library.read();
-        let primary_typeface = self.get_or_create_typeface(&font_library, 0);
-
-        if let Some(ref typeface) = primary_typeface {
-            let primary_font = Font::from_typeface(typeface, font_size);
-            let (_, metrics) = primary_font.metrics();
-            let raw_cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height;
-            let cell_height = (raw_cell_height * scale).round() / scale;
-            let baseline_offset = -metrics.ascent;
-
-            let (raw_cell_width, _) = primary_font.measure_str("M", None);
-            let cell_width = (raw_cell_width * scale).round() / scale;
-
-            // 创建 damaged_set 用于快速查找
-            let damaged_set: Option<std::collections::HashSet<usize>> = damaged_lines.map(|lines| {
-                lines.iter().copied().collect()
-            });
-
-            // 渲染 rich text 到 off-screen canvas（根据 damage 类型决定渲染哪些行）
-
-            for rich_text in &self.state.rich_texts {
-                if let Some(builder_state) = self.state.content.get_state(&rich_text.id) {
-                    let base_x = rich_text.position[0] * scale;
-                    let base_y = rich_text.position[1] * scale;
-
-                    // 计算行渲染区域宽度
-                    let line_width = width as f32 - base_x;
-
-                    // 统计 raster cache 命中
-                    let mut raster_hits = 0;
-                    let mut raster_misses = 0;
-
-                    // 渲染 damaged 行到 off_canvas
-                    for (line_idx, line) in builder_state.lines.iter().enumerate() {
-                        // 🎯 Partial damage: 只渲染 damaged 行
-                        if let Some(ref set) = damaged_set {
-                            if !set.contains(&line_idx) {
-                                continue; // 跳过未受损的行
-                            }
-                        }
-
-                        let y_top = base_y + (line_idx as f32) * cell_height;
-                        let content_hash = line.content_hash;
-                        total_lines += 1;
-
-                        // 🚀 优先查询 raster cache
-                        let cached_image = self.raster_cache.borrow().get(&content_hash).cloned();
-
-                        if let Some(image) = cached_image {
-                            // ✅ Raster cache hit: 直接 blit 缓存的 Image
-                            raster_hits += 1;
-                            off_canvas.draw_image(&image, Point::new(base_x, y_top), None);
-                        } else {
-                            // ❌ Raster cache miss: 需要渲染
-                            raster_misses += 1;
-
-                            // 获取或生成 layout
-                            let layout = {
-                                let cache = self.layout_cache.borrow();
-                                if let Some(cached_layout) = cache.get(content_hash) {
-                                    cache_hits += 1;
-                                    cached_layout.clone()
-                                } else {
-                                    drop(cache);
-                                    cache_misses += 1;
-
-                                    let new_layout = self.generate_line_layout(
-                                        line,
-                                        &font_library,
-                                        font_size,
-                                        cell_width,
-                                        &primary_font,
-                                    );
-
-                                    self.layout_cache.borrow_mut().set(content_hash, new_layout.clone());
-                                    new_layout
-                                }
-                            };
-
-                            // 渲染行到 Image（不含光标）
-                            if let Some(line_image) = self.render_line_to_image(
-                                line,
-                                &layout,
-                                line_width,
-                                cell_height,
-                                cell_width,
-                                font_size,
-                                baseline_offset,
-                                clear_color,
-                            ) {
-                                // 缓存 Image
-                                self.raster_cache.borrow_mut().insert(content_hash, line_image.clone());
-                                // Blit 到 off_canvas
-                                off_canvas.draw_image(&line_image, Point::new(base_x, y_top), None);
-                            }
-                        }
-
-                        // 统计字符数
-                        for fragment in &line.fragments {
-                            let fragment_chars: Vec<char> = fragment.content.chars()
-                                .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}' && c != '\u{20E3}')
-                                .collect();
-                            total_chars += fragment_chars.len();
-                        }
-                    }
-
-                    // 🎯 收集所有行的光标信息（不受 damage 限制，每帧都绘制当前光标）
-                    for (line_idx, line) in builder_state.lines.iter().enumerate() {
-                        let y_top = base_y + (line_idx as f32) * cell_height;
-                        let content_hash = line.content_hash;
-
-                        let mut char_idx = 0;
-                        for fragment in &line.fragments {
-                            let fragment_chars: Vec<char> = fragment.content.chars()
-                                .filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}' && c != '\u{20E3}')
-                                .collect();
-
-                            // 如果这个 fragment 有 cursor 属性，只在第一个字符位置添加光标
-                            if let Some(cursor) = fragment.style.cursor {
-                                if !fragment_chars.is_empty() {
-                                    // 获取光标位置（需要从 layout 获取）
-                                    let layout = {
-                                        let cache = self.layout_cache.borrow();
-                                        cache.get(content_hash).cloned()
-                                    };
-
-                                    if let Some(layout) = layout {
-                                        if char_idx < layout.positions.len() {
-                                            let x = base_x + layout.positions[char_idx];
-                                            let fragment_cell_width = fragment.style.width;
-                                            let char_cell_advance = cell_width * fragment_cell_width;
-                                            all_cursor_overlays.push((x, y_top, char_cell_advance, cell_height, cursor));
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 更新字符索引
-                            char_idx += fragment_chars.len();
-                        }
-                    }
-
-                    // Raster cache stats available: raster_hits, raster_misses
-                }
-            }
-        }
-        drop(font_library);
-
-        // Render visual bell overlay if present
-        if let Some(bell_overlay) = self.state.visual_bell_overlay {
-            self.render_quad(off_canvas, &bell_overlay, scale);
-        }
-
-        // 获取 drawable 并 blit off-screen surface
-        let frame = self.ctx.begin_frame();
-        if frame.is_none() {
-            return;
-        }
-
-        let (mut surface, drawable) = frame.unwrap();
-        let canvas = surface.canvas();
-
-        // Blit off-screen surface 到 drawable
-        // Safety: 再次通过指针访问 off_screen_surface 来获取 image snapshot
-        let image = unsafe {
-            let off_screen_ptr = self.off_screen_surface.as_mut().unwrap() as *mut Surface;
-            (*off_screen_ptr).image_snapshot()
-        };
-        // 使用 Src blend mode 确保完全覆盖，不与 drawable 混合
-        let mut blit_paint = Paint::default();
-        blit_paint.set_blend_mode(skia_safe::BlendMode::Src);
-        canvas.draw_image(&image, (0, 0), Some(&blit_paint));
-
-        // 🎨 在最终 surface 上绘制光标叠加层（不在 off_canvas 上，避免持久化缓存问题）
-        for (x, y_top, char_advance, cell_h, cursor) in all_cursor_overlays {
-            match cursor {
-                crate::SugarCursor::Block(color) => {
-                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
-                    cursor_paint.set_color(skia_safe::Color::from_argb(
-                        (color[3] * 255.0) as u8,
-                        (color[0] * 255.0) as u8,
-                        (color[1] * 255.0) as u8,
-                        (color[2] * 255.0) as u8,
-                    ));
-                    canvas.draw_rect(
-                        skia_safe::Rect::from_xywh(x, y_top, char_advance, cell_h),
-                        &cursor_paint,
-                    );
-                }
-                crate::SugarCursor::HollowBlock(color) => {
-                    cursor_paint.set_style(skia_safe::PaintStyle::Stroke);
-                    cursor_paint.set_stroke_width(1.0);
-                    cursor_paint.set_color(skia_safe::Color::from_argb(
-                        (color[3] * 255.0) as u8,
-                        (color[0] * 255.0) as u8,
-                        (color[1] * 255.0) as u8,
-                        (color[2] * 255.0) as u8,
-                    ));
-                    canvas.draw_rect(
-                        skia_safe::Rect::from_xywh(x + 0.5, y_top + 0.5, char_advance - 1.0, cell_h - 1.0),
-                        &cursor_paint,
-                    );
-                }
-                crate::SugarCursor::Caret(color) => {
-                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
-                    cursor_paint.set_color(skia_safe::Color::from_argb(
-                        (color[3] * 255.0) as u8,
-                        (color[0] * 255.0) as u8,
-                        (color[1] * 255.0) as u8,
-                        (color[2] * 255.0) as u8,
-                    ));
-                    canvas.draw_rect(
-                        skia_safe::Rect::from_xywh(x, y_top, 2.0, cell_h),
-                        &cursor_paint,
-                    );
-                }
-                crate::SugarCursor::Underline(color) => {
-                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
-                    cursor_paint.set_color(skia_safe::Color::from_argb(
-                        (color[3] * 255.0) as u8,
-                        (color[0] * 255.0) as u8,
-                        (color[1] * 255.0) as u8,
-                        (color[2] * 255.0) as u8,
-                    ));
-                    let underline_height = 2.0;
-                    canvas.draw_rect(
-                        skia_safe::Rect::from_xywh(x, y_top + cell_h - underline_height, char_advance, underline_height),
-                        &cursor_paint,
-                    );
-                }
-            }
-        }
-
-        // End frame and present
-        self.ctx.end_frame(drawable);
-        self.reset();
-    }
+    // ========================================================================
+    // 🚀 未来优化方向：合并 Image 渲染
+    // ========================================================================
+    //
+    // 当前架构瓶颈分析（2024-12 探索记录）：
+    //
+    // 现状：
+    //   terminal_pool.render_terminal() 为每行生成一个 Image object
+    //   → 114 行 = 114 个 objects
+    //   → sugarloaf.render() 处理 114 个 objects，耗时约 440μs
+    //
+    // 问题：
+    //   即使 sugarloaf-ffi 的 Renderer 有三级缓存（FullHit 时零开销），
+    //   objects 数量不变，GPU 仍需处理 114 次绘制命令。
+    //
+    // 优化思路：
+    //   1. 将 114 个小 Image 合并为 1 个完整终端 Image
+    //   2. 使用 off-screen surface 作为持久缓冲区
+    //   3. 只重绘 damaged 行到 off-screen surface
+    //   4. 每帧只提交 1 个 object
+    //
+    // 预期收益：
+    //   - 光标闪烁：从 440μs 降到 < 10μs（只更新 2 行）
+    //   - 打字输入：从 440μs 降到 < 10μs（只更新 1 行）
+    //
+    // 实现复杂度：
+    //   - 需要管理 off-screen surface 生命周期
+    //   - 需要处理 resize 时的 surface 重建
+    //   - 光标渲染需要特殊处理（不能缓存到 off-screen，每帧重绘）
+    //   - 选区/搜索高亮需要考虑擦除和重绘
+    //
+    // 暂不实现原因：
+    //   当前 440μs 的帧时间对于 60Hz 刷新率（16.6ms）完全足够，
+    //   优化优先级不高。当需要支持高刷新率或更大终端时再考虑。
+    // ========================================================================
 
     /// 生成单行的布局计算结果（字符、字体、位置）
     /// 这是脏区渲染优化的核心：缓存耗时的字体查找和布局计算
@@ -1626,11 +1139,6 @@ impl Sugarloaf<'_> {
         // Draw the image directly at the position
         canvas.draw_image(&image_obj.image, (x, y), None);
     }
-
-    // #[cfg(not(target_os = "macos"))]
-    // pub fn render(&mut self) {
-    //     panic!("Skia rendering is only supported on macOS currently");
-    // }
 
     #[inline]
     pub fn set_visual_bell_overlay(&mut self, overlay: Option<Quad>) {

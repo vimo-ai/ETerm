@@ -1,4 +1,4 @@
-use super::pixels::{Pixels, Logical, Physical, LogicalPixels, PhysicalPixels};
+use super::pixels::{Pixels, Logical, Physical};
 
 /// 尺寸值对象（width + height）
 ///
