@@ -693,15 +693,6 @@ impl TerminalPool {
             renderer.set_font_size(LogicalPixels::new(new_font_size));
         }
 
-        // 更新 Sugarloaf（需要同步字体大小以便 Sugarloaf 内部使用）
-        {
-            let sugarloaf = self.sugarloaf.lock();
-            // 注意：Sugarloaf 的字体大小通过 RichText 设置
-            // 这里直接更新 config，渲染时会使用新的字体大小
-            // TODO: 如果需要更新 Sugarloaf 内部状态，使用 set_rich_text_font_size
-            drop(sugarloaf);
-        }
-
         // 标记需要重新渲染
         self.needs_render.store(true, Ordering::Release);
     }

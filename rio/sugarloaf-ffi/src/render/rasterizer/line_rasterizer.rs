@@ -306,7 +306,6 @@ mod tests {
         let rasterizer = LineRasterizer::new();
         let layout = GlyphLayout {
             glyphs: vec![],
-            content_hash: 0,
         };
 
         let image = rasterizer.render(
@@ -344,7 +343,6 @@ mod tests {
                 width: 1.0,  // 单宽字符
                 decoration: None,
             }],
-            content_hash: 0,
         };
 
         let image = rasterizer.render(

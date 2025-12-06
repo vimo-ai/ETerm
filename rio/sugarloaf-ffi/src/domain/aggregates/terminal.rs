@@ -1081,7 +1081,7 @@ mod tests {
         // Tick 驱动
         let events = terminal.tick();
         // 可能有或没有事件，取决于 Crosswords 实现
-        assert!(events.len() >= 0);
+        let _ = events; // 确保编译器不会警告未使用
 
         // 验证状态更新
         let state = terminal.state();
@@ -1096,8 +1096,8 @@ mod tests {
             assert_eq!(cells[4].c, 'o');
         }
 
-        // 验证光标位置（应该在第三行开头）
-        assert!(state.cursor.position.line >= 0);
+        // 验证光标存在（line 是 usize，总是 >= 0）
+        let _ = state.cursor.position.line;
     }
 
     #[test]
@@ -1205,7 +1205,8 @@ mod tests {
         terminal.scroll(1);
 
         let final_state = terminal.state();
-        assert!(final_state.grid.display_offset() >= 0);
+        // display_offset 是 usize，总是 >= 0，只验证可访问
+        let _ = final_state.grid.display_offset();
 
         // 5. 清理
         terminal.clear_selection();
@@ -1244,7 +1245,7 @@ mod tests {
 
         // Tick
         let events = terminal.tick();
-        assert!(events.len() >= 0);
+        let _ = events; // events.len() 是 usize，总是 >= 0
 
         // 验证状态一致性
         let final_state = terminal.state();
@@ -1318,9 +1319,8 @@ mod tests {
 
         // Tick 收集事件
         let events = terminal.tick();
-
-        // 验证 events 是 Vec（可能为空）
-        assert!(events.len() >= 0);
+        // events 可能为空或非空
+        let _ = events;
 
         // 再次 tick，应该没有新事件
         let events2 = terminal.tick();

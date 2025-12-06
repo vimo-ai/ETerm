@@ -10,10 +10,6 @@ crate-type = ["cdylib", "staticlib"]
 # 新架构模块（DDD 分层架构），暂时不启用
 new_architecture = []
 
-[[example]]
-name = "visual_test"
-path = "examples/visual_test.rs"
-
 [dependencies]
 sugarloaf = { path = "../sugarloaf" }
 raw-window-handle = "0.6.2"

@@ -314,6 +314,9 @@ impl Renderer {
             }
         }
 
+        // 下划线颜色（ANSI 支持自定义）
+        let decoration_color = cell.underline_color.map(|c| ansi_color_to_rgba(&c, colors));
+
         FragmentStyle {
             font_id: 0,
             width,
@@ -322,7 +325,7 @@ impl Renderer {
             background_color,
             font_vars: 0,
             decoration,
-            decoration_color: None,  // TODO: 可以支持 underline_color
+            decoration_color,
             cursor,
             media: None,
             drawable_char: None,
@@ -979,20 +982,11 @@ mod tests {
         renderer.reset_stats();
 
         // 渲染 Line 1（无光标）→ LayoutHit
-        // 在 LayoutHit 分支加日志，查看 layout.cursor_info 的值
         let _img1 = renderer.render_line(1, &state);
         assert_eq!(renderer.stats.layout_hits, 1, "Line 1 should be LayoutHit");
 
-        // 🐛 BUG：LayoutHit 时直接用了缓存的 layout，里面带着 Line 0 的 cursor_info
-        // 正确行为：LayoutHit 时应该根据当前 state 重新计算 cursor_info，或者忽略缓存的 cursor_info
-        //
-        // 这个测试目前会"通过"（因为我们只验证了统计数据），
-        // 但实际渲染结果是错的（Line 1 也会显示光标）
-        //
-        // TODO: 需要验证渲染出的 image 里没有光标
-        // 方法1: 检查 layout.cursor_info（但 LayoutHit 用的是缓存的 layout）
-        // 方法2: 像素级比较 image（复杂）
-        // 方法3: 在 LayoutHit 分支修复 cursor_info（正确方案）
+        // 注：cursor_info 在 render_with_layout() 中从 state 动态计算，
+        // 不从 layout 缓存读取，所以 LayoutHit 时光标会被正确处理
     }
 
     #[test]

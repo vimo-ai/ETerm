@@ -46,6 +46,7 @@ impl LogicalPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::pixels::LogicalPixels;
 
     #[test]
     fn test_position_conversion() {
