@@ -629,8 +629,6 @@ impl Sugarloaf<'_> {
     #[inline]
     #[cfg(target_os = "macos")]
     pub fn render(&mut self) {
-        let render_start = std::time::Instant::now();
-
         // Compute dimensions for rich text
         self.state.compute_dimensions_skia();
 
@@ -656,8 +654,16 @@ impl Sugarloaf<'_> {
         }
 
         // Render images (pre-rasterized SkImages)
+        let image_count = self.state.images.len();
         for image_obj in &self.state.images {
             self.render_image(canvas, image_obj, scale);
+        }
+
+        // 如果有 images，跳过 rich_text 渲染（新架构）
+        if image_count > 0 {
+            // 直接提交帧，不渲染 rich_texts
+            self.ctx.end_frame(drawable);
+            return;
         }
 
         let font_size = self.font_size * scale;
@@ -988,16 +994,6 @@ impl Sugarloaf<'_> {
         // End frame and present
         self.ctx.end_frame(drawable);
         self.reset();
-
-        // 性能日志：只在渲染较多内容时打印，避免日志噪音
-        let render_time = render_start.elapsed().as_micros();
-        if total_chars > 100 {  // 降低阈值，方便查看
-            let hit_rate = if total_lines > 0 {
-                (cache_hits as f32 / total_lines as f32) * 100.0
-            } else { 0.0 };
-
-            // Debug logging removed - use perf_log! macro if needed
-        }
     }
 
     /// 带脏区信息的渲染（使用 off-screen surface 作为持久缓冲区）
@@ -1010,8 +1006,6 @@ impl Sugarloaf<'_> {
     /// 3. 将 off-screen surface blit 到 drawable
     #[cfg(target_os = "macos")]
     pub fn render_with_damage(&mut self, damaged_lines: Option<&[usize]>) {
-        let render_start = std::time::Instant::now();
-
         // Compute dimensions for rich text
         self.state.compute_dimensions_skia();
 
@@ -1342,30 +1336,6 @@ impl Sugarloaf<'_> {
         // End frame and present
         self.ctx.end_frame(drawable);
         self.reset();
-
-        // 性能日志
-        let render_time = render_start.elapsed().as_micros();
-        if total_chars > 100 {
-            let hit_rate = if total_lines > 0 {
-                (cache_hits as f32 / total_lines as f32) * 100.0
-            } else { 0.0 };
-
-            let damage_type = if is_full_damage {
-                "Full"
-            } else if let Some(lines) = damaged_lines {
-                if lines.is_empty() {
-                    "None (all cached)"
-                } else {
-                    "Partial"
-                }
-            } else {
-                "Unknown"
-            };
-
-            let damaged_count = damaged_lines.map(|l| l.len()).unwrap_or(0);
-
-            // Debug logging removed - use perf_log! macro if needed
-        }
     }
 
     /// 生成单行的布局计算结果（字符、字体、位置）

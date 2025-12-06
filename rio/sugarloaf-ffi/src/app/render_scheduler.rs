@@ -74,8 +74,6 @@ impl RenderScheduler {
                 return;
             }
 
-            // eprintln!("🔄 [RenderScheduler] VSync: needs_render=true, calling callback");
-
             // 获取布局
             let layout = {
                 let layout_guard = render_layout.lock();
@@ -129,11 +127,7 @@ impl RenderScheduler {
     /// 请求渲染
     #[inline]
     pub fn request_render(&self) {
-        // eprintln!("🎯 [RenderScheduler] request_render() called");
         self.needs_render.store(true, Ordering::Release);
-        if let Some(ref dl) = self.display_link {
-            dl.request_render();
-        }
     }
 
     /// 设置渲染布局
