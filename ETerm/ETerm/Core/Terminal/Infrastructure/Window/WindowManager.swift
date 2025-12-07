@@ -87,10 +87,7 @@ final class WindowManager: NSObject {
             windowFrame = frame
         }
 
-        let window = KeyableWindow.create(
-            contentRect: windowFrame,
-            styleMask: [.borderless, .resizable, .miniaturizable, .closable]
-        )
+        let window = KeyableWindow.create(contentRect: windowFrame)
 
         // 创建 TerminalWindow（从 WindowState 恢复完整结构）
         let terminalWindow = restoreTerminalWindow(from: windowState)
@@ -264,10 +261,7 @@ final class WindowManager: NSObject {
         // 将 CWD 存入全局管理器（在创建 ContentView 之前）
         WindowCwdManager.shared.setPendingCwd(inheritCwd)
 
-        let window = KeyableWindow.create(
-            contentRect: windowFrame,
-            styleMask: [.borderless, .resizable, .miniaturizable, .closable]
-        )
+        let window = KeyableWindow.create(contentRect: windowFrame)
 
         // 🔑 关键：在 WindowManager 中创建 Coordinator，而不是在 SwiftUI 中
         let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
@@ -438,10 +432,7 @@ final class WindowManager: NSObject {
             y: screenPoint.y - defaultSize.height / 2
         )
         let frame = NSRect(origin: adjustedPoint, size: defaultSize)
-        let window = KeyableWindow.create(
-            contentRect: frame,
-            styleMask: [.borderless, .resizable, .miniaturizable, .closable]
-        )
+        let window = KeyableWindow.create(contentRect: frame)
 
         // 🔑 在 WindowManager 中创建 Coordinator
         let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
@@ -549,10 +540,7 @@ final class WindowManager: NSObject {
             y: screenPoint.y - defaultSize.height / 2
         )
         let frame = NSRect(origin: adjustedPoint, size: defaultSize)
-        let window = KeyableWindow.create(
-            contentRect: frame,
-            styleMask: [.borderless, .resizable, .miniaturizable, .closable]
-        )
+        let window = KeyableWindow.create(contentRect: frame)
 
         // 🔑 在 WindowManager 中创建 Coordinator
         let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
