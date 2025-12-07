@@ -282,6 +282,49 @@ float terminal_pool_get_font_size(
 );
 
 // =============================================================================
+// Search API
+// =============================================================================
+
+/// Search for text in terminal
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param query Search query (UTF-8 string)
+/// @return Number of matches (>= 0), or -1 on failure
+int32_t terminal_pool_search(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    const char* query
+);
+
+/// Jump to next search match
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+void terminal_pool_search_next(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Jump to previous search match
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+void terminal_pool_search_prev(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Clear search
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+void terminal_pool_clear_search(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+// =============================================================================
 // Cursor & Word Boundary API (new architecture)
 // =============================================================================
 

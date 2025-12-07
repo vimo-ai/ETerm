@@ -1503,32 +1503,85 @@ class TerminalWindowCoordinator: ObservableObject {
     ///
     /// - Parameters:
     ///   - pattern: 搜索模式
-    ///   - isRegex: 是否为正则表达式
-    ///   - caseSensitive: 是否区分大小写
+    ///   - isRegex: 是否为正则表达式（暂不支持）
+    ///   - caseSensitive: 是否区分大小写（暂不支持）
     func startSearch(pattern: String, isRegex: Bool = false, caseSensitive: Bool = false) {
-        // TODO: 新架构中需要添加搜索功能的 FFI 支持
-        // 暂时禁用搜索功能
         guard let activePanelId = activePanelId,
               let panel = terminalWindow.getPanel(activePanelId),
-              let activeTab = panel.activeTab else {
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId,
+              let wrapper = terminalPool as? TerminalPoolWrapper else {
             return
         }
 
-        // 清除搜索信息
-        activeTab.setSearchInfo(nil)
+        // 调用 Rust 端搜索
+        let matchCount = wrapper.search(terminalId: Int(terminalId), query: pattern)
+
+        if matchCount > 0 {
+            // 更新 Tab 的搜索信息
+            let searchInfo = TabSearchInfo(
+                pattern: pattern,
+                totalCount: matchCount,
+                currentIndex: 1  // 搜索后光标在第一个匹配
+            )
+            activeTab.setSearchInfo(searchInfo)
+        } else {
+            // 无匹配，清除搜索信息
+            activeTab.setSearchInfo(nil)
+        }
+
+        // 触发 UI 更新
         objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
     }
 
     /// 跳转到下一个匹配
     func searchNext() {
-        // TODO: 新架构中需要添加搜索功能的 FFI 支持
-        // 暂时禁用
+        guard let activePanelId = activePanelId,
+              let panel = terminalWindow.getPanel(activePanelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId,
+              let searchInfo = activeTab.searchInfo,
+              let wrapper = terminalPool as? TerminalPoolWrapper else {
+            return
+        }
+
+        // 调用 Rust 端跳转
+        wrapper.searchNext(terminalId: Int(terminalId))
+
+        // 更新索引（循环）
+        let newIndex = searchInfo.currentIndex % searchInfo.totalCount + 1
+        activeTab.updateSearchIndex(currentIndex: newIndex, totalCount: searchInfo.totalCount)
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
     }
 
     /// 跳转到上一个匹配
     func searchPrev() {
-        // TODO: 新架构中需要添加搜索功能的 FFI 支持
-        // 暂时禁用
+        guard let activePanelId = activePanelId,
+              let panel = terminalWindow.getPanel(activePanelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId,
+              let searchInfo = activeTab.searchInfo,
+              let wrapper = terminalPool as? TerminalPoolWrapper else {
+            return
+        }
+
+        // 调用 Rust 端跳转
+        wrapper.searchPrev(terminalId: Int(terminalId))
+
+        // 更新索引（循环）
+        let newIndex = searchInfo.currentIndex > 1 ? searchInfo.currentIndex - 1 : searchInfo.totalCount
+        activeTab.updateSearchIndex(currentIndex: newIndex, totalCount: searchInfo.totalCount)
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
     }
 
     /// 清除当前 Tab 的搜索
@@ -1537,6 +1590,12 @@ class TerminalWindowCoordinator: ObservableObject {
               let panel = terminalWindow.getPanel(activePanelId),
               let activeTab = panel.activeTab else {
             return
+        }
+
+        // 调用 Rust 端清除搜索
+        if let terminalId = activeTab.rustTerminalId,
+           let wrapper = terminalPool as? TerminalPoolWrapper {
+            wrapper.clearSearch(terminalId: Int(terminalId))
         }
 
         // 清除 Tab 的搜索信息

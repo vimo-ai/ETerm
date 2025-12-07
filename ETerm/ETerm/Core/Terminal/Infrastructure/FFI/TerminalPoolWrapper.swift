@@ -419,6 +419,43 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         guard let handle = handle else { return }
         terminal_pool_resize_sugarloaf(handle, width, height)
     }
+
+    // MARK: - Search Methods
+
+    /// 搜索文本
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - query: 搜索关键词
+    /// - Returns: 匹配数量（>= 0），失败返回 -1
+    func search(terminalId: Int, query: String) -> Int {
+        guard let handle = handle else { return -1 }
+        return Int(terminal_pool_search(handle, terminalId, query))
+    }
+
+    /// 跳转到下一个匹配
+    ///
+    /// - Parameter terminalId: 终端 ID
+    func searchNext(terminalId: Int) {
+        guard let handle = handle else { return }
+        terminal_pool_search_next(handle, terminalId)
+    }
+
+    /// 跳转到上一个匹配
+    ///
+    /// - Parameter terminalId: 终端 ID
+    func searchPrev(terminalId: Int) {
+        guard let handle = handle else { return }
+        terminal_pool_search_prev(handle, terminalId)
+    }
+
+    /// 清除搜索
+    ///
+    /// - Parameter terminalId: 终端 ID
+    func clearSearch(terminalId: Int) {
+        guard let handle = handle else { return }
+        terminal_pool_clear_search(handle, terminalId)
+    }
 }
 
 // MARK: - Convenience Extensions
