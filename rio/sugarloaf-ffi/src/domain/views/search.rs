@@ -6,6 +6,7 @@
 //! - **独立**：不依赖具体的搜索实现
 
 use crate::domain::primitives::AbsolutePoint;
+use std::collections::HashMap;
 
 /// 搜索视图 - 包含所有匹配结果
 ///
@@ -13,8 +14,14 @@ use crate::domain::primitives::AbsolutePoint;
 ///
 /// # 字段说明
 ///
-/// - `matches`: 所有匹配范围
+/// - `matches`: 所有匹配范围（保留用于导航）
+/// - `matches_by_line`: 按行索引的匹配（用于快速渲染查询）
 /// - `focused_index`: 当前焦点匹配的索引（0-based）
+///
+/// # 性能优化
+///
+/// `matches_by_line` 将匹配按行号分组，渲染某行时只需检查该行的匹配，
+/// 避免遍历所有匹配（O(cells × matches) → O(cells)）。
 ///
 /// # 使用场景
 ///
@@ -22,8 +29,11 @@ use crate::domain::primitives::AbsolutePoint;
 /// - 传递给 Render 层生成搜索高亮 overlays
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchView {
-    /// 所有匹配范围
+    /// 所有匹配范围（保留用于导航）
     pub matches: Vec<MatchRange>,
+    /// 按行索引的匹配（用于快速渲染查询）
+    /// key: 行号（绝对坐标）, value: matches 中的索引列表
+    pub matches_by_line: HashMap<usize, Vec<usize>>,
     /// 当前焦点匹配的索引（0-based）
     pub focused_index: usize,
 }
@@ -57,6 +67,11 @@ impl SearchView {
     /// - `matches`: 所有匹配范围
     /// - `focused_index`: 当前焦点匹配的索引（0-based）
     ///
+    /// # 性能说明
+    ///
+    /// 构建时会自动生成 `matches_by_line` 索引，将匹配按行号分组。
+    /// 如果一个匹配跨多行，会在所有涉及的行中添加索引。
+    ///
     /// # 示例
     ///
     /// ```ignore
@@ -67,8 +82,22 @@ impl SearchView {
     /// let search = SearchView::new(matches, 0);
     /// ```
     pub fn new(matches: Vec<MatchRange>, focused_index: usize) -> Self {
+        // 构建行号索引
+        let mut matches_by_line: HashMap<usize, Vec<usize>> = HashMap::new();
+
+        for (idx, m) in matches.iter().enumerate() {
+            // 对于跨多行的匹配，需要在每一行的索引中都添加
+            for line in m.start.line..=m.end.line {
+                matches_by_line
+                    .entry(line)
+                    .or_insert_with(Vec::new)
+                    .push(idx);
+            }
+        }
+
         Self {
             matches,
+            matches_by_line,
             focused_index,
         }
     }
@@ -89,6 +118,25 @@ impl SearchView {
     #[inline]
     pub fn focused_match(&self) -> Option<&MatchRange> {
         self.matches.get(self.focused_index)
+    }
+
+    /// 获取某行的所有匹配索引
+    ///
+    /// # 参数
+    ///
+    /// - `line`: 行号（绝对坐标）
+    ///
+    /// # 返回
+    ///
+    /// - `Some(&[usize])`: 该行的匹配索引列表（指向 `matches` 中的下标）
+    /// - `None`: 该行没有匹配
+    ///
+    /// # 性能
+    ///
+    /// O(1) HashMap 查询，比遍历所有匹配快得多。
+    #[inline]
+    pub fn get_matches_at_line(&self, line: usize) -> Option<&[usize]> {
+        self.matches_by_line.get(&line).map(|v| v.as_slice())
     }
 }
 
@@ -237,5 +285,73 @@ mod tests {
 
         assert_eq!(search1, search2);
         assert_ne!(search1, search3);
+    }
+
+    /// 测试：验证按行索引功能
+    #[test]
+    fn test_get_matches_at_line() {
+        let matches = vec![
+            MatchRange::new(AbsolutePoint::new(0, 0), AbsolutePoint::new(0, 5)),   // 第 0 行
+            MatchRange::new(AbsolutePoint::new(2, 10), AbsolutePoint::new(2, 15)), // 第 2 行
+            MatchRange::new(AbsolutePoint::new(5, 0), AbsolutePoint::new(7, 10)),  // 第 5-7 行（跨行）
+        ];
+        let search = SearchView::new(matches, 0);
+
+        // 第 0 行：有 1 个匹配（索引 0）
+        let line0 = search.get_matches_at_line(0);
+        assert!(line0.is_some());
+        assert_eq!(line0.unwrap(), &[0]);
+
+        // 第 1 行：没有匹配
+        let line1 = search.get_matches_at_line(1);
+        assert!(line1.is_none());
+
+        // 第 2 行：有 1 个匹配（索引 1）
+        let line2 = search.get_matches_at_line(2);
+        assert!(line2.is_some());
+        assert_eq!(line2.unwrap(), &[1]);
+
+        // 第 5 行：有 1 个匹配（索引 2，跨行匹配的起始行）
+        let line5 = search.get_matches_at_line(5);
+        assert!(line5.is_some());
+        assert_eq!(line5.unwrap(), &[2]);
+
+        // 第 6 行：有 1 个匹配（索引 2，跨行匹配的中间行）
+        let line6 = search.get_matches_at_line(6);
+        assert!(line6.is_some());
+        assert_eq!(line6.unwrap(), &[2]);
+
+        // 第 7 行：有 1 个匹配（索引 2，跨行匹配的结束行）
+        let line7 = search.get_matches_at_line(7);
+        assert!(line7.is_some());
+        assert_eq!(line7.unwrap(), &[2]);
+
+        // 第 8 行：没有匹配
+        let line8 = search.get_matches_at_line(8);
+        assert!(line8.is_none());
+    }
+
+    /// 测试：验证按行索引的性能优化
+    #[test]
+    fn test_matches_by_line_performance() {
+        // 创建大量匹配（模拟 50000 个匹配的场景）
+        let mut matches = Vec::new();
+        for i in 0..1000 {
+            matches.push(MatchRange::new(
+                AbsolutePoint::new(i, 0),
+                AbsolutePoint::new(i, 5),
+            ));
+        }
+
+        let search = SearchView::new(matches, 0);
+
+        // 查询第 500 行的匹配（应该是 O(1) 查询，而不是 O(1000) 遍历）
+        let line500 = search.get_matches_at_line(500);
+        assert!(line500.is_some());
+        assert_eq!(line500.unwrap(), &[500]);
+
+        // 查询不存在的行（应该是 O(1) 查询）
+        let line9999 = search.get_matches_at_line(9999);
+        assert!(line9999.is_none());
     }
 }

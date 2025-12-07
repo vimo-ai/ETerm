@@ -350,3 +350,89 @@ pub extern "C" fn terminal_pool_get_font_size(
     let pool = unsafe { &*(handle as *const TerminalPool) };
     pool.get_font_size()
 }
+
+// ===== 搜索功能 =====
+
+/// 搜索文本
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+/// - query: 搜索关键词（C 字符串）
+///
+/// # 返回
+/// - 匹配数量（>= 0），失败返回 -1
+#[no_mangle]
+pub extern "C" fn terminal_pool_search(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    query: *const std::ffi::c_char,
+) -> i32 {
+    if handle.is_null() || query.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    // 转换 C 字符串为 Rust 字符串
+    let query_str = match unsafe { std::ffi::CStr::from_ptr(query).to_str() } {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    pool.search(terminal_id, query_str)
+}
+
+/// 跳转到下一个匹配
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+#[no_mangle]
+pub extern "C" fn terminal_pool_search_next(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.search_next(terminal_id);
+}
+
+/// 跳转到上一个匹配
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+#[no_mangle]
+pub extern "C" fn terminal_pool_search_prev(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.search_prev(terminal_id);
+}
+
+/// 清除搜索
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+#[no_mangle]
+pub extern "C" fn terminal_pool_clear_search(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.clear_search(terminal_id);
+}

@@ -3240,21 +3240,35 @@ impl<U: EventListener> Crosswords<U> {
         regex: &mut search::RegexSearch,
         max_lines: Option<usize>,
     ) -> Vec<search::Match> {
-        let max_lines = max_lines.unwrap_or(1000);
         let mut matches = Vec::new();
 
-        let total_lines = self.grid.total_lines();
-        let search_lines = max_lines.min(total_lines);
+        // 计算搜索范围
+        // Line 坐标系：Line(0) = 屏幕顶部, Line(-N) = 历史记录
+        let history_size = self.grid.history_size();
+        let screen_lines = self.grid.screen_lines();
 
-        let start = Pos::new(Line(0), Column(0));
-        let end = Pos::new(
-            Line(search_lines as i32 - 1),
-            self.grid.last_column(),
-        );
+        // 搜索起点：历史记录最顶部
+        let start_line = -(history_size as i32);
+        // 搜索终点：屏幕底部
+        let end_line = (screen_lines as i32) - 1;
+
+        // 如果有 max_lines 限制，从当前位置向上搜索
+        let start_line = if let Some(max) = max_lines {
+            start_line.max(end_line - max as i32 + 1)
+        } else {
+            start_line
+        };
+
+        let start = Pos::new(Line(start_line), Column(0));
+        let end = Pos::new(Line(end_line), self.grid.last_column());
 
         let mut iter = search::RegexIter::new(start, end, Direction::Right, self, regex);
         while let Some(m) = iter.next() {
             matches.push(m);
+            // 安全保护：超过 10000 个匹配就停止
+            if matches.len() >= 10000 {
+                break;
+            }
         }
 
         matches

@@ -509,6 +509,9 @@ impl TerminalPool {
             self.pending_objects.push(Object::Image(image_obj));
         }
 
+        // 打印本次渲染的缓存统计
+        renderer.print_frame_stats(&format!("terminal_{}", id));
+
         drop(renderer);
 
         // 5. 渲染成功完成后，重置 damage 状态
@@ -700,6 +703,75 @@ impl TerminalPool {
     /// 获取当前字体大小
     pub fn get_font_size(&self) -> f32 {
         self.config.font_size
+    }
+
+    // ========================================================================
+    // 搜索功能
+    // ========================================================================
+
+    /// 搜索文本
+    ///
+    /// # 参数
+    /// - terminal_id: 终端 ID
+    /// - query: 搜索关键词
+    ///
+    /// # 返回
+    /// - 匹配数量（>= 0），失败返回 -1
+    pub fn search(&self, terminal_id: usize, query: &str) -> i32 {
+        let entry = match self.terminals.get(&terminal_id) {
+            Some(e) => e,
+            None => return -1,
+        };
+
+        let mut terminal = entry.terminal.lock();
+        let count = terminal.search(query);
+
+        // 触发渲染更新
+        self.needs_render.store(true, Ordering::Release);
+
+        count as i32
+    }
+
+    /// 跳转到下一个匹配
+    ///
+    /// # 参数
+    /// - terminal_id: 终端 ID
+    pub fn search_next(&self, terminal_id: usize) {
+        if let Some(entry) = self.terminals.get(&terminal_id) {
+            let mut terminal = entry.terminal.lock();
+            terminal.next_match();
+
+            // 触发渲染更新
+            self.needs_render.store(true, Ordering::Release);
+        }
+    }
+
+    /// 跳转到上一个匹配
+    ///
+    /// # 参数
+    /// - terminal_id: 终端 ID
+    pub fn search_prev(&self, terminal_id: usize) {
+        if let Some(entry) = self.terminals.get(&terminal_id) {
+            let mut terminal = entry.terminal.lock();
+            terminal.prev_match();
+
+            // 触发渲染更新
+            self.needs_render.store(true, Ordering::Release);
+        }
+    }
+
+    /// 清除搜索
+    ///
+    /// # 参数
+    /// - terminal_id: 终端 ID
+    pub fn clear_search(&self, terminal_id: usize) {
+        if let Some(entry) = self.terminals.get(&terminal_id) {
+            let mut terminal = entry.terminal.lock();
+            terminal.clear_search();
+
+            // 触发渲染更新
+            self.needs_render.store(true, Ordering::Release);
+        }
     }
 }
 

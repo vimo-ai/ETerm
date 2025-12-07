@@ -29,7 +29,9 @@ use crate::domain::state::TerminalState;
 
 use crate::domain::events::TerminalEvent;
 
-use crate::domain::views::{GridData, GridView, CursorView};
+use crate::domain::views::{GridData, GridView, CursorView, SearchView, MatchRange};
+
+use crate::domain::primitives::AbsolutePoint;
 
 use crate::rio_event::{EventQueue, FFIEventListener};
 
@@ -122,6 +124,9 @@ pub struct Terminal {
 
     /// ANSI 解析器
     parser: Processor<StdSyncHandler>,
+
+    /// 缓存的搜索视图（只在搜索事件时重建，避免每帧 O(N) 遍历）
+    cached_search_view: Option<SearchView>,
 }
 
 /// 事件监听器类型
@@ -198,6 +203,7 @@ impl Terminal {
             cols,
             rows,
             parser,
+            cached_search_view: None,
         }
     }
 
@@ -246,6 +252,7 @@ impl Terminal {
             cols,
             rows,
             parser,
+            cached_search_view: None,
         }
     }
 
@@ -354,7 +361,7 @@ impl Terminal {
 
     /// 获取终端状态快照
     pub fn state(&self) -> TerminalState {
-        with_crosswords!(self, crosswords, {
+        let base_state = with_crosswords!(self, crosswords, {
             // 1. 转换 Grid
             let grid_data = GridData::from_crosswords(&*crosswords);
             let grid = GridView::new(Arc::new(grid_data));
@@ -412,47 +419,24 @@ impl Terminal {
                 })
             });
 
-            // 4. 转换 Search
-            let search = crosswords.search_state.as_ref().map(|search_state| {
-                use crate::domain::primitives::AbsolutePoint;
-                use crate::domain::views::{SearchView, MatchRange};
-
-                let display_offset = crosswords.grid.display_offset();
-                let history_size = crosswords.grid.history_size();
-
-                // 转换所有匹配
-                let matches: Vec<MatchRange> = search_state
-                    .all_matches
-                    .iter()
-                    .map(|match_range| {
-                        // match_range 是 RangeInclusive<Pos>
-                        let start_pos = match_range.start();
-                        let end_pos = match_range.end();
-
-                        // 转换起点
-                        let start_line = (history_size as i32 + start_pos.row.0 - display_offset as i32) as usize;
-                        let start = AbsolutePoint::new(start_line, start_pos.col.0 as usize);
-
-                        // 转换终点
-                        let end_line = (history_size as i32 + end_pos.row.0 - display_offset as i32) as usize;
-                        let end = AbsolutePoint::new(end_line, end_pos.col.0 as usize);
-
-                        MatchRange::new(start, end)
-                    })
-                    .collect();
-
-                SearchView::new(matches, search_state.focused_index)
-            });
-
-            // 构造 TerminalState
+            // 构造 TerminalState（不含搜索，搜索在外部添加）
             if let Some(sel) = selection {
                 TerminalState::with_selection(grid, cursor, sel)
-            } else if let Some(srch) = search {
-                TerminalState::with_search(grid, cursor, srch)
             } else {
                 TerminalState::new(grid, cursor)
             }
-        })
+        });
+
+        // 4. 使用缓存的 SearchView（避免每帧 O(N) 遍历）
+        // 缓存在 search()/next_match()/prev_match() 时更新
+        if let Some(ref search_view) = self.cached_search_view {
+            // 如果有搜索且没有选区，添加搜索
+            if base_state.selection.is_none() {
+                return TerminalState::with_search(base_state.grid, base_state.cursor, search_view.clone());
+            }
+        }
+
+        base_state
     }
 
     // ==================== Step 5: Selection ====================
@@ -574,6 +558,39 @@ impl Terminal {
 
     // ==================== Step 6: Search ====================
 
+    /// 从 Crosswords 的搜索状态构建 SearchView
+    ///
+    /// 只在搜索事件发生时调用（search/next/prev），避免每帧 O(N) 遍历
+    fn build_search_view<T>(crosswords: &Crosswords<T>) -> Option<SearchView>
+    where
+        T: EventListener,
+    {
+        crosswords.search_state.as_ref().map(|search_state| {
+            let history_size = crosswords.grid.history_size();
+
+            // 转换所有匹配（O(N) 但只在搜索事件时执行）
+            let matches: Vec<MatchRange> = search_state
+                .all_matches
+                .iter()
+                .map(|match_range| {
+                    let start_pos = match_range.start();
+                    let end_pos = match_range.end();
+
+                    // 绝对行号 = history_size + Line 坐标
+                    let start_line = (history_size as i32 + start_pos.row.0) as usize;
+                    let start = AbsolutePoint::new(start_line, start_pos.col.0 as usize);
+
+                    let end_line = (history_size as i32 + end_pos.row.0) as usize;
+                    let end = AbsolutePoint::new(end_line, end_pos.col.0 as usize);
+
+                    MatchRange::new(start, end)
+                })
+                .collect();
+
+            SearchView::new(matches, search_state.focused_index)
+        })
+    }
+
     /// 搜索文本
     ///
     /// # 参数
@@ -582,30 +599,63 @@ impl Terminal {
     /// # 返回
     /// - 匹配的数量
     pub fn search(&mut self, query: &str) -> usize {
-        with_crosswords_mut!(self, crosswords, {
-            // 执行搜索（非正则，不区分大小写，不限制行数）
+        // 先执行搜索，获取结果
+        let (count, search_view) = if let Some(ref cw) = self.crosswords_ffi {
+            let mut crosswords = cw.write();
             let _ = crosswords.start_search(query, false, false, None);
-
-            // 返回匹配数量
-            crosswords.search_state
+            let count = crosswords.search_state
                 .as_ref()
                 .map(|s| s.all_matches.len())
-                .unwrap_or(0)
-        })
+                .unwrap_or(0);
+            let view = Self::build_search_view(&*crosswords);
+            (count, view)
+        } else if let Some(ref cw) = self.crosswords_test {
+            let mut crosswords = cw.write();
+            let _ = crosswords.start_search(query, false, false, None);
+            let count = crosswords.search_state
+                .as_ref()
+                .map(|s| s.all_matches.len())
+                .unwrap_or(0);
+            let view = Self::build_search_view(&*crosswords);
+            (count, view)
+        } else {
+            (0, None)
+        };
+        // 锁已释放，更新缓存
+        self.cached_search_view = search_view;
+        count
     }
 
     /// 跳到下一个搜索匹配
     pub fn next_match(&mut self) {
-        with_crosswords_mut!(self, crosswords, {
+        let search_view = if let Some(ref cw) = self.crosswords_ffi {
+            let mut crosswords = cw.write();
             crosswords.search_goto_next();
-        });
+            Self::build_search_view(&*crosswords)
+        } else if let Some(ref cw) = self.crosswords_test {
+            let mut crosswords = cw.write();
+            crosswords.search_goto_next();
+            Self::build_search_view(&*crosswords)
+        } else {
+            None
+        };
+        self.cached_search_view = search_view;
     }
 
     /// 跳到上一个搜索匹配
     pub fn prev_match(&mut self) {
-        with_crosswords_mut!(self, crosswords, {
+        let search_view = if let Some(ref cw) = self.crosswords_ffi {
+            let mut crosswords = cw.write();
             crosswords.search_goto_prev();
-        });
+            Self::build_search_view(&*crosswords)
+        } else if let Some(ref cw) = self.crosswords_test {
+            let mut crosswords = cw.write();
+            crosswords.search_goto_prev();
+            Self::build_search_view(&*crosswords)
+        } else {
+            None
+        };
+        self.cached_search_view = search_view;
     }
 
     /// 清除搜索
@@ -613,6 +663,8 @@ impl Terminal {
         with_crosswords_mut!(self, crosswords, {
             crosswords.clear_search();
         });
+        // 清除缓存
+        self.cached_search_view = None;
     }
 
     // ==================== Step 7: Scroll ====================
