@@ -142,10 +142,8 @@ impl Renderer {
 
             let ch = cell.c;
 
-            // 从 CellData 构造 FragmentStyle
-            // 🔧 将屏幕坐标转换为绝对坐标，用于选区/搜索匹配检测
-            let abs_pos = state.grid.screen_to_absolute(screen_line, col);
-            let style = self.cell_to_fragment_style(&cell, &abs_pos, state);
+            // 从 CellData 构造 FragmentStyle（只提取原始样式，不含选区/搜索高亮）
+            let style = self.cell_to_fragment_style(&cell);
 
             // 如果样式改变，创建新 fragment
             // styles_equal 已经比较了 width，所以 width 改变会自动分割 fragment
@@ -193,9 +191,11 @@ impl Renderer {
     ///
     /// # 参数
     /// - `cell`: 单元格数据
-    /// - `pos`: 绝对坐标（AbsolutePoint）
-    /// - `state`: 终端状态（用于检查光标、选区、搜索）
-    fn cell_to_fragment_style(&self, cell: &CellData, pos: &crate::domain::AbsolutePoint, state: &TerminalState) -> FragmentStyle {
+    ///
+    /// # 设计说明
+    /// 只提取 cell 的原始样式（颜色、字体属性、装饰）。
+    /// 选区和搜索高亮在 LineRasterizer 中动态计算，避免缓存污染。
+    fn cell_to_fragment_style(&self, cell: &CellData) -> FragmentStyle {
         use rio_backend::config::colors::NamedColor;
         use sugarloaf::layout::{UnderlineInfo, UnderlineShape, FragmentStyleDecoration};
         use sugarloaf::font_introspector::{Stretch, Weight, Style};
@@ -308,27 +308,12 @@ impl Renderer {
         let cursor = None;
 
         // ===== 选区高亮 =====
-        // 注意：选区高亮现在在 LineRasterizer 中动态计算（不再从布局缓存读取）
-        // 这里只保留用于 cache miss 时的初始渲染
-        if let Some(selection) = &state.selection {
-            if let Some(_range) = get_selection_range_at(pos, selection) {
-                fg_color = colors.selection_foreground;
-                background_color = Some(colors.selection_background);
-            }
-        }
+        // 🔧 选区高亮完全在 LineRasterizer 中动态计算，不写入 GlyphLayout
+        // 避免缓存污染问题（选区变化时，屏幕外的行无法更新缓存）
 
         // ===== 搜索匹配高亮 =====
-        if let Some(search) = &state.search {
-            if let Some(is_focused) = get_search_match_at(pos, search) {
-                if is_focused {
-                    fg_color = colors.search_focused_match_foreground;
-                    background_color = Some(colors.search_focused_match_background);
-                } else {
-                    fg_color = colors.search_match_foreground;
-                    background_color = Some(colors.search_match_background);
-                }
-            }
-        }
+        // 🔧 搜索高亮完全在 LineRasterizer 中动态计算，不写入 GlyphLayout
+        // 避免缓存污染问题（关闭搜索时，屏幕外的行无法更新缓存）
 
         // 下划线颜色（ANSI 支持自定义）
         let decoration_color = cell.underline_color.map(|c| ansi_color_to_rgba(&c, colors));
@@ -612,87 +597,6 @@ fn styles_equal(a: &FragmentStyle, b: &FragmentStyle) -> bool {
         && a.background_color == b.background_color
         && a.font_attrs == b.font_attrs
         && a.decoration == b.decoration
-}
-
-/// 判断位置是否在选区内
-///
-/// # 参数
-/// - `pos`: 绝对坐标（AbsolutePoint）
-/// - `selection`: 选区视图
-///
-/// # 返回
-/// - `Some((start_col, end_col))`: 在选区内，返回本行的选区列范围
-/// - `None`: 不在选区内
-fn get_selection_range_at(pos: &crate::domain::AbsolutePoint, selection: &crate::domain::SelectionView) -> Option<(usize, usize)> {
-    // 检查行是否在选区范围内
-    if pos.line < selection.start.line || pos.line > selection.end.line {
-        return None;
-    }
-
-    // 计算本行的选区列范围
-    let start_col = if pos.line == selection.start.line {
-        selection.start.col
-    } else {
-        0
-    };
-
-    let end_col = if pos.line == selection.end.line {
-        selection.end.col
-    } else {
-        usize::MAX
-    };
-
-    // 检查列是否在范围内
-    if pos.col >= start_col && pos.col <= end_col {
-        Some((start_col, end_col))
-    } else {
-        None
-    }
-}
-
-/// 判断位置是否在搜索匹配内
-///
-/// # 参数
-/// - `pos`: 绝对坐标（AbsolutePoint）
-/// - `search`: 搜索视图
-///
-/// # 返回
-/// - `Some(is_focused)`: 在匹配内，返回是否是聚焦的匹配
-/// - `None`: 不在匹配内
-///
-/// # 性能优化
-///
-/// 使用按行索引的 HashMap（`matches_by_line`），避免遍历所有匹配。
-/// 复杂度从 O(matches) 降低到 O(该行的匹配数)。
-fn get_search_match_at(pos: &crate::domain::AbsolutePoint, search: &crate::domain::SearchView) -> Option<bool> {
-    // 先通过行号快速查找该行的匹配索引（usize 类型）
-    let indices = search.get_matches_at_line(pos.line)?;
-
-    // 只遍历该行的匹配
-    for &idx in indices {
-        let m = &search.matches[idx];
-
-        // 计算本行的匹配列范围
-        let start_col = if pos.line == m.start.line {
-            m.start.col
-        } else {
-            0
-        };
-
-        let end_col = if pos.line == m.end.line {
-            m.end.col
-        } else {
-            usize::MAX
-        };
-
-        // 检查列是否在范围内
-        if pos.col >= start_col && pos.col <= end_col {
-            let is_focused = idx == search.focused_index;
-            return Some(is_focused);
-        }
-    }
-
-    None
 }
 
 /// 将 AnsiColor 转换为 RGBA [f32; 4]
