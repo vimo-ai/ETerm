@@ -1133,10 +1133,11 @@ impl Sugarloaf<'_> {
 
     /// Render a pre-rasterized image at the specified position
     fn render_image(&self, canvas: &skia_safe::Canvas, image_obj: &crate::sugarloaf::primitives::ImageObject, scale: f32) {
-        let x = image_obj.position[0] * scale;
-        let y = image_obj.position[1] * scale;
+        // 像素对齐：避免亚像素渲染导致的模糊/锯齿
+        // 当 Panel 分割后，坐标可能是非整数，直接绘制会导致 Skia 亚像素插值
+        let x = (image_obj.position[0] * scale).round();
+        let y = (image_obj.position[1] * scale).round();
 
-        // Draw the image directly at the position
         canvas.draw_image(&image_obj.image, (x, y), None);
     }
 
