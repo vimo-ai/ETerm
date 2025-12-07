@@ -29,10 +29,9 @@ struct RioTerminalView: View {
             RicePaperView(showMountain: true, overallOpacity: 0.5) {
                 EmptyView()
             }
-            .ignoresSafeArea()
             .allowsHitTesting(false)  // 不拦截事件，让事件穿透到下面的渲染层
 
-            // 渲染层
+            // 渲染层（PageBar 已在 SwiftUI 层，这里不需要 ignoresSafeArea）
             RioRenderView(coordinator: coordinator)
 
             // Inline Writing Assistant Overlay (Cmd+K)
@@ -96,9 +95,6 @@ struct RioRenderView: NSViewRepresentable {
 // MARK: - Container View（分离 Metal 层和 UI 层）
 
 class RioContainerView: NSView {
-    /// Page 栏视图（SwiftUI 桥接）
-    private let pageBarView: PageBarHostingView
-
     /// Metal 渲染层（在底部）
     let renderView: RioMetalView
 
@@ -108,18 +104,26 @@ class RioContainerView: NSView {
     /// 分割线视图列表
     private var dividerViews: [DividerView] = []
 
+    /// Active 终端内发光视图
+    private let activeGlowView: ActiveTerminalGlowView
+
+    /// 发光淡出定时器
+    private var glowFadeOutTimer: Timer?
+
+    /// 发光显示时长（秒）
+    private let glowDisplayDuration: TimeInterval = 3.0
+
     /// 分割线可拖拽区域宽度
     private let dividerHitAreaWidth: CGFloat = 6.0
 
-    /// Page 栏高度
-    private let pageBarHeight: CGFloat = PageBarHostingView.recommendedHeight()
+    /// PageBar 高度（SwiftUI 层的 PageBar，这里需要预留空间）
+    private let pageBarHeight: CGFloat = 28
 
     weak var coordinator: TerminalWindowCoordinator? {
         didSet {
             renderView.coordinator = coordinator
-            setupPageBarCallbacks()
-            updatePageBar()
             // 注意：Coordinator 的注册现在由 WindowManager 在创建窗口时完成
+            // PageBar 已移至 SwiftUI 层（ContentView）
         }
     }
 
@@ -129,17 +133,20 @@ class RioContainerView: NSView {
     }
 
     override init(frame frameRect: NSRect) {
-        pageBarView = PageBarHostingView()
         renderView = RioMetalView()
+        activeGlowView = ActiveTerminalGlowView()
         super.init(frame: frameRect)
 
         // 添加 Metal 层（底层）
         addSubview(renderView)
 
-        // 添加 PageBar（顶层，最后添加确保在最上面）
-        addSubview(pageBarView)
+        // 添加 Active 终端发光层（Metal 层之上）
+        activeGlowView.isHidden = true  // 初始隐藏，有 active panel 时显示
+        addSubview(activeGlowView)
 
-        // 监听 AR 变化，更新 UI
+        // PageBar 已移至 SwiftUI 层（ContentView）
+
+        // 监听状态变化，更新 UI
         setupObservers()
     }
 
@@ -191,95 +198,58 @@ class RioContainerView: NSView {
         guard let window = notification.object as? NSWindow,
               window == self.window else { return }
 
-        // 向所有启用了 Focus Reporting 的终端发送焦点获得事件
-        if let _pool = coordinator?.getTerminalPool() as? TerminalPoolWrapper {
-            // TerminalPoolWrapper 暂不支持 Focus Reporting
-        }
+        // 窗口获得焦点时显示发光效果
+        showActiveGlow()
     }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
               window == self.window else { return }
 
-        // 向所有启用了 Focus Reporting 的终端发送焦点失去事件
-        if let _pool = coordinator?.getTerminalPool() as? TerminalPoolWrapper {
-            // TerminalPoolWrapper 暂不支持 Focus Reporting
-        }
+        // 窗口失去焦点时立即隐藏发光
+        hideActiveGlow()
     }
 
-    /// 设置 Page 栏的回调
-    private func setupPageBarCallbacks() {
+    /// 显示 Active 终端发光效果
+    private func showActiveGlow() {
+        // 取消之前的淡出定时器
+        glowFadeOutTimer?.invalidate()
+
+        // 更新发光位置并显示
         guard let coordinator = coordinator else { return }
+        let panels = coordinator.terminalWindow.allPanels
+        updateActiveGlow(panels: panels, activePanelId: coordinator.activePanelId, forceShow: true)
 
-        pageBarView.onPageClick = { [weak coordinator] pageId in
-            _ = coordinator?.switchToPage(pageId)
-        }
-
-        pageBarView.onPageClose = { [weak coordinator] pageId in
-            _ = coordinator?.closePage(pageId)
-        }
-
-        pageBarView.onPageRename = { [weak coordinator] pageId, newTitle in
-            _ = coordinator?.renamePage(pageId, to: newTitle)
-        }
-
-        pageBarView.onAddPage = { [weak coordinator] in
-            _ = coordinator?.createPage()
-        }
-
-        pageBarView.onPageReorder = { [weak coordinator] pageIds in
-            _ = coordinator?.reorderPages(pageIds)
-        }
-
-        // 跨窗口拖拽：Page 拖出当前窗口
-        pageBarView.onPageDragOutOfWindow = { [weak coordinator, weak self] pageId, screenPoint in
-            guard let coordinator = coordinator,
-                  let page = coordinator.terminalWindow.pages.first(where: { $0.pageId == pageId }) else {
-                return
-            }
-            // 创建新窗口
-            WindowManager.shared.createWindowWithPage(page, from: coordinator, at: screenPoint)
-        }
-
-        // 跨窗口拖拽：从其他窗口接收 Page
-        pageBarView.onPageReceivedFromOtherWindow = { [weak self] pageId, sourceWindowNumber in
-            guard let self = self,
-                  let targetWindow = self.window,
-                  let coordinator = self.coordinator else {
-                return
-            }
-
-            let targetWindowNumber = targetWindow.windowNumber
-            WindowManager.shared.movePage(pageId, from: sourceWindowNumber, to: targetWindowNumber)
+        // 设置淡出定时器
+        glowFadeOutTimer = Timer.scheduledTimer(withTimeInterval: glowDisplayDuration, repeats: false) { [weak self] _ in
+            self?.fadeOutActiveGlow()
         }
     }
 
-    /// 更新 Page 栏
-    func updatePageBar() {
-        guard let coordinator = coordinator else { return }
-
-        // 设置 Page 列表
-        let pages = coordinator.allPages.map { (id: $0.pageId, title: $0.title) }
-        pageBarView.setPages(pages)
-
-        // 设置激活的 Page
-        if let activePageId = coordinator.activePage?.pageId {
-            pageBarView.setActivePage(activePageId)
+    /// 淡出隐藏发光效果
+    private func fadeOutActiveGlow() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.5
+            activeGlowView.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            self?.activeGlowView.isHidden = true
+            self?.activeGlowView.alphaValue = 1  // 重置 alpha 供下次使用
         }
     }
+
+    /// 立即隐藏发光效果
+    private func hideActiveGlow() {
+        glowFadeOutTimer?.invalidate()
+        glowFadeOutTimer = nil
+        activeGlowView.isHidden = true
+    }
+
+    // PageBar 相关回调和更新方法已移至 SwiftUI 层（SwiftUIPageBar）
 
     override func layout() {
         super.layout()
 
-        // PageBar 在顶部
-        pageBarView.frame = CGRect(
-            x: 0,
-            y: bounds.height - pageBarHeight,
-            width: bounds.width,
-            height: pageBarHeight
-        )
-
-        // Metal 层填满 PageBar 下方区域（使用 contentBounds 属性，已考虑对话框空间）
+        // Metal 层填满整个区域（PageBar 已移至 SwiftUI 层）
         renderView.frame = contentBounds
 
         // 更新 Panel UI 视图
@@ -294,7 +264,8 @@ class RioContainerView: NSView {
         return 0
     }
 
-    /// 获取内容区域的 bounds（减去 PageBar 高度和底部预留空间）
+    /// 获取内容区域的 bounds（减去顶部 PageBar 高度和底部预留空间）
+    /// PageBar 在 SwiftUI 层但覆盖在此视图上方，需要预留空间
     var contentBounds: CGRect {
         return CGRect(
             x: 0,
@@ -309,8 +280,7 @@ class RioContainerView: NSView {
             return
         }
 
-        // 更新 Page 栏
-        updatePageBar()
+        // PageBar 已移至 SwiftUI 层，通过 @ObservedObject 自动更新
 
         // 获取当前 Page 的所有 Panel
         let _ = coordinator.terminalWindow.getActiveTabsForRendering(
@@ -360,6 +330,52 @@ class RioContainerView: NSView {
 
         // 更新分割线
         updateDividers()
+
+        // 只更新发光位置，不改变显示状态（显示由窗口焦点控制）
+        updateActiveGlow(panels: panels, activePanelId: coordinator.activePanelId, forceShow: false)
+    }
+
+    /// 更新 Active 终端发光视图
+    /// - Parameters:
+    ///   - panels: 所有 Panel
+    ///   - activePanelId: 激活的 Panel ID
+    ///   - forceShow: 是否强制显示（窗口获得焦点时为 true）
+    private func updateActiveGlow(panels: [EditorPanel], activePanelId: UUID?, forceShow: Bool) {
+        // 只有多个 Panel 时才需要显示发光提示
+        guard panels.count > 1 else {
+            activeGlowView.isHidden = true
+            return
+        }
+
+        // 找到 active panel
+        guard let activePanelId = activePanelId,
+              let activePanel = panels.first(where: { $0.panelId == activePanelId }) else {
+            activeGlowView.isHidden = true
+            return
+        }
+
+        // 计算终端内容区域（panel.bounds 减去 header 高度）
+        let headerHeight: CGFloat = 30.0
+        let panelBounds = activePanel.bounds
+        let contentFrame = CGRect(
+            x: panelBounds.origin.x,
+            y: panelBounds.origin.y,
+            width: panelBounds.width,
+            height: panelBounds.height - headerHeight
+        )
+
+        // 更新发光视图位置
+        activeGlowView.frame = contentFrame
+
+        // 确保发光视图在 Panel UI 之下但在 Metal 层之上
+        activeGlowView.removeFromSuperview()
+        addSubview(activeGlowView, positioned: .above, relativeTo: renderView)
+
+        // 只有 forceShow 时才显示，否则保持当前状态
+        if forceShow {
+            activeGlowView.alphaValue = 1
+            activeGlowView.isHidden = false
+        }
     }
 
     /// 更新分割线视图
@@ -385,8 +401,7 @@ class RioContainerView: NSView {
             view.coordinator = coordinator
             view.splitBounds = splitBounds
             // 分割线必须在 panelUIViews 之上才能接收鼠标事件
-            // 使用 positioned: .below, relativeTo: pageBarView 确保在 pageBar 下面但在其他所有视图之上
-            addSubview(view, positioned: .below, relativeTo: pageBarView)
+            addSubview(view)
             dividerViews.append(view)
         }
     }
@@ -471,8 +486,14 @@ class RioContainerView: NSView {
     }
 
     /// 设置指定 Page 的提醒状态
+    /// PageBar 已移至 SwiftUI 层，通过 Notification 通知
     func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
-        pageBarView.setPageNeedsAttention(pageId, attention: attention)
+        // 通过通知机制传递到 SwiftUI 层
+        NotificationCenter.default.post(
+            name: NSNotification.Name("PageNeedsAttention"),
+            object: nil,
+            userInfo: ["pageId": pageId, "attention": attention]
+        )
     }
 
     deinit {

@@ -4,7 +4,7 @@
 //
 //  单个 Page 的视图
 //
-//  使用 ShuimoTabView 实现水墨风格
+//  使用 SimpleTabView 实现简约风格
 //  支持：
 //  - 点击切换 Page
 //  - 双击编辑标题（重命名）
@@ -33,7 +33,7 @@ final class PageItemView: NSView {
     /// 是否显示关闭按钮
     private var showCloseButton: Bool = true
 
-    /// SwiftUI 水墨标签视图
+    /// SwiftUI 简约标签视图
     private var hostingView: NSView?
 
     /// 是否正在拖拽
@@ -101,32 +101,32 @@ final class PageItemView: NSView {
     /// 设置激活状态
     func setActive(_ active: Bool) {
         isActive = active
-        updateShuimoView()
+        updateCyberView()
     }
 
     /// 更新标题
     func setTitle(_ newTitle: String) {
         title = newTitle
-        updateShuimoView()
+        updateCyberView()
     }
 
     /// 设置是否显示关闭按钮
     func setShowCloseButton(_ show: Bool) {
         showCloseButton = show
-        updateShuimoView()
+        updateCyberView()
     }
 
     /// 设置提醒状态
     func setNeedsAttention(_ attention: Bool) {
         needsAttention = attention
-        updateShuimoView()
+        updateCyberView()
     }
 
     /// 清除提醒状态
     func clearAttention() {
         if needsAttention {
             needsAttention = false
-            updateShuimoView()
+            updateCyberView()
         }
     }
 
@@ -135,14 +135,14 @@ final class PageItemView: NSView {
     private func setupUI() {
         wantsLayer = true
 
-        // 创建水墨标签视图
-        updateShuimoView()
+        // 创建赛博标签视图
+        updateCyberView()
 
         // 添加编辑框
         addSubview(editField)
     }
 
-    private func updateShuimoView() {
+    private func updateCyberView() {
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
@@ -151,9 +151,9 @@ final class PageItemView: NSView {
             self?.onClose?()
         } : nil
 
-        let shuimoTab = ShuimoTabView(title, isActive: isActive, needsAttention: needsAttention, height: 22, onClose: closeAction)
+        let simpleTab = SimpleTabView(title, isActive: isActive, needsAttention: needsAttention, height: 22, onClose: closeAction)
 
-        let hosting = NSHostingView(rootView: shuimoTab)
+        let hosting = NSHostingView(rootView: simpleTab)
         // 让 NSHostingView 使用固有大小，不居中
         hosting.translatesAutoresizingMaskIntoConstraints = true
 
@@ -206,7 +206,7 @@ final class PageItemView: NSView {
             let newTitle = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !newTitle.isEmpty && newTitle != title {
                 title = newTitle
-                updateShuimoView()
+                updateCyberView()
                 // 通知父视图重新布局（pageContainer -> PageBarView）
                 superview?.superview?.needsLayout = true
                 onRename?(newTitle)

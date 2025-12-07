@@ -33,8 +33,8 @@ final class TabItemView: NSView {
     /// 所属 Page 是否激活
     private var isPageActive: Bool = true
 
-    /// SwiftUI 水墨标签视图
-    private var hostingView: NSHostingView<ShuimoTabView>?
+    /// SwiftUI 简约标签视图
+    private var hostingView: NSHostingView<SimpleTabView>?
 
     /// 是否正在拖拽
     private var isDragging: Bool = false
@@ -113,7 +113,7 @@ final class TabItemView: NSView {
     /// 设置激活状态
     func setActive(_ active: Bool) {
         isActive = active
-        updateShuimoView()
+        updateCyberView()
     }
 
     /// 设置所属 Page 是否激活
@@ -125,7 +125,7 @@ final class TabItemView: NSView {
     /// 更新标题
     func setTitle(_ newTitle: String) {
         title = newTitle
-        updateShuimoView()
+        updateCyberView()
     }
 
     // MARK: - Private Methods
@@ -133,8 +133,8 @@ final class TabItemView: NSView {
     private func setupUI() {
         wantsLayer = true
 
-        // 创建水墨标签视图
-        updateShuimoView()
+        // 创建赛博标签视图
+        updateCyberView()
 
         // 添加编辑框
         addSubview(editField)
@@ -144,16 +144,16 @@ final class TabItemView: NSView {
         // 拖拽通过 mouseDown 启动，不需要手势识别器
     }
 
-    private func updateShuimoView() {
+    private func updateCyberView() {
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
         // 创建新的 SwiftUI 视图
-        let shuimoTab = ShuimoTabView(title, isActive: isActive, needsAttention: needsAttention, height: 26) { [weak self] in
+        let simpleTab = SimpleTabView(title, isActive: isActive, needsAttention: needsAttention, height: 26) { [weak self] in
             self?.onClose?()
         }
 
-        let hosting = NSHostingView(rootView: shuimoTab)
+        let hosting = NSHostingView(rootView: simpleTab)
         hosting.frame = bounds
         hosting.autoresizingMask = [.width, .height]
         addSubview(hosting)
@@ -202,7 +202,7 @@ final class TabItemView: NSView {
             let newTitle = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !newTitle.isEmpty && newTitle != title {
                 title = newTitle
-                updateShuimoView()
+                updateCyberView()
                 // 通知父视图重新布局（tabContainer -> PanelHeaderView）
                 superview?.superview?.needsLayout = true
                 onRename?(newTitle)
@@ -394,20 +394,20 @@ extension TabItemView {
 
         // 设置需要注意状态（不自动消失，只有用户点击才消失）
         needsAttention = true
-        updateShuimoView()
+        updateCyberView()
     }
 
     /// 设置提醒状态
     func setNeedsAttention(_ attention: Bool) {
         needsAttention = attention
-        updateShuimoView()
+        updateCyberView()
     }
 
     /// 清除提醒状态
     func clearAttention() {
         if needsAttention {
             needsAttention = false
-            updateShuimoView()
+            updateCyberView()
         }
     }
 

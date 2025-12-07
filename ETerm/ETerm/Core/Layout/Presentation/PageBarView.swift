@@ -170,7 +170,7 @@ struct TrafficLightButton: View {
     }
 }
 
-// MARK: - Page 标签（使用水墨风格）
+// MARK: - Page 标签（使用简约圆角风格）
 
 struct PageTabView: View {
     let title: String
@@ -182,7 +182,7 @@ struct PageTabView: View {
     private let height: CGFloat = 22
 
     var body: some View {
-        ShuimoTabView(
+        SimpleTabView(
             title,
             isActive: isActive,
             height: height,
@@ -565,6 +565,81 @@ struct PageBarControlsView: View {
             .padding(.trailing, 12)
         }
         .frame(height: 28)
+    }
+}
+
+// MARK: - SwiftUIPageBar（用于 ContentView）
+
+/// 纯 SwiftUI 实现的 PageBar，用于在 ContentView 层显示
+/// 解决 NSView 嵌套时 safe area 无法正确传递的问题
+struct SwiftUIPageBar: View {
+    @ObservedObject var coordinator: TerminalWindowCoordinator
+    @ObservedObject private var translationMode = TranslationModeStore.shared
+    @State private var isFullScreen = false
+
+    private let barHeight: CGFloat = 28
+
+    var body: some View {
+        // 读取 updateTrigger 强制刷新
+        let _ = coordinator.updateTrigger
+
+        HStack(spacing: 0) {
+            // 系统红绿灯区域预留空间（全屏时不需要）
+            if !isFullScreen {
+                Spacer().frame(width: 78)
+            } else {
+                Spacer().frame(width: 12)
+            }
+
+            // Page 标签列表
+            HStack(spacing: 2) {
+                ForEach(coordinator.terminalWindow.pages, id: \.pageId) { page in
+                    PageTabView(
+                        title: page.title,
+                        isActive: page.pageId == coordinator.terminalWindow.activePageId,
+                        showCloseButton: coordinator.terminalWindow.pages.count > 1,
+                        onTap: { _ = coordinator.switchToPage(page.pageId) },
+                        onClose: { _ = coordinator.closePage(page.pageId) }
+                    )
+                }
+            }
+
+            Spacer()
+
+            // 添加按钮
+            Button(action: { _ = coordinator.createPage() }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 6)
+
+            // 侧边栏按钮
+            Button(action: {
+                NotificationCenter.default.post(name: NSNotification.Name("ToggleSidebar"), object: nil)
+            }) {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 6)
+
+            StatusTabView(
+                text: translationMode.statusText,
+                isActive: translationMode.isEnabled,
+                onTap: { translationMode.toggle() }
+            )
+            .padding(.trailing, 12)
+        }
+        .frame(height: barHeight)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
+            isFullScreen = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+            isFullScreen = false
+        }
     }
 }
 

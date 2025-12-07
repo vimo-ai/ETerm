@@ -50,35 +50,30 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // 主内容区（终端视图 + 半透明背景）
-            ZStack {
-                // 终端视图（底层）
-                RioTerminalView(coordinator: coordinator)
-                    .frame(minWidth: 400, minHeight: 300)
-                    .ignoresSafeArea()
+            // 终端视图（填满整个窗口）
+            RioTerminalView(coordinator: coordinator)
+                .frame(minWidth: 400, minHeight: 300)
 
-                // 侧边栏选中项的详情视图（覆盖在终端上方，居中显示）
-                if showSidebar, let item = selectedSidebarItem {
-                    sidebarDetailView(for: item)
-                        .transition(.opacity)
-                }
+            // PageBar 在顶部（覆盖在终端上方，与红绿灯同一行）
+            VStack {
+                SwiftUIPageBar(coordinator: coordinator)
+                Spacer()
             }
-            .background(
-                ZStack {
-                    TransparentWindowBackground()
-                    Color.black.opacity(0.3)
-                }
-                .ignoresSafeArea()
-            )
 
-            // 侧边栏（悬浮在左上角）
+            // 侧边栏选中项的详情视图
+            if showSidebar, let item = selectedSidebarItem {
+                sidebarDetailView(for: item)
+                    .transition(.opacity)
+            }
+
+            // 侧边栏（悬浮在左侧）
             if showSidebar {
                 CustomSidebar(
                     selectedItem: $selectedSidebarItem,
                     onClose: {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showSidebar = false
-                            selectedSidebarItem = nil  // 关闭时清除选中项
+                            selectedSidebarItem = nil
                         }
                     }
                 )
@@ -88,6 +83,14 @@ struct ContentView: View {
                 ))
             }
         }
+        .ignoresSafeArea()
+        .background(
+            ZStack {
+                TransparentWindowBackground()
+                Color.black.opacity(0.3)
+            }
+            .ignoresSafeArea()
+        )
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ToggleSidebar"))) { _ in
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
