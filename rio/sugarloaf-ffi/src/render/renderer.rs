@@ -1,6 +1,6 @@
 use crate::domain::TerminalState;
 use crate::domain::views::grid::CellData;
-use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SelectionInfo};
+use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SelectionInfo, SearchMatchInfo};
 use super::cache::{compute_text_hash, compute_state_hash_for_line};
 use super::font::FontContext;
 use super::layout::TextShaper;
@@ -83,6 +83,22 @@ impl Renderer {
                 image
             }
         }
+    }
+
+    /// 打印当前帧的缓存统计并重置
+    pub fn print_frame_stats(&mut self, frame_label: &str) {
+        let total = self.stats.cache_hits + self.stats.layout_hits + self.stats.cache_misses;
+        if total > 0 {
+            let hit_rate = (self.stats.cache_hits as f64 / total as f64) * 100.0;
+            eprintln!("📊 CACHE_STATS [{}] L1_hit={} L2_layout={} L3_miss={} total={} hit_rate={:.1}%",
+                frame_label,
+                self.stats.cache_hits,
+                self.stats.layout_hits,
+                self.stats.cache_misses,
+                total,
+                hit_rate);
+        }
+        self.reset_stats();
     }
 
     /// 从 TerminalState 提取指定行的数据，转换为 BuilderLine
@@ -516,11 +532,61 @@ impl Renderer {
             None
         };
 
+        // 🔧 从 state 动态计算 search_info（不从 layout 缓存读取）
+        // 注意：search 使用绝对坐标，需要转换为屏幕行号进行比较
+        let search_info = if let Some(search) = &state.search {
+            // 转换屏幕行号为绝对行号
+            let abs_line = state.grid.history_size()
+                .saturating_add(line)
+                .saturating_sub(state.grid.display_offset());
+
+            // 使用按行索引快速查找该行的匹配
+            if let Some(indices) = search.get_matches_at_line(abs_line) {
+                // 收集本行的匹配范围
+                let mut ranges = Vec::new();
+                for &idx in indices {
+                    let m = &search.matches[idx];
+                    let is_focused = idx == search.focused_index;
+
+                    // 计算本行的匹配列范围
+                    let start_col = if abs_line == m.start.line {
+                        m.start.col
+                    } else {
+                        0
+                    };
+                    let end_col = if abs_line == m.end.line {
+                        m.end.col
+                    } else {
+                        usize::MAX
+                    };
+
+                    ranges.push((start_col, end_col, is_focused));
+                }
+
+                if !ranges.is_empty() {
+                    Some(SearchMatchInfo {
+                        ranges,
+                        fg_color: self.config.colors.search_match_foreground,
+                        bg_color: self.config.colors.search_match_background,
+                        focused_fg_color: self.config.colors.search_focused_match_foreground,
+                        focused_bg_color: self.config.colors.search_focused_match_background,
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         self.rasterizer
             .render(
                 &layout,
                 cursor_info.as_ref(),
                 selection_info.as_ref(),
+                search_info.as_ref(),
                 line_width,
                 metrics.cell_width.value,
                 metrics.cell_height.value,
@@ -593,12 +659,18 @@ fn get_selection_range_at(pos: &crate::domain::AbsolutePoint, selection: &crate:
 /// # 返回
 /// - `Some(is_focused)`: 在匹配内，返回是否是聚焦的匹配
 /// - `None`: 不在匹配内
+///
+/// # 性能优化
+///
+/// 使用按行索引的 HashMap（`matches_by_line`），避免遍历所有匹配。
+/// 复杂度从 O(matches) 降低到 O(该行的匹配数)。
 fn get_search_match_at(pos: &crate::domain::AbsolutePoint, search: &crate::domain::SearchView) -> Option<bool> {
-    for (i, m) in search.matches.iter().enumerate() {
-        // 检查行是否在匹配范围内
-        if pos.line < m.start.line || pos.line > m.end.line {
-            continue;
-        }
+    // 先通过行号快速查找该行的匹配索引（usize 类型）
+    let indices = search.get_matches_at_line(pos.line)?;
+
+    // 只遍历该行的匹配
+    for &idx in indices {
+        let m = &search.matches[idx];
 
         // 计算本行的匹配列范围
         let start_col = if pos.line == m.start.line {
@@ -615,7 +687,7 @@ fn get_search_match_at(pos: &crate::domain::AbsolutePoint, search: &crate::domai
 
         // 检查列是否在范围内
         if pos.col >= start_col && pos.col <= end_col {
-            let is_focused = i == search.focused_index;
+            let is_focused = idx == search.focused_index;
             return Some(is_focused);
         }
     }

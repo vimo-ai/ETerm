@@ -51,6 +51,21 @@ pub struct SelectionInfo {
     pub bg_color: [f32; 4],
 }
 
+/// 搜索匹配信息（用于渲染时动态覆盖背景色）
+#[derive(Debug, Clone)]
+pub struct SearchMatchInfo {
+    /// 匹配范围列表 (start_col, end_col, is_focused)
+    pub ranges: Vec<(usize, usize, bool)>,
+    /// 普通匹配前景色 (RGBA)
+    pub fg_color: [f32; 4],
+    /// 普通匹配背景色 (RGBA)
+    pub bg_color: [f32; 4],
+    /// 焦点匹配前景色 (RGBA)
+    pub focused_fg_color: [f32; 4],
+    /// 焦点匹配背景色 (RGBA)
+    pub focused_bg_color: [f32; 4],
+}
+
 /// 缓存查询结果
 pub enum CacheResult {
     /// 内层命中：直接返回最终渲染

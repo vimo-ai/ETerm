@@ -1,6 +1,6 @@
 
 use crate::render::cache::GlyphLayout;
-use crate::render::cache::{CursorInfo, SelectionInfo};
+use crate::render::cache::{CursorInfo, SelectionInfo, SearchMatchInfo};
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};
 use rio_backend::ansi::CursorShape;
 use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f};
@@ -23,6 +23,7 @@ impl LineRasterizer {
     /// - layout: 字形布局（字符 + 字体 + 位置）
     /// - cursor_info: 光标信息（从 TerminalState 动态计算，不从 layout 缓存读取）
     /// - selection_info: 选区信息（从 TerminalState 动态计算，不从 layout 缓存读取）
+    /// - search_info: 搜索匹配信息（从 TerminalState 动态计算）
     /// - line_width: 行宽度（像素）
     /// - cell_width: 单元格宽度（像素）
     /// - cell_height: 单元格高度（像素）
@@ -42,6 +43,7 @@ impl LineRasterizer {
         layout: &GlyphLayout,
         cursor_info: Option<&CursorInfo>,
         selection_info: Option<&SelectionInfo>,
+        search_info: Option<&SearchMatchInfo>,
         line_width: f32,
         cell_width: f32,
         cell_height: f32,
@@ -71,7 +73,7 @@ impl LineRasterizer {
         paint.set_anti_alias(true);
 
         // ===== 步骤 4: 遍历字形，绘制字符 =====
-        // 跟踪当前列号（用于选区检测）
+        // 跟踪当前列号（用于选区/搜索检测）
         let mut current_col: usize = 0;
 
         for glyph in &layout.glyphs {
@@ -80,13 +82,30 @@ impl LineRasterizer {
                 current_col >= sel.start_col && current_col <= sel.end_col
             });
 
-            // 确定背景色：选区优先
+            // 检查当前字符是否在搜索匹配内
+            // 返回 Some(is_focused) 表示在匹配内
+            let search_match = search_info.and_then(|info| {
+                info.ranges.iter().find_map(|&(start, end, is_focused)| {
+                    if current_col >= start && current_col <= end {
+                        Some(is_focused)
+                    } else {
+                        None
+                    }
+                })
+            });
+
+            // 确定背景色优先级：选区 > 搜索 > 原始
             let effective_bg_color = if in_selection {
                 // 选区内：使用选区背景色
                 let sel = selection_info.unwrap();
                 Some(Color4f::new(sel.bg_color[0], sel.bg_color[1], sel.bg_color[2], sel.bg_color[3]))
+            } else if let Some(is_focused) = search_match {
+                // 搜索匹配内
+                let info = search_info.unwrap();
+                let bg = if is_focused { info.focused_bg_color } else { info.bg_color };
+                Some(Color4f::new(bg[0], bg[1], bg[2], bg[3]))
             } else {
-                // 非选区：使用字形原有背景色
+                // 非选区非搜索：使用字形原有背景色
                 glyph.background_color
             };
 
@@ -101,10 +120,14 @@ impl LineRasterizer {
                 canvas.draw_rect(rect, &bg_paint);
             }
 
-            // 确定前景色：选区优先
+            // 确定前景色优先级：选区 > 搜索 > 原始
             let effective_fg_color = if in_selection {
                 let sel = selection_info.unwrap();
                 Color4f::new(sel.fg_color[0], sel.fg_color[1], sel.fg_color[2], sel.fg_color[3])
+            } else if let Some(is_focused) = search_match {
+                let info = search_info.unwrap();
+                let fg = if is_focused { info.focused_fg_color } else { info.fg_color };
+                Color4f::new(fg[0], fg[1], fg[2], fg[3])
             } else {
                 glyph.color
             };
@@ -312,6 +335,7 @@ mod tests {
             &layout,
             None,   // cursor_info
             None,   // selection_info
+            None,   // search_info
             800.0,  // line_width
             10.0,   // cell_width
             16.0,   // cell_height
@@ -349,6 +373,7 @@ mod tests {
             &layout,
             None,   // cursor_info
             None,   // selection_info
+            None,   // search_info
             800.0,
             10.0,
             16.0,

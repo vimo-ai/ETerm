@@ -64,13 +64,17 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
     }
 
     // 3. 搜索覆盖本行？（使用绝对行号比较）
+    // 🚀 性能优化：使用按行索引的 HashMap，避免遍历所有匹配
     if let Some(search) = &state.search {
-        for (i, m) in search.matches.iter().enumerate() {
-            if line_in_match(abs_line, m) {
+        // 先通过行号快速查找该行的匹配索引（usize 类型）
+        if let Some(indices) = search.get_matches_at_line(abs_line) {
+            // 只遍历该行的匹配
+            for &idx in indices {
+                let m = &search.matches[idx];
                 let (start_col, end_col) = match_range_on_line(abs_line, m);
                 hasher.write_usize(start_col);
                 hasher.write_usize(end_col);
-                let is_focused = i == search.focused_index;
+                let is_focused = idx == search.focused_index;
                 hasher.write_u8(is_focused as u8);
             }
         }
@@ -97,15 +101,6 @@ fn selection_range_on_line(abs_line: usize, sel: &SelectionView) -> (usize, usiz
     let start_col = if abs_line == sel.start.line { sel.start.col } else { 0 };
     let end_col = if abs_line == sel.end.line { sel.end.col } else { usize::MAX };
     (start_col, end_col)
-}
-
-/// 判断匹配是否覆盖本行
-///
-/// # 参数
-/// - `abs_line`: 绝对行号（已转换）
-/// - `m`: 匹配范围（使用绝对坐标）
-fn line_in_match(abs_line: usize, m: &MatchRange) -> bool {
-    abs_line >= m.start.line && abs_line <= m.end.line
 }
 
 /// 获取匹配在本行的范围
