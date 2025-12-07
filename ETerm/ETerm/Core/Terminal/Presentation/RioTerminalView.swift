@@ -184,6 +184,19 @@ class RioContainerView: NSView {
             name: NSWindow.willCloseNotification,
             object: nil
         )
+
+        // 监听 Active 终端变化（Tab 切换）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(activeTerminalDidChange),
+            name: .activeTerminalDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func activeTerminalDidChange(_ notification: Notification) {
+        // Tab 切换时显示发光效果
+        showActiveGlow()
     }
 
     @objc private func windowWillClose(_ notification: Notification) {

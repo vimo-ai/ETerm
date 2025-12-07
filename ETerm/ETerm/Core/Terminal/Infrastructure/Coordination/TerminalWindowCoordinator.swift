@@ -21,6 +21,13 @@ import CoreGraphics
 import Combine
 import PanelLayoutKit
 
+// MARK: - Notification Names
+
+extension Notification.Name {
+    /// Active 终端变化通知（Tab 切换或 Panel 切换）
+    static let activeTerminalDidChange = Notification.Name("activeTerminalDidChange")
+}
+
 /// 渲染视图协议 - 统一不同的 RenderView 实现
 protocol RenderViewProtocol: AnyObject {
     func requestRender()
@@ -554,6 +561,9 @@ class TerminalWindowCoordinator: ObservableObject {
             objectWillChange.send()
             updateTrigger = UUID()
             scheduleRender()
+
+            // 通知显示 Active 终端发光效果
+            NotificationCenter.default.post(name: .activeTerminalDidChange, object: nil)
         }
     }
 
