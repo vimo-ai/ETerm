@@ -41,6 +41,8 @@ final class PluginManager {
         loadPlugin(WritingAssistantPlugin.self)
         loadPlugin(OneLineCommandPlugin.self)
         loadPlugin(ClaudeMonitorPlugin.self)    // Claude 监控插件
+        loadPlugin(ClaudePlugin.self)           // Claude 集成（Socket Server）
+        loadPlugin(VlaudePlugin.self)           // Vlaude 远程（依赖 Claude）
         // loadPlugin(ExampleSidebarPlugin.self)  // 示例侧边栏插件（已禁用）
         print("🔌 插件管理器已初始化")
     }

@@ -8,6 +8,7 @@ import AppKit
 // MARK: - 简约 Tab 视图
 struct SimpleTabView: View {
     let text: String
+    let emoji: String?
     let isActive: Bool
     let needsAttention: Bool
     let height: CGFloat
@@ -16,8 +17,9 @@ struct SimpleTabView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered: Bool = false
 
-    init(_ text: String, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, onClose: (() -> Void)? = nil) {
+    init(_ text: String, emoji: String? = nil, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, onClose: (() -> Void)? = nil) {
         self.text = text
+        self.emoji = emoji
         self.isActive = isActive
         self.needsAttention = needsAttention
         self.height = height
@@ -89,6 +91,12 @@ struct SimpleTabView: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            // emoji 前缀（如 📱 表示 Mobile 正在查看）
+            if let emoji = emoji {
+                Text(emoji)
+                    .font(.system(size: height * 0.5))
+            }
+
             Text(text)
                 .font(.system(size: height * 0.4))
                 .foregroundColor(textColor)

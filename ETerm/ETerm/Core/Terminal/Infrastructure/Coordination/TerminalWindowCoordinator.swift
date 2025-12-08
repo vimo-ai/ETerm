@@ -159,6 +159,25 @@ class TerminalWindowCoordinator: ObservableObject {
             name: .claudeResponseComplete,
             object: nil
         )
+
+        // 监听 Vlaude 注入请求
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleVlaudeInjectRequest(_:)),
+            name: .vlaudeInjectRequest,
+            object: nil
+        )
+    }
+
+    @objc private func handleVlaudeInjectRequest(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let terminalId = userInfo["terminal_id"] as? Int,
+              let text = userInfo["text"] as? String else {
+            return
+        }
+
+        // 写入输入到指定终端
+        writeInput(terminalId: UInt32(terminalId), data: text)
     }
 
     @objc private func handleClaudeResponseComplete(_ notification: Notification) {

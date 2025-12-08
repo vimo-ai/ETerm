@@ -48,6 +48,9 @@ final class TabItemView: NSView {
     /// Claude 响应完成提醒状态
     private var needsAttention: Bool = false
 
+    /// Tab 前缀 emoji（如 📱 表示 Mobile 正在查看）
+    private var emoji: String?
+
     // MARK: - 回调
 
     /// 点击回调
@@ -98,6 +101,7 @@ final class TabItemView: NSView {
         setupUI()
         setupGestures()
         setupClaudeNotifications()
+        setupVlaudeNotifications()
     }
 
     deinit {
@@ -128,6 +132,12 @@ final class TabItemView: NSView {
         updateCyberView()
     }
 
+    /// 设置 emoji
+    func setEmoji(_ emoji: String?) {
+        self.emoji = emoji
+        updateCyberView()
+    }
+
     // MARK: - Private Methods
 
     private func setupUI() {
@@ -149,7 +159,7 @@ final class TabItemView: NSView {
         hostingView?.removeFromSuperview()
 
         // 创建新的 SwiftUI 视图
-        let simpleTab = SimpleTabView(title, isActive: isActive, needsAttention: needsAttention, height: 26) { [weak self] in
+        let simpleTab = SimpleTabView(title, emoji: emoji, isActive: isActive, needsAttention: needsAttention, height: 26) { [weak self] in
             self?.onClose?()
         }
 
@@ -409,5 +419,33 @@ extension TabItemView {
             updateCyberView()
         }
     }
+}
 
+// MARK: - Vlaude Notification Handling
+
+extension TabItemView {
+    /// 设置 Vlaude 通知监听
+    private func setupVlaudeNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleMobileViewingChanged(_:)),
+            name: .vlaudeMobileViewingChanged,
+            object: nil
+        )
+    }
+
+    @objc private func handleMobileViewingChanged(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let terminalId = userInfo["terminal_id"] as? Int,
+              let isViewing = userInfo["is_viewing"] as? Bool else {
+            return
+        }
+
+        // 检查是否是当前 Tab 的 terminal
+        guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
+            return
+        }
+
+        setEmoji(isViewing ? "📱" : nil)
+    }
 }
