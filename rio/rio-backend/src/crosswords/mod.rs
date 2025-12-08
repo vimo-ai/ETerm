@@ -1074,6 +1074,10 @@ impl<U: EventListener> Crosswords<U> {
         cursor_square.bg = bg;
         cursor_square.flags = flags;
         cursor_square.extra = extra;
+
+        // 标记当前行为 damaged
+        let line = self.grid.cursor.pos.row.0 as usize;
+        self.damage.damage_line(line);
     }
 
     #[inline]
