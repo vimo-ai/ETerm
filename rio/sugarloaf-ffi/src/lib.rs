@@ -1,8 +1,32 @@
 use sugarloaf::font::fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle};
+use sugarloaf::font::FontLibrary;
+use std::sync::OnceLock;
 
 // 同步原语（FairMutex）
 mod sync;
 pub use sync::*;
+
+// ============================================================================
+// 全局共享 FontLibrary（所有 TerminalPool 共享同一个实例）
+// ============================================================================
+
+/// 全局 FontLibrary 单例
+///
+/// 字体库占用约 180MB 内存，通过全局共享避免重复加载
+static GLOBAL_FONT_LIBRARY: OnceLock<FontLibrary> = OnceLock::new();
+
+/// 获取全局共享的 FontLibrary
+///
+/// 首次调用会初始化字体库，后续调用返回同一实例的 clone（Arc 引用计数增加）
+pub fn get_shared_font_library(font_size: f32) -> FontLibrary {
+    GLOBAL_FONT_LIBRARY
+        .get_or_init(|| {
+            let font_spec = create_default_font_spec(font_size);
+            let (font_library, _) = FontLibrary::new(font_spec);
+            font_library
+        })
+        .clone()
+}
 
 // ============================================================================
 // 全局常量

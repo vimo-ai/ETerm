@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use sugarloaf::font::FontLibrary;
-use crate::create_default_font_spec;
 use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, ImageObject, layout::RootStyle};
 use std::ffi::c_void;
 
@@ -170,14 +169,11 @@ impl TerminalPool {
         // 创建 EventQueue
         let event_queue = EventQueue::new();
 
-        // 创建 FontLibrary (为 FontContext 和 Sugarloaf 各创建一个)
-        // 使用统一的字体配置（Maple Mono NF CN + Apple Color Emoji）
-        let font_spec = create_default_font_spec(config.font_size);
-        let (font_library_for_context, _) = FontLibrary::new(font_spec.clone());
-        let (font_library_for_sugarloaf, _) = FontLibrary::new(font_spec);
+        // 获取全局共享的 FontLibrary（所有 TerminalPool 共用同一个实例，节省约 180MB 内存）
+        let font_library = crate::get_shared_font_library(config.font_size);
 
-        // 创建字体上下文
-        let font_context = Arc::new(FontContext::new(font_library_for_context));
+        // 创建字体上下文（clone FontLibrary，只增加 Arc 引用计数）
+        let font_context = Arc::new(FontContext::new(font_library.clone()));
 
         // 创建渲染配置（统一背景色配置源）
         use crate::domain::primitives::LogicalPixels;
@@ -193,8 +189,8 @@ impl TerminalPool {
         // 创建渲染器
         let renderer = Renderer::new(font_context.clone(), render_config.clone());
 
-        // 创建 Sugarloaf（使用 render_config 的背景色）
-        let sugarloaf = Self::create_sugarloaf(&config, &font_library_for_sugarloaf, &render_config)?;
+        // 创建 Sugarloaf（使用共享的 font_library）
+        let sugarloaf = Self::create_sugarloaf(&config, &font_library, &render_config)?;
 
         Ok(Self {
             terminals: HashMap::new(),
