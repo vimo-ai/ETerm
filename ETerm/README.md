@@ -6,27 +6,42 @@
 
 ```
 english/
-├── ETerm/                    # Swift macOS 应用
+├── ETerm/                          # Swift macOS 应用
 │   ├── ETerm/
-│   │   ├── Domain/           # DDD 领域层（聚合根、值对象、服务）
-│   │   ├── Application/      # 应用层（Coordinator、Keyboard）
-│   │   ├── Infrastructure/   # 基础设施层（FFI、渲染）
-│   │   ├── Presentation/     # 表现层（SwiftUI/AppKit 视图）
-│   │   └── Protocols/        # 协议定义
-│   ├── Sugarloaf/            # 静态库目录
-│   └── ARCHITECTURE.md       # 详细架构文档
+│   │   ├── Application/            # 应用层（Command、Event、Input）
+│   │   ├── Core/                   # 核心功能模块
+│   │   │   ├── Keyboard/           # 键盘输入处理、快捷键、IME
+│   │   │   ├── Layout/             # 布局视图（Panel、Tab、Divider）
+│   │   │   ├── Settings/           # 设置界面
+│   │   │   ├── Shared/             # 共享组件和协议
+│   │   │   └── Terminal/           # 终端核心（DDD 架构）
+│   │   │       ├── Domain/         # 聚合根、值对象、领域服务
+│   │   │       ├── Infrastructure/ # FFI、Window、Coordination
+│   │   │       └── Presentation/   # 终端视图
+│   │   ├── Features/               # 功能模块
+│   │   │   ├── AI/                 # AI 服务（翻译、字典）
+│   │   │   └── Plugins/            # 插件系统
+│   │   └── Resources/              # 资源文件
+│   └── ARCHITECTURE.md             # 详细架构文档
 │
-├── sugarloaf-ffi/            # Rust FFI 桥接层
-│   ├── src/
-│   │   ├── lib.rs            # Sugarloaf FFI
-│   │   ├── terminal.rs       # 终端管理 + TerminalPool
-│   │   └── context_grid.rs   # Panel 布局管理
-│   └── Cargo.toml
+├── rio/                            # Rio 终端源码
+│   ├── sugarloaf-ffi/              # Rust FFI 桥接层
+│   │   └── src/
+│   │       ├── app/                # 应用层（TerminalPool、RenderScheduler）
+│   │       ├── domain/             # 领域层（状态、聚合、事件）
+│   │       ├── ffi/                # FFI 导出函数
+│   │       ├── render/             # 渲染层（Renderer、布局、字体）
+│   │       ├── lib.rs              # 库入口
+│   │       └── rio_machine.rs      # Rio 终端状态机
+│   ├── sugarloaf/                  # 渲染引擎
+│   └── ...                         # 其他 Rio 组件
 │
-├── rio/                      # Rio 终端源码（submodule，保持干净）
-└── scripts/
-    ├── update_sugarloaf_dev.sh     # 🚀 开发快速编译（thin LTO）
-    └── build_sugarloaf_release.sh  # 🏗️ 发布完整优化（full LTO）
+├── scripts/
+│   ├── update_sugarloaf_dev.sh     # 🚀 开发快速编译（thin LTO）
+│   └── build_sugarloaf_release.sh  # 🏗️ 发布完整优化（full LTO）
+│
+└── Packages/                       # Swift Package 依赖
+    └── PanelLayoutKit/             # Panel 布局计算库
 ```
 
 ## 快速开始
@@ -70,10 +85,10 @@ xcodebuild -project ETerm/ETerm.xcodeproj -scheme ETerm build
 
 | 层级 | 组件 | 职责 |
 |------|------|------|
-| Domain | TerminalWindow, EditorPanel, TerminalTab | 业务状态、领域逻辑 |
-| Application | TerminalWindowCoordinator, KeyboardSystem | 协调、用户交互处理 |
-| Infrastructure | TerminalPoolWrapper, SugarloafWrapper | Rust FFI 封装 |
-| Presentation | DDDTerminalView, PanelView | UI 渲染 |
+| Domain | TerminalWindow, EditorPanel, TerminalTab, Page | 业务状态、领域逻辑 |
+| Application | CommandService, EventService, InputCoordinator | 命令分发、事件总线、输入协调 |
+| Infrastructure | TerminalPoolWrapper, RenderSchedulerWrapper, WindowManager | Rust FFI 封装、渲染调度、窗口管理 |
+| Presentation | RioTerminalView, PanelView, DomainPanelView | UI 渲染 |
 
 ### 数据流
 
@@ -103,16 +118,23 @@ TabClick → Coordinator.handleTabClick()
 ## 功能模块
 
 ### 终端功能
-- GPU 加速渲染（60 FPS）
+- GPU 加速渲染（60 FPS，Metal/WGPU）
 - 多 Tab / 多 Panel 支持
 - 文本选择和复制
 - 中文输入法支持
 - 字体大小调整 (Cmd+/-)
 
-### 英语学习（集成中）
+### 插件系统
+- **ClaudeMonitor**: Claude 使用量监控和统计
+- **EnglishLearning**: 英语学习功能（翻译、单词查询）
+- **OneLineCommand**: 命令行快捷输入
+- **WritingAssistant**: AI 写作助手
+- **Vlaude**: 远程控制支持
+
+### AI 功能
 - 单词查询 (DictionaryService)
-- 句子理解 (OllamaService)
-- 写作助手
+- 句子翻译 (DashScopeClient)
+- 写作助手 (AIService)
 
 ## 开发指南
 
@@ -138,9 +160,9 @@ TabClick → Coordinator.handleTabClick()
 
 ### 添加新的 FFI 函数
 
-1. 在 `sugarloaf-ffi/src/*.rs` 添加 `#[no_mangle] pub extern "C" fn`
-2. 在 `ETerm/ETerm/SugarloafBridge.h` 添加 C 声明
-3. 在 Swift Wrapper 中封装
+1. 在 `rio/sugarloaf-ffi/src/ffi/*.rs` 添加 `#[no_mangle] pub extern "C" fn`
+2. 在 `ETerm/ETerm/ETerm-Bridging-Header.h` 添加 C 声明
+3. 在 `ETerm/ETerm/Core/Terminal/Infrastructure/FFI/` 中的 Swift Wrapper 封装
 
 ### 坐标系注意
 
@@ -211,4 +233,5 @@ cat .eterm-config/shuimo-theme.toml
 ## 相关文档
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) - DDD 架构详细设计
-- [Presentation/Views/README.md](./ETerm/Presentation/Views/README.md) - UI 组件说明
+- [docs/PLUGIN_DEVELOPMENT_GUIDE.md](./docs/PLUGIN_DEVELOPMENT_GUIDE.md) - 插件开发指南
+- [docs/COORDINATE_SYSTEM_ANALYSIS.md](./docs/COORDINATE_SYSTEM_ANALYSIS.md) - 坐标系分析
