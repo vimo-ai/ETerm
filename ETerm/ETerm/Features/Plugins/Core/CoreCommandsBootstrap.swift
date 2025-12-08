@@ -372,9 +372,44 @@ extension TerminalWindowCoordinator {
         guard let terminalId = getActiveTerminalId() else { return }
 
         let pasteboard = NSPasteboard.general
+
+        // 优先检查文本
         if let text = pasteboard.string(forType: .string) {
             writeInput(terminalId: terminalId, data: text)
+            return
         }
+
+        // 检查图片 (支持 PNG、TIFF、JPEG 等)
+        if let imageData = getImageDataFromPasteboard(pasteboard) {
+            let sequence = createITerm2ImageSequence(from: imageData)
+            writeInput(terminalId: terminalId, data: sequence)
+        }
+    }
+
+    /// 从剪贴板获取图片数据 (PNG 格式)
+    private func getImageDataFromPasteboard(_ pasteboard: NSPasteboard) -> Data? {
+        // 尝试读取 PNG
+        if let data = pasteboard.data(forType: .png) {
+            return data
+        }
+
+        // 尝试读取 TIFF 并转换为 PNG
+        if let data = pasteboard.data(forType: .tiff),
+           let image = NSImage(data: data),
+           let tiffData = image.tiffRepresentation,
+           let bitmap = NSBitmapImageRep(data: tiffData),
+           let pngData = bitmap.representation(using: .png, properties: [:]) {
+            return pngData
+        }
+
+        return nil
+    }
+
+    /// 创建 iTerm2 图片协议序列 (OSC 1337)
+    /// 格式: ESC ] 1337 ; File = inline=1 : <base64> BEL
+    private func createITerm2ImageSequence(from imageData: Data) -> String {
+        let base64String = imageData.base64EncodedString()
+        return "\u{1B}]1337;File=inline=1:\(base64String)\u{07}"
     }
 
     /// 全选
