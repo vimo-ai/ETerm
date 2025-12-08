@@ -8,8 +8,9 @@
 
 import Foundation
 
-/// Claude Stop Hook 调用的事件
+/// Claude Hook 调用的事件
 struct ClaudeResponseCompleteEvent: Codable {
+    let event_type: String?  // "stop" 或 "notification"
     let session_id: String
     let terminal_id: Int
 }
@@ -176,7 +177,6 @@ class ClaudeSocketServer {
         // 解析 JSON
         do {
             let event = try JSONDecoder().decode(ClaudeResponseCompleteEvent.self, from: data)
-//            print("✅ [ClaudeSocket] Received event: session=\(event.session_id), terminal=\(event.terminal_id)")
 
             // 在主线程处理事件
             DispatchQueue.main.async { [weak self] in
@@ -194,7 +194,6 @@ class ClaudeSocketServer {
     // MARK: - Event Handling
 
     private func handleResponseComplete(event: ClaudeResponseCompleteEvent) {
-//        print("🎯 [ClaudeSocket] Handling response complete: session=\(event.session_id), terminal=\(event.terminal_id)")
 
         // 建立映射关系
         ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)

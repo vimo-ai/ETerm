@@ -315,6 +315,9 @@ impl TerminalPool {
         let rows = terminal.rows() as u16;
         let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
+        // 注入 ETERM_TERMINAL_ID 环境变量（用于 Claude Hook 调用）
+        env::set_var("ETERM_TERMINAL_ID", terminal.id().0.to_string());
+
         // 统一使用 spawn 创建 PTY（支持指定工作目录）
         // 如果未指定工作目录，默认使用 $HOME
         let cwd = working_dir.or_else(|| env::var("HOME").ok());

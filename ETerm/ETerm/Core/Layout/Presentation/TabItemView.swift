@@ -387,7 +387,6 @@ extension TabItemView {
         }
 
         // 如果 Tab 已激活 且 Page 也激活，不需要提醒
-        // 只有当 Tab 不是激活状态，或者 Page 不是激活状态时，才需要提醒
         if isActive && isPageActive {
             return
         }

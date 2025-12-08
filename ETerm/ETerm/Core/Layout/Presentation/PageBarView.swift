@@ -176,6 +176,7 @@ struct PageTabView: View {
     let title: String
     let isActive: Bool
     let showCloseButton: Bool
+    var needsAttention: Bool = false
     var onTap: (() -> Void)?
     var onClose: (() -> Void)?
 
@@ -185,6 +186,7 @@ struct PageTabView: View {
         SimpleTabView(
             title,
             isActive: isActive,
+            needsAttention: needsAttention,
             height: height,
             onClose: showCloseButton ? onClose : nil
         )
@@ -270,6 +272,25 @@ final class PageBarHostingView: NSView {
         setupHostingView()
         setupPageContainer()
         setupDragDestination()
+        setupNotificationObservers()
+    }
+
+    private func setupNotificationObservers() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePageNeedsAttention(_:)),
+            name: NSNotification.Name("PageNeedsAttention"),
+            object: nil
+        )
+    }
+
+    @objc private func handlePageNeedsAttention(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let pageId = userInfo["pageId"] as? UUID,
+              let attention = userInfo["attention"] as? Bool else {
+            return
+        }
+        setPageNeedsAttention(pageId, attention: attention)
     }
 
     required init?(coder: NSCoder) {
@@ -576,6 +597,7 @@ struct SwiftUIPageBar: View {
     @ObservedObject var coordinator: TerminalWindowCoordinator
     @ObservedObject private var translationMode = TranslationModeStore.shared
     @State private var isFullScreen = false
+    @State private var pagesNeedingAttention: Set<UUID> = []
 
     private let barHeight: CGFloat = 28
 
@@ -598,7 +620,12 @@ struct SwiftUIPageBar: View {
                         title: page.title,
                         isActive: page.pageId == coordinator.terminalWindow.activePageId,
                         showCloseButton: coordinator.terminalWindow.pages.count > 1,
-                        onTap: { _ = coordinator.switchToPage(page.pageId) },
+                        needsAttention: pagesNeedingAttention.contains(page.pageId),
+                        onTap: {
+                            // 点击时清除提醒状态
+                            pagesNeedingAttention.remove(page.pageId)
+                            _ = coordinator.switchToPage(page.pageId)
+                        },
                         onClose: { _ = coordinator.closePage(page.pageId) }
                     )
                 }
@@ -639,6 +666,18 @@ struct SwiftUIPageBar: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
             isFullScreen = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PageNeedsAttention"))) { notification in
+            guard let userInfo = notification.userInfo,
+                  let pageId = userInfo["pageId"] as? UUID,
+                  let attention = userInfo["attention"] as? Bool else {
+                return
+            }
+            if attention {
+                pagesNeedingAttention.insert(pageId)
+            } else {
+                pagesNeedingAttention.remove(pageId)
+            }
         }
     }
 }
