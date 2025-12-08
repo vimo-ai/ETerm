@@ -2,6 +2,9 @@
 # This file is loaded when ZDOTDIR points to ETerm's shell directory
 # It sources the user's original .zshrc and then loads ETerm integration
 
+# Ensure history file is in user's home directory (not in app bundle)
+export HISTFILE="${ETERM_ORIGINAL_ZDOTDIR:-$HOME}/.zsh_history"
+
 # Restore original ZDOTDIR for any nested shells
 if [[ -n "$ETERM_ORIGINAL_ZDOTDIR" ]]; then
     export ZDOTDIR="$ETERM_ORIGINAL_ZDOTDIR"
