@@ -486,6 +486,9 @@ impl Terminal {
 
             // 创建新的 Selection
             crosswords.selection = Some(Selection::new(backend_kind, crosswords_pos, Side::Left));
+
+            // 标记 damage，触发重新渲染以显示选区高亮
+            crosswords.mark_fully_damaged();
         });
     }
 
@@ -509,6 +512,8 @@ impl Terminal {
             // 更新选区
             if let Some(ref mut selection) = crosswords.selection {
                 selection.update(crosswords_pos, Side::Right);
+                // 标记 damage，触发重新渲染以显示选区高亮
+                crosswords.mark_fully_damaged();
             }
         });
     }
@@ -517,6 +522,8 @@ impl Terminal {
     pub fn clear_selection(&mut self) {
         with_crosswords_mut!(self, crosswords, {
             crosswords.selection = None;
+            // 标记 damage，触发重新渲染以清除选区高亮
+            crosswords.mark_fully_damaged();
         });
     }
 
