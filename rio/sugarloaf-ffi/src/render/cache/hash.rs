@@ -32,9 +32,10 @@ pub fn compute_text_hash(screen_line: usize, state: &TerminalState) -> u64 {
 pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) -> u64 {
     let mut hasher = DefaultHasher::new();
 
-    // 为了正确处理滚动，包含 display_offset 在 hash 中
-    // 这样当滚动时，即使物理行内容不变，state_hash 也会改变
-    hasher.write_usize(state.grid.display_offset());
+    // 🔧 性能优化：移除 display_offset，它已经通过 text_hash (row_hash) 反映了
+    // 之前的设计导致滚动时所有行 state_hash 都变化，L1 缓存完全失效
+    // 如果发现稳定性问题，可以取消注释下面这行
+    // hasher.write_usize(state.grid.display_offset());
 
     // 🔧 将屏幕行号转换为绝对行号，用于和光标/选区/搜索比较
     // 绝对行号 = history_size + screen_line - display_offset

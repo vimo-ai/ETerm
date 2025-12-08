@@ -449,7 +449,8 @@ impl<U: EventListener> Crosswords<U> {
     ) -> Crosswords<U> {
         let cols = dimensions.columns();
         let rows = dimensions.screen_lines();
-        let grid = Grid::new(rows, cols, 10_000);
+        let history_size = dimensions.history_size();
+        let grid = Grid::new(rows, cols, history_size);
         let alt = Grid::new(rows, cols, 0);
 
         let scroll_region = Line(0)..Line(rows as i32);

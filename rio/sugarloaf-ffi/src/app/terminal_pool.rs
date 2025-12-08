@@ -762,6 +762,8 @@ impl TerminalPool {
     /// 完整的渲染循环：begin_frame → render_terminal × N → end_frame
     /// 在 Rust 侧完成，无需 Swift 参与
     pub fn render_all(&mut self) {
+        let frame_start = std::time::Instant::now();
+
         // 获取当前布局
         let layout = {
             let render_layout = self.render_layout.lock();
@@ -782,6 +784,16 @@ impl TerminalPool {
 
         // 结束帧（统一提交渲染）
         self.end_frame();
+
+        // 打印缓存统计
+        {
+            let mut renderer = self.renderer.lock();
+            renderer.print_frame_stats("render_all");
+        }
+
+        let frame_time = frame_start.elapsed().as_micros();
+        eprintln!("⚡️ FRAME_PERF render_all() took {}μs ({:.2}ms)",
+                  frame_time, frame_time as f32 / 1000.0);
     }
 
     /// 调整 Sugarloaf 尺寸
