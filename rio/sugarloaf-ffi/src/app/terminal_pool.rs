@@ -564,7 +564,7 @@ impl TerminalPool {
         };
 
         // 如果需要重建 Surface，先创建
-        if needs_recreate && surface_width > 0 && surface_height > 0 {
+        let surface_recreated = if needs_recreate && surface_width > 0 && surface_height > 0 {
             let new_surface = self.create_terminal_surface(surface_width, surface_height);
             if new_surface.is_none() {
                 eprintln!("❌ [TerminalPool] Failed to create surface for terminal {}", id);
@@ -575,7 +575,10 @@ impl TerminalPool {
             if let Some(entry) = self.terminals.get_mut(&id) {
                 entry.render_state = new_surface;
             }
-        }
+            true
+        } else {
+            false
+        };
 
         // 1. 检查是否有 damage（不清空标记）
         let is_damaged = {
@@ -588,8 +591,9 @@ impl TerminalPool {
             }
         };
 
-        // 2. 如果没有 damage，跳过渲染（复用已有 Surface）
-        if !is_damaged {
+        // 2. 如果没有 damage 且 Surface 未重建，跳过渲染（复用已有 Surface）
+        // 注意：Surface 重建后必须强制渲染，否则新 Surface 是空的
+        if !is_damaged && !surface_recreated {
             return true;
         }
 

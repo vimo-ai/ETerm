@@ -577,6 +577,9 @@ class RioMetalView: NSView, RenderViewProtocol {
     private var requestCount: Int = 0
     private let needsRenderLock = NSLock()
 
+    /// 布局缓存（用于检测布局是否变化）
+    private var lastLayoutHash: Int = 0
+
     // MARK: - 光标闪烁相关（照抄 Rio）
 
     private var lastBlinkToggle: Date?
@@ -708,11 +711,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             needsLayout = true
             layoutSubtreeIfNeeded()
 
-            // 5. 同步布局到 Rust（DPI 变化）
-            coordinator?.syncLayoutToRust()
-
-            // 6. 重新渲染
-            requestRender()
+            // 5. DPI 变化，布局需要重新同步
+            onLayoutChanged()
         }
     }
 
@@ -748,10 +748,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             coordinateMapper = mapper
             coordinator?.setCoordinateMapper(mapper)
 
-            // 3. 同步布局到 Rust（通知各终端尺寸变化）
-            coordinator?.syncLayoutToRust()
-
-            requestRender()
+            // 3. 布局变化，同步到 Rust 并请求渲染
+            onLayoutChanged()
         }
     }
 
@@ -853,6 +851,13 @@ class RioMetalView: NSView, RenderViewProtocol {
             headerHeight: 30.0
         )
 
+        // 计算布局 hash，判断是否变化
+        let currentHash = calculateLayoutHash(tabsToRender)
+        if currentHash == lastLayoutHash {
+            return  // 布局没变，跳过同步
+        }
+        lastLayoutHash = currentHash
+
         // 转换为 Rust 坐标系并设置布局
         let layouts: [(terminalId: Int, x: Float, y: Float, width: Float, height: Float)] = tabsToRender.map { (terminalId, contentBounds) in
             // contentBounds 是 Swift 坐标系（左下角原点）
@@ -867,18 +872,34 @@ class RioMetalView: NSView, RenderViewProtocol {
         pool.setRenderLayout(layouts, containerHeight: Float(bounds.height))
     }
 
+    /// 计算布局的 hash 值
+    ///
+    /// 用于检测布局是否发生变化，避免不必要的 FFI 调用
+    private func calculateLayoutHash(_ tabs: [(UInt32, CGRect)]) -> Int {
+        var hasher = Hasher()
+        for (id, rect) in tabs {
+            hasher.combine(id)
+            // 乘以 100 转换为整数，避免浮点数精度问题
+            hasher.combine(Int(rect.origin.x * 100))
+            hasher.combine(Int(rect.origin.y * 100))
+            hasher.combine(Int(rect.width * 100))
+            hasher.combine(Int(rect.height * 100))
+        }
+        return hasher.finalize()
+    }
+
     // MARK: - RenderViewProtocol
 
-    /// 请求渲染
+    /// 请求渲染（内容变化）
     ///
     /// 新架构下：
-    /// - 同步当前布局到 Rust
+    /// - 同步布局到 Rust（有 hash 缓存，无变化时跳过）
     /// - 标记 needs_render
     /// - Rust 侧在下一个 VSync 时自动渲染
     func requestRender() {
         guard isInitialized else { return }
 
-        // 同步布局到 Rust
+        // 同步布局（有 hash 缓存优化，无变化时自动跳过）
         syncLayoutToRust()
 
         // 通知 Rust 侧需要渲染
@@ -888,6 +909,14 @@ class RioMetalView: NSView, RenderViewProtocol {
         needsRenderLock.lock()
         requestCount += 1
         needsRenderLock.unlock()
+    }
+
+    /// 布局变化通知
+    ///
+    /// 在布局可能变化的场景调用（Tab 切换、窗口 resize、DPI 变化等）
+    private func onLayoutChanged() {
+        syncLayoutToRust()
+        requestRender()
     }
 
     func changeFontSize(operation: FontSizeOperation) {
