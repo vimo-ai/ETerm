@@ -561,9 +561,41 @@ pub fn create_pty_with_spawn(
     builder.stdout(owned_child);
 
     builder.env("USER", user.user);
-    builder.env("HOME", user.home);
+    builder.env("HOME", &user.home);
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
+
+    // ETerm Shell Integration
+    // Set ETERM_SHELL_INTEGRATION to enable shell enhancements
+    builder.env("ETERM_SHELL_INTEGRATION", "1");
+    builder.env("TERM_PROGRAM", "ETerm");
+
+    // Set ZDOTDIR to load ETerm's zsh integration
+    // This hijacks zsh config loading: ETerm's .zshrc loads user's .zshrc then our integration
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(bundle_path) = exe_path.parent().and_then(|p| p.parent()) {
+            // Xcode flattens resources, so check both possible locations
+            let shell_dir = bundle_path.join("Resources/Shell/zsh");
+            let shell_dir_flat = bundle_path.join("Resources");
+
+            let final_dir = if shell_dir.exists() {
+                Some(shell_dir)
+            } else if shell_dir_flat.join("integration.zsh").exists() {
+                Some(shell_dir_flat)
+            } else {
+                None
+            };
+
+            if let Some(dir) = final_dir {
+                // Save original ZDOTDIR so nested shells work correctly
+                if let Ok(original) = std::env::var("ZDOTDIR") {
+                    builder.env("ETERM_ORIGINAL_ZDOTDIR", original);
+                }
+                builder.env("ETERM_SHELL_DIR", &dir);
+                builder.env("ZDOTDIR", &dir);
+            }
+        }
+    }
 
     unsafe {
         builder.pre_exec(move || {
