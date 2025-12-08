@@ -1,37 +1,33 @@
 //! RenderScheduler - 渲染调度器
 //!
-//! DDD 职责分离：
-//! - 持有 DisplayLink（基础设施层）
-//! - 协调 TerminalPool 的渲染
-//! - 管理渲染布局
+//! 职责：
+//! - 持有 DisplayLink（VSync 驱动）
+//! - 在 VSync 时检查 needs_render，如果需要则调用渲染回调
 //!
-//! 不直接持有 TerminalPool，而是通过回调方式触发渲染
+//! 架构变更：
+//! - 旧：DisplayLink → callback → Swift render() → FFI × N
+//! - 新：DisplayLink → Rust render_all()（通过回调，无 Swift 参与）
 
 use crate::display_link::DisplayLink;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// 渲染回调类型
-///
-/// 参数：布局信息 Vec<(terminal_id, x, y, width, height)>
-pub type RenderCallback = Box<dyn Fn(&[(usize, f32, f32, f32, f32)]) + Send + Sync>;
+/// 渲染回调类型（在 Rust 侧完成整个渲染）
+pub type RenderAllCallback = Box<dyn Fn() + Send + Sync>;
 
 /// 渲染调度器
 ///
-/// 负责协调 DisplayLink 和渲染逻辑，不直接依赖 TerminalPool
+/// 在 Rust 侧完成整个渲染循环，Swift 只负责布局同步
 pub struct RenderScheduler {
     /// DisplayLink 实例
     display_link: Option<DisplayLink>,
 
-    /// 是否需要渲染
+    /// 是否需要渲染（与 TerminalPool 共享）
     needs_render: Arc<AtomicBool>,
 
-    /// 渲染布局
-    render_layout: Arc<Mutex<Vec<(usize, f32, f32, f32, f32)>>>,
-
-    /// 渲染回调（由外部设置）
-    render_callback: Arc<Mutex<Option<RenderCallback>>>,
+    /// 渲染回调（调用 pool.render_all()）
+    render_callback: Arc<Mutex<Option<RenderAllCallback>>>,
 }
 
 impl RenderScheduler {
@@ -40,17 +36,16 @@ impl RenderScheduler {
         Self {
             display_link: None,
             needs_render: Arc::new(AtomicBool::new(false)),
-            render_layout: Arc::new(Mutex::new(Vec::new())),
             render_callback: Arc::new(Mutex::new(None)),
         }
     }
 
     /// 设置渲染回调
     ///
-    /// 回调在 DisplayLink VSync 时触发，参数是当前布局
+    /// 回调应该调用 pool.render_all() 完成整个渲染循环
     pub fn set_render_callback<F>(&self, callback: F)
     where
-        F: Fn(&[(usize, f32, f32, f32, f32)]) + Send + Sync + 'static,
+        F: Fn() + Send + Sync + 'static,
     {
         let mut cb = self.render_callback.lock();
         *cb = Some(Box::new(callback));
@@ -59,12 +54,10 @@ impl RenderScheduler {
     /// 启动 DisplayLink
     pub fn start(&mut self) -> bool {
         if self.display_link.is_some() {
-            // eprintln!("⚠️ [RenderScheduler] DisplayLink already running");
             return true;
         }
 
         let needs_render = self.needs_render.clone();
-        let render_layout = self.render_layout.clone();
         let render_callback = self.render_callback.clone();
 
         let display_link = DisplayLink::new(move || {
@@ -74,26 +67,10 @@ impl RenderScheduler {
                 return;
             }
 
-            // 获取布局
-            let layout = {
-                let layout_guard = render_layout.lock();
-                layout_guard.clone()
-            };
-
-            // eprintln!("🔄 [RenderScheduler] Layout count: {}", layout.len());
-
-            // 即使 layout 为空也调用回调（让 Swift 侧处理）
-            // if layout.is_empty() {
-            //     return;
-            // }
-
-            // 调用渲染回调
+            // 调用渲染回调（在 Rust 侧完成整个渲染）
             let cb_guard = render_callback.lock();
             if let Some(ref callback) = *cb_guard {
-                // eprintln!("🔄 [RenderScheduler] Calling render callback");
-                callback(&layout);
-            } else {
-                // eprintln!("⚠️ [RenderScheduler] No render callback set");
+                callback();
             }
         });
 
@@ -101,7 +78,6 @@ impl RenderScheduler {
             Some(dl) => {
                 if dl.start() {
                     self.display_link = Some(dl);
-                    // eprintln!("✅ [RenderScheduler] Started");
                     true
                 } else {
                     eprintln!("❌ [RenderScheduler] Failed to start DisplayLink");
@@ -121,7 +97,6 @@ impl RenderScheduler {
             dl.stop();
         }
         self.display_link = None;
-        // eprintln!("⏹️ [RenderScheduler] Stopped");
     }
 
     /// 请求渲染
@@ -130,15 +105,7 @@ impl RenderScheduler {
         self.needs_render.store(true, Ordering::Release);
     }
 
-    /// 设置渲染布局
-    pub fn set_layout(&self, layout: Vec<(usize, f32, f32, f32, f32)>) {
-        let mut render_layout = self.render_layout.lock();
-        *render_layout = layout;
-    }
-
     /// 获取 needs_render 的 Arc 引用
-    ///
-    /// 可用于与 TerminalPool 的 needs_render 共享
     pub fn needs_render_flag(&self) -> Arc<AtomicBool> {
         self.needs_render.clone()
     }
@@ -147,7 +114,6 @@ impl RenderScheduler {
     ///
     /// 让 RenderScheduler 和 TerminalPool 共享同一个 needs_render 标记
     pub fn bind_needs_render(&mut self, flag: Arc<AtomicBool>) {
-        // eprintln!("🔗 [RenderScheduler] bind_needs_render() - binding to TerminalPool's flag");
         self.needs_render = flag;
     }
 }

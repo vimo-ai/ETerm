@@ -80,6 +80,13 @@ pub struct TerminalPool {
 
     /// 是否需要渲染（dirty 标记，供外部调度器查询）
     needs_render: Arc<AtomicBool>,
+
+    /// 渲染布局（由 Swift 侧设置，Rust 侧使用）
+    /// Vec<(terminal_id, x, y, width, height)>
+    render_layout: Arc<Mutex<Vec<(usize, f32, f32, f32, f32)>>>,
+
+    /// 容器高度（用于坐标转换）
+    container_height: Arc<Mutex<f32>>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -134,6 +141,8 @@ impl TerminalPool {
             event_callback: None,
             config,
             needs_render: Arc::new(AtomicBool::new(false)),
+            render_layout: Arc::new(Mutex::new(Vec::new())),
+            container_height: Arc::new(Mutex::new(0.0)),
         })
     }
 
@@ -276,11 +285,15 @@ impl TerminalPool {
     }
 
     /// 创建 PTY 和 Machine
+    ///
+    /// 默认使用 $HOME 作为工作目录
     fn create_pty_and_machine(
         terminal: &Terminal,
         event_queue: EventQueue,
     ) -> Result<(JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>, channel::Sender<rio_backend::event::Msg>, i32, u32), ErrorCode> {
-        Self::create_pty_and_machine_with_cwd(terminal, event_queue, None)
+        // 默认使用用户 home 目录
+        let home = std::env::var("HOME").ok();
+        Self::create_pty_and_machine_with_cwd(terminal, event_queue, home)
     }
 
     /// 创建 PTY 和 Machine（支持工作目录）
@@ -291,9 +304,8 @@ impl TerminalPool {
         event_queue: EventQueue,
         working_dir: Option<String>,
     ) -> Result<(JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>, channel::Sender<rio_backend::event::Msg>, i32, u32), ErrorCode> {
-        use teletypewriter::{create_pty_with_fork, create_pty_with_spawn};
+        use teletypewriter::create_pty_with_spawn;
         use crate::rio_event::FFIEventListener;
-        use std::borrow::Cow;
         use std::env;
 
         let crosswords = terminal.inner_crosswords()
@@ -303,15 +315,11 @@ impl TerminalPool {
         let rows = terminal.rows() as u16;
         let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
-        // 根据是否有工作目录选择创建方式
-        let pty = if working_dir.is_some() {
-            // 用 spawn 时需要传入 -l 参数启动登录 shell，确保完整初始化
-            create_pty_with_spawn(&shell, vec!["-l".to_string()], &working_dir, cols, rows)
-                .map_err(|_| ErrorCode::RenderError)?
-        } else {
-            create_pty_with_fork(&Cow::Owned(shell), cols, rows)
-                .map_err(|_| ErrorCode::RenderError)?
-        };
+        // 统一使用 spawn 创建 PTY（支持指定工作目录）
+        // 如果未指定工作目录，默认使用 $HOME
+        let cwd = working_dir.or_else(|| env::var("HOME").ok());
+        let pty = create_pty_with_spawn(&shell, vec!["-l".to_string()], &cwd, cols, rows)
+            .map_err(|_| ErrorCode::RenderError)?;
 
         let pty_fd = *pty.child.id;
         let shell_pid = *pty.child.pid as u32;
@@ -389,6 +397,10 @@ impl TerminalPool {
     pub fn input(&self, id: usize, data: &[u8]) -> bool {
         if let Some(entry) = self.terminals.get(&id) {
             crate::rio_machine::send_input(&entry.pty_tx, data);
+            // 输入后标记需要渲染
+            // 某些应用（如 Claude CLI）在 raw 模式下不产生即时回显，
+            // 但仍需要更新光标位置等状态，所以输入后应触发渲染
+            self.needs_render.store(true, Ordering::Release);
             true
         } else {
             false
@@ -544,15 +556,97 @@ impl TerminalPool {
         sugarloaf.render();
         let render_time = frame_start.elapsed().as_micros() - lock_time - set_time;
 
+        // ⚠️ 性能监控日志，请勿删除
         let total_time = frame_start.elapsed().as_micros();
         eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | objects={}",
                   total_time, total_time as f64 / 1000.0, lock_time, set_time, render_time, object_count);
+    }
+
+    // ========================================================================
+    // 布局管理（供 RenderScheduler 使用）
+    // ========================================================================
+
+    /// 设置渲染布局
+    ///
+    /// Swift 侧在布局变化时调用（Tab 切换、窗口 resize 等）
+    /// 坐标已转换为 Rust 坐标系（Y 从顶部开始）
+    ///
+    /// # 参数
+    /// - layout: Vec<(terminal_id, x, y, width, height)>
+    /// - container_height: 容器高度（用于坐标转换）
+    pub fn set_render_layout(&self, layout: Vec<(usize, f32, f32, f32, f32)>, container_height: f32) {
+        {
+            let mut render_layout = self.render_layout.lock();
+            *render_layout = layout;
+        }
+        {
+            let mut height = self.container_height.lock();
+            *height = container_height;
+        }
+    }
+
+    /// 获取渲染布局的 Arc 引用（供 RenderScheduler 使用）
+    pub fn render_layout_ref(&self) -> Arc<Mutex<Vec<(usize, f32, f32, f32, f32)>>> {
+        self.render_layout.clone()
+    }
+
+    /// 获取容器高度的 Arc 引用（供 RenderScheduler 使用）
+    pub fn container_height_ref(&self) -> Arc<Mutex<f32>> {
+        self.container_height.clone()
+    }
+
+    /// 渲染所有布局中的终端（由 RenderScheduler 调用）
+    ///
+    /// 完整的渲染循环：begin_frame → render_terminal × N → end_frame
+    /// 在 Rust 侧完成，无需 Swift 参与
+    pub fn render_all(&mut self) {
+        // 获取当前布局
+        let layout = {
+            let render_layout = self.render_layout.lock();
+            render_layout.clone()
+        };
+
+        if layout.is_empty() {
+            return;
+        }
+
+        // 开始新的一帧
+        self.begin_frame();
+
+        // 渲染每个终端
+        for (terminal_id, x, y, width, height) in &layout {
+            self.render_terminal(*terminal_id, *x, *y, *width, *height);
+        }
+
+        // 结束帧（统一提交渲染）
+        self.end_frame();
     }
 
     /// 调整 Sugarloaf 尺寸
     pub fn resize_sugarloaf(&mut self, width: f32, height: f32) {
         let mut sugarloaf = self.sugarloaf.lock();
         sugarloaf.resize(width as u32, height as u32);
+    }
+
+    /// 设置 DPI 缩放（窗口在不同 DPI 屏幕间移动时调用）
+    ///
+    /// 更新渲染器的 scale factor，确保坐标转换正确
+    pub fn set_scale(&mut self, scale: f32) {
+        // 更新 config 中的 scale
+        self.config.scale = scale;
+
+        // 更新渲染器的 scale
+        let mut renderer = self.renderer.lock();
+        renderer.set_scale(scale);
+        drop(renderer);
+
+        // 更新 Sugarloaf 的 scale
+        let mut sugarloaf = self.sugarloaf.lock();
+        sugarloaf.rescale(scale);
+        drop(sugarloaf);
+
+        // 标记需要重新渲染
+        self.needs_render.store(true, Ordering::Release);
     }
 
     /// 设置事件回调

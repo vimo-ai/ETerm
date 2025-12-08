@@ -232,6 +232,26 @@ pub extern "C" fn terminal_pool_resize_sugarloaf(
     pool.resize_sugarloaf(width, height);
 }
 
+/// 设置 DPI 缩放（窗口在不同 DPI 屏幕间移动时调用）
+///
+/// 当窗口从一个屏幕移动到另一个 DPI 不同的屏幕时，Swift 端需要调用此函数
+/// 更新 Rust 端的 scale factor，确保：
+/// - 字体度量计算正确
+/// - 选区坐标转换正确
+/// - 渲染位置计算正确
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_scale(
+    handle: *mut TerminalPoolHandle,
+    scale: f32,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.set_scale(scale);
+}
+
 /// 设置事件回调
 #[no_mangle]
 pub extern "C" fn terminal_pool_set_event_callback(
@@ -435,4 +455,70 @@ pub extern "C" fn terminal_pool_clear_search(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
     pool.clear_search(terminal_id);
+}
+
+// ===== 渲染布局（新架构） =====
+
+/// 渲染布局信息
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TerminalRenderLayout {
+    pub terminal_id: usize,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// 设置渲染布局（新架构）
+///
+/// Swift 侧在布局变化时调用（Tab 切换、窗口 resize 等）
+/// Rust 侧在 VSync 时使用此布局进行渲染
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - layout: 布局数组
+/// - count: 布局数量
+/// - container_height: 容器高度（用于坐标转换）
+///
+/// # 注意
+/// 坐标应已转换为 Rust 坐标系（Y 从顶部开始）
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_render_layout(
+    handle: *mut TerminalPoolHandle,
+    layout: *const TerminalRenderLayout,
+    count: usize,
+    container_height: f32,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    let layouts = if layout.is_null() || count == 0 {
+        Vec::new()
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(layout, count) };
+        slice
+            .iter()
+            .map(|l| (l.terminal_id, l.x, l.y, l.width, l.height))
+            .collect()
+    };
+
+    pool.set_render_layout(layouts, container_height);
+}
+
+/// 触发一次完整渲染（新架构）
+///
+/// 通常不需要手动调用，RenderScheduler 会自动在 VSync 时调用
+/// 此接口用于特殊情况（如初始化、强制刷新）
+#[no_mangle]
+pub extern "C" fn terminal_pool_render_all(handle: *mut TerminalPoolHandle) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.render_all();
 }

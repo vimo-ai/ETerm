@@ -1,9 +1,14 @@
 //! RenderScheduler FFI - 渲染调度器（CVDisplayLink）
+//!
+//! 新架构：Rust 侧完成整个渲染循环
+//! - Swift 只负责设置布局（terminal_pool_set_render_layout）
+//! - Rust 在 VSync 时自动调用 pool.render_all()
 
 use crate::app::RenderScheduler;
 use crate::app::TerminalPool;
 use crate::ffi::terminal_pool::TerminalPoolHandle;
 use std::ffi::c_void;
+
 
 /// RenderScheduler 句柄（不透明指针）
 #[repr(C)]
@@ -11,7 +16,7 @@ pub struct RenderSchedulerHandle {
     _private: [u8; 0],
 }
 
-/// 渲染布局信息
+/// 渲染布局信息（兼容旧接口）
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RenderLayout {
@@ -21,18 +26,6 @@ pub struct RenderLayout {
     pub width: f32,
     pub height: f32,
 }
-
-/// 渲染回调类型
-///
-/// 在 VSync 时触发，Swift 侧应该在回调中执行渲染：
-/// - terminal_pool_begin_frame
-/// - terminal_pool_render_terminal (for each layout item)
-/// - terminal_pool_end_frame
-pub type RenderSchedulerCallback = extern "C" fn(
-    context: *mut c_void,
-    layout: *const RenderLayout,
-    layout_count: usize,
-);
 
 /// 创建 RenderScheduler
 #[no_mangle]
@@ -53,39 +46,34 @@ pub extern "C" fn render_scheduler_destroy(handle: *mut RenderSchedulerHandle) {
     }
 }
 
-/// 设置渲染回调
+/// 绑定到 TerminalPool（新架构）
 ///
-/// 回调在 CVDisplayLink VSync 时触发
+/// 绑定后：
+/// - RenderScheduler 和 TerminalPool 共享 needs_render 标记
+/// - RenderScheduler 在 VSync 时直接调用 pool.render_all()
+/// - 无需 Swift 参与渲染循环
 #[no_mangle]
-pub extern "C" fn render_scheduler_set_callback(
-    handle: *mut RenderSchedulerHandle,
-    callback: RenderSchedulerCallback,
-    context: *mut c_void,
+pub extern "C" fn render_scheduler_bind_to_pool(
+    scheduler_handle: *mut RenderSchedulerHandle,
+    pool_handle: *mut TerminalPoolHandle,
 ) {
-    if handle.is_null() {
+    if scheduler_handle.is_null() || pool_handle.is_null() {
         return;
     }
 
-    let scheduler = unsafe { &*(handle as *const RenderScheduler) };
+    let scheduler = unsafe { &mut *(scheduler_handle as *mut RenderScheduler) };
+    let pool = unsafe { &mut *(pool_handle as *mut TerminalPool) };
 
-    // 包装 C 回调为 Rust 闭包
-    // 注意：context 需要是 Send + Sync（Swift 侧保证）
-    let context_ptr = context as usize; // 转成 usize 来满足 Send + Sync
-    scheduler.set_render_callback(move |layout: &[(usize, f32, f32, f32, f32)]| {
-        // 转换布局格式
-        let layouts: Vec<RenderLayout> = layout
-            .iter()
-            .map(|&(terminal_id, x, y, width, height)| RenderLayout {
-                terminal_id,
-                x,
-                y,
-                width,
-                height,
-            })
-            .collect();
+    // 共享 needs_render 标记
+    scheduler.bind_needs_render(pool.needs_render_flag());
 
-        // 调用 C 回调
-        callback(context_ptr as *mut c_void, layouts.as_ptr(), layouts.len());
+    // 设置渲染回调：直接调用 pool.render_all()
+    // 使用 usize 传递指针，绕过 Send + Sync 检查
+    // Safety: pool 的生命周期由 Swift 管理，保证在 RenderScheduler 生命周期内有效
+    let pool_addr = pool_handle as usize;
+    scheduler.set_render_callback(move || {
+        let pool = unsafe { &mut *(pool_addr as *mut TerminalPool) };
+        pool.render_all();
     });
 }
 
@@ -122,48 +110,38 @@ pub extern "C" fn render_scheduler_request_render(handle: *mut RenderSchedulerHa
     scheduler.request_render();
 }
 
-/// 设置渲染布局
-///
-/// 布局信息会在下次 VSync 回调时传给回调函数
-#[no_mangle]
-pub extern "C" fn render_scheduler_set_layout(
-    handle: *mut RenderSchedulerHandle,
+// ============================================================================
+// 兼容旧接口（将被废弃）
+// ============================================================================
+
+/// 渲染回调类型（旧接口，已废弃）
+pub type RenderSchedulerCallback = extern "C" fn(
+    context: *mut c_void,
     layout: *const RenderLayout,
-    count: usize,
+    layout_count: usize,
+);
+
+/// 设置渲染回调（旧接口，已废弃）
+///
+/// 新架构下不再需要，渲染完全在 Rust 侧完成
+#[no_mangle]
+pub extern "C" fn render_scheduler_set_callback(
+    _handle: *mut RenderSchedulerHandle,
+    _callback: RenderSchedulerCallback,
+    _context: *mut c_void,
 ) {
-    if handle.is_null() {
-        return;
-    }
-
-    let scheduler = unsafe { &*(handle as *const RenderScheduler) };
-
-    let layouts = if layout.is_null() || count == 0 {
-        Vec::new()
-    } else {
-        let slice = unsafe { std::slice::from_raw_parts(layout, count) };
-        slice
-            .iter()
-            .map(|l| (l.terminal_id, l.x, l.y, l.width, l.height))
-            .collect()
-    };
-
-    scheduler.set_layout(layouts);
+    // 新架构下不再需要此接口
+    eprintln!("⚠️ [RenderScheduler] render_scheduler_set_callback is deprecated, rendering is now done in Rust");
 }
 
-/// 绑定到 TerminalPool 的 needs_render 标记
+/// 设置渲染布局（旧接口，已废弃）
 ///
-/// 让 RenderScheduler 和 TerminalPool 共享同一个 dirty 标记
+/// 新架构下应使用 terminal_pool_set_render_layout
 #[no_mangle]
-pub extern "C" fn render_scheduler_bind_to_pool(
-    scheduler_handle: *mut RenderSchedulerHandle,
-    pool_handle: *mut TerminalPoolHandle,
+pub extern "C" fn render_scheduler_set_layout(
+    _handle: *mut RenderSchedulerHandle,
+    _layout: *const RenderLayout,
+    _count: usize,
 ) {
-    if scheduler_handle.is_null() || pool_handle.is_null() {
-        return;
-    }
-
-    let scheduler = unsafe { &mut *(scheduler_handle as *mut RenderScheduler) };
-    let pool = unsafe { &*(pool_handle as *const TerminalPool) };
-
-    scheduler.bind_needs_render(pool.needs_render_flag());
+    eprintln!("⚠️ [RenderScheduler] render_scheduler_set_layout is deprecated, use terminal_pool_set_render_layout");
 }

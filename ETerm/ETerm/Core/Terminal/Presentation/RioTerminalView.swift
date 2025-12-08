@@ -563,22 +563,19 @@ class RioMetalView: NSView, RenderViewProtocol {
     private var coordinateMapper: CoordinateMapper?
 
 
-    // MARK: - Render Scheduler（帧率限制 - Rust CVDisplayLink）
+    // MARK: - Render Scheduler（Rust 侧渲染）
 
-    /// Rust 侧的渲染调度器（新架构使用，替代 Swift CVDisplayLink）
+    /// Rust 侧的渲染调度器
+    ///
+    /// 新架构：
+    /// - RenderScheduler 绑定到 TerminalPool
+    /// - 在 VSync 时自动调用 pool.render_all()
+    /// - Swift 只负责同步布局
     private var renderScheduler: RenderSchedulerWrapper?
 
-    /// 需要渲染的标记（原子操作）
-    private var needsRender = false
+    /// 渲染请求统计（用于调试）
+    private var requestCount: Int = 0
     private let needsRenderLock = NSLock()
-
-    /// 渲染性能统计
-    private var renderCount: Int = 0
-    private var lastStatTime: Date = Date()
-    private var skipCount: Int = 0  // CVDisplayLink 跳过的帧数
-    private var totalRenderTime: TimeInterval = 0  // 累计渲染耗时
-    private var maxRenderTime: TimeInterval = 0    // 最大单帧耗时
-    private var requestCount: Int = 0  // requestRender 调用次数
 
     // MARK: - 光标闪烁相关（照抄 Rio）
 
@@ -699,19 +696,22 @@ class RioMetalView: NSView, RenderViewProtocol {
             // 1. 更新 layer 的 scale
             layer?.contentsScale = newScale
 
-            // 2. 更新 CoordinateMapper
+            // 2. 通知 Rust 更新 scale（关键！确保字体度量和选区坐标正确）
+            terminalPool?.setScale(Float(newScale))
+
+            // 3. 更新 CoordinateMapper
             let mapper = CoordinateMapper(scale: newScale, containerBounds: bounds)
             coordinateMapper = mapper
             coordinator?.setCoordinateMapper(mapper)
 
-            // 3. 触发 layout（确保 resize 被正确调用）
+            // 4. 触发 layout（确保 resize 被正确调用）
             needsLayout = true
             layoutSubtreeIfNeeded()
 
-            // 4. 同步布局到 Rust（DPI 变化）
+            // 5. 同步布局到 Rust（DPI 变化）
             coordinator?.syncLayoutToRust()
 
-            // 5. 重新渲染
+            // 6. 重新渲染
             requestRender()
         }
     }
@@ -766,7 +766,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 优先使用 window 关联的 screen 的 scale，更可靠
         let effectiveScale = window.screen?.backingScaleFactor ?? window.backingScaleFactor
 
-        print("📐 [RioMetalView] Initializing TerminalPoolWrapper (bounds: \(bounds.width)x\(bounds.height), scale: \(effectiveScale))")
+        // TerminalPoolWrapper 初始化
 
         // 创建 TerminalPoolWrapper
         terminalPool = TerminalPoolWrapper(
@@ -778,10 +778,7 @@ class RioMetalView: NSView, RenderViewProtocol {
             fontSize: 14.0
         )
 
-        guard let pool = terminalPool else {
-            print("⚠️ [RioMetalView] Failed to create TerminalPoolWrapper")
-            return
-        }
+        guard let pool = terminalPool else { return }
 
         // 设置渲染回调
         pool.setRenderCallback { [weak self] in
@@ -815,92 +812,82 @@ class RioMetalView: NSView, RenderViewProtocol {
     // MARK: - Render Scheduler Setup (Rust CVDisplayLink)
 
     /// 设置 Rust 侧的渲染调度器
+    ///
+    /// 新架构：
+    /// - RenderScheduler 绑定到 TerminalPool
+    /// - 在 VSync 时自动调用 pool.render_all()
+    /// - Swift 只负责同步布局，不参与渲染循环
     private func setupRenderScheduler() {
-        guard let pool = terminalPool else {
-            print("⚠️ [RenderScheduler] TerminalPool not ready")
-            return
-        }
+        guard let pool = terminalPool else { return }
 
         // 创建 RenderScheduler
         let scheduler = RenderSchedulerWrapper()
         self.renderScheduler = scheduler
 
-        // 绑定到 TerminalPool（共享 needs_render 标记）
+        // 绑定到 TerminalPool
+        // - 共享 needs_render 标记
+        // - 在 VSync 时自动调用 pool.render_all()
         scheduler.bind(to: pool)
 
-        // 设置渲染回调
-        scheduler.setRenderCallback { [weak self] in
-            self?.renderIfNeeded()
-        }
-
         // 启动
-        if scheduler.start() {
-            print("✅ [RioMetalView] RenderScheduler started (Rust CVDisplayLink)")
-        }
+        _ = scheduler.start()
+
+        // 初始同步布局
+        syncLayoutToRust()
     }
 
-    // MARK: - Rendering
+    // MARK: - Layout Sync (New Architecture)
 
-    /// 仅在需要时渲染（由 RenderScheduler 调用）
-    private func renderIfNeeded() {
-        needsRenderLock.lock()
-        let shouldRender = needsRender
-        needsRender = false
-        needsRenderLock.unlock()
+    /// 同步布局到 Rust 侧
+    ///
+    /// 在布局变化时调用（Tab 切换、窗口 resize 等）
+    /// Rust 侧会在下一个 VSync 时使用此布局进行渲染
+    private func syncLayoutToRust() {
+        guard isInitialized,
+              let pool = terminalPool,
+              let coordinator = coordinator else { return }
 
-        if shouldRender {
-            // 测量渲染耗时
-            let startTime = Date()
-            render()
-            let renderTime = Date().timeIntervalSince(startTime)
+        // 获取所有需要渲染的终端及其位置
+        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
+            containerBounds: bounds,
+            headerHeight: 30.0
+        )
 
-            renderCount += 1
-            totalRenderTime += renderTime
-            maxRenderTime = max(maxRenderTime, renderTime)
-
-            // 每秒统计一次
-            let now = Date()
-            if now.timeIntervalSince(lastStatTime) >= 1.0 {
-                let duration = now.timeIntervalSince(lastStatTime)
-                let fps = Double(renderCount) / duration
-                let avgRenderTime = renderCount > 0 ? totalRenderTime / Double(renderCount) * 1000 : 0
-                let maxRenderTimeMs = maxRenderTime * 1000
-                let skipRate = Double(skipCount) / Double(renderCount + skipCount) * 100
-
-                // 性能统计日志（已注释，需要时取消注释）
-                // print("📊 [Performance Stats]")
-                // print("   FPS: \(String(format: "%.1f", fps)) (actual renders)")
-                // print("   requestRender() calls: \(requestCount) (\(String(format: "%.1f", Double(requestCount) / duration))/sec)")
-                // print("   Skipped frames: \(skipCount) (\(String(format: "%.1f", skipRate))%)")
-                // print("   Avg render time: \(String(format: "%.2f", avgRenderTime))ms")
-                // print("   Max render time: \(String(format: "%.2f", maxRenderTimeMs))ms")
-
-                // 重置统计
-                renderCount = 0
-                skipCount = 0
-                requestCount = 0
-                totalRenderTime = 0
-                maxRenderTime = 0
-                lastStatTime = now
-            }
-        } else {
-            skipCount += 1
+        // 转换为 Rust 坐标系并设置布局
+        let layouts: [(terminalId: Int, x: Float, y: Float, width: Float, height: Float)] = tabsToRender.map { (terminalId, contentBounds) in
+            // contentBounds 是 Swift 坐标系（左下角原点）
+            // 转换为 Rust 坐标系（左上角原点）
+            let x = Float(contentBounds.origin.x)
+            let y = Float(bounds.height - contentBounds.origin.y - contentBounds.height)
+            let width = Float(contentBounds.width)
+            let height = Float(contentBounds.height)
+            return (terminalId: Int(terminalId), x: x, y: y, width: width, height: height)
         }
+
+        pool.setRenderLayout(layouts, containerHeight: Float(bounds.height))
     }
 
     // MARK: - RenderViewProtocol
 
+    /// 请求渲染
+    ///
+    /// 新架构下：
+    /// - 同步当前布局到 Rust
+    /// - 标记 needs_render
+    /// - Rust 侧在下一个 VSync 时自动渲染
     func requestRender() {
         guard isInitialized else { return }
 
-        // 只标记需要渲染，实际渲染由 CVDisplayLink 在下一帧执行
+        // 同步布局到 Rust
+        syncLayoutToRust()
+
+        // 通知 Rust 侧需要渲染
+        renderScheduler?.requestRender()
+
+        // 更新统计
         needsRenderLock.lock()
-        needsRender = true
         requestCount += 1
         needsRenderLock.unlock()
-
-        // 通知 Rust 侧的 RenderScheduler
-        renderScheduler?.requestRender()
     }
 
     func changeFontSize(operation: FontSizeOperation) {
@@ -921,44 +908,8 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
 
-    /// 渲染所有 Panel（多终端支持）
-    ///
-    /// 三层分离架构：
-    /// - 高层数据层：TerminalWindowCoordinator 管理布局信息
-    /// - 同步层：布局变化时主动调用 syncLayoutToRust()
-    /// - 渲染层：每帧只负责纯渲染，不管布局
-    private func render() {
-        // 关键检查：如果已清理或未初始化，不执行渲染
-        guard isInitialized else { return }
-
-        // 新架构：统一提交模式
-        // beginFrame() → renderTerminal(id, x, y) × N → endFrame()
-        guard let pool = terminalPool,
-              let coordinator = coordinator else { return }
-
-        // 获取所有需要渲染的终端及其位置
-        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
-            containerBounds: bounds,
-            headerHeight: 30.0
-        )
-
-        // 开始新的一帧
-        pool.beginFrame()
-
-        // 渲染每个终端到指定位置
-        for (terminalId, contentBounds) in tabsToRender {
-            // contentBounds 是 Swift 坐标系（左下角原点）
-            // 需要转换为 Rust 坐标系（左上角原点）
-            let x = Float(contentBounds.origin.x)
-            let y = Float(bounds.height - contentBounds.origin.y - contentBounds.height)
-            let width = Float(contentBounds.width)
-            let height = Float(contentBounds.height)
-            _ = pool.renderTerminal(Int(terminalId), x: x, y: y, width: width, height: height)
-        }
-
-        // 结束帧（统一提交渲染）
-        pool.endFrame()
-    }
+    // render() 已移除 - 新架构下渲染完全在 Rust 侧完成
+    // Swift 只负责通过 syncLayoutToRust() 同步布局
 
     /// 检查位置是否在选区内
     private func isInSelection(
@@ -1105,6 +1056,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 转换为终端序列并发送到当前激活终端
+        // 不主动触发渲染，依赖 Wakeup 事件（终端有输出时自动触发）
         if shouldHandleDirectly(keyStroke) {
             let sequence = keyStroke.toTerminalSequence()
             if !sequence.isEmpty {
@@ -1619,7 +1571,8 @@ extension RioMetalView: NSTextInputClient {
         let imeCoord = coordinator?.keyboardSystem?.imeCoordinator ?? imeCoordinator
         let committedText = imeCoord.commitText(text)
 
-        // 新架构：发送键盘输入到当前激活的终端
+        // 发送键盘输入到当前激活的终端
+        // 不主动触发渲染，依赖 Wakeup 事件（终端有输出时自动触发）
         if let terminalId = coordinator?.getActiveTerminalId() {
             _ = terminalPool?.writeInput(terminalId: Int(terminalId), data: committedText)
         }

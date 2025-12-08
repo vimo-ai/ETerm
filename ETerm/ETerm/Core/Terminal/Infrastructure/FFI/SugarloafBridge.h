@@ -159,6 +159,17 @@ void terminal_pool_resize_sugarloaf(
     float height
 );
 
+/// Set DPI scale (call when window moves between screens with different DPI)
+///
+/// Updates Rust-side scale factor to ensure:
+/// - Correct font metrics calculation
+/// - Correct selection coordinate conversion
+/// - Correct render position calculation
+void terminal_pool_set_scale(
+    TerminalPoolHandle handle,
+    float scale
+);
+
 /// Set event callback
 void terminal_pool_set_event_callback(
     TerminalPoolHandle handle,
@@ -447,12 +458,47 @@ void render_scheduler_set_layout(
     size_t count
 );
 
-/// Bind to TerminalPool's needs_render flag
+/// Bind to TerminalPool (new architecture)
 ///
-/// Let RenderScheduler and TerminalPool share the same dirty flag
+/// After binding:
+/// - RenderScheduler and TerminalPool share needs_render flag
+/// - RenderScheduler calls pool.render_all() on VSync
+/// - No Swift involvement in render loop
 void render_scheduler_bind_to_pool(
     RenderSchedulerHandle scheduler_handle,
     TerminalPoolHandle pool_handle
 );
+
+// ============================================================================
+// New Architecture: Rust-side rendering
+// ============================================================================
+
+/// Terminal render layout info (new architecture)
+typedef struct {
+    size_t terminal_id;
+    float x;
+    float y;
+    float width;
+    float height;
+} TerminalRenderLayout;
+
+/// Set render layout (new architecture)
+///
+/// Swift calls this when layout changes (tab switch, window resize, etc.)
+/// Rust uses this layout for rendering on VSync
+///
+/// Note: Coordinates should be in Rust coordinate system (Y from top)
+void terminal_pool_set_render_layout(
+    TerminalPoolHandle handle,
+    const TerminalRenderLayout* layout,
+    size_t count,
+    float container_height
+);
+
+/// Trigger a full render (new architecture)
+///
+/// Usually not needed, RenderScheduler calls this automatically on VSync
+/// This is for special cases (initialization, force refresh)
+void terminal_pool_render_all(TerminalPoolHandle handle);
 
 #endif /* SugarloafBridge_h */

@@ -420,6 +420,17 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         terminal_pool_resize_sugarloaf(handle, width, height)
     }
 
+    /// 设置 DPI 缩放（窗口在不同 DPI 屏幕间移动时调用）
+    ///
+    /// 更新 Rust 端的 scale factor，确保：
+    /// - 字体度量计算正确
+    /// - 选区坐标转换正确
+    /// - 渲染位置计算正确
+    func setScale(_ scale: Float) {
+        guard let handle = handle else { return }
+        terminal_pool_set_scale(handle, scale)
+    }
+
     // MARK: - Search Methods
 
     /// 搜索文本
@@ -477,5 +488,44 @@ extension TerminalPoolWrapper {
             _ = renderTerminal(terminal.id, x: terminal.x, y: terminal.y)
         }
         endFrame()
+    }
+
+    // MARK: - New Architecture: Rust-side Rendering
+
+    /// 设置渲染布局（新架构）
+    ///
+    /// Swift 侧在布局变化时调用（Tab 切换、窗口 resize 等）
+    /// Rust 侧在 VSync 时使用此布局进行渲染
+    ///
+    /// - Parameters:
+    ///   - layouts: 布局数组 (terminalId, x, y, width, height)
+    ///   - containerHeight: 容器高度（用于坐标转换）
+    ///
+    /// - Note: 坐标应已转换为 Rust 坐标系（Y 从顶部开始）
+    func setRenderLayout(_ layouts: [(terminalId: Int, x: Float, y: Float, width: Float, height: Float)], containerHeight: Float) {
+        guard let handle = handle else { return }
+
+        var cLayouts = layouts.map { layout in
+            TerminalRenderLayout(
+                terminal_id: layout.terminalId,
+                x: layout.x,
+                y: layout.y,
+                width: layout.width,
+                height: layout.height
+            )
+        }
+
+        cLayouts.withUnsafeMutableBufferPointer { buffer in
+            terminal_pool_set_render_layout(handle, buffer.baseAddress, buffer.count, containerHeight)
+        }
+    }
+
+    /// 触发一次完整渲染（新架构）
+    ///
+    /// 通常不需要手动调用，RenderScheduler 会自动在 VSync 时调用
+    /// 此接口用于特殊情况（如初始化、强制刷新）
+    func renderAll() {
+        guard let handle = handle else { return }
+        terminal_pool_render_all(handle)
     }
 }
