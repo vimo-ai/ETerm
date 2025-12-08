@@ -82,12 +82,8 @@ struct SimpleTabView: View {
     /// 圆角大小
     private var cornerRadius: CGFloat { height * 0.25 }
 
-    /// 内容宽度计算
-    private var contentWidth: CGFloat {
-        let textWidth = text.size(withAttributes: [.font: NSFont.systemFont(ofSize: height * 0.4)]).width
-        let closeButtonWidth: CGFloat = onClose != nil ? (height * 0.35 + 8) : 0
-        return textWidth + closeButtonWidth + 20
-    }
+    /// 固定宽度
+    private var tabWidth: CGFloat { 180 }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -101,6 +97,7 @@ struct SimpleTabView: View {
                 .font(.system(size: height * 0.4))
                 .foregroundColor(textColor)
                 .lineLimit(1)
+                .truncationMode(.tail)
 
             if let onClose = onClose {
                 Button(action: onClose) {
@@ -112,7 +109,7 @@ struct SimpleTabView: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: height)
+        .frame(width: tabWidth, height: height)
         .background(
             RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(backgroundColor)
