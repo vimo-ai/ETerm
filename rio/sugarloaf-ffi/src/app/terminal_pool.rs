@@ -641,7 +641,7 @@ impl TerminalPool {
     ///
     /// 从缓存获取 Image，贴图合成到最终画面
     pub fn end_frame(&mut self) {
-        let frame_start = std::time::Instant::now();
+        // let frame_start = std::time::Instant::now();
 
         // 从 layout 获取当前需要渲染的终端
         let layout = {
@@ -657,7 +657,7 @@ impl TerminalPool {
         self.pending_objects.clear();
 
         let mut sugarloaf = self.sugarloaf.lock();
-        let lock_time = frame_start.elapsed().as_micros();
+        // let lock_time = frame_start.elapsed().as_micros();
 
         // 从每个终端的缓存获取 Image
         let mut objects = Vec::new();
@@ -675,18 +675,18 @@ impl TerminalPool {
             }
         }
 
-        let object_count = objects.len();
+        // let object_count = objects.len();
         sugarloaf.set_objects(objects);
-        let set_time = frame_start.elapsed().as_micros() - lock_time;
+        // let set_time = frame_start.elapsed().as_micros() - lock_time;
 
         // 触发 GPU 渲染
         sugarloaf.render();
-        let render_time = frame_start.elapsed().as_micros() - lock_time - set_time;
+        // let render_time = frame_start.elapsed().as_micros() - lock_time - set_time;
 
-        // ⚠️ 性能监控日志，请勿删除
-        let total_time = frame_start.elapsed().as_micros();
-        eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | terminals={}",
-                  total_time, total_time as f64 / 1000.0, lock_time, set_time, render_time, object_count);
+        // ⚠️ 性能监控日志，请勿删除（需要时取消注释）
+        // let total_time = frame_start.elapsed().as_micros();
+        // eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | terminals={}",
+        //           total_time, total_time as f64 / 1000.0, lock_time, set_time, render_time, object_count);
     }
 
     // ========================================================================

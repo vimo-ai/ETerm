@@ -86,18 +86,19 @@ impl Renderer {
     }
 
     /// 打印当前帧的缓存统计并重置
-    pub fn print_frame_stats(&mut self, frame_label: &str) {
-        let total = self.stats.cache_hits + self.stats.layout_hits + self.stats.cache_misses;
-        if total > 0 {
-            let hit_rate = (self.stats.cache_hits as f64 / total as f64) * 100.0;
-            eprintln!("📊 CACHE_STATS [{}] L1_hit={} L2_layout={} L3_miss={} total={} hit_rate={:.1}%",
-                frame_label,
-                self.stats.cache_hits,
-                self.stats.layout_hits,
-                self.stats.cache_misses,
-                total,
-                hit_rate);
-        }
+    pub fn print_frame_stats(&mut self, _frame_label: &str) {
+        // ⚠️ 性能监控日志，请勿删除（需要时取消注释）
+        // let total = self.stats.cache_hits + self.stats.layout_hits + self.stats.cache_misses;
+        // if total > 0 {
+        //     let hit_rate = (self.stats.cache_hits as f64 / total as f64) * 100.0;
+        //     eprintln!("📊 CACHE_STATS [{}] L1_hit={} L2_layout={} L3_miss={} total={} hit_rate={:.1}%",
+        //         _frame_label,
+        //         self.stats.cache_hits,
+        //         self.stats.layout_hits,
+        //         self.stats.cache_misses,
+        //         total,
+        //         hit_rate);
+        // }
         self.reset_stats();
     }
 
