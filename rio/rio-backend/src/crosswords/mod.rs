@@ -599,6 +599,8 @@ impl<U: EventListener> Crosswords<U> {
 
     #[inline]
     pub fn reset_damage(&mut self) {
+        // 同步 last_cursor 到当前位置，防止 peek_damage_event 误判
+        self.damage.last_cursor = self.grid.cursor.pos;
         self.damage.reset();
     }
 

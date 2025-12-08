@@ -26,6 +26,16 @@ use std::ffi::c_void;
 
 use super::ffi::{AppConfig, ErrorCode, TerminalEvent, TerminalEventType, TerminalPoolEventCallback};
 
+/// 单个终端的渲染状态
+struct TerminalRenderState {
+    /// 独立的 GPU 纹理（每个终端维护自己的 Surface）
+    surface: skia_safe::Surface,
+    /// Surface 宽度（物理像素）
+    width: u32,
+    /// Surface 高度（物理像素）
+    height: u32,
+}
+
 /// 单个终端条目
 struct TerminalEntry {
     /// Terminal 聚合根
@@ -47,6 +57,9 @@ struct TerminalEntry {
 
     /// Shell 进程 ID（用于获取 CWD）
     shell_pid: u32,
+
+    /// 渲染状态（独立 Surface，按需更新）
+    render_state: Option<TerminalRenderState>,
 }
 
 /// 终端池
@@ -94,6 +107,65 @@ pub struct TerminalPool {
 unsafe impl Send for TerminalPool {}
 
 impl TerminalPool {
+    /// 创建独立的终端 Surface（GPU 纹理）
+    ///
+    /// # 参数
+    /// - width, height: Surface 尺寸（物理像素）
+    ///
+    /// # 返回
+    /// - Some(TerminalRenderState): 创建成功
+    /// - None: 创建失败
+    fn create_terminal_surface(&self, width: u32, height: u32) -> Option<TerminalRenderState> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let sugarloaf = self.sugarloaf.lock();
+        let context = sugarloaf.get_context();
+
+        // 从 Skia 上下文创建 GPU 加速的 Surface
+        #[cfg(target_os = "macos")]
+        {
+            use skia_safe::{
+                gpu::{SurfaceOrigin, surfaces, Budgeted},
+                ColorType, ImageInfo, AlphaType, ColorSpace,
+            };
+
+            let image_info = ImageInfo::new(
+                (width as i32, height as i32),
+                ColorType::RGBA8888,
+                AlphaType::Premul,
+                ColorSpace::new_srgb(),
+            );
+
+            // 使用 Skia DirectContext 创建 GPU Surface
+            // 参数顺序：context, budgeted, image_info, sample_count, origin, surface_props, should_create_with_mips, is_protected
+            let mut skia_context = context.skia_context.clone();
+            let surface = surfaces::render_target(
+                &mut skia_context,
+                Budgeted::Yes,
+                &image_info,
+                None,  // sample_count
+                SurfaceOrigin::TopLeft,
+                None,  // surface_props
+                false, // should_create_with_mips
+                false, // is_protected
+            )?;
+
+            Some(TerminalRenderState {
+                surface,
+                width,
+                height,
+            })
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // 其他平台暂不支持
+            None
+        }
+    }
+
     /// 创建终端池
     pub fn new(config: AppConfig) -> Result<Self, ErrorCode> {
         // 验证配置
@@ -234,6 +306,7 @@ impl TerminalPool {
             rows,
             pty_fd,
             shell_pid,
+            render_state: None,  // 首次渲染时创建
         };
 
         self.terminals.insert(id, entry);
@@ -277,6 +350,7 @@ impl TerminalPool {
             rows,
             pty_fd,
             shell_pid,
+            render_state: None,  // 首次渲染时创建
         };
 
         self.terminals.insert(id, entry);
@@ -438,7 +512,7 @@ impl TerminalPool {
     /// - width, height: 终端区域大小（逻辑坐标）
     ///   - 如果 > 0，会自动计算 cols/rows 并 resize
     ///   - 如果 = 0，不执行 resize
-    pub fn render_terminal(&mut self, id: usize, x: f32, y: f32, width: f32, height: f32) -> bool {
+    pub fn render_terminal(&mut self, id: usize, _x: f32, _y: f32, width: f32, height: f32) -> bool {
         // 获取字体度量（物理像素）
         let font_metrics = {
             let renderer = self.renderer.lock();
@@ -471,57 +545,100 @@ impl TerminalPool {
             }
         }
 
-        let entry = match self.terminals.get(&id) {
-            Some(e) => e,
-            None => return false,
+        // 计算所需的 Surface 尺寸（物理像素）
+        use crate::domain::primitives::PhysicalPixels;
+        let physical_width = PhysicalPixels::new(width * scale);
+        let physical_height = PhysicalPixels::new(height * scale);
+        let surface_width = physical_width.value as u32;
+        let surface_height = physical_height.value as u32;
+
+        // 检查是否需要重建 Surface（尺寸变化）
+        let needs_recreate = {
+            match self.terminals.get(&id) {
+                Some(entry) => match &entry.render_state {
+                    Some(state) => state.width != surface_width || state.height != surface_height,
+                    None => true,
+                },
+                None => return false,
+            }
         };
+
+        // 如果需要重建 Surface，先创建
+        if needs_recreate && surface_width > 0 && surface_height > 0 {
+            let new_surface = self.create_terminal_surface(surface_width, surface_height);
+            if new_surface.is_none() {
+                eprintln!("❌ [TerminalPool] Failed to create surface for terminal {}", id);
+                return false;
+            }
+
+            // 更新 render_state
+            if let Some(entry) = self.terminals.get_mut(&id) {
+                entry.render_state = new_surface;
+            }
+        }
 
         // 1. 检查是否有 damage（不清空标记）
         let is_damaged = {
-            let terminal = entry.terminal.lock();
-            terminal.is_damaged()
+            match self.terminals.get(&id) {
+                Some(entry) => {
+                    let terminal = entry.terminal.lock();
+                    terminal.is_damaged()
+                },
+                None => return false,
+            }
         };
 
-        // 2. 如果没有 damage，跳过渲染
+        // 2. 如果没有 damage，跳过渲染（复用已有 Surface）
         if !is_damaged {
             return true;
         }
 
         // 3. 获取终端状态
-        let terminal = entry.terminal.lock();
-        let state = terminal.state();
-        let rows = terminal.rows();
-        drop(terminal);
+        let (state, rows) = {
+            match self.terminals.get(&id) {
+                Some(entry) => {
+                    let terminal = entry.terminal.lock();
+                    let state = terminal.state();
+                    let rows = terminal.rows();
+                    (state, rows)
+                },
+                None => return false,
+            }
+        };
 
-        // 4. 渲染所有行（类型安全的坐标转换）
+        // 4. 渲染到独立 Surface
+        let entry = match self.terminals.get_mut(&id) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        let render_state = match entry.render_state.as_mut() {
+            Some(state) => state,
+            None => return false,
+        };
+
+        let canvas = render_state.surface.canvas();
+        canvas.clear(skia_safe::Color::TRANSPARENT);
+
         let mut renderer = self.renderer.lock();
-
-        use crate::domain::primitives::{LogicalPosition, LogicalPixels};
 
         let logical_cell_size = font_metrics.to_logical_size(scale);
         // 行高 = cell_height * line_height_factor（用于行间距）
         let logical_line_height = logical_cell_size.height * self.config.line_height;
-        let base_position = LogicalPosition::new(
-            LogicalPixels::new(x),
-            LogicalPixels::new(y),
-        );
 
         for line in 0..rows {
             let image = renderer.render_line(line, &state);
 
-            // 计算该行位置（使用 line_height 作为行间距）
-            let y_offset = logical_line_height * (line as f32);
-            let line_position = LogicalPosition::new(
-                base_position.x,
-                base_position.y + y_offset,
+            // 计算该行在 Surface 内的位置（相对位置，从 0 开始，物理像素）
+            let y_offset_pixels = (logical_line_height * (line as f32)) * scale;
+            let y_offset = y_offset_pixels.value;
+
+            // 直接绘制到 Surface 的 Canvas
+            canvas.draw_image(
+                &image,
+                (0.0f32, y_offset),
+                None,
             );
-
-            let image_obj = ImageObject {
-                position: line_position.as_array(),  // [f32; 2]
-                image,
-            };
-
-            self.pending_objects.push(Object::Image(image_obj));
         }
 
         // 打印本次渲染的缓存统计
@@ -531,28 +648,57 @@ impl TerminalPool {
 
         // 5. 渲染成功完成后，重置 damage 状态
         {
-            let mut terminal = entry.terminal.lock();
-            terminal.reset_damage();
+            if let Some(entry) = self.terminals.get(&id) {
+                let mut terminal = entry.terminal.lock();
+                terminal.reset_damage();
+            }
         }
 
         true
     }
 
-    /// 结束帧（统一提交渲染）
+    /// 结束帧（贴图合成）
+    ///
+    /// 新实现：从 layout 获取位置，从 Terminal 获取 Surface，贴图合成
     pub fn end_frame(&mut self) {
-        // 如果没有待渲染对象，直接返回
-        if self.pending_objects.is_empty() {
+        let frame_start = std::time::Instant::now();
+
+        // 从 layout 获取当前需要渲染的终端
+        let layout = {
+            let render_layout = self.render_layout.lock();
+            render_layout.clone()
+        };
+
+        if layout.is_empty() {
             return;
         }
 
-        let frame_start = std::time::Instant::now();
+        // 清空 pending_objects（新方案不再使用）
+        self.pending_objects.clear();
 
         let mut sugarloaf = self.sugarloaf.lock();
         let lock_time = frame_start.elapsed().as_micros();
 
-        // 设置所有待渲染对象
-        let object_count = self.pending_objects.len();
-        sugarloaf.set_objects(std::mem::take(&mut self.pending_objects));
+        // 从每个终端的 Surface 生成 Image 对象
+        let mut objects = Vec::new();
+        for (terminal_id, x, y, _width, _height) in &layout {
+            if let Some(entry) = self.terminals.get_mut(terminal_id) {
+                if let Some(render_state) = &mut entry.render_state {
+                    // 从 Surface 获取 Image snapshot
+                    let image = render_state.surface.image_snapshot();
+
+                    let image_obj = ImageObject {
+                        position: [*x, *y],
+                        image,
+                    };
+
+                    objects.push(Object::Image(image_obj));
+                }
+            }
+        }
+
+        let object_count = objects.len();
+        sugarloaf.set_objects(objects);
         let set_time = frame_start.elapsed().as_micros() - lock_time;
 
         // 触发 GPU 渲染
@@ -561,7 +707,7 @@ impl TerminalPool {
 
         // ⚠️ 性能监控日志，请勿删除
         let total_time = frame_start.elapsed().as_micros();
-        eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | objects={}",
+        eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | terminals={}",
                   total_time, total_time as f64 / 1000.0, lock_time, set_time, render_time, object_count);
     }
 
