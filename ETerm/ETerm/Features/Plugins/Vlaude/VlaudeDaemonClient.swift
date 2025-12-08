@@ -7,9 +7,37 @@
 import Foundation
 import SocketIO
 
+/// 输入命令类型
+enum VlaudeInputCommand {
+    case input(String)       // 文本输入
+    case controlKey(String)  // 控制序列，直接写入终端
+
+    /// 从字典解析
+    static func from(dict: [String: Any]) -> VlaudeInputCommand? {
+        if let text = dict["input"] as? String {
+            return .input(text)
+        }
+        if let key = dict["controlKey"] as? String {
+            return .controlKey(key)
+        }
+        return nil
+    }
+
+    /// 转换为终端输入序列
+    var terminalSequence: String {
+        switch self {
+        case .input(let text):
+            return text
+        case .controlKey(let sequence):
+            return sequence  // 直接返回，调用方传什么就写什么
+        }
+    }
+}
+
 protocol VlaudeDaemonClientDelegate: AnyObject {
     func daemonClient(_ client: VlaudeDaemonClient, didReceiveInject sessionId: String, terminalId: Int, text: String)
     func daemonClient(_ client: VlaudeDaemonClient, didReceiveMobileViewing sessionId: String, isViewing: Bool)
+    func daemonClientDidConnect(_ client: VlaudeDaemonClient)
 }
 
 final class VlaudeDaemonClient {
@@ -59,8 +87,10 @@ final class VlaudeDaemonClient {
 
         // 连接成功
         socket.on(clientEvent: .connect) { [weak self] _, _ in
-            self?.isConnected = true
+            guard let self = self else { return }
+            self.isConnected = true
             print("✅ [VlaudeDaemonClient] 已连接到 daemon")
+            self.delegate?.daemonClientDidConnect(self)
         }
 
         // 断开连接
@@ -108,9 +138,11 @@ final class VlaudeDaemonClient {
     func reportSessionAvailable(sessionId: String, terminalId: Int) {
         guard isConnected else {
             print("⚠️ [VlaudeDaemonClient] 未连接，无法发送消息")
+            print("   Terminal \(terminalId) → Session \(sessionId)")
             return
         }
 
+        print("📤 [VlaudeDaemonClient] 发送 session:available - \(sessionId.prefix(8))... -> Terminal \(terminalId)")
         socket?.emit("session:available", [
             "sessionId": sessionId,
             "terminalId": terminalId

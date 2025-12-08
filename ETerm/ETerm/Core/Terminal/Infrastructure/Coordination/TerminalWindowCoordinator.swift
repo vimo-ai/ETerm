@@ -172,12 +172,23 @@ class TerminalWindowCoordinator: ObservableObject {
     @objc private func handleVlaudeInjectRequest(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let terminalId = userInfo["terminal_id"] as? Int,
-              let text = userInfo["text"] as? String else {
+              let commands = userInfo["commands"] as? [VlaudeInputCommand] else {
             return
         }
 
-        // 写入输入到指定终端
-        writeInput(terminalId: UInt32(terminalId), data: text)
+        let tid = UInt32(terminalId)
+        let delay: TimeInterval = 0.05
+
+        // 串行执行，每个命令之间加延迟
+        for (index, command) in commands.enumerated() {
+            let sequence = command.terminalSequence
+            if sequence.isEmpty { continue }
+
+            let execTime = delay * Double(index)
+            DispatchQueue.main.asyncAfter(deadline: .now() + execTime) { [weak self] in
+                self?.writeInput(terminalId: tid, data: sequence)
+            }
+        }
     }
 
     @objc private func handleClaudeResponseComplete(_ notification: Notification) {

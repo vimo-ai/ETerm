@@ -82,4 +82,11 @@ class ClaudeSessionMapper {
             print("   Terminal \(terminalId) → Session \(sessionId)")
         }
     }
+
+    /// 获取所有映射（session_id → terminal_id）
+    func getAllMappings() -> [(sessionId: String, terminalId: Int)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessionToTerminal.map { ($0.key, $0.value) }
+    }
 }
