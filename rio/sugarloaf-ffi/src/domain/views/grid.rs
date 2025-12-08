@@ -442,8 +442,10 @@ impl GridData {
                 underline_color: square.underline_color(),
             };
 
-            // 计算 hash（只基于字符内容）
+            // 计算 hash（字符内容 + 样式 flags）
+            // flags 包含 INVERSE、BOLD、ITALIC 等样式，是文本内容的一部分
             cell.c.hash(&mut hasher);
+            cell.flags.hash(&mut hasher);
 
             cells.push(cell);
         }
