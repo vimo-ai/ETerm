@@ -65,13 +65,14 @@ rio/
 ## 编译
 
 ```bash
-# 编译 Rust 库
-cd rio
-cargo build --release -p sugarloaf-ffi
+# 开发时：快速编译（debug 模式，自动复制到 Swift 项目）
+./scripts/update_sugarloaf_dev.sh
 
-# 或使用脚本（自动复制到 Swift 项目）
+# 发布时：优化编译（release 模式）
 ./scripts/update_sugarloaf.sh
 ```
+
+> **提示**：日常开发改动 Rust 代码后，只需运行 `./scripts/update_sugarloaf_dev.sh`，无需手动 `cargo build`。
 
 生成的库文件：
 - `libsugarloaf_ffi.a` - 静态库（链接到 Xcode）
