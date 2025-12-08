@@ -59,9 +59,7 @@ final class TerminalInputHandler {
         }
 
         // 判断是否应该直接处理
-        let shouldHandle = shouldHandleDirectly(keyStroke)
-
-        if shouldHandle {
+        if shouldHandleDirectly(keyStroke) {
             // 特殊键或 Ctrl 组合键：直接发送到终端
             let sequence = keyStroke.toTerminalSequence()
             if !sequence.isEmpty {

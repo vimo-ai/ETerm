@@ -953,6 +953,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 写入输入到指定终端
     func writeInput(terminalId: UInt32, data: String) {
         writeInputInternal(terminalId: Int(terminalId), data: data)
+        // 不主动触发渲染，依赖 Wakeup 事件（终端有输出时自动触发）
     }
 
     // MARK: - Mouse Event Helpers
