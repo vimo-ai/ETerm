@@ -100,6 +100,8 @@ struct KeyStroke: Hashable {
     static let `return` = key(36)
     static let tab = key(48)
     static let delete = key(51)
+    static let forwardDelete = key(117)
+    static let insert = key(114)
     static let leftArrow = key(123)
     static let rightArrow = key(124)
     static let downArrow = key(125)
@@ -155,8 +157,10 @@ struct KeyStroke: Hashable {
         switch keyCode {
         case 36: return "\r"           // Return
         case 48: return "\t"           // Tab
-        case 51: return "\u{7F}"       // Delete
+        case 51: return "\u{7F}"       // Delete (Backspace)
         case 53: return "\u{1B}"       // Escape
+        case 114: return "\u{1B}[2~"   // Insert
+        case 117: return "\u{1B}[3~"   // Forward Delete (Del)
         case 123: return "\u{1B}[D"    // Left
         case 124: return "\u{1B}[C"    // Right
         case 125: return "\u{1B}[B"    // Down
@@ -203,6 +207,8 @@ struct KeyStroke: Hashable {
         case 36: return result + "↩"
         case 48: return result + "⇥"
         case 51: return result + "⌫"
+        case 114: return result + "Ins"
+        case 117: return result + "Del"
         case 123: return result + "←"
         case 124: return result + "→"
         case 125: return result + "↓"

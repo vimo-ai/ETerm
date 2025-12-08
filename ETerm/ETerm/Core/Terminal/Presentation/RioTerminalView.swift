@@ -609,8 +609,10 @@ class RioMetalView: NSView, RenderViewProtocol {
     private let specialKeyCodes: Set<UInt16> = [
         36,   // Return
         48,   // Tab
-        51,   // Delete
+        51,   // Delete (Backspace)
         53,   // Escape
+        114,  // Insert
+        117,  // Forward Delete (Del)
         123,  // Left Arrow
         124,  // Right Arrow
         125,  // Down Arrow
@@ -619,7 +621,6 @@ class RioMetalView: NSView, RenderViewProtocol {
         119,  // End
         116,  // Page Up
         121,  // Page Down
-        117,  // Forward Delete
     ]
 
     // MARK: - Initialization
