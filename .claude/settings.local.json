@@ -77,7 +77,22 @@
       "Bash(rio/sugarloaf-ffi/src/app/terminal_pool.rs )",
       "Bash(rio/sugarloaf-ffi/src/lib.rs )",
       "Bash(rio/sugarloaf-ffi/src/render/layout/text_shaper.rs )",
-      "Bash(rio/sugarloaf-ffi/src/rio_terminal.rs)"
+      "Bash(rio/sugarloaf-ffi/src/rio_terminal.rs)",
+      "Bash(Presentation/Views/PanelView.swift )",
+      "Bash(Presentation/Views/PanelHeaderView.swift )",
+      "Bash(Presentation/Views/DomainPanelView.swift )",
+      "Bash(Presentation/Views/TabItemView.swift )",
+      "Bash(Presentation/Views/PageBarView.swift )",
+      "Bash(Presentation/Views/PageItemView.swift )",
+      "Bash(Presentation/Views/DividerView.swift )",
+      "Bash(Core/Layout/Presentation/)",
+      "Bash(Presentation/Views/ShortcutsView.swift )",
+      "Bash(Presentation/Views/CustomSidebar.swift )",
+      "Bash(Presentation/Views/PluginManagerView.swift )",
+      "Bash(Core/Settings/Presentation/)",
+      "Bash(open:*)",
+      "Bash(/Users/higuaifan/Desktop/hi/小工具/english/ETerm/ETerm/Resources/Hooks/install.sh)",
+      "mcp__mcp-router__memex__get_session"
     ],
     "deny": [],
     "ask": []

@@ -70,7 +70,14 @@ struct RioRenderView: NSViewRepresentable {
         return containerView
     }
 
+    private static var updateCount = 0
+
     func updateNSView(_ nsView: RioContainerView, context: Context) {
+        Self.updateCount += 1
+        if Self.updateCount % 60 == 0 {
+            print("⚠️ updateNSView called \(Self.updateCount) times")
+        }
+
         // 读取 updateTrigger 触发更新
         let _ = coordinator.updateTrigger
 
@@ -140,8 +147,7 @@ class RioContainerView: NSView {
         // 添加 Metal 层（底层）
         addSubview(renderView)
 
-        // 添加 Active 终端发光层（Metal 层之上）
-        activeGlowView.isHidden = true  // 初始隐藏，有 active panel 时显示
+        // 添加 Active 终端发光层（Metal 层之上，初始不创建 SwiftUI 视图）
         addSubview(activeGlowView)
 
         // PageBar 已移至 SwiftUI 层（ContentView）
@@ -245,8 +251,7 @@ class RioContainerView: NSView {
             context.duration = 0.5
             activeGlowView.animator().alphaValue = 0
         } completionHandler: { [weak self] in
-            self?.activeGlowView.isHidden = true
-            self?.activeGlowView.alphaValue = 1  // 重置 alpha 供下次使用
+            self?.activeGlowView.hide()  // 销毁 SwiftUI 视图，停止动画
         }
     }
 
@@ -254,7 +259,7 @@ class RioContainerView: NSView {
     private func hideActiveGlow() {
         glowFadeOutTimer?.invalidate()
         glowFadeOutTimer = nil
-        activeGlowView.isHidden = true
+        activeGlowView.hide()
     }
 
     // PageBar 相关回调和更新方法已移至 SwiftUI 层（SwiftUIPageBar）
@@ -356,14 +361,14 @@ class RioContainerView: NSView {
     private func updateActiveGlow(panels: [EditorPanel], activePanelId: UUID?, forceShow: Bool) {
         // 只有多个 Panel 时才需要显示发光提示
         guard panels.count > 1 else {
-            activeGlowView.isHidden = true
+            activeGlowView.hide()
             return
         }
 
         // 找到 active panel
         guard let activePanelId = activePanelId,
               let activePanel = panels.first(where: { $0.panelId == activePanelId }) else {
-            activeGlowView.isHidden = true
+            activeGlowView.hide()
             return
         }
 
@@ -386,8 +391,7 @@ class RioContainerView: NSView {
 
         // 只有 forceShow 时才显示，否则保持当前状态
         if forceShow {
-            activeGlowView.alphaValue = 1
-            activeGlowView.isHidden = false
+            activeGlowView.show()  // 创建 SwiftUI 视图，启动呼吸动画
         }
     }
 

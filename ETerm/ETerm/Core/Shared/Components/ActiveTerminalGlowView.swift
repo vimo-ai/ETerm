@@ -16,6 +16,7 @@ import SwiftUI
 /// 内发光边框视图
 ///
 /// 固定颜色 + 轻微呼吸效果的内发光边框
+/// 使用 SwiftUI 声明式动画，由 Core Animation 处理，避免持续触发布局
 struct InnerGlowBorderView: View {
     let cornerRadius: CGFloat
     let glowWidth: CGFloat
@@ -23,19 +24,22 @@ struct InnerGlowBorderView: View {
     // 固定颜色：Apple Intelligence 风格的 teal/cyan
     private let glowColor = Color(red: 74.0/255.0, green: 153.0/255.0, blue: 146.0/255.0)
 
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0/30.0)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            // 3 秒呼吸周期，使用 sin 函数实现平滑过渡
-            let breathPhase = (sin(time * .pi / 1.5) + 1) / 2  // 0 ~ 1
-            // 呼吸范围：0.15 ~ 0.3（轻微变化）
-            let breathOpacity = 0.15 + breathPhase * 0.15
+    // 呼吸动画状态：控制整体透明度
+    @State private var isBreathingIn: Bool = false
 
-            Canvas { ctx, size in
-                drawInnerGlowBorder(ctx: ctx, size: size, opacity: breathOpacity)
+    var body: some View {
+        Canvas { ctx, size in
+            // 固定基础透明度绘制
+            drawInnerGlowBorder(ctx: ctx, size: size, opacity: 0.25)
+        }
+        .opacity(isBreathingIn ? 1.0 : 0.6)  // 呼吸范围：0.6 ~ 1.0
+        .allowsHitTesting(false)
+        .onAppear {
+            // 启动呼吸动画：3 秒周期，永久循环
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                isBreathingIn = true
             }
         }
-        .allowsHitTesting(false)
     }
 
     /// 绘制内发光边框
@@ -95,10 +99,11 @@ struct InnerGlowBorderView: View {
 /// Active 终端内发光视图（AppKit）
 ///
 /// 用于在终端内容区域显示内发光边框效果
+/// 按需创建/销毁 SwiftUI hosting view，避免隐藏时仍运行动画
 final class ActiveTerminalGlowView: NSView {
     // MARK: - 属性
 
-    /// SwiftUI hosting view
+    /// SwiftUI hosting view（按需创建）
     private var hostingView: NSHostingView<InnerGlowBorderView>?
 
     /// 圆角半径
@@ -123,14 +128,31 @@ final class ActiveTerminalGlowView: NSView {
     private func setupUI() {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+        // 初始不创建 hostingView，等到 show() 时再创建
+    }
 
-        // 创建 SwiftUI 视图
+    // MARK: - Public API
+
+    /// 显示发光效果（创建 SwiftUI 视图，启动呼吸动画）
+    func show() {
+        guard hostingView == nil else { return }
+
         let glowView = InnerGlowBorderView(cornerRadius: cornerRadius, glowWidth: glowWidth)
         let hosting = NSHostingView(rootView: glowView)
         hosting.frame = bounds
         hosting.autoresizingMask = [.width, .height]
         addSubview(hosting)
         hostingView = hosting
+
+        isHidden = false
+        alphaValue = 1
+    }
+
+    /// 隐藏发光效果（销毁 SwiftUI 视图，停止动画）
+    func hide() {
+        hostingView?.removeFromSuperview()
+        hostingView = nil
+        isHidden = true
     }
 
     // MARK: - Layout
