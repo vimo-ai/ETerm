@@ -125,7 +125,7 @@ pub enum SelectionType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
     pub ty: SelectionType,
-    region: Range<Anchor>,
+    pub region: Range<Anchor>,
 }
 
 impl Selection {

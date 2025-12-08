@@ -511,7 +511,17 @@ impl Terminal {
 
             // 更新选区
             if let Some(ref mut selection) = crosswords.selection {
-                selection.update(crosswords_pos, Side::Right);
+                // 根据当前点和起点的相对位置决定 Side
+                // 当反向选择（从右到左）时，需要使用 Side::Left 来包含完整的字符
+                let start_point = selection.region.start.point;
+                let side = if crosswords_pos < start_point {
+                    // 反向选择：终点在起点左边/上方
+                    Side::Left
+                } else {
+                    // 正向选择：终点在起点右边/下方
+                    Side::Right
+                };
+                selection.update(crosswords_pos, side);
                 // 标记 damage，触发重新渲染以显示选区高亮
                 crosswords.mark_fully_damaged();
             }
