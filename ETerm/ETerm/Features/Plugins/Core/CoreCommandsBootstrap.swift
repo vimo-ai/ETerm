@@ -18,6 +18,23 @@ final class CoreCommandsBootstrap {
     /// 确保只注册一次
     private static var isRegistered = false
 
+    /// 清理剪贴板临时目录中的所有文件
+    /// 应在应用启动时调用
+    static func cleanupClipboardTempFiles() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ETerm")
+            .appendingPathComponent("clipboard")
+
+        do {
+            let files = try FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)
+            for file in files {
+                try? FileManager.default.removeItem(at: file)
+            }
+        } catch {
+            // 目录不存在或为空，忽略
+        }
+    }
+
     /// 注册所有核心命令和快捷键
     static func registerCoreCommands() {
         guard !isRegistered else {
@@ -373,16 +390,47 @@ extension TerminalWindowCoordinator {
 
         let pasteboard = NSPasteboard.general
 
-        // 优先检查文本
-        if let text = pasteboard.string(forType: .string) {
-            writeInput(terminalId: terminalId, data: text)
+        // 优先检查图片 (支持 PNG、TIFF 等)
+        // Claude CLI 期望的是文件路径，不是 iTerm2 协议
+        if let imageData = getImageDataFromPasteboard(pasteboard) {
+            if let filePath = saveImageToTempFile(imageData) {
+                writeInput(terminalId: terminalId, data: filePath)
+            }
             return
         }
 
-        // 检查图片 (支持 PNG、TIFF、JPEG 等)
-        if let imageData = getImageDataFromPasteboard(pasteboard) {
-            let sequence = createITerm2ImageSequence(from: imageData)
-            writeInput(terminalId: terminalId, data: sequence)
+        // 检查文本
+        if let text = pasteboard.string(forType: .string) {
+            writeInput(terminalId: terminalId, data: text)
+        }
+    }
+
+    /// ETerm 剪贴板图片临时目录
+    private var clipboardTempDirectory: URL {
+        Self.getClipboardTempDirectory()
+    }
+
+    /// 获取剪贴板图片临时目录（静态）
+    private static func getClipboardTempDirectory() -> URL {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ETerm")
+            .appendingPathComponent("clipboard")
+
+        // 确保目录存在
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        return tempDir
+    }
+
+    /// 保存图片到临时文件，返回文件路径
+    private func saveImageToTempFile(_ imageData: Data) -> String? {
+        let fileName = "clipboard_\(Int(Date().timeIntervalSince1970 * 1000)).png"
+        let fileURL = clipboardTempDirectory.appendingPathComponent(fileName)
+
+        do {
+            try imageData.write(to: fileURL)
+            return fileURL.path
+        } catch {
+            return nil
         }
     }
 
@@ -405,12 +453,6 @@ extension TerminalWindowCoordinator {
         return nil
     }
 
-    /// 创建 iTerm2 图片协议序列 (OSC 1337)
-    /// 格式: ESC ] 1337 ; File = inline=1 : <base64> BEL
-    private func createITerm2ImageSequence(from imageData: Data) -> String {
-        let base64String = imageData.base64EncodedString()
-        return "\u{1B}]1337;File=inline=1:\(base64String)\u{07}"
-    }
 
     /// 全选
     func selectAll() {

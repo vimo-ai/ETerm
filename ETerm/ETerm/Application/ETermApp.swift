@@ -39,6 +39,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 注册核心命令（必须在加载插件之前，让插件可以覆盖）
         CoreCommandsBootstrap.registerCoreCommands()
 
+        // 清理上次运行残留的剪贴板临时文件
+        CoreCommandsBootstrap.cleanupClipboardTempFiles()
+
         // 加载内置插件
         PluginManager.shared.loadBuiltinPlugins()
 
