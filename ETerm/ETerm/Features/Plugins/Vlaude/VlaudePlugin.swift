@@ -33,6 +33,22 @@ final class VlaudePlugin: Plugin {
             object: nil
         )
 
+        // 监听终端关闭
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTerminalClosed(_:)),
+            name: .terminalDidClose,
+            object: nil
+        )
+
+        // 监听 Claude 退出（SessionEnd hook）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleClaudeSessionEnd(_:)),
+            name: .claudeSessionEnd,
+            object: nil
+        )
+
         print("✅ [VlaudePlugin] 已激活")
     }
 
@@ -54,6 +70,43 @@ final class VlaudePlugin: Plugin {
         print("📍 [VlaudePlugin] 上报 session 可用: \(sessionId.prefix(8))... -> Terminal \(terminalId)")
         // 上报 session 可用
         daemonClient?.reportSessionAvailable(sessionId: sessionId, terminalId: terminalId)
+    }
+
+    @objc private func handleTerminalClosed(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let terminalId = userInfo["terminal_id"] as? Int else {
+            return
+        }
+
+        // 查找该 terminal 对应的 session
+        guard let sessionId = ClaudeSessionMapper.shared.getSessionId(for: terminalId) else {
+            // 该 terminal 没有 Claude session，无需处理
+            return
+        }
+
+        print("🗑️ [VlaudePlugin] Terminal \(terminalId) 关闭，上报 session 不可用: \(sessionId.prefix(8))...")
+
+        // 清理本地映射
+        ClaudeSessionMapper.shared.remove(terminalId: terminalId)
+
+        // 通知 daemon
+        daemonClient?.reportSessionUnavailable(sessionId: sessionId)
+    }
+
+    @objc private func handleClaudeSessionEnd(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let sessionId = userInfo["session_id"] as? String,
+              let terminalId = userInfo["terminal_id"] as? Int else {
+            return
+        }
+
+        print("🛑 [VlaudePlugin] Claude 退出，上报 session 不可用: \(sessionId.prefix(8))... (Terminal \(terminalId))")
+
+        // 清理本地映射
+        ClaudeSessionMapper.shared.remove(terminalId: terminalId)
+
+        // 通知 daemon
+        daemonClient?.reportSessionUnavailable(sessionId: sessionId)
     }
 }
 

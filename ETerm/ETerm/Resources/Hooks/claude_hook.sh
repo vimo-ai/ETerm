@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# ETerm Claude Hook - 基于已验证的 stop_hook.sh 改进
-# 支持 Stop 和 Notification 事件
-# 通过 Unix Socket 通知 ETerm，触发 Tab 变色
+# ETerm Claude Hook
+# 支持 SessionStart, Stop, Notification 事件
+# 通过 Unix Socket 通知 ETerm，建立 session 映射
 # 优雅降级：非 ETerm 环境下静默跳过，不影响后续 hooks
 #
 
@@ -24,6 +24,7 @@ fi
 # 解析 JSON 字段
 session_id=$(echo "$input" | jq -r '.session_id')
 hook_event_name=$(echo "$input" | jq -r '.hook_event_name // "Stop"')
+source=$(echo "$input" | jq -r '.source // "unknown"')
 
 # 读取环境变量
 terminal_id="${ETERM_TERMINAL_ID}"
@@ -34,6 +35,7 @@ socket_path="${ETERM_SOCKET_PATH}"
     echo "==================="
     echo "Triggered at: $(date)"
     echo "Event: $hook_event_name"
+    echo "Source: $source"
     echo "Session ID: $session_id"
     echo "Terminal ID: $terminal_id"
     echo "Socket Path: $socket_path"
@@ -58,6 +60,12 @@ fi
 
 # 事件类型映射
 case "$hook_event_name" in
+    "SessionStart")
+        event_type="session_start"
+        ;;
+    "SessionEnd")
+        event_type="session_end"
+        ;;
     "Stop")
         event_type="stop"
         ;;

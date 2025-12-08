@@ -26,6 +26,8 @@ import PanelLayoutKit
 extension Notification.Name {
     /// Active 终端变化通知（Tab 切换或 Panel 切换）
     static let activeTerminalDidChange = Notification.Name("activeTerminalDidChange")
+    /// 终端关闭通知
+    static let terminalDidClose = Notification.Name("terminalDidClose")
 }
 
 /// 渲染视图协议 - 统一不同的 RenderView 实现
@@ -454,6 +456,13 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 关闭终端（统一入口）
     @discardableResult
     private func closeTerminalInternal(_ terminalId: Int) -> Bool {
+        // 发送通知，让插件清理 Claude session 映射
+        NotificationCenter.default.post(
+            name: .terminalDidClose,
+            object: nil,
+            userInfo: ["terminal_id": terminalId]
+        )
+
         return terminalPool.closeTerminal(terminalId)
     }
 

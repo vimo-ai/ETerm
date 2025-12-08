@@ -194,8 +194,25 @@ class ClaudeSocketServer {
     // MARK: - Event Handling
 
     private func handleResponseComplete(event: ClaudeResponseCompleteEvent) {
+        let eventType = event.event_type ?? "stop"
 
-        // 建立映射关系
+        // session_end 事件：Claude 退出，清理映射
+        if eventType == "session_end" {
+            print("🛑 [ClaudeSocket] Session 结束: \(event.session_id)")
+
+            // 发送 session 结束通知
+            NotificationCenter.default.post(
+                name: .claudeSessionEnd,
+                object: nil,
+                userInfo: [
+                    "session_id": event.session_id,
+                    "terminal_id": event.terminal_id
+                ]
+            )
+            return
+        }
+
+        // 其他事件：建立/更新映射关系
         ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
         // 发送通知（跨层级跳转逻辑可以监听这个通知）
@@ -217,4 +234,5 @@ class ClaudeSocketServer {
 
 extension Notification.Name {
     static let claudeResponseComplete = Notification.Name("claudeResponseComplete")
+    static let claudeSessionEnd = Notification.Name("claudeSessionEnd")
 }
