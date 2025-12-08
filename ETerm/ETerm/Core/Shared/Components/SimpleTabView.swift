@@ -87,18 +87,23 @@ struct SimpleTabView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // emoji 前缀（如 📱 表示 Mobile 正在查看）
-            if let emoji = emoji {
-                Text(emoji)
-                    .font(.system(size: height * 0.5))
+            // 左侧：emoji + 文字
+            HStack(spacing: 4) {
+                if let emoji = emoji {
+                    Text(emoji)
+                        .font(.system(size: height * 0.5))
+                }
+
+                Text(text)
+                    .font(.system(size: height * 0.4))
+                    .foregroundColor(textColor)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
 
-            Text(text)
-                .font(.system(size: height * 0.4))
-                .foregroundColor(textColor)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            Spacer()
 
+            // 右侧：关闭按钮
             if let onClose = onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
