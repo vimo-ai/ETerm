@@ -94,6 +94,19 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 获取终端的当前工作目录
     func getCwd(terminalId: Int) -> String?
 
+    // MARK: - 进程检测
+
+    /// 获取终端的前台进程名称
+    ///
+    /// 返回当前前台进程的名称（如 "vim", "cargo", "python" 等）
+    /// 如果前台进程就是 shell 本身，返回 shell 名称（如 "zsh", "bash"）
+    func getForegroundProcessName(terminalId: Int) -> String?
+
+    /// 检查终端是否有正在运行的子进程（非 shell）
+    ///
+    /// 返回 true 如果前台进程不是 shell 本身（如正在运行 vim, cargo, python 等）
+    func hasRunningProcess(terminalId: Int) -> Bool
+
     // MARK: - 光标和选区
 
     /// 获取光标位置
@@ -169,6 +182,8 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func flush() {}
     func clear() {}
     func getCwd(terminalId: Int) -> String? { nil }
+    func getForegroundProcessName(terminalId: Int) -> String? { nil }
+    func hasRunningProcess(terminalId: Int) -> Bool { false }
     func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
     func getWordAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalWordBoundary? { nil }
     func clearSelection(terminalId: Int) -> Bool { false }

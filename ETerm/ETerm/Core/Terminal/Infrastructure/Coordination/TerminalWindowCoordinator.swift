@@ -984,6 +984,43 @@ class TerminalWindowCoordinator: ObservableObject {
         return getCwd(terminalId: Int(terminalId)) ?? NSHomeDirectory()
     }
 
+    /// 检查当前激活的终端是否有正在运行的子进程
+    ///
+    /// 返回 true 如果前台进程不是 shell 本身（如正在运行 vim, cargo, python 等）
+    func hasActiveTerminalRunningProcess() -> Bool {
+        guard let terminalId = getActiveTerminalId() else {
+            return false
+        }
+        return terminalPool.hasRunningProcess(terminalId: Int(terminalId))
+    }
+
+    /// 获取当前激活终端的前台进程名称
+    func getActiveTerminalForegroundProcessName() -> String? {
+        guard let terminalId = getActiveTerminalId() else {
+            return nil
+        }
+        return terminalPool.getForegroundProcessName(terminalId: Int(terminalId))
+    }
+
+    /// 收集窗口中所有正在运行进程的信息
+    ///
+    /// 返回一个数组，包含所有正在运行非 shell 进程的 Tab 信息
+    func collectRunningProcesses() -> [(tabTitle: String, processName: String)] {
+        var processes: [(String, String)] = []
+
+        for panel in terminalWindow.allPanels {
+            for tab in panel.tabs {
+                guard let terminalId = tab.rustTerminalId else { continue }
+                if terminalPool.hasRunningProcess(terminalId: Int(terminalId)),
+                   let processName = terminalPool.getForegroundProcessName(terminalId: Int(terminalId)) {
+                    processes.append((tab.title, processName))
+                }
+            }
+        }
+
+        return processes
+    }
+
     /// 根据滚轮事件位置获取应滚动的终端 ID（鼠标所在 Panel 的激活 Tab）
     /// - Parameters:
     ///   - point: 鼠标位置（容器坐标，PageBar 下方区域）

@@ -429,6 +429,40 @@ impl TerminalPool {
         }
     }
 
+    /// 获取终端的前台进程名称
+    ///
+    /// 返回当前前台进程的名称（如 "vim", "cargo", "python" 等）
+    /// 如果前台进程就是 shell 本身，返回 shell 名称（如 "zsh", "bash"）
+    pub fn get_foreground_process_name(&self, id: usize) -> Option<String> {
+        if let Some(entry) = self.terminals.get(&id) {
+            let name = teletypewriter::foreground_process_name(entry.pty_fd, entry.shell_pid);
+            if name.is_empty() {
+                None
+            } else {
+                Some(name)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// 检查终端是否有正在运行的子进程（非 shell）
+    ///
+    /// 返回 true 如果前台进程不是 shell 本身
+    pub fn has_running_process(&self, id: usize) -> bool {
+        if let Some(entry) = self.terminals.get(&id) {
+            let fg_name = teletypewriter::foreground_process_name(entry.pty_fd, entry.shell_pid);
+            if fg_name.is_empty() {
+                return false;
+            }
+            // 检查是否是常见的 shell
+            let shell_names = ["zsh", "bash", "fish", "sh", "tcsh", "ksh", "csh", "dash"];
+            !shell_names.contains(&fg_name.as_str())
+        } else {
+            false
+        }
+    }
+
     /// 调整终端大小
     pub fn resize_terminal(&mut self, id: usize, cols: u16, rows: u16, width: f32, height: f32) -> bool {
         if let Some(entry) = self.terminals.get_mut(&id) {

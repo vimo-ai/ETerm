@@ -118,6 +118,49 @@ pub extern "C" fn terminal_pool_get_cwd(
     }
 }
 
+/// 获取终端的前台进程名称
+///
+/// 返回当前前台进程的名称（如 "vim", "cargo", "python" 等）
+/// 如果前台进程就是 shell 本身，返回 shell 名称（如 "zsh", "bash"）
+///
+/// 返回的字符串需要调用者使用 `rio_free_string` 释放
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_foreground_process_name(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> *mut std::ffi::c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    if let Some(name) = pool.get_foreground_process_name(terminal_id) {
+        match std::ffi::CString::new(name) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// 检查终端是否有正在运行的子进程（非 shell）
+///
+/// 返回 true 如果前台进程不是 shell 本身（如正在运行 vim, cargo, python 等）
+#[no_mangle]
+pub extern "C" fn terminal_pool_has_running_process(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+    pool.has_running_process(terminal_id)
+}
+
 /// 调整终端大小
 #[no_mangle]
 pub extern "C" fn terminal_pool_resize_terminal(

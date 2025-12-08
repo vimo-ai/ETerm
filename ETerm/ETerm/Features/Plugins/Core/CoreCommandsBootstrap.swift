@@ -151,7 +151,34 @@ final class CoreCommandsBootstrap {
             title: "关闭",
             icon: "xmark"
         ) { context in
-            context.coordinator?.handleSmartClose()
+            guard let coordinator = context.coordinator else { return }
+
+            // 检查当前终端是否有正在运行的进程
+            if coordinator.hasActiveTerminalRunningProcess() {
+                DispatchQueue.main.async {
+                    let processName = coordinator.getActiveTerminalForegroundProcessName() ?? "进程"
+                    Self.showCloseTabWithProcessConfirmation(processName: processName) {
+                        // 用户确认关闭，执行关闭逻辑
+                        let result = coordinator.handleSmartClose()
+                        if case .shouldCloseWindow = result {
+                            let isLastWindow = WindowManager.shared.windowCount <= 1
+                            Self.showCloseWindowConfirmation(isLastWindow: isLastWindow)
+                        }
+                    }
+                }
+                return
+            }
+
+            // 没有运行的进程，直接关闭
+            let result = coordinator.handleSmartClose()
+
+            if case .shouldCloseWindow = result {
+                // 需要关闭窗口，弹出确认对话框
+                DispatchQueue.main.async {
+                    let isLastWindow = WindowManager.shared.windowCount <= 1
+                    Self.showCloseWindowConfirmation(isLastWindow: isLastWindow)
+                }
+            }
         })
         keyboard.bind(.cmd("w"), to: "tab.smartClose", when: nil)
 
@@ -293,6 +320,50 @@ final class CoreCommandsBootstrap {
         keyboard.bind(.cmd("f"), to: "terminal.search", when: nil)
 
         print("✅ [CoreCommands] 已注册所有核心命令和快捷键")
+    }
+
+    // MARK: - 关闭确认
+
+    /// 显示关闭 Tab 时有运行进程的确认对话框
+    private static func showCloseTabWithProcessConfirmation(processName: String, onConfirm: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "终端正在运行 \(processName)"
+        alert.informativeText = "关闭此终端将终止正在运行的进程，确定要继续吗？"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "关闭")
+        alert.addButton(withTitle: "取消")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            onConfirm()
+        }
+    }
+
+    /// 显示关闭窗口确认对话框
+    private static func showCloseWindowConfirmation(isLastWindow: Bool) {
+        let alert = NSAlert()
+
+        if isLastWindow {
+            alert.messageText = "确定要退出 ETerm 吗？"
+            alert.informativeText = "这是最后一个窗口，关闭后将退出应用程序。"
+            alert.addButton(withTitle: "退出")
+        } else {
+            alert.messageText = "确定要关闭此窗口吗？"
+            alert.informativeText = "窗口中的所有终端会话将被关闭。"
+            alert.addButton(withTitle: "关闭")
+        }
+
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "取消")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            if isLastWindow {
+                NSApplication.shared.terminate(nil)
+            } else {
+                NSApplication.shared.keyWindow?.close()
+            }
+        }
     }
 }
 

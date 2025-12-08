@@ -102,6 +102,26 @@ char* terminal_pool_get_cwd(
     size_t terminal_id
 );
 
+/// Get terminal's foreground process name
+///
+/// Returns the name of the current foreground process (e.g., "vim", "cargo", "python")
+/// If the foreground process is the shell itself, returns the shell name (e.g., "zsh", "bash")
+///
+/// Returns a string that must be freed with rio_free_string
+char* terminal_pool_get_foreground_process_name(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Check if terminal has a running child process (non-shell)
+///
+/// Returns true if the foreground process is not the shell itself
+/// (e.g., running vim, cargo, python, etc.)
+bool terminal_pool_has_running_process(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
 /// Resize terminal
 bool terminal_pool_resize_terminal(
     TerminalPoolHandle handle,

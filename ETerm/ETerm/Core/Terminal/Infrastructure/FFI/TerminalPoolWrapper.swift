@@ -194,6 +194,29 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return result
     }
 
+    /// 获取终端的前台进程名称
+    ///
+    /// 返回当前前台进程的名称（如 "vim", "cargo", "python" 等）
+    /// 如果前台进程就是 shell 本身，返回 shell 名称（如 "zsh", "bash"）
+    func getForegroundProcessName(terminalId: Int) -> String? {
+        guard let handle = handle else { return nil }
+
+        let cStr = terminal_pool_get_foreground_process_name(handle, terminalId)
+        guard let cStr = cStr else { return nil }
+
+        let result = String(cString: cStr)
+        rio_free_string(cStr)
+        return result
+    }
+
+    /// 检查终端是否有正在运行的子进程（非 shell）
+    ///
+    /// 返回 true 如果前台进程不是 shell 本身（如正在运行 vim, cargo, python 等）
+    func hasRunningProcess(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_has_running_process(handle, terminalId)
+    }
+
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool {
         guard let handle = handle else { return false }
