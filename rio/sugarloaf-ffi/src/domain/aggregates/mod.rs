@@ -2,4 +2,4 @@
 pub mod terminal;
 
 
-pub use terminal::{Terminal, TerminalId};
+pub use terminal::{Terminal, TerminalId, TerminalMode};

@@ -501,4 +501,33 @@ void terminal_pool_set_render_layout(
 /// This is for special cases (initialization, force refresh)
 void terminal_pool_render_all(TerminalPoolHandle handle);
 
+// ============================================================================
+// Terminal Mode API
+// ============================================================================
+
+/// Set terminal mode
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param mode Terminal mode (0=Active, 1=Background)
+///
+/// - Active: Full processing + render callbacks
+/// - Background: Full VTE parsing but no render callbacks (save CPU/GPU)
+/// - Switching to Active triggers a render refresh
+void terminal_pool_set_mode(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    uint8_t mode
+);
+
+/// Get terminal mode
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return Terminal mode (0=Active, 1=Background, 255=invalid)
+uint8_t terminal_pool_get_mode(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
 #endif /* SugarloafBridge_h */

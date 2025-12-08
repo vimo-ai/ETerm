@@ -11,6 +11,23 @@
 
 import Foundation
 
+/// 终端运行模式
+///
+/// 用于优化后台终端的性能
+enum TerminalMode: UInt8 {
+    /// 活跃模式（可见）
+    /// - 完整 VTE 解析
+    /// - 触发渲染回调
+    /// - 所有事件上报
+    case active = 0
+
+    /// 后台模式（不可见）
+    /// - 完整 VTE 解析（保证状态正确）
+    /// - 不触发渲染回调（节省 CPU/GPU）
+    /// - 仅上报关键事件（bell、exit）
+    case background = 1
+}
+
 /// 终端池协议
 ///
 /// 定义终端池的核心功能：创建、销毁、查询终端实例。
@@ -117,6 +134,23 @@ protocol TerminalPoolProtocol: AnyObject {
     ///
     /// 鼠标坐标转换应使用 line_height（而非 cell_height）
     func getFontMetrics() -> SugarloafFontMetrics?
+
+    // MARK: - 终端模式
+
+    /// 设置终端运行模式
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - mode: 运行模式
+    ///
+    /// 切换到 Active 时会自动触发一次渲染刷新
+    func setMode(terminalId: Int, mode: TerminalMode)
+
+    /// 获取终端运行模式
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 当前模式，终端不存在时返回 nil
+    func getMode(terminalId: Int) -> TerminalMode?
 }
 
 // MARK: - Mock Implementation
@@ -142,4 +176,6 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func getInputRow(terminalId: Int) -> UInt16? { nil }
     func changeFontSize(operation: FontSizeOperation) {}
     func getFontMetrics() -> SugarloafFontMetrics? { nil }
+    func setMode(terminalId: Int, mode: TerminalMode) {}
+    func getMode(terminalId: Int) -> TerminalMode? { nil }
 }

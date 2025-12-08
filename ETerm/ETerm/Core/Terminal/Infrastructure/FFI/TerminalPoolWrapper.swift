@@ -467,6 +467,30 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         guard let handle = handle else { return }
         terminal_pool_clear_search(handle, terminalId)
     }
+
+    // MARK: - Terminal Mode
+
+    /// 设置终端运行模式
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - mode: 运行模式
+    ///
+    /// 切换到 Active 时会自动触发一次渲染刷新
+    func setMode(terminalId: Int, mode: TerminalMode) {
+        guard let handle = handle else { return }
+        terminal_pool_set_mode(handle, terminalId, mode.rawValue)
+    }
+
+    /// 获取终端运行模式
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 当前模式，终端不存在时返回 nil
+    func getMode(terminalId: Int) -> TerminalMode? {
+        guard let handle = handle else { return nil }
+        let rawMode = terminal_pool_get_mode(handle, terminalId)
+        return TerminalMode(rawValue: rawMode)
+    }
 }
 
 // MARK: - Convenience Extensions

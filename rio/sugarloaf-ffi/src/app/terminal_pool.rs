@@ -641,7 +641,7 @@ impl TerminalPool {
     ///
     /// 从缓存获取 Image，贴图合成到最终画面
     pub fn end_frame(&mut self) {
-        // let frame_start = std::time::Instant::now();
+        let frame_start = std::time::Instant::now();
 
         // 从 layout 获取当前需要渲染的终端
         let layout = {
@@ -657,7 +657,7 @@ impl TerminalPool {
         self.pending_objects.clear();
 
         let mut sugarloaf = self.sugarloaf.lock();
-        // let lock_time = frame_start.elapsed().as_micros();
+        let lock_time = frame_start.elapsed().as_micros();
 
         // 从每个终端的缓存获取 Image
         let mut objects = Vec::new();
@@ -675,18 +675,19 @@ impl TerminalPool {
             }
         }
 
-        // let object_count = objects.len();
+        let object_count = objects.len();
         sugarloaf.set_objects(objects);
-        // let set_time = frame_start.elapsed().as_micros() - lock_time;
+        let set_time = frame_start.elapsed().as_micros() - lock_time;
 
         // 触发 GPU 渲染
         sugarloaf.render();
-        // let render_time = frame_start.elapsed().as_micros() - lock_time - set_time;
+        let render_time = frame_start.elapsed().as_micros() - lock_time - set_time;
 
         // ⚠️ 性能监控日志，请勿删除（需要时取消注释）
         // let total_time = frame_start.elapsed().as_micros();
         // eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | terminals={}",
         //           total_time, total_time as f64 / 1000.0, lock_time, set_time, render_time, object_count);
+        let _ = (lock_time, set_time, render_time, object_count);  // 避免 unused 警告
     }
 
     // ========================================================================
@@ -807,16 +808,32 @@ impl TerminalPool {
         };
 
         // 收到 Wakeup/Render 事件时：
-        // 设置 needs_render 标记（供外部调度器查询）
-        // 注意：Crosswords 在写入时已自动标记 damage，无需手动调用
+        // 检查终端模式，Background 模式完全跳过（不设置 needs_render，不发送到 Swift）
+        // 这样可以节省 CPU/GPU，因为后台终端的输出不需要立即渲染
         if event_type == TerminalEventType::Wakeup || event_type == TerminalEventType::Render {
             unsafe {
-                let pool = &mut *(context as *mut TerminalPool);
-                // 设置 dirty 标记
-                pool.needs_render.store(true, Ordering::Release);
+                let pool = &*(context as *const TerminalPool);
+                let terminal_id = event.route_id;
+
+                // 检查终端模式
+                if let Some(entry) = pool.terminals.get(&terminal_id) {
+                    let terminal = entry.terminal.lock();
+                    if terminal.mode() == crate::domain::aggregates::TerminalMode::Background {
+                        // Background 模式，完全跳过（不触发渲染，不发送事件到 Swift）
+                        // 这样可以节省 CPU/GPU，后台终端的输出不需要立即渲染
+                        return;
+                    } else {
+                        // Active 模式，正常渲染
+                        pool.needs_render.store(true, Ordering::Release);
+                    }
+                } else {
+                    // 终端不存在（可能已关闭），设置渲染标记以刷新 UI
+                    pool.needs_render.store(true, Ordering::Release);
+                }
             }
         }
 
+        // 发送事件到 Swift（Bell、TitleChanged、Exit 等仍需通知）
         let terminal_event = TerminalEvent {
             event_type,
             data: event.route_id as u64,  // 传递终端 ID
@@ -993,6 +1010,44 @@ impl TerminalPool {
             // 触发渲染更新
             self.needs_render.store(true, Ordering::Release);
         }
+    }
+
+    // ========================================================================
+    // 终端模式管理
+    // ========================================================================
+
+    /// 设置终端运行模式
+    ///
+    /// # 参数
+    /// - terminal_id: 终端 ID
+    /// - mode: 新的运行模式（0=Active, 1=Background）
+    ///
+    /// # 说明
+    /// - Active 模式：完整处理 + 触发渲染回调
+    /// - Background 模式：完整 VTE 解析但不触发渲染回调
+    /// - 切换到 Active 时会自动触发一次渲染刷新
+    pub fn set_terminal_mode(&self, terminal_id: usize, mode: crate::domain::aggregates::TerminalMode) {
+        if let Some(entry) = self.terminals.get(&terminal_id) {
+            let mut terminal = entry.terminal.lock();
+            terminal.set_mode(mode);
+
+            // 如果切换到 Active 模式，标记需要渲染
+            if mode == crate::domain::aggregates::TerminalMode::Active {
+                self.needs_render.store(true, Ordering::Release);
+            }
+        }
+    }
+
+    /// 获取终端运行模式
+    ///
+    /// # 返回
+    /// - Some(mode): 终端存在，返回当前模式
+    /// - None: 终端不存在
+    pub fn get_terminal_mode(&self, terminal_id: usize) -> Option<crate::domain::aggregates::TerminalMode> {
+        self.terminals.get(&terminal_id).map(|entry| {
+            let terminal = entry.terminal.lock();
+            terminal.mode()
+        })
     }
 }
 

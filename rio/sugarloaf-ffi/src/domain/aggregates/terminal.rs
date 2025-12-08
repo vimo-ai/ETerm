@@ -40,6 +40,28 @@ use crate::rio_event::{EventQueue, FFIEventListener};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerminalId(pub usize);
 
+/// Terminal 运行模式
+///
+/// 用于优化后台终端的性能：
+/// - Active: 可见终端，完整处理 + 触发渲染回调
+/// - Background: 后台终端，完整 VTE 解析但不触发渲染回调
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum TerminalMode {
+    /// 活跃模式（可见）
+    /// - 完整 VTE 解析
+    /// - 触发渲染回调
+    /// - 所有事件上报
+    #[default]
+    Active = 0,
+
+    /// 后台模式（不可见）
+    /// - 完整 VTE 解析（保证状态正确）
+    /// - 不触发渲染回调（节省 CPU/GPU）
+    /// - 仅上报关键事件（bell、exit）
+    Background = 1,
+}
+
 /// 事件收集器（用于从 Crosswords 收集事件）
 
 #[derive(Clone)]
@@ -127,6 +149,9 @@ pub struct Terminal {
 
     /// 缓存的搜索视图（只在搜索事件时重建，避免每帧 O(N) 遍历）
     cached_search_view: Option<SearchView>,
+
+    /// 运行模式（Active/Background）
+    mode: TerminalMode,
 }
 
 /// 事件监听器类型
@@ -204,6 +229,7 @@ impl Terminal {
             rows,
             parser,
             cached_search_view: None,
+            mode: TerminalMode::Active,
         }
     }
 
@@ -253,6 +279,7 @@ impl Terminal {
             rows,
             parser,
             cached_search_view: None,
+            mode: TerminalMode::Active,
         }
     }
 
@@ -280,6 +307,31 @@ impl Terminal {
         self.rows
     }
 
+    /// 获取当前运行模式
+    pub fn mode(&self) -> TerminalMode {
+        self.mode
+    }
+
+    /// 设置运行模式
+    ///
+    /// # 参数
+    /// - `mode`: 新的运行模式
+    ///
+    /// # 说明
+    /// - 切换到 Active 模式时，会触发一次渲染回调（刷新显示）
+    /// - 切换到 Background 模式时，不会触发渲染回调
+    pub fn set_mode(&mut self, mode: TerminalMode) {
+        let was_background = self.mode == TerminalMode::Background;
+        self.mode = mode;
+
+        // 从 Background 切换到 Active 时，触发一次渲染
+        if was_background && mode == TerminalMode::Active {
+            if let EventListenerType::FFI(ref listener) = self.event_listener {
+                listener.send_event(crate::rio_event::RioEvent::Render);
+            }
+        }
+    }
+
     /// 写入数据到终端（ANSI 序列）
     ///
     /// # 参数
@@ -302,11 +354,9 @@ impl Terminal {
                 // eprintln!("   After advance, parser finished");
             } // 释放 crosswords 的锁
 
-            // 手动触发 Render 事件（Crosswords 不会自动发送事件）
-            if let EventListenerType::FFI(ref listener) = self.event_listener {
-                // eprintln!("   📤 Manually sending Render event");
-                listener.send_event(crate::rio_event::RioEvent::Render);
-            }
+            // 注意：生产环境中，Machine 直接写入 Crosswords，不经过这个方法
+            // 这段代码仅用于测试场景
+            // 实际的模式检查在 TerminalPool::event_queue_callback 中进行
         } else if let Some(ref crosswords_test) = self.crosswords_test {
             // eprintln!("   Using Test crosswords");
             {

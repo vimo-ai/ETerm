@@ -522,3 +522,65 @@ pub extern "C" fn terminal_pool_render_all(handle: *mut TerminalPoolHandle) {
     let pool = unsafe { &mut *(handle as *mut TerminalPool) };
     pool.render_all();
 }
+
+// ===== 终端模式管理 =====
+
+/// 设置终端运行模式
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+/// - mode: 运行模式（0=Active, 1=Background）
+///
+/// # 说明
+/// - Active 模式：完整处理 + 触发渲染回调
+/// - Background 模式：完整 VTE 解析但不触发渲染回调（节省 CPU/GPU）
+/// - 切换到 Active 时会自动触发一次渲染刷新
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_mode(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    mode: u8,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    // 转换 mode 值
+    let terminal_mode = match mode {
+        0 => crate::domain::aggregates::TerminalMode::Active,
+        1 => crate::domain::aggregates::TerminalMode::Background,
+        _ => return, // 无效模式，忽略
+    };
+
+    pool.set_terminal_mode(terminal_id, terminal_mode);
+}
+
+/// 获取终端运行模式
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+///
+/// # 返回
+/// - 0: Active 模式
+/// - 1: Background 模式
+/// - 255: 终端不存在或句柄无效
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_mode(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> u8 {
+    if handle.is_null() {
+        return 255;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    match pool.get_terminal_mode(terminal_id) {
+        Some(mode) => mode as u8,
+        None => 255,
+    }
+}

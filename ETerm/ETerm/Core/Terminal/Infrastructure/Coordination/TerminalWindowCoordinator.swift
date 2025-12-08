@@ -591,8 +591,19 @@ class TerminalWindowCoordinator: ObservableObject {
             return
         }
 
+        // 获取旧 Tab 的终端 ID（用于设置为 Background）
+        let oldTerminalId = panel.activeTab?.rustTerminalId
+
         // 调用 AR 的方法切换 Tab
         if panel.setActiveTab(tabId) {
+            // 更新终端模式：旧 Tab -> Background，新 Tab -> Active
+            if let oldId = oldTerminalId {
+                terminalPool.setMode(terminalId: Int(oldId), mode: .background)
+            }
+            if let newTab = panel.activeTab, let newId = newTab.rustTerminalId {
+                terminalPool.setMode(terminalId: Int(newId), mode: .active)
+            }
+
             // 同步布局到 Rust（Tab 切换可能改变显示的终端）
             syncLayoutToRust()
 
@@ -1259,6 +1270,18 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Returns: 是否成功切换
     @discardableResult
     func switchToPage(_ pageId: UUID) -> Bool {
+        // Step 0: 收集旧 Page 的所有终端 ID（用于设置为 Background）
+        var oldTerminalIds: [UInt32] = []
+        if let oldPage = terminalWindow.activePage {
+            for panel in oldPage.allPanels {
+                for tab in panel.tabs {
+                    if let terminalId = tab.rustTerminalId {
+                        oldTerminalIds.append(terminalId)
+                    }
+                }
+            }
+        }
+
         // Step 1: Domain 层切换
         guard terminalWindow.switchToPage(pageId) else {
             return false
@@ -1272,14 +1295,28 @@ class TerminalWindowCoordinator: ObservableObject {
         // Step 3: 更新激活的 Panel
         activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
 
-        // Step 4: 同步布局到 Rust（Page 切换改变了显示的终端）
+        // Step 4: 更新终端模式
+        // 旧 Page 的所有终端 -> Background
+        for oldId in oldTerminalIds {
+            terminalPool.setMode(terminalId: Int(oldId), mode: .background)
+        }
+        // 新 Page 的激活终端 -> Active
+        if let newPage = terminalWindow.activePage {
+            for panel in newPage.allPanels {
+                if let activeTab = panel.activeTab, let terminalId = activeTab.rustTerminalId {
+                    terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                }
+            }
+        }
+
+        // Step 5: 同步布局到 Rust（Page 切换改变了显示的终端）
         syncLayoutToRust()
 
-        // Step 5: 触发 UI 更新
+        // Step 6: 触发 UI 更新
         objectWillChange.send()
         updateTrigger = UUID()
 
-        // Step 6: 请求渲染（防抖）
+        // Step 7: 请求渲染（防抖）
         scheduleRender()
 
         return true
