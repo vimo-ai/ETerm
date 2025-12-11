@@ -116,7 +116,16 @@ struct CustomSidebar: View {
                                         icon: tab.icon,
                                         shortcut: nil,
                                         isSelected: selectedItem == .plugin(tab.id),
-                                        action: { selectedItem = .plugin(tab.id) },
+                                        action: {
+                                            // 如果有 onSelect 回调，直接执行（打开 PluginPage）并关闭侧边栏
+                                            if let onSelect = tab.onSelect {
+                                                onSelect()
+                                                onClose()
+                                            } else {
+                                                // 否则显示侧边栏内容
+                                                selectedItem = .plugin(tab.id)
+                                            }
+                                        },
                                         isSubItem: true
                                     )
                                 }

@@ -49,10 +49,24 @@ struct ContentView: View {
     @ObservedObject var sidebarRegistry = SidebarRegistry.shared
 
     var body: some View {
+        // 读取 updateTrigger 强制刷新
+        let _ = coordinator.updateTrigger
+
         ZStack(alignment: .topLeading) {
-            // 终端视图（填满整个窗口）
+            // 终端视图始终存在，只是根据 Page 类型隐藏/显示
+            let isPluginPage = coordinator.activePage?.isPluginPage ?? false
+
+            // 终端视图（插件页面时隐藏，但不销毁）
             RioTerminalView(coordinator: coordinator)
                 .frame(minWidth: 400, minHeight: 300)
+                .opacity(isPluginPage ? 0 : 1)
+                .allowsHitTesting(!isPluginPage)
+
+            // 插件页面视图（终端页面时隐藏）
+            if let activePage = coordinator.activePage, isPluginPage {
+                pluginPageContent(for: activePage)
+                    .frame(minWidth: 400, minHeight: 300)
+            }
 
             // PageBar 在顶部（覆盖在终端上方，与红绿灯同一行）
             VStack {
@@ -99,6 +113,17 @@ struct ContentView: View {
                     selectedSidebarItem = nil  // 关闭时清除选中项
                 }
             }
+        }
+    }
+
+    /// 插件页面内容视图
+    @ViewBuilder
+    private func pluginPageContent(for page: Page) -> some View {
+        if case .plugin(_, let viewProvider) = page.content {
+            viewProvider()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            EmptyView()
         }
     }
 

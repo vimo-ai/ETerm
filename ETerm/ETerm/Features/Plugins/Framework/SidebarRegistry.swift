@@ -13,12 +13,21 @@ public struct SidebarTab: Identifiable {
     public let title: String
     public let icon: String
     public let viewProvider: () -> AnyView
+    /// 点击时的回调（可选），用于直接执行操作（如打开 PluginPage）
+    public let onSelect: (() -> Void)?
 
-    public init(id: String, title: String, icon: String, viewProvider: @escaping () -> AnyView) {
+    public init(
+        id: String,
+        title: String,
+        icon: String,
+        viewProvider: @escaping () -> AnyView,
+        onSelect: (() -> Void)? = nil
+    ) {
         self.id = id
         self.title = title
         self.icon = icon
         self.viewProvider = viewProvider
+        self.onSelect = onSelect
     }
 }
 

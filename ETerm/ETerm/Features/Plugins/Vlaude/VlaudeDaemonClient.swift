@@ -37,6 +37,7 @@ enum VlaudeInputCommand {
 protocol VlaudeDaemonClientDelegate: AnyObject {
     func daemonClient(_ client: VlaudeDaemonClient, didReceiveInject sessionId: String, terminalId: Int, text: String)
     func daemonClient(_ client: VlaudeDaemonClient, didReceiveMobileViewing sessionId: String, isViewing: Bool)
+    func daemonClient(_ client: VlaudeDaemonClient, didReceiveCreateSession projectPath: String, prompt: String?, requestId: String?)
     func daemonClientDidConnect(_ client: VlaudeDaemonClient)
 }
 
@@ -131,6 +132,20 @@ final class VlaudeDaemonClient {
             }
             self.delegate?.daemonClient(self, didReceiveMobileViewing: sessionId, isViewing: isViewing)
         }
+
+        // 业务事件：创建新会话
+        socket.on("session:create") { [weak self] data, _ in
+            guard let self = self,
+                  let dict = data.first as? [String: Any],
+                  let projectPath = dict["projectPath"] as? String else {
+                print("⚠️ [VlaudeDaemonClient] session:create 参数无效")
+                return
+            }
+            let prompt = dict["prompt"] as? String
+            let requestId = dict["requestId"] as? String
+            print("📥 [VlaudeDaemonClient] 收到创建会话请求: \(projectPath), requestId: \(requestId ?? "N/A")")
+            self.delegate?.daemonClient(self, didReceiveCreateSession: projectPath, prompt: prompt, requestId: requestId)
+        }
     }
 
     // MARK: - Send Messages
@@ -157,6 +172,25 @@ final class VlaudeDaemonClient {
 
         socket?.emit("session:unavailable", [
             "sessionId": sessionId
+        ])
+    }
+
+    /// 上报会话创建完成（带 requestId）
+    func reportSessionCreated(requestId: String, sessionId: String, projectPath: String) {
+        guard isConnected else {
+            print("⚠️ [VlaudeDaemonClient] 未连接，无法发送消息")
+            return
+        }
+
+        print("📤 [VlaudeDaemonClient] 发送 session:created")
+        print("   RequestId: \(requestId)")
+        print("   SessionId: \(sessionId.prefix(8))...")
+        print("   ProjectPath: \(projectPath)")
+
+        socket?.emit("session:created", [
+            "requestId": requestId,
+            "sessionId": sessionId,
+            "projectPath": projectPath
         ])
     }
 }

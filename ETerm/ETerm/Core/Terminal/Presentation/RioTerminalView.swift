@@ -298,6 +298,11 @@ class RioContainerView: NSView {
             return
         }
 
+        // 插件页面由 ContentView 层处理，这里只处理终端页面
+        if let activePage = coordinator.activePage, activePage.isPluginPage {
+            return
+        }
+
         // PageBar 已移至 SwiftUI 层，通过 @ObservedObject 自动更新
 
         // 获取当前 Page 的所有 Panel
@@ -352,6 +357,7 @@ class RioContainerView: NSView {
         // 只更新发光位置，不改变显示状态（显示由窗口焦点控制）
         updateActiveGlow(panels: panels, activePanelId: coordinator.activePanelId, forceShow: false)
     }
+
 
     /// 更新 Active 终端发光视图
     /// - Parameters:
@@ -1121,7 +1127,9 @@ class RioMetalView: NSView, RenderViewProtocol {
         // Cmd+V 粘贴
         if keyStroke.matches(.cmd("v")) {
             if let text = NSPasteboard.general.string(forType: .string) {
-                _ = pool.writeInput(terminalId: Int(terminalId), data: text)
+                // 使用 Bracketed Paste Mode，告诉终端这是粘贴操作
+                let bracketedText = "\u{1B}[200~" + text + "\u{1B}[201~"
+                _ = pool.writeInput(terminalId: Int(terminalId), data: bracketedText)
             }
             return true
         }

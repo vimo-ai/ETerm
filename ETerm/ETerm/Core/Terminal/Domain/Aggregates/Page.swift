@@ -15,6 +15,7 @@
 
 import Foundation
 import CoreGraphics
+import SwiftUI
 
 /// 页面聚合根
 ///
@@ -25,6 +26,9 @@ final class Page {
     private(set) var title: String
     private(set) var rootLayout: PanelLayout
     private var panelRegistry: [UUID: EditorPanel]
+
+    /// 页面内容类型（终端或插件）
+    private(set) var content: PageContent
 
     // MARK: - Initialization
 
@@ -38,6 +42,28 @@ final class Page {
         self.title = title
         self.rootLayout = .leaf(panelId: initialPanel.panelId)
         self.panelRegistry = [initialPanel.panelId: initialPanel]
+        self.content = .terminal
+    }
+
+    /// 创建插件 Page
+    ///
+    /// - Parameters:
+    ///   - title: 页面标题
+    ///   - pluginId: 插件 ID
+    ///   - viewProvider: 视图提供者
+    private init(title: String, pluginId: String, viewProvider: @escaping () -> AnyView) {
+        self.pageId = UUID()
+        self.title = title
+        // 插件 Page 不需要 Panel，使用空布局
+        let dummyId = UUID()
+        self.rootLayout = .leaf(panelId: dummyId)
+        self.panelRegistry = [:]
+        self.content = .plugin(id: pluginId, viewProvider: viewProvider)
+    }
+
+    /// 创建插件 Page 的工厂方法
+    static func createPluginPage(title: String, pluginId: String, viewProvider: @escaping () -> AnyView) -> Page {
+        return Page(title: title, pluginId: pluginId, viewProvider: viewProvider)
     }
 
     /// 创建空 Page（用于恢复 Session）
@@ -50,11 +76,22 @@ final class Page {
         let dummyId = UUID()
         self.rootLayout = .leaf(panelId: dummyId)
         self.panelRegistry = [:]
+        self.content = .terminal
     }
 
     /// 创建用于恢复的空 Page
     static func createEmptyForRestore(title: String) -> Page {
         return Page(title: title)
+    }
+
+    // MARK: - Content Type Queries
+
+    /// 是否为插件页面
+    var isPluginPage: Bool {
+        if case .plugin = content {
+            return true
+        }
+        return false
     }
 
     // MARK: - Title Management

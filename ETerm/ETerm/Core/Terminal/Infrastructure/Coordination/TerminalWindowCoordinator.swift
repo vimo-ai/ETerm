@@ -161,36 +161,6 @@ class TerminalWindowCoordinator: ObservableObject {
             name: .claudeResponseComplete,
             object: nil
         )
-
-        // 监听 Vlaude 注入请求
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleVlaudeInjectRequest(_:)),
-            name: .vlaudeInjectRequest,
-            object: nil
-        )
-    }
-
-    @objc private func handleVlaudeInjectRequest(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let terminalId = userInfo["terminal_id"] as? Int,
-              let commands = userInfo["commands"] as? [VlaudeInputCommand] else {
-            return
-        }
-
-        let tid = UInt32(terminalId)
-        let delay: TimeInterval = 0.05
-
-        // 串行执行，每个命令之间加延迟
-        for (index, command) in commands.enumerated() {
-            let sequence = command.terminalSequence
-            if sequence.isEmpty { continue }
-
-            let execTime = delay * Double(index)
-            DispatchQueue.main.asyncAfter(deadline: .now() + execTime) { [weak self] in
-                self?.writeInput(terminalId: tid, data: sequence)
-            }
-        }
     }
 
     @objc private func handleClaudeResponseComplete(_ notification: Notification) {
@@ -266,7 +236,64 @@ class TerminalWindowCoordinator: ObservableObject {
 
         return newTab
     }
-    
+
+    /// 创建新 Tab 并执行初始命令
+    ///
+    /// - Parameters:
+    ///   - panelId: 目标 Panel ID（可选，默认为当前激活的 Panel）
+    ///   - cwd: 工作目录
+    ///   - command: 要执行的命令（可选）
+    ///   - commandDelay: 命令执行延迟（默认 0.3 秒）
+    /// - Returns: 创建的 Tab 和终端 ID，失败返回 nil
+    func createNewTabWithCommand(
+        in panelId: UUID? = nil,
+        cwd: String,
+        command: String? = nil,
+        commandDelay: TimeInterval = 0.3
+    ) -> (tab: TerminalTab, terminalId: Int)? {
+        let targetPanelId = panelId ?? activePanelId
+        guard let targetPanelId = targetPanelId else {
+            print("⚠️ [Coordinator] createNewTabWithCommand: 没有目标 Panel")
+            return nil
+        }
+
+        // 创建终端
+        let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh", cwd: cwd)
+        guard terminalId >= 0 else {
+            print("❌ [Coordinator] createNewTabWithCommand: 创建终端失败")
+            return nil
+        }
+
+        guard let panel = terminalWindow.getPanel(targetPanelId) else {
+            print("❌ [Coordinator] createNewTabWithCommand: 找不到 Panel")
+            return nil
+        }
+
+        let newTab = TerminalTab(
+            tabId: UUID(),
+            title: terminalWindow.generateNextTabTitle(),
+            rustTerminalId: UInt32(terminalId)
+        )
+
+        panel.addTab(newTab)
+
+        print("✅ [Coordinator] 新 Tab 已创建: Terminal \(terminalId), CWD: \(cwd)")
+
+        // 如果有命令，延迟执行
+        if let cmd = command, !cmd.isEmpty {
+            let tid = UInt32(terminalId)
+            DispatchQueue.main.asyncAfter(deadline: .now() + commandDelay) { [weak self] in
+                print("🚀 [Coordinator] 执行命令: \(cmd.trimmingCharacters(in: .whitespacesAndNewlines))")
+                self?.writeInput(terminalId: tid, data: cmd)
+            }
+        }
+
+        // 保存 Session
+        WindowManager.shared.saveSession()
+
+        return (newTab, terminalId)
+    }
+
     // ... (中间代码保持不变) ...
 
 
@@ -1147,6 +1174,11 @@ class TerminalWindowCoordinator: ObservableObject {
     ///
     /// 单向数据流：从 AR 拉取数据，调用 Rust 渲染
     func renderAllPanels(containerBounds: CGRect) {
+        // 如果当前激活的 Page 是插件页面，不需要渲染终端
+        if let activePage = terminalWindow.activePage, activePage.isPluginPage {
+            return
+        }
+
         let totalStart = CFAbsoluteTimeGetCurrent()
 
         guard let mapper = coordinateMapper,

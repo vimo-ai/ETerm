@@ -57,6 +57,11 @@ final class WindowManager: NSObject {
         return windows.map { $0.windowNumber }
     }
 
+    /// 获取所有 Coordinator（用于跨窗口操作）
+    func getAllCoordinators() -> [TerminalWindowCoordinator] {
+        return Array(coordinators.values)
+    }
+
     /// 根据屏幕位置查找窗口
     func findWindow(at screenPoint: NSPoint) -> KeyableWindow? {
         for window in windows {

@@ -6,6 +6,7 @@
 
 import Foundation
 import CoreGraphics
+import SwiftUI
 
 /// 终端窗口
 ///
@@ -117,6 +118,55 @@ final class TerminalWindow {
         pages.append(newPage)
 
         return newPage
+    }
+
+    /// 创建插件 Page
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - title: 页面标题
+    ///   - viewProvider: 视图提供者
+    /// - Returns: 新创建的 Page
+    @discardableResult
+    func addPluginPage(pluginId: String, title: String, viewProvider: @escaping () -> AnyView) -> Page {
+        let newPage = Page.createPluginPage(title: title, pluginId: pluginId, viewProvider: viewProvider)
+        pages.append(newPage)
+        return newPage
+    }
+
+    /// 查找指定插件的 PluginPage
+    ///
+    /// - Parameter pluginId: 插件 ID
+    /// - Returns: 找到的 Page（如果存在）
+    func findPluginPage(pluginId: String) -> Page? {
+        return pages.first { page in
+            if case .plugin(let id, _) = page.content {
+                return id == pluginId
+            }
+            return false
+        }
+    }
+
+    /// 打开或切换到插件页面
+    ///
+    /// 如果该插件的页面已存在，直接返回；否则创建新页面
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - title: 页面标题
+    ///   - viewProvider: 视图提供者
+    /// - Returns: 插件页面（已有或新创建）
+    @discardableResult
+    func openOrSwitchToPluginPage(pluginId: String, title: String, viewProvider: @escaping () -> AnyView) -> Page {
+        // 检查是否已有该插件的页面
+        if let existingPage = findPluginPage(pluginId: pluginId) {
+            print("🔄 [TerminalWindow] 切换到已有插件页面: \(title)")
+            return existingPage
+        }
+
+        // 创建新页面
+        print("➕ [TerminalWindow] 创建新插件页面: \(title)")
+        return addPluginPage(pluginId: pluginId, title: title, viewProvider: viewProvider)
     }
 
     /// 切换到指定 Page
