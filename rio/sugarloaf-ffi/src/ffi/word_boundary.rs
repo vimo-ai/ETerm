@@ -68,7 +68,8 @@ pub extern "C" fn terminal_pool_get_word_at(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    if let Some(terminal) = pool.get_terminal(terminal_id as usize) {
+    // 使用 try_get_terminal 避免阻塞主线程
+    if let Some(terminal) = pool.try_get_terminal(terminal_id as usize) {
         let state = terminal.state();
         let grid = &state.grid;
 

@@ -58,6 +58,13 @@ struct TerminalEntry {
 
     /// 渲染缓存（缓存的 Image，按需更新）
     render_cache: Option<TerminalRenderCache>,
+
+    /// 原子光标缓存（无锁读取）
+    cursor_cache: Arc<crate::infra::AtomicCursorCache>,
+
+    /// 原子模式标记：是否为后台模式（无锁读取）
+    /// true = Background 模式，false = Active 模式
+    is_background: Arc<AtomicBool>,
 }
 
 /// 终端池
@@ -297,6 +304,8 @@ impl TerminalPool {
             pty_fd,
             shell_pid,
             render_cache: None,  // 首次渲染时创建
+            cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
+            is_background: Arc::new(AtomicBool::new(false)),  // 默认为 Active 模式
         };
 
         self.terminals.insert(id, entry);
@@ -341,6 +350,8 @@ impl TerminalPool {
             pty_fd,
             shell_pid,
             render_cache: None,  // 首次渲染时创建
+            cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
+            is_background: Arc::new(AtomicBool::new(false)),  // 默认为 Active 模式
         };
 
         self.terminals.insert(id, entry);
@@ -464,17 +475,22 @@ impl TerminalPool {
     }
 
     /// 调整终端大小
+    ///
+    /// 使用 try_lock 避免阻塞主线程
+    /// - 如果锁可用：立即更新 Terminal + PTY
+    /// - 如果锁被占用：只更新 PTY（Terminal 会在下次渲染时同步）
     pub fn resize_terminal(&mut self, id: usize, cols: u16, rows: u16, width: f32, height: f32) -> bool {
         if let Some(entry) = self.terminals.get_mut(&id) {
             // eprintln!("📐 [TerminalPool] Resizing terminal {} to {}x{}", id, cols, rows);
 
-            // 更新 Terminal
-            {
-                let mut terminal = entry.terminal.lock();
+            // 尝试更新 Terminal（非阻塞）
+            if let Some(mut terminal) = entry.terminal.try_lock() {
                 terminal.resize(cols as usize, rows as usize);
             }
+            // 如果锁被占用，跳过 Terminal 更新
+            // PTY resize 仍然发送，Terminal 会在下次渲染时通过 PTY 事件同步
 
-            // 通知 PTY
+            // 通知 PTY（总是发送，无需锁）
             use teletypewriter::WinsizeBuilder;
             let winsize = WinsizeBuilder {
                 rows,
@@ -509,11 +525,18 @@ impl TerminalPool {
     }
 
     /// 滚动终端
+    ///
+    /// 使用 try_lock 避免阻塞主线程，如果锁被占用则跳过这次滚动
     pub fn scroll(&self, id: usize, delta: i32) -> bool {
         if let Some(entry) = self.terminals.get(&id) {
-            let mut terminal = entry.terminal.lock();
-            terminal.scroll(delta);
-            true
+            // 使用 try_lock 避免阻塞主线程
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.scroll(delta);
+                true
+            } else {
+                // 锁被占用，跳过这次滚动
+                false
+            }
         } else {
             false
         }
@@ -587,12 +610,15 @@ impl TerminalPool {
             }
         };
 
-        // 检查是否有 damage
+        // 检查是否有 damage（非阻塞）
+        // 如果锁被占用，假设有 damage（保守策略，避免卡住渲染线程）
         let is_damaged = {
             match self.terminals.get(&id) {
                 Some(entry) => {
-                    let terminal = entry.terminal.lock();
-                    terminal.is_damaged()
+                    match entry.terminal.try_lock() {
+                        Some(terminal) => terminal.is_damaged(),
+                        None => true, // 锁被占用，假设有 damage
+                    }
                 },
                 None => return false,
             }
@@ -603,18 +629,51 @@ impl TerminalPool {
             return true;
         }
 
-        // 需要重新渲染：获取终端状态
-        let (state, rows) = {
+        // 需要重新渲染：获取终端状态（非阻塞）
+        // 如果锁被占用，跳过这一帧，使用缓存
+        let (state, rows, cursor_cache) = {
             match self.terminals.get(&id) {
                 Some(entry) => {
-                    let terminal = entry.terminal.lock();
-                    let state = terminal.state();
-                    let rows = terminal.rows();
-                    (state, rows)
+                    match entry.terminal.try_lock() {
+                        Some(terminal) => {
+                            let state = terminal.state();
+                            let rows = terminal.rows();
+                            let cursor_cache = entry.cursor_cache.clone();
+                            (state, rows, cursor_cache)
+                        },
+                        None => {
+                            // 锁被占用，跳过这一帧
+                            return true;
+                        }
+                    }
                 },
                 None => return false,
             }
         };
+
+        // 更新原子光标缓存（无锁写入）
+        // 这样主线程可以无锁读取光标位置
+        {
+            let cursor = &state.cursor;
+            let grid = &state.grid;
+
+            // 计算屏幕坐标
+            let history_size = grid.history_size();
+            let display_offset = grid.display_offset();
+            let absolute_line = cursor.line();
+
+            if absolute_line >= history_size {
+                let screen_row = (absolute_line - history_size + display_offset) as u16;
+                cursor_cache.update(
+                    cursor.col() as u16,
+                    screen_row,
+                    display_offset as u16,
+                );
+            } else {
+                // 光标在历史区域，标记无效
+                cursor_cache.invalidate();
+            }
+        }
 
         // 创建临时 Surface 进行渲染
         let mut temp_surface = match self.create_temp_surface(cache_width, cache_height) {
@@ -662,10 +721,12 @@ impl TerminalPool {
 
         // temp_surface 在这里自动 drop，释放 GPU 资源
 
-        // 重置 damage 状态
+        // 重置 damage 状态（非阻塞）
+        // 如果锁被占用，跳过重置（下次渲染会重试）
         if let Some(entry) = self.terminals.get(&id) {
-            let mut terminal = entry.terminal.lock();
-            terminal.reset_damage();
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.reset_damage();
+            }
         }
 
         true
@@ -861,10 +922,9 @@ impl TerminalPool {
                 let pool = &*(context as *const TerminalPool);
                 let terminal_id = event.route_id;
 
-                // 检查终端模式
+                // 使用原子读取检查终端模式（无锁）
                 if let Some(entry) = pool.terminals.get(&terminal_id) {
-                    let terminal = entry.terminal.lock();
-                    if terminal.mode() == crate::domain::aggregates::TerminalMode::Background {
+                    if entry.is_background.load(Ordering::Acquire) {
                         // Background 模式，完全跳过（不触发渲染，不发送事件到 Swift）
                         // 这样可以节省 CPU/GPU，后台终端的输出不需要立即渲染
                         return;
@@ -898,14 +958,37 @@ impl TerminalPool {
         self.terminals.len()
     }
 
-    /// 获取终端（只读）
+    /// 获取终端（只读，阻塞）
     pub fn get_terminal(&self, id: usize) -> Option<parking_lot::MutexGuard<'_, Terminal>> {
         self.terminals.get(&id).map(|entry| entry.terminal.lock())
+    }
+
+    /// 获取终端（只读，非阻塞）
+    ///
+    /// 如果锁被占用，立即返回 None 而不是等待
+    /// 用于主线程调用，避免阻塞 UI
+    pub fn try_get_terminal(&self, id: usize) -> Option<parking_lot::MutexGuard<'_, Terminal>> {
+        self.terminals.get(&id).and_then(|entry| entry.terminal.try_lock())
     }
 
     /// 获取终端（可变）
     pub fn get_terminal_mut(&mut self, id: usize) -> Option<parking_lot::MutexGuard<'_, Terminal>> {
         self.terminals.get(&id).map(|entry| entry.terminal.lock())
+    }
+
+    /// 获取终端（可变，非阻塞）
+    ///
+    /// 如果锁被占用，立即返回 None 而不是等待
+    /// 用于主线程调用，避免阻塞 UI
+    pub fn try_get_terminal_mut(&mut self, id: usize) -> Option<parking_lot::MutexGuard<'_, Terminal>> {
+        self.terminals.get(&id).and_then(|entry| entry.terminal.try_lock())
+    }
+
+    /// 获取终端的原子光标缓存（无锁）
+    ///
+    /// 返回 Arc<AtomicCursorCache>，可以无锁读取光标位置
+    pub fn get_cursor_cache(&self, id: usize) -> Option<Arc<crate::infra::AtomicCursorCache>> {
+        self.terminals.get(&id).map(|entry| entry.cursor_cache.clone())
     }
 
     /// 检查是否需要渲染
@@ -1000,33 +1083,41 @@ impl TerminalPool {
     /// - query: 搜索关键词
     ///
     /// # 返回
-    /// - 匹配数量（>= 0），失败返回 -1
+    /// - 匹配数量（>= 0），失败返回 -1（终端不存在或锁被占用）
     pub fn search(&self, terminal_id: usize, query: &str) -> i32 {
         let entry = match self.terminals.get(&terminal_id) {
             Some(e) => e,
             None => return -1,
         };
 
-        let mut terminal = entry.terminal.lock();
-        let count = terminal.search(query);
+        // 使用 try_lock 避免阻塞主线程
+        if let Some(mut terminal) = entry.terminal.try_lock() {
+            let count = terminal.search(query);
 
-        // 触发渲染更新
-        self.needs_render.store(true, Ordering::Release);
+            // 触发渲染更新
+            self.needs_render.store(true, Ordering::Release);
 
-        count as i32
+            count as i32
+        } else {
+            // 锁被占用，返回失败
+            -1
+        }
     }
 
     /// 跳转到下一个匹配
     ///
     /// # 参数
     /// - terminal_id: 终端 ID
+    ///
+    /// 使用 try_lock 避免阻塞主线程，如果锁被占用则跳过
     pub fn search_next(&self, terminal_id: usize) {
         if let Some(entry) = self.terminals.get(&terminal_id) {
-            let mut terminal = entry.terminal.lock();
-            terminal.next_match();
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.next_match();
 
-            // 触发渲染更新
-            self.needs_render.store(true, Ordering::Release);
+                // 触发渲染更新
+                self.needs_render.store(true, Ordering::Release);
+            }
         }
     }
 
@@ -1034,13 +1125,16 @@ impl TerminalPool {
     ///
     /// # 参数
     /// - terminal_id: 终端 ID
+    ///
+    /// 使用 try_lock 避免阻塞主线程，如果锁被占用则跳过
     pub fn search_prev(&self, terminal_id: usize) {
         if let Some(entry) = self.terminals.get(&terminal_id) {
-            let mut terminal = entry.terminal.lock();
-            terminal.prev_match();
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.prev_match();
 
-            // 触发渲染更新
-            self.needs_render.store(true, Ordering::Release);
+                // 触发渲染更新
+                self.needs_render.store(true, Ordering::Release);
+            }
         }
     }
 
@@ -1048,13 +1142,16 @@ impl TerminalPool {
     ///
     /// # 参数
     /// - terminal_id: 终端 ID
+    ///
+    /// 使用 try_lock 避免阻塞主线程，如果锁被占用则跳过
     pub fn clear_search(&self, terminal_id: usize) {
         if let Some(entry) = self.terminals.get(&terminal_id) {
-            let mut terminal = entry.terminal.lock();
-            terminal.clear_search();
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.clear_search();
 
-            // 触发渲染更新
-            self.needs_render.store(true, Ordering::Release);
+                // 触发渲染更新
+                self.needs_render.store(true, Ordering::Release);
+            }
         }
     }
 
@@ -1074,6 +1171,11 @@ impl TerminalPool {
     /// - 切换到 Active 时会自动触发一次渲染刷新
     pub fn set_terminal_mode(&self, terminal_id: usize, mode: crate::domain::aggregates::TerminalMode) {
         if let Some(entry) = self.terminals.get(&terminal_id) {
+            // 先更新原子标记（无锁），让 event_queue_callback 能立即看到
+            let is_background = mode == crate::domain::aggregates::TerminalMode::Background;
+            entry.is_background.store(is_background, Ordering::Release);
+
+            // 再更新 Terminal 内部状态
             let mut terminal = entry.terminal.lock();
             terminal.set_mode(mode);
 
@@ -1089,10 +1191,17 @@ impl TerminalPool {
     /// # 返回
     /// - Some(mode): 终端存在，返回当前模式
     /// - None: 终端不存在
+    ///
+    /// # 注意
+    /// 优先使用原子标记（无锁），避免阻塞
     pub fn get_terminal_mode(&self, terminal_id: usize) -> Option<crate::domain::aggregates::TerminalMode> {
         self.terminals.get(&terminal_id).map(|entry| {
-            let terminal = entry.terminal.lock();
-            terminal.mode()
+            // 使用原子读取（无锁）
+            if entry.is_background.load(Ordering::Acquire) {
+                crate::domain::aggregates::TerminalMode::Background
+            } else {
+                crate::domain::aggregates::TerminalMode::Active
+            }
         })
     }
 }

@@ -14,7 +14,7 @@ pub struct FFICursorPosition {
     pub valid: bool,
 }
 
-/// 获取终端光标位置
+/// 获取终端光标位置（无锁）
 ///
 /// 返回光标的屏幕坐标（相对于可见区域）
 ///
@@ -29,6 +29,7 @@ pub struct FFICursorPosition {
 /// - 返回的是**屏幕坐标**（相对于可见区域），不是绝对坐标
 /// - row=0 表示屏幕第一行，row=rows-1 表示屏幕最后一行
 /// - 如果终端正在滚动查看历史，光标可能不在可见区域
+/// - **无锁**：使用原子缓存读取，永不阻塞主线程
 #[no_mangle]
 pub extern "C" fn terminal_pool_get_cursor(
     handle: *mut TerminalPoolHandle,
@@ -40,7 +41,21 @@ pub extern "C" fn terminal_pool_get_cursor(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    if let Some(terminal) = pool.get_terminal(terminal_id) {
+    // 优先使用原子缓存（无锁读取）
+    if let Some(cursor_cache) = pool.get_cursor_cache(terminal_id) {
+        if let Some((col, row, _display_offset)) = cursor_cache.read() {
+            // 从原子缓存读取成功
+            return FFICursorPosition {
+                col,
+                row,
+                valid: true,
+            };
+        }
+    }
+
+    // 回退：使用 try_get_terminal 避免阻塞主线程
+    // 如果锁被渲染线程或 PTY 线程占用，立即返回无效位置
+    if let Some(terminal) = pool.try_get_terminal(terminal_id) {
         // 从 state() 获取光标位置
         let state = terminal.state();
         let cursor = &state.cursor;
@@ -73,6 +88,7 @@ pub extern "C" fn terminal_pool_get_cursor(
             valid,
         }
     } else {
+        // 锁被占用或终端不存在，返回无效位置
         FFICursorPosition { col: 0, row: 0, valid: false }
     }
 }

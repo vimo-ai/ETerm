@@ -42,7 +42,8 @@ pub extern "C" fn terminal_pool_screen_to_absolute(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    if let Some(terminal) = pool.get_terminal(terminal_id) {
+    // 使用 try_get_terminal 避免阻塞主线程
+    if let Some(terminal) = pool.try_get_terminal(terminal_id) {
         // 从 state() 获取 grid 信息
         let state = terminal.state();
         let history_size = state.grid.history_size();
@@ -58,6 +59,7 @@ pub extern "C" fn terminal_pool_screen_to_absolute(
             success: true,
         }
     } else {
+        // 锁被占用或终端不存在
         ScreenToAbsoluteResult { absolute_row: 0, col: 0, success: false }
     }
 }
@@ -78,7 +80,8 @@ pub extern "C" fn terminal_pool_set_selection(
 
     let pool = unsafe { &mut *(handle as *mut TerminalPool) };
 
-    if let Some(mut terminal) = pool.get_terminal_mut(terminal_id) {
+    // 使用 try_get_terminal_mut 避免阻塞主线程
+    if let Some(mut terminal) = pool.try_get_terminal_mut(terminal_id) {
         // 使用 start_selection + update_selection 来设置选区
         let start_pos = AbsolutePoint::new(start_absolute_row as usize, start_col);
         let end_pos = AbsolutePoint::new(end_absolute_row as usize, end_col);
@@ -88,6 +91,7 @@ pub extern "C" fn terminal_pool_set_selection(
 
         true
     } else {
+        // 锁被占用或终端不存在
         false
     }
 }
@@ -104,10 +108,12 @@ pub extern "C" fn terminal_pool_clear_selection(
 
     let pool = unsafe { &mut *(handle as *mut TerminalPool) };
 
-    if let Some(mut terminal) = pool.get_terminal_mut(terminal_id) {
+    // 使用 try_get_terminal_mut 避免阻塞主线程
+    if let Some(mut terminal) = pool.try_get_terminal_mut(terminal_id) {
         terminal.clear_selection();
         true
     } else {
+        // 锁被占用或终端不存在
         false
     }
 }
@@ -146,7 +152,8 @@ pub extern "C" fn terminal_pool_finalize_selection(
 
     let pool = unsafe { &mut *(handle as *mut TerminalPool) };
 
-    if let Some(mut terminal) = pool.get_terminal_mut(terminal_id) {
+    // 使用 try_get_terminal_mut 避免阻塞主线程
+    if let Some(mut terminal) = pool.try_get_terminal_mut(terminal_id) {
         match terminal.finalize_selection() {
             Some(text) => {
                 let text_len = text.len();
@@ -164,6 +171,7 @@ pub extern "C" fn terminal_pool_finalize_selection(
             },
         }
     } else {
+        // 锁被占用或终端不存在
         FinalizeSelectionResult {
             text: std::ptr::null_mut(),
             text_len: 0,
@@ -213,7 +221,8 @@ pub extern "C" fn terminal_pool_get_selection_text(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    if let Some(terminal) = pool.get_terminal(terminal_id) {
+    // 使用 try_get_terminal 避免阻塞主线程
+    if let Some(terminal) = pool.try_get_terminal(terminal_id) {
         match terminal.selection_text() {
             Some(text) => {
                 let text_len = text.len();
@@ -231,6 +240,7 @@ pub extern "C" fn terminal_pool_get_selection_text(
             },
         }
     } else {
+        // 锁被占用或终端不存在
         GetSelectionTextResult {
             text: std::ptr::null_mut(),
             text_len: 0,

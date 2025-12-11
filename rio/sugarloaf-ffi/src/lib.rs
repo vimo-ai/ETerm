@@ -85,14 +85,14 @@ pub fn create_default_font_spec(font_size: f32) -> SugarloafFonts {
 // 新架构模块（DDD 分层架构，使用 feature flag 隔离）
 // ============================================================================
 
-
 pub mod domain;
-
 
 pub mod render;
 
-
 pub mod app;
+
+// 基础设施层（SPSC 队列等）
+pub mod infra;
 
 // CVDisplayLink Rust 绑定（macOS only）
 #[cfg(target_os = "macos")]
