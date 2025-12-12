@@ -232,11 +232,8 @@ impl RenderSurface {
     pub fn render_terminal(&self, id: usize, _x: f32, _y: f32, width: f32, height: f32) -> bool {
         // 获取字体度量
         let font_metrics = {
-            let renderer = self.renderer.lock();
-            crate::render::config::FontMetrics::compute(
-                renderer.config(),
-                &self.font_context,
-            )
+            let mut renderer = self.renderer.lock();
+            renderer.get_font_metrics()
         };
 
         let scale = self.config.scale;
@@ -420,11 +417,8 @@ impl RenderSurface {
 
     /// 获取字体度量
     pub fn get_font_metrics(&self) -> (f32, f32, f32) {
-        let renderer = self.renderer.lock();
-        let metrics = crate::render::config::FontMetrics::compute(
-            renderer.config(),
-            &self.font_context,
-        );
+        let mut renderer = self.renderer.lock();
+        let metrics = renderer.get_font_metrics();
 
         (
             metrics.cell_width.value,

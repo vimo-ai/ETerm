@@ -334,7 +334,7 @@ impl Renderer {
     }
 
     /// 获取字体度量（带缓存，自动管理）
-    fn get_font_metrics(&mut self) -> FontMetrics {
+    pub fn get_font_metrics(&mut self) -> FontMetrics {
         // 检查缓存是否有效
         if let Some(cached) = self.cached_metrics {
             if cached.config_key == self.config.cache_key() {
