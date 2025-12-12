@@ -597,6 +597,76 @@ impl TerminalPool {
         }
     }
 
+    /// 设置选区
+    ///
+    /// 使用 try_lock 避免阻塞主线程
+    pub fn set_selection(&self, id: usize, start_row: usize, start_col: usize, end_row: usize, end_col: usize) -> bool {
+        use crate::domain::primitives::AbsolutePoint;
+        use crate::domain::views::SelectionType;
+
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                let start_pos = AbsolutePoint::new(start_row, start_col);
+                let end_pos = AbsolutePoint::new(end_row, end_col);
+                terminal.start_selection(start_pos, SelectionType::Simple);
+                terminal.update_selection(end_pos);
+                // 选区变化后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// 清除选区
+    ///
+    /// 使用 try_lock 避免阻塞主线程
+    pub fn clear_selection(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.clear_selection();
+                // 选区变化后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// 完成选区（mouseUp 时调用）
+    ///
+    /// 如果选区内容全是空白，自动清除选区并触发渲染
+    pub fn finalize_selection(&self, id: usize) -> Option<String> {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                let result = terminal.finalize_selection();
+                // finalize_selection 可能会清除选区（空白内容时）
+                // 无论是否清除，都标记脏以确保渲染最新状态
+                if result.is_none() {
+                    // 选区被清除了，需要重新渲染
+                    entry.dirty_flag.mark_dirty();
+                    self.needs_render.store(true, Ordering::Release);
+                }
+                result
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     // ========================================================================
     // 渲染流程（统一提交）
     // ========================================================================
@@ -689,8 +759,9 @@ impl TerminalPool {
                     match entry.terminal.try_lock() {
                         Some(mut terminal) => {
                             // 在锁范围内检查 damaged 状态（避免 TOCTOU）
-                            // 如果缓存有效且没有 damage，跳过渲染
-                            if cache_valid && !terminal.is_damaged() {
+                            // 如果缓存有效、没有 damage、且 dirty_flag 未标记，跳过渲染
+                            // 注：dirty_flag 用于外部触发（选区、滚动等），is_damaged() 用于内部 PTY 输出
+                            if cache_valid && !terminal.is_damaged() && !entry.dirty_flag.is_dirty() {
                                 return true;
                             }
 

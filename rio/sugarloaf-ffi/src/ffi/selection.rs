@@ -1,8 +1,6 @@
 //! Selection FFI - 选区相关
 
 use crate::app::TerminalPool;
-use crate::domain::primitives::AbsolutePoint;
-use crate::domain::views::SelectionType;
 use crate::ffi::terminal_pool::TerminalPoolHandle;
 
 /// 屏幕坐标转绝对坐标结果
@@ -77,15 +75,14 @@ pub extern "C" fn terminal_pool_set_selection(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    // 使用 try_with_terminal 避免阻塞主线程
-    pool.try_with_terminal(terminal_id, |terminal| {
-        // 使用 start_selection + update_selection 来设置选区
-        let start_pos = AbsolutePoint::new(start_absolute_row as usize, start_col);
-        let end_pos = AbsolutePoint::new(end_absolute_row as usize, end_col);
-
-        terminal.start_selection(start_pos, SelectionType::Simple);
-        terminal.update_selection(end_pos);
-    }).is_some()
+    // 使用 TerminalPool 的方法，会自动标记 dirty_flag
+    pool.set_selection(
+        terminal_id,
+        start_absolute_row as usize,
+        start_col,
+        end_absolute_row as usize,
+        end_col,
+    )
 }
 
 /// 清除选区
@@ -100,10 +97,8 @@ pub extern "C" fn terminal_pool_clear_selection(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    // 使用 try_with_terminal 避免阻塞主线程
-    pool.try_with_terminal(terminal_id, |terminal| {
-        terminal.clear_selection();
-    }).is_some()
+    // 使用 TerminalPool 的方法，会自动标记 dirty_flag
+    pool.clear_selection(terminal_id)
 }
 
 /// 完成选区结果
@@ -140,29 +135,23 @@ pub extern "C" fn terminal_pool_finalize_selection(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    // 使用 try_with_terminal 避免阻塞主线程
-    pool.try_with_terminal(terminal_id, |terminal| {
-        match terminal.finalize_selection() {
-            Some(text) => {
-                let text_len = text.len();
-                let c_string = std::ffi::CString::new(text).unwrap_or_default();
-                FinalizeSelectionResult {
-                    text: c_string.into_raw(),
-                    text_len,
-                    has_selection: true,
-                }
+    // 使用 TerminalPool 的方法，会自动标记 dirty_flag（如果清除了选区）
+    match pool.finalize_selection(terminal_id) {
+        Some(text) => {
+            let text_len = text.len();
+            let c_string = std::ffi::CString::new(text).unwrap_or_default();
+            FinalizeSelectionResult {
+                text: c_string.into_raw(),
+                text_len,
+                has_selection: true,
             }
-            None => FinalizeSelectionResult {
-                text: std::ptr::null_mut(),
-                text_len: 0,
-                has_selection: false,
-            },
         }
-    }).unwrap_or(FinalizeSelectionResult {
-        text: std::ptr::null_mut(),
-        text_len: 0,
-        has_selection: false,
-    })
+        None => FinalizeSelectionResult {
+            text: std::ptr::null_mut(),
+            text_len: 0,
+            has_selection: false,
+        },
+    }
 }
 
 /// 释放 finalize_selection 返回的字符串
