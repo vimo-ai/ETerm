@@ -7,7 +7,6 @@
 use crate::app::RenderScheduler;
 use crate::app::TerminalPool;
 use crate::ffi::terminal_pool::TerminalPoolHandle;
-use std::ffi::c_void;
 
 
 /// RenderScheduler 句柄（不透明指针）
@@ -108,40 +107,4 @@ pub extern "C" fn render_scheduler_request_render(handle: *mut RenderSchedulerHa
 
     let scheduler = unsafe { &*(handle as *const RenderScheduler) };
     scheduler.request_render();
-}
-
-// ============================================================================
-// 兼容旧接口（将被废弃）
-// ============================================================================
-
-/// 渲染回调类型（旧接口，已废弃）
-pub type RenderSchedulerCallback = extern "C" fn(
-    context: *mut c_void,
-    layout: *const RenderLayout,
-    layout_count: usize,
-);
-
-/// 设置渲染回调（旧接口，已废弃）
-///
-/// 新架构下不再需要，渲染完全在 Rust 侧完成
-#[no_mangle]
-pub extern "C" fn render_scheduler_set_callback(
-    _handle: *mut RenderSchedulerHandle,
-    _callback: RenderSchedulerCallback,
-    _context: *mut c_void,
-) {
-    // 新架构下不再需要此接口
-    eprintln!("⚠️ [RenderScheduler] render_scheduler_set_callback is deprecated, rendering is now done in Rust");
-}
-
-/// 设置渲染布局（旧接口，已废弃）
-///
-/// 新架构下应使用 terminal_pool_set_render_layout
-#[no_mangle]
-pub extern "C" fn render_scheduler_set_layout(
-    _handle: *mut RenderSchedulerHandle,
-    _layout: *const RenderLayout,
-    _count: usize,
-) {
-    eprintln!("⚠️ [RenderScheduler] render_scheduler_set_layout is deprecated, use terminal_pool_set_render_layout");
 }

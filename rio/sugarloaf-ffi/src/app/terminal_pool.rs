@@ -111,9 +111,6 @@ pub struct TerminalPool {
     /// 渲染器
     renderer: Mutex<Renderer>,
 
-    /// 字体上下文
-    font_context: Arc<FontContext>,
-
     /// 待渲染的 objects（每帧累积）
     pending_objects: Vec<Object>,
 
@@ -234,7 +231,6 @@ impl TerminalPool {
             next_id: 1,  // 从 1 开始，0 表示无效
             sugarloaf: Mutex::new(sugarloaf),
             renderer: Mutex::new(renderer),
-            font_context,
             pending_objects: Vec::new(),
             event_queue,
             event_callback: None,

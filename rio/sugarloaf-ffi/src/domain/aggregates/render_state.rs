@@ -165,12 +165,6 @@ impl Grid {
         self.lines.get_mut(index)
     }
 
-    /// 获取屏幕行（屏幕坐标 0..screen_lines）
-    #[inline]
-    fn get_screen_line(&self, screen_row: usize) -> Option<&Vec<Cell>> {
-        self.get_line(Line(screen_row as i32))
-    }
-
     /// 设置单元格
     fn set_cell(&mut self, line: Line, col: Column, cell: Cell) {
         if let Some(row) = self.get_line_mut(line) {
@@ -366,15 +360,6 @@ impl Grid {
         }
 
         self.screen_lines = new_screen_lines;
-    }
-
-    /// 重置网格
-    fn reset(&mut self) {
-        self.lines.clear();
-        self.current_history_lines = 0;
-        for _ in 0..self.screen_lines {
-            self.lines.push(vec![Cell::default(); self.columns]);
-        }
     }
 }
 
