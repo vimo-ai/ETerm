@@ -53,9 +53,9 @@ pub extern "C" fn terminal_pool_get_cursor(
         }
     }
 
-    // 回退：使用 try_get_terminal 避免阻塞主线程
+    // 回退：使用 try_with_terminal 避免阻塞主线程
     // 如果锁被渲染线程或 PTY 线程占用，立即返回无效位置
-    if let Some(terminal) = pool.try_get_terminal(terminal_id) {
+    pool.try_with_terminal(terminal_id, |terminal| {
         // 从 state() 获取光标位置
         let state = terminal.state();
         let cursor = &state.cursor;
@@ -87,10 +87,7 @@ pub extern "C" fn terminal_pool_get_cursor(
             row: if valid { screen_row as u16 } else { 0 },
             valid,
         }
-    } else {
-        // 锁被占用或终端不存在，返回无效位置
-        FFICursorPosition { col: 0, row: 0, valid: false }
-    }
+    }).unwrap_or(FFICursorPosition { col: 0, row: 0, valid: false })
 }
 
 // ===== Tests =====

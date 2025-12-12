@@ -68,8 +68,8 @@ pub extern "C" fn terminal_pool_get_word_at(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    // 使用 try_get_terminal 避免阻塞主线程
-    if let Some(terminal) = pool.try_get_terminal(terminal_id as usize) {
+    // 使用 try_with_terminal 避免阻塞主线程
+    pool.try_with_terminal(terminal_id as usize, |terminal| {
         let state = terminal.state();
         let grid = &state.grid;
 
@@ -118,9 +118,7 @@ pub extern "C" fn terminal_pool_get_word_at(
         } else {
             FFIWordBoundary::default()
         }
-    } else {
-        FFIWordBoundary::default()
-    }
+    }).unwrap_or(FFIWordBoundary::default())
 }
 
 /// 释放单词边界资源

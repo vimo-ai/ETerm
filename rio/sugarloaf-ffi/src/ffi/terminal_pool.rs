@@ -627,3 +627,60 @@ pub extern "C" fn terminal_pool_get_mode(
         None => 255,
     }
 }
+
+// ============================================================================
+// 无锁 FFI 函数（从原子缓存读取）
+// ============================================================================
+
+/// 滚动信息结果（无锁读取）
+#[repr(C)]
+pub struct ScrollInfo {
+    /// 当前显示偏移（滚动位置）
+    pub display_offset: u32,
+    /// 历史行数
+    pub history_size: u16,
+    /// 总行数
+    pub total_lines: u16,
+    /// 是否有效
+    pub valid: bool,
+}
+
+/// 获取滚动信息（无锁）
+///
+/// 从原子缓存读取滚动信息，无需获取 Terminal 锁
+/// 主线程可以安全调用，永不阻塞
+///
+/// 注意：返回的是上次渲染时的快照，可能与实时状态有微小差异
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_scroll_info(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> ScrollInfo {
+    if handle.is_null() {
+        return ScrollInfo {
+            display_offset: 0,
+            history_size: 0,
+            total_lines: 0,
+            valid: false,
+        };
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    // 从原子缓存读取（无锁）
+    if let Some((display_offset, history_size, total_lines)) = pool.get_scroll_cache(terminal_id) {
+        ScrollInfo {
+            display_offset,
+            history_size,
+            total_lines,
+            valid: true,
+        }
+    } else {
+        ScrollInfo {
+            display_offset: 0,
+            history_size: 0,
+            total_lines: 0,
+            valid: false,
+        }
+    }
+}
