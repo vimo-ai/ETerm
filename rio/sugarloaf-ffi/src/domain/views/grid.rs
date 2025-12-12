@@ -297,29 +297,29 @@ impl GridData {
     /// - `Some(array_index)`: 实际数组索引
     /// - `None`: 行不存在
     ///
-    /// # 映射公式
+    /// # 映射公式（优化后）
     /// ```
-    /// array_index = history_size - display_offset + screen_line
+    /// array_index = screen_line
     /// ```
     ///
-    /// # 示例
-    /// - 假设 history_size = 1000, display_offset = 0（在底部）
-    ///   - screen_line 0 → array_index 1000（屏幕第一行）
-    ///   - screen_line 23 → array_index 1023（屏幕最后一行）
-    /// - 假设 history_size = 1000, display_offset = 5（向上滚动 5 行）
-    ///   - screen_line 0 → array_index 995（历史缓冲区的某一行）
-    ///   - screen_line 23 → array_index 1018
+    /// # 说明
+    /// 优化后的快照只包含可见行（display_offset + screen_lines），
+    /// 数组索引直接对应屏幕行号：
+    /// - rows[0] = 屏幕第一行
+    /// - rows[1] = 屏幕第二行
+    /// - ...
+    ///
+    /// display_offset 的处理已在 from_crosswords() 中完成，
+    /// 快照的第一行就是当前可见的第一行。
     #[inline]
     fn screen_line_to_array_index(&self, screen_line: usize) -> Option<usize> {
         if screen_line >= self.screen_lines {
             return None;
         }
 
-        // 计算数组索引
-        // 注意：当 display_offset > 0 时，我们向上滚动，看到的是更早的历史行
-        let array_index = self.history_size
-            .checked_sub(self.display_offset)?
-            .checked_add(screen_line)?;
+        // 优化后的映射：直接使用 screen_line 作为索引
+        // rows 数组的布局：[可见行 0, 可见行 1, ..., 可见行 N-1]
+        let array_index = screen_line;
 
         // 验证索引在有效范围内
         if array_index < self.rows.len() {
@@ -373,6 +373,9 @@ impl GridData {
     }
 
     /// 从 Crosswords 构造 GridData
+    ///
+    /// 优化：只快照可见区域（屏幕行 + 当前滚动偏移需要的历史行）
+    /// 而不是整个历史缓冲区，大幅减少数据拷贝
     pub fn from_crosswords<T: EventListener>(crosswords: &Crosswords<T>) -> Self {
         let grid = &crosswords.grid;
         let display_offset = grid.display_offset();
@@ -381,20 +384,23 @@ impl GridData {
         let screen_lines = grid.screen_lines();
         let history_size = grid.history_size();
 
-        // 计算总行数（历史 + 屏幕）
-        let total_lines = grid.total_lines();
+        // 计算需要快照的行数范围
+        // 如果 display_offset = 0（在底部），只需快照屏幕行
+        // 如果 display_offset > 0（向上滚动），需要快照部分历史行
+        let visible_lines = screen_lines + display_offset;
 
-        // 收集所有行数据
-        let mut rows = Vec::with_capacity(total_lines);
-        let mut row_hashes = Vec::with_capacity(total_lines);
+        // 收集可见行数据
+        let mut rows = Vec::with_capacity(visible_lines);
+        let mut row_hashes = Vec::with_capacity(visible_lines);
 
-        // 遍历所有行（从历史缓冲区开始）
+        // 遍历可见行（从需要显示的第一行开始）
         // Crosswords 的 Line 是 i32，Line(0) 是屏幕顶部，负数是历史缓冲区
-        for line_index in 0..total_lines {
-            // 计算相对于屏幕顶部的行号
-            // line_index 0 = 历史缓冲区最顶部
-            // line_index history_size = 屏幕第一行（Line(0)）
-            let line = Line((line_index as i32) - (history_size as i32));
+        // 当 display_offset > 0 时，我们需要从 Line(-display_offset) 开始
+        let start_line = -(display_offset as i32);
+        let end_line = screen_lines as i32;
+
+        for line_value in start_line..end_line {
+            let line = Line(line_value);
 
             // 获取该行数据
             let row_data = Self::convert_row::<T>(grid, line, columns);
