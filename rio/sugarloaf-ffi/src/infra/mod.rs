@@ -13,5 +13,14 @@ pub mod atomic_cache;
 #[cfg(test)]
 mod stress_tests;
 
+#[cfg(test)]
+mod pipeline_bench;
+
 pub use spsc_queue::SpscQueue;
-pub use atomic_cache::{AtomicCursorCache, AtomicDirtyFlag};
+pub use atomic_cache::{
+    AtomicCursorCache,
+    AtomicDirtyFlag,
+    AtomicSelectionCache,
+    AtomicTitleCache,
+    AtomicScrollCache,
+};
