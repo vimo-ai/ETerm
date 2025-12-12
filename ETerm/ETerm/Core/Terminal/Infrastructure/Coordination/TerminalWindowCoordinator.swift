@@ -623,6 +623,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 调用 AR 的方法切换 Tab
         if panel.setActiveTab(tabId) {
+            // 核心逻辑：Tab 被激活时自动消费提醒状态
+            clearTabAttention(tabId)
+
             // 更新终端模式：旧 Tab -> Background，新 Tab -> Active
             if let oldId = oldTerminalId {
                 terminalPool.setMode(terminalId: Int(oldId), mode: .background)

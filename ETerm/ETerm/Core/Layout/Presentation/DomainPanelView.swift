@@ -203,9 +203,6 @@ final class DomainPanelView: NSView {
         guard let panel = panel,
               let coordinator = coordinator else { return }
 
-        // 清除 Tab 的高亮状态（如果有）
-        coordinator.clearTabAttention(tabId)
-
         coordinator.handleTabClick(panelId: panel.panelId, tabId: tabId)
     }
 

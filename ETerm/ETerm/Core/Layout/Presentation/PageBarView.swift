@@ -621,11 +621,7 @@ struct SwiftUIPageBar: View {
                         isActive: page.pageId == coordinator.terminalWindow.activePageId,
                         showCloseButton: coordinator.terminalWindow.pages.count > 1,
                         needsAttention: pagesNeedingAttention.contains(page.pageId),
-                        onTap: {
-                            // 点击时清除提醒状态
-                            pagesNeedingAttention.remove(page.pageId)
-                            _ = coordinator.switchToPage(page.pageId)
-                        },
+                        onTap: { _ = coordinator.switchToPage(page.pageId) },
                         onClose: { _ = coordinator.closePage(page.pageId) }
                     )
                 }
@@ -676,6 +672,12 @@ struct SwiftUIPageBar: View {
             if attention {
                 pagesNeedingAttention.insert(pageId)
             } else {
+                pagesNeedingAttention.remove(pageId)
+            }
+        }
+        // 核心逻辑：Page 被激活时自动消费提醒状态
+        .onChange(of: coordinator.terminalWindow.activePageId) { _, newPageId in
+            if let pageId = newPageId {
                 pagesNeedingAttention.remove(pageId)
             }
         }

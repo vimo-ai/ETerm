@@ -201,6 +201,8 @@ class RioContainerView: NSView {
     }
 
     @objc private func activeTerminalDidChange(_ notification: Notification) {
+        // Tab 切换时更新 Panel 视图（确保提醒状态等 UI 同步）
+        updatePanelViews()
         // Tab 切换时显示发光效果
         showActiveGlow()
     }

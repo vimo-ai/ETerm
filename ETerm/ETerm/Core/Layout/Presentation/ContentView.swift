@@ -101,7 +101,7 @@ struct ContentView: View {
         .background(
             ZStack {
                 TransparentWindowBackground()
-                Color.black.opacity(0.3)
+                Color.black.opacity(0.9)
             }
             .ignoresSafeArea()
         )
