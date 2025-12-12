@@ -1095,6 +1095,13 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
+        // IME 预编辑状态检查：如果正在输入中文，交给系统处理（包括 Backspace）
+        let imeCoord = coordinator?.keyboardSystem?.imeCoordinator ?? imeCoordinator
+        if imeCoord.isComposing {
+            interpretKeyEvents([event])
+            return
+        }
+
         // 转换为终端序列并发送到当前激活终端
         // 不主动触发渲染，依赖 Wakeup 事件（终端有输出时自动触发）
         if shouldHandleDirectly(keyStroke) {
@@ -1570,29 +1577,54 @@ extension RioMetalView: NSTextInputClient {
     }
 
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        guard let window = window else {
-            return .zero
+        guard let window = window,
+              let coordinator = coordinator,
+              let pool = terminalPool,
+              let mapper = coordinateMapper else {
+            return window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
         }
 
-        // 获取光标位置用于输入法候选框定位（新架构：使用 terminalPool）
-        if let terminalId = coordinator?.getActiveTerminalId(),
-           let pool = terminalPool,
-           let cursor = pool.getCursorPosition(terminalId: Int(terminalId)),
-           let mapper = coordinateMapper {
-
-            // ✅ 关键修复：cellWidth/cellHeight 是物理像素，需要转换为逻辑点
-            // bounds 是逻辑坐标，必须用逻辑点来计算
-            let logicalCellWidth = cellWidth / mapper.scale
-            let logicalCellHeight = cellHeight / mapper.scale
-
-            let x = CGFloat(cursor.col) * logicalCellWidth
-            let y = bounds.height - CGFloat(cursor.row + 1) * logicalCellHeight
-
-            let rect = CGRect(x: x, y: y, width: logicalCellWidth, height: logicalCellHeight)
-            return window.convertToScreen(convert(rect, to: nil))
+        // 获取当前 active terminal 和光标位置
+        guard let terminalId = coordinator.getActiveTerminalId(),
+              let cursor = pool.getCursorPosition(terminalId: Int(terminalId)) else {
+            return window.convertToScreen(convert(bounds, to: nil))
         }
 
-        return window.convertToScreen(convert(bounds, to: nil))
+        // 从 fontMetrics 获取实际的 cell 尺寸（逻辑点）
+        let logicalCellWidth: CGFloat
+        let logicalCellHeight: CGFloat
+        if let metrics = pool.getFontMetrics() {
+            logicalCellWidth = CGFloat(metrics.cell_width) / mapper.scale
+            logicalCellHeight = CGFloat(metrics.line_height) / mapper.scale
+        } else {
+            logicalCellWidth = 9.6
+            logicalCellHeight = 20.0
+        }
+
+        // 获取当前 active panel 的 content bounds（考虑 Panel 偏移）
+        let tabsToRender = coordinator.terminalWindow.getActiveTabsForRendering(
+            containerBounds: bounds,
+            headerHeight: 30.0
+        )
+
+        // 查找当前终端对应的 content bounds
+        let panelOrigin: CGPoint
+        let panelHeight: CGFloat
+        if let contentBounds = tabsToRender.first(where: { $0.0 == terminalId })?.1 {
+            panelOrigin = contentBounds.origin
+            panelHeight = contentBounds.height
+        } else {
+            // fallback: 使用整个 bounds
+            panelOrigin = bounds.origin
+            panelHeight = bounds.height
+        }
+
+        // 计算光标在屏幕上的位置（考虑 Panel 偏移）
+        let x = panelOrigin.x + CGFloat(cursor.col) * logicalCellWidth
+        let y = panelOrigin.y + panelHeight - CGFloat(cursor.row + 1) * logicalCellHeight
+
+        let rect = CGRect(x: x, y: y, width: logicalCellWidth, height: logicalCellHeight)
+        return window.convertToScreen(convert(rect, to: nil))
     }
 
     func characterIndex(for point: NSPoint) -> Int {
