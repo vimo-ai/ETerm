@@ -793,6 +793,17 @@ impl Terminal {
             crosswords.reset_damage();
         });
     }
+
+    /// 检查是否正在 DEC Synchronized Update 中
+    ///
+    /// 当终端收到 BSU (\e[?2026h) 后，is_syncing 为 true，
+    /// 直到收到 ESU (\e[?2026l) 才变为 false。
+    /// 在 sync 期间，应该跳过渲染以避免闪烁。
+    pub fn is_syncing(&self) -> bool {
+        with_crosswords!(self, crosswords, {
+            crosswords.is_syncing
+        })
+    }
 }
 
 #[cfg(test)]

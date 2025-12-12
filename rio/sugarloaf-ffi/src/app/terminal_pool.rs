@@ -758,6 +758,12 @@ impl TerminalPool {
                 Some(entry) => {
                     match entry.terminal.try_lock() {
                         Some(mut terminal) => {
+                            // 检查 DEC Synchronized Update (mode 2026)
+                            // 如果正在 sync 中（收到 BSU 但未收到 ESU），跳过渲染以避免闪烁
+                            if terminal.is_syncing() {
+                                return true;
+                            }
+
                             // 在锁范围内检查 damaged 状态（避免 TOCTOU）
                             // 如果缓存有效、没有 damage、且 dirty_flag 未标记，跳过渲染
                             // 注：dirty_flag 用于外部触发（选区、滚动等），is_damaged() 用于内部 PTY 输出

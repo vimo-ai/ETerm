@@ -147,6 +147,10 @@ pub trait Handler {
     /// Set the cursor style.
     fn set_cursor_style(&mut self, _style: Option<CursorShape>, _blinking: bool) {}
 
+    /// Set DEC Synchronized Update state (mode 2026).
+    /// Called when BSU (\e[?2026h) or ESU (\e[?2026l) is received.
+    fn set_syncing(&mut self, _syncing: bool) {}
+
     /// Set the cursor shape.
     fn set_cursor_shape(&mut self, _shape: CursorShape) {}
 
@@ -544,6 +548,9 @@ impl<T: Timeout> Processor<T> {
     where
         H: Handler,
     {
+        // 确保退出 sync 状态（处理超时、缓冲区溢出等情况）
+        handler.set_syncing(false);
+
         // Process all synchronized bytes.
         //
         // NOTE: We do not use `advance_until_terminated` here since BSU sequences are
@@ -630,8 +637,12 @@ impl<T: Timeout> Processor<T> {
                     .sync_state
                     .timeout
                     .set_timeout(SYNC_UPDATE_TIMEOUT);
+                // 通知 handler 进入 sync 状态
+                handler.set_syncing(true);
                 bsu_offset = Some(offset);
             } else if escape == ESU_CSI {
+                // 通知 handler 退出 sync 状态
+                handler.set_syncing(false);
                 self.stop_sync_internal(handler, bsu_offset);
                 break;
             }
@@ -1043,6 +1054,8 @@ impl<U: Handler, T: Timeout> copa::Perform for Performer<'_, U, T> {
                             .sync_state
                             .timeout
                             .set_timeout(SYNC_UPDATE_TIMEOUT);
+                        // 通知 handler 进入 sync 状态
+                        handler.set_syncing(true);
                     }
 
                     handler.set_private_mode(PrivateMode::new(param))
@@ -1084,6 +1097,11 @@ impl<U: Handler, T: Timeout> copa::Perform for Performer<'_, U, T> {
             }
             ('l', [b'?']) => {
                 for param in params_iter.map(|param| param[0]) {
+                    // Handle sync update end.
+                    if param == NamedPrivateMode::SyncUpdate as u16 {
+                        // 通知 handler 退出 sync 状态
+                        handler.set_syncing(false);
+                    }
                     handler.unset_private_mode(PrivateMode::new(param))
                 }
             }

@@ -337,13 +337,10 @@ where
         }
 
         // 照抄 Rio: Queue terminal update processing unless all processed bytes were synchronized.
-        // For non-synchronized updates, we send a Wakeup event which will coalesce
-        // multiple rapid updates into a single render pass.
         //
-        // 修复闪烁：只要有 sync_bytes > 0（正在同步更新中），就不发送 Wakeup
-        // 原因：BSU 之前的数据（如清屏）不应该单独触发渲染
-        let sync_bytes = state.parser.sync_bytes_count();
-        if sync_bytes == 0 && processed > 0 {
+        // 注意：不在这里抑制 Wakeup，而是在渲染层检查 is_syncing
+        // 原因：完全抑制 Wakeup 会导致界面卡死（用户输入无响应）
+        if processed > 0 {
             self.event_listener
                 .send_event(RioEvent::Wakeup(self.route_id));
         }

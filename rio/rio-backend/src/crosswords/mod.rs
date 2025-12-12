@@ -437,6 +437,10 @@ where
 
     /// Search state for this terminal.
     pub search_state: Option<crate::event::SearchState>,
+
+    /// DEC Synchronized Update state (mode 2026).
+    /// When true, rendering should be deferred until ESU is received.
+    pub is_syncing: bool,
 }
 
 impl<U: EventListener> Crosswords<U> {
@@ -490,6 +494,7 @@ impl<U: EventListener> Crosswords<U> {
             inactive_keyboard_mode_stack: Default::default(),
             inactive_keyboard_mode_idx: 0,
             search_state: None,
+            is_syncing: false,
         }
     }
 
@@ -1425,6 +1430,11 @@ impl<U: EventListener> Crosswords<U> {
 }
 
 impl<U: EventListener> Handler for Crosswords<U> {
+    #[inline]
+    fn set_syncing(&mut self, syncing: bool) {
+        self.is_syncing = syncing;
+    }
+
     #[inline]
     fn set_mode(&mut self, mode: AnsiMode) {
         let mode = match mode {
