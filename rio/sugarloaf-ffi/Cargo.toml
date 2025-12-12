@@ -29,3 +29,10 @@ rayon = "1.8"
 
 # 搜索优化
 regex = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "surface_cache_bench"
+harness = false
