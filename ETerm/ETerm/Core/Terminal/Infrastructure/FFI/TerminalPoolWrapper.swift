@@ -575,4 +575,97 @@ extension TerminalPoolWrapper {
         guard let handle = handle else { return }
         terminal_pool_render_all(handle)
     }
+
+    // MARK: - Lock-Free Cache API (Phase 1 Async FFI)
+
+    /// 选区范围（无锁读取）
+    struct TerminalSelectionRange {
+        /// 起始行（绝对行号）
+        let startRow: Int32
+        /// 起始列
+        let startCol: UInt32
+        /// 结束行（绝对行号）
+        let endRow: Int32
+        /// 结束列
+        let endCol: UInt32
+    }
+
+    /// 获取选区范围（无锁）
+    ///
+    /// 从原子缓存读取，无需获取 Terminal 锁
+    /// 主线程可安全调用，永不阻塞
+    ///
+    /// - Note: 返回的是上次渲染时的快照，可能与实时状态有微小差异
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 选区范围，无选区时返回 nil
+    func getSelectionRange(terminalId: Int) -> TerminalSelectionRange? {
+        guard let handle = handle else { return nil }
+
+        let result = terminal_pool_get_selection_range(handle, terminalId)
+        guard result.has_selection else { return nil }
+
+        return TerminalSelectionRange(
+            startRow: result.start_row,
+            startCol: result.start_col,
+            endRow: result.end_row,
+            endCol: result.end_col
+        )
+    }
+
+    /// 滚动信息（无锁读取）
+    struct TerminalScrollInfo {
+        /// 当前滚动位置
+        let displayOffset: UInt32
+        /// 历史行数
+        let historySize: UInt16
+        /// 总行数
+        let totalLines: UInt16
+    }
+
+    /// 获取滚动信息（无锁）
+    ///
+    /// 从原子缓存读取，无需获取 Terminal 锁
+    /// 主线程可安全调用，永不阻塞
+    ///
+    /// - Note: 返回的是上次渲染时的快照，可能与实时状态有微小差异
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 滚动信息，终端不存在时返回 nil
+    func getScrollInfo(terminalId: Int) -> TerminalScrollInfo? {
+        guard let handle = handle else { return nil }
+
+        let result = terminal_pool_get_scroll_info(handle, terminalId)
+        guard result.valid else { return nil }
+
+        return TerminalScrollInfo(
+            displayOffset: result.display_offset,
+            historySize: result.history_size,
+            totalLines: result.total_lines
+        )
+    }
+
+    /// 检查是否有选区（无锁）
+    ///
+    /// 比 getSelectionRange() 更轻量，只检查是否有选区
+    func hasSelection(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        let result = terminal_pool_get_selection_range(handle, terminalId)
+        return result.has_selection
+    }
+
+    /// 检查是否可滚动（无锁）
+    ///
+    /// 返回 true 如果有历史内容可以滚动
+    func canScroll(terminalId: Int) -> Bool {
+        guard let scrollInfo = getScrollInfo(terminalId: terminalId) else { return false }
+        return scrollInfo.historySize > 0
+    }
+
+    /// 获取滚动进度（无锁）
+    ///
+    /// - Returns: 0.0 = 底部（最新），1.0 = 顶部（最旧历史）
+    func getScrollProgress(terminalId: Int) -> Float {
+        guard let scrollInfo = getScrollInfo(terminalId: terminalId),
+              scrollInfo.historySize > 0 else { return 0.0 }
+        return Float(scrollInfo.displayOffset) / Float(scrollInfo.historySize)
+    }
 }

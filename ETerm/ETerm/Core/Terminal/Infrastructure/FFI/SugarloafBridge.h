@@ -550,4 +550,57 @@ uint8_t terminal_pool_get_mode(
     size_t terminal_id
 );
 
+// ============================================================================
+// Lock-Free Cache API (Phase 1 Async FFI)
+// ============================================================================
+// These functions read from atomic caches, never block the main thread.
+// Data is a snapshot from the last render, may have slight delay.
+
+/// Selection range result (lock-free)
+typedef struct {
+    int32_t start_row;      // Start row (absolute row number)
+    uint32_t start_col;     // Start column
+    int32_t end_row;        // End row (absolute row number)
+    uint32_t end_col;       // End column
+    bool has_selection;     // Whether there is a valid selection
+} SelectionRange;
+
+/// Get selection range (lock-free)
+///
+/// Reads from atomic cache, no terminal lock required.
+/// Main thread safe, never blocks.
+///
+/// Note: Returns snapshot from last render, may differ slightly from real-time state.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return Selection range, has_selection=false if no selection or terminal not found
+SelectionRange terminal_pool_get_selection_range(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Scroll info result (lock-free)
+typedef struct {
+    uint32_t display_offset;    // Current scroll position
+    uint16_t history_size;      // History line count
+    uint16_t total_lines;       // Total line count
+    bool valid;                 // Whether the result is valid
+} ScrollInfo;
+
+/// Get scroll info (lock-free)
+///
+/// Reads from atomic cache, no terminal lock required.
+/// Main thread safe, never blocks.
+///
+/// Note: Returns snapshot from last render, may differ slightly from real-time state.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return Scroll info, valid=false if terminal not found
+ScrollInfo terminal_pool_get_scroll_info(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
 #endif /* SugarloafBridge_h */
