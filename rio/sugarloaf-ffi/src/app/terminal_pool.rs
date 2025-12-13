@@ -7,6 +7,47 @@
 //!
 //! 注意：TerminalPool 不知道 DisplayLink 的存在
 //! 渲染调度由 RenderScheduler 负责
+//!
+//! # 锁顺序约定（重要！防止死锁）
+//!
+//! 为防止死锁，**所有线程**必须按以下顺序获取锁：
+//!
+//! ```text
+//! 1. sugarloaf      (最外层，GPU 渲染)
+//! 2. render_layout  (布局信息)
+//! 3. container_height
+//! 4. terminals      (终端 HashMap)
+//! 5. renderer       (文字光栅化)
+//! 6. entry.terminal (单个终端状态)
+//! ```
+//!
+//! ## 涉及的线程
+//!
+//! | 线程 | 触发场景 | 主要锁 |
+//! |-----|---------|-------|
+//! | **主线程** (AppKit) | 窗口 resize、Tab 切换 | sugarloaf → render_layout |
+//! | **CVDisplayLink** | VSync 渲染回调 | sugarloaf → render_layout → terminals |
+//! | **PTY 线程** | 终端输出 | terminals → entry.terminal |
+//!
+//! ## 死锁案例（已修复）
+//!
+//! ```text
+//! 主线程:           CVDisplayLink:
+//! ─────────         ──────────────
+//! sugarloaf.lock()  render_layout.lock()
+//!       ↓                 ↓
+//! render_layout.lock()  sugarloaf.lock()
+//!       ↓                 ↓
+//!    等待...            等待...
+//!       └──── 💀 死锁 ────┘
+//! ```
+//!
+//! ## 规则
+//!
+//! 1. **绝对禁止**反向获取锁
+//! 2. 如需获取多个锁，必须按上述顺序
+//! 3. 尽量缩短锁持有时间（clone 后立即释放）
+//! 4. 优先使用 `try_lock()` 避免阻塞主线程
 
 use crate::domain::aggregates::{Terminal, TerminalId};
 use crate::rio_event::EventQueue;
@@ -132,6 +173,27 @@ pub struct TerminalPool {
 
     /// 容器高度（用于坐标转换）
     container_height: Arc<Mutex<f32>>,
+
+    // ========================================================================
+    // 待处理的更新（避免主线程阻塞）
+    // ========================================================================
+    //
+    // 主线程使用 try_lock 尝试更新，如果锁被占用则存入 pending_*
+    // CVDisplayLink 线程在 render_all() 开始时检查并应用这些更新
+    // 这样既避免了死锁，又保证更新不会丢失
+
+    /// 待处理的 Sugarloaf resize (width, height)
+    pending_resize: Mutex<Option<(f32, f32)>>,
+
+    /// 待处理的 scale 更新
+    pending_scale: Mutex<Option<f32>>,
+
+    /// 待处理的字体大小更新
+    pending_font_size: Mutex<Option<f32>>,
+
+    /// 待处理的终端 resize (terminal_id, cols, rows, width, height)
+    /// 当 CVDisplayLink 线程无法获取 terminals 写锁时，将 resize 排队
+    pending_terminal_resizes: Mutex<Vec<(usize, u16, u16, f32, f32)>>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -238,6 +300,11 @@ impl TerminalPool {
             needs_render: Arc::new(AtomicBool::new(false)),
             render_layout: Arc::new(Mutex::new(Vec::new())),
             container_height: Arc::new(Mutex::new(0.0)),
+            // 初始化待处理更新为 None
+            pending_resize: Mutex::new(None),
+            pending_scale: Mutex::new(None),
+            pending_font_size: Mutex::new(None),
+            pending_terminal_resizes: Mutex::new(Vec::new()),
         })
     }
 
@@ -515,48 +582,64 @@ impl TerminalPool {
 
     /// 调整终端大小
     ///
-    /// 使用 try_lock 避免阻塞主线程
-    /// - 如果锁可用：立即更新 Terminal + PTY
-    /// - 如果锁被占用：只更新 PTY（Terminal 会在下次渲染时同步）
+    /// 分两阶段执行以避免死锁：
+    /// 1. 获取 terminals 写锁，快速更新 entry 字段，获取 terminal Arc
+    /// 2. 释放 terminals 写锁后，再调用 terminal.resize()
+    ///
+    /// 这避免了 terminals 锁和 crosswords 锁的循环等待：
+    /// - PTY-1 可能持有 crosswords 锁并等待 terminals 读锁
+    /// - 如果我们在持有 terminals 写锁时调用 terminal.resize()（需要 crosswords 锁）
+    /// - 就会形成死锁
     pub fn resize_terminal(&mut self, id: usize, cols: u16, rows: u16, width: f32, height: f32) -> bool {
-        let mut terminals = self.terminals.write();
-        if let Some(entry) = terminals.get_mut(&id) {
-            // eprintln!("📐 [TerminalPool] Resizing terminal {} to {}x{}", id, cols, rows);
-
-            // 尝试更新 Terminal（非阻塞）
-            if let Some(mut terminal) = entry.terminal.try_lock() {
-                terminal.resize(cols as usize, rows as usize);
-            }
-            // 如果锁被占用，跳过 Terminal 更新
-            // PTY resize 仍然发送，Terminal 会在下次渲染时通过 PTY 事件同步
-
-            // 通知 PTY（总是发送，无需锁）
-            use teletypewriter::WinsizeBuilder;
-            let winsize = WinsizeBuilder {
-                rows,
-                cols,
-                width: width as u16,
-                height: height as u16,
+        // 阶段 1：快速更新 entry 字段（持有写锁时间尽量短）
+        let (terminal_arc, pty_tx) = {
+            let mut terminals = match self.terminals.try_write() {
+                Some(t) => t,
+                None => {
+                    // 写锁被占用，排队待处理
+                    self.pending_terminal_resizes.lock().push((id, cols, rows, width, height));
+                    self.needs_render.store(true, Ordering::Release);
+                    return true;
+                }
             };
-            crate::rio_machine::send_resize(&entry.pty_tx, winsize);
 
-            // 更新存储的尺寸
-            entry.cols = cols;
-            entry.rows = rows;
+            if let Some(entry) = terminals.get_mut(&id) {
+                // 更新存储的尺寸
+                entry.cols = cols;
+                entry.rows = rows;
 
-            // P4 优化：尺寸变化时清除 Surface 缓存
-            // Surface 会在下次 render_terminal() 时重建
-            entry.surface_cache = None;
+                // P4 优化：尺寸变化时清除 Surface 缓存
+                entry.surface_cache = None;
 
-            // P4-S1 修复：同时清除 render_cache 并标记 dirty
-            // 避免 end_frame 使用旧尺寸的 stale image
-            entry.render_cache = None;
-            entry.dirty_flag.mark_dirty();
+                // P4-S1 修复：同时清除 render_cache 并标记 dirty
+                entry.render_cache = None;
+                entry.dirty_flag.mark_dirty();
 
-            true
-        } else {
-            false
+                // 获取需要的引用，稍后在锁外使用
+                (entry.terminal.clone(), entry.pty_tx.clone())
+            } else {
+                return false;
+            }
+            // terminals 写锁在这里释放
+        };
+
+        // 阶段 2：在锁外执行可能阻塞的操作
+        // 更新 Terminal（可能需要获取 crosswords 锁）
+        if let Some(mut terminal) = terminal_arc.try_lock() {
+            terminal.resize(cols as usize, rows as usize);
         }
+
+        // 通知 PTY
+        use teletypewriter::WinsizeBuilder;
+        let winsize = WinsizeBuilder {
+            rows,
+            cols,
+            width: width as u16,
+            height: height as u16,
+        };
+        crate::rio_machine::send_resize(&pty_tx, winsize);
+
+        true
     }
 
     /// 发送输入到终端
@@ -942,10 +1025,29 @@ impl TerminalPool {
     /// 结束帧（贴图合成）
     ///
     /// 从缓存获取 Image，贴图合成到最终画面
+    ///
+    /// # 锁顺序（重要！防止死锁）
+    ///
+    /// 必须保持与主线程 layout() 一致的锁顺序：
+    /// 1. sugarloaf.lock()
+    /// 2. render_layout.lock()
+    ///
+    /// 主线程调用顺序：
+    /// - resize_sugarloaf() → sugarloaf.lock()
+    /// - set_render_layout() → render_layout.lock()
+    ///
+    /// 如果顺序不一致会导致死锁！
     pub fn end_frame(&mut self) {
         let frame_start = std::time::Instant::now();
 
-        // 从 layout 获取当前需要渲染的终端
+        // 清空 pending_objects（新方案不再使用）
+        self.pending_objects.clear();
+
+        // ⚠️ 锁顺序：先 sugarloaf，再 render_layout（与主线程一致，防止死锁）
+        let mut sugarloaf = self.sugarloaf.lock();
+        let lock_time = frame_start.elapsed().as_micros();
+
+        // 获取当前布局（在 sugarloaf 锁内，保持锁顺序）
         let layout = {
             let render_layout = self.render_layout.lock();
             render_layout.clone()
@@ -954,12 +1056,6 @@ impl TerminalPool {
         if layout.is_empty() {
             return;
         }
-
-        // 清空 pending_objects（新方案不再使用）
-        self.pending_objects.clear();
-
-        let mut sugarloaf = self.sugarloaf.lock();
-        let lock_time = frame_start.elapsed().as_micros();
 
         // 从每个终端的缓存获取 Image
         let mut objects = Vec::new();
@@ -1028,12 +1124,93 @@ impl TerminalPool {
         self.container_height.clone()
     }
 
+    /// 应用主线程排队的待处理更新
+    ///
+    /// 在 render_all() 开始时调用，确保：
+    /// 1. 主线程的 try_lock 失败时不会丢失更新
+    /// 2. 所有更新按正确的锁顺序应用（sugarloaf → renderer）
+    fn apply_pending_updates(&mut self) {
+        use crate::domain::primitives::LogicalPixels;
+
+        // 1. 应用待处理的 resize（需要 sugarloaf 锁）
+        let pending_resize = self.pending_resize.lock().take();
+        if let Some((width, height)) = pending_resize {
+            let mut sugarloaf = self.sugarloaf.lock();
+            sugarloaf.resize(width as u32, height as u32);
+        }
+
+        // 2. 应用待处理的 scale（需要 sugarloaf + renderer 锁）
+        // 锁顺序：sugarloaf → renderer（遵循项目规定的锁顺序）
+        let pending_scale = self.pending_scale.lock().take();
+        if let Some(scale) = pending_scale {
+            // 先获取 sugarloaf 锁
+            {
+                let mut sugarloaf = self.sugarloaf.lock();
+                sugarloaf.rescale(scale);
+            }
+            // 再获取 renderer 锁
+            {
+                let mut renderer = self.renderer.lock();
+                renderer.set_scale(scale);
+            }
+        }
+
+        // 3. 应用待处理的字体大小（需要 renderer 锁）
+        let pending_font_size = self.pending_font_size.lock().take();
+        if let Some(font_size) = pending_font_size {
+            let mut renderer = self.renderer.lock();
+            renderer.set_font_size(LogicalPixels::new(font_size));
+        }
+
+        // 4. 应用待处理的终端 resize
+        // 两阶段执行：先更新 entry，释放锁后再调用 terminal.resize()
+        let pending_resizes: Vec<_> = self.pending_terminal_resizes.lock().drain(..).collect();
+        if !pending_resizes.is_empty() {
+            // 阶段 1：收集需要 resize 的终端信息
+            let resize_tasks: Vec<_> = {
+                if let Some(mut terminals) = self.terminals.try_write() {
+                    pending_resizes.into_iter().filter_map(|(id, cols, rows, width, height)| {
+                        if let Some(entry) = terminals.get_mut(&id) {
+                            // 更新 entry 字段
+                            entry.cols = cols;
+                            entry.rows = rows;
+                            entry.surface_cache = None;
+                            entry.render_cache = None;
+                            entry.dirty_flag.mark_dirty();
+                            // 收集需要的信息
+                            Some((entry.terminal.clone(), entry.pty_tx.clone(), cols, rows, width, height))
+                        } else {
+                            None
+                        }
+                    }).collect()
+                } else {
+                    // 写锁被占用，放回队列下一帧重试
+                    self.pending_terminal_resizes.lock().extend(pending_resizes);
+                    return;
+                }
+            };
+
+            // 阶段 2：在锁外执行 terminal.resize() 和 send_resize()
+            for (terminal_arc, pty_tx, cols, rows, width, height) in resize_tasks {
+                if let Some(mut terminal) = terminal_arc.try_lock() {
+                    terminal.resize(cols as usize, rows as usize);
+                }
+                use teletypewriter::WinsizeBuilder;
+                let winsize = WinsizeBuilder { rows, cols, width: width as u16, height: height as u16 };
+                crate::rio_machine::send_resize(&pty_tx, winsize);
+            }
+        }
+    }
+
     /// 渲染所有布局中的终端（由 RenderScheduler 调用）
     ///
-    /// 完整的渲染循环：begin_frame → render_terminal × N → end_frame
+    /// 完整的渲染循环：apply_pending → begin_frame → render_terminal × N → end_frame
     /// 在 Rust 侧完成，无需 Swift 参与
     pub fn render_all(&mut self) {
         let frame_start = std::time::Instant::now();
+
+        // 先应用主线程排队的待处理更新（避免更新丢失）
+        self.apply_pending_updates();
 
         // 获取当前布局
         let layout = {
@@ -1068,27 +1245,56 @@ impl TerminalPool {
     }
 
     /// 调整 Sugarloaf 尺寸
+    ///
+    /// 使用 try_lock 避免阻塞主线程：
+    /// - GPU Surface 创建可能需要主线程的 Metal 回调
+    /// - 如果 CVDisplayLink 线程持有 sugarloaf 锁并等待 GPU
+    /// - 而主线程在这里阻塞等待锁，会导致死锁
+    ///
+    /// 如果 try_lock 失败，将更新排队到 pending_resize，
+    /// 在下次 render_all() 开始时应用，确保更新不会丢失
     pub fn resize_sugarloaf(&mut self, width: f32, height: f32) {
-        let mut sugarloaf = self.sugarloaf.lock();
-        sugarloaf.resize(width as u32, height as u32);
+        // 使用 try_lock 避免死锁
+        if let Some(mut sugarloaf) = self.sugarloaf.try_lock() {
+            sugarloaf.resize(width as u32, height as u32);
+            // 成功时清除待处理队列（避免旧值被回滚）
+            self.pending_resize.lock().take();
+        } else {
+            // 锁被占用，排队待处理更新
+            *self.pending_resize.lock() = Some((width, height));
+        }
+        // 无论成功与否都标记需要渲染
+        self.needs_render.store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// 设置 DPI 缩放（窗口在不同 DPI 屏幕间移动时调用）
     ///
     /// 更新渲染器的 scale factor，确保坐标转换正确
+    ///
+    /// 使用 try_lock 避免阻塞主线程（与 resize_sugarloaf 相同的原因）
+    /// 如果 try_lock 失败，将更新排队到 pending_scale
     pub fn set_scale(&mut self, scale: f32) {
         // 更新 config 中的 scale
         self.config.scale = scale;
 
-        // 更新渲染器的 scale
-        let mut renderer = self.renderer.lock();
-        renderer.set_scale(scale);
-        drop(renderer);
+        // 尝试立即更新渲染器和 Sugarloaf
+        let renderer_updated = self.renderer.try_lock().map(|mut r| {
+            r.set_scale(scale);
+            true
+        }).unwrap_or(false);
 
-        // 更新 Sugarloaf 的 scale
-        let mut sugarloaf = self.sugarloaf.lock();
-        sugarloaf.rescale(scale);
-        drop(sugarloaf);
+        let sugarloaf_updated = self.sugarloaf.try_lock().map(|mut s| {
+            s.rescale(scale);
+            true
+        }).unwrap_or(false);
+
+        if renderer_updated && sugarloaf_updated {
+            // 全部成功时清除待处理队列（避免旧值被回滚）
+            self.pending_scale.lock().take();
+        } else {
+            // 如果任一更新失败，排队待处理
+            *self.pending_scale.lock() = Some(scale);
+        }
 
         // 标记需要重新渲染
         self.needs_render.store(true, Ordering::Release);
@@ -1299,15 +1505,25 @@ impl TerminalPool {
     /// - cell_width: 单元格宽度（物理像素）
     /// - cell_height: 基础单元格高度（物理像素，不含 line_height_factor）
     /// - line_height: 实际行高（物理像素，= cell_height * line_height_factor）
+    /// 获取字体度量
+    ///
+    /// 使用 try_lock 避免阻塞主线程
+    /// 如果锁被占用，返回缓存的默认值（基于 config）
     pub fn get_font_metrics(&self) -> (f32, f32, f32) {
-        let mut renderer = self.renderer.lock();
-        let metrics = renderer.get_font_metrics();
-
-        let cell_width = metrics.cell_width.value;
-        let cell_height = metrics.cell_height.value;
-        let line_height = cell_height * self.config.line_height;
-
-        (cell_width, cell_height, line_height)
+        if let Some(mut renderer) = self.renderer.try_lock() {
+            let metrics = renderer.get_font_metrics();
+            let cell_width = metrics.cell_width.value;
+            let cell_height = metrics.cell_height.value;
+            let line_height = cell_height * self.config.line_height;
+            (cell_width, cell_height, line_height)
+        } else {
+            // 锁被占用，返回基于 config 的估算值
+            // 假设每个字符宽度约为字体大小的 0.6 倍（等宽字体）
+            let estimated_width = self.config.font_size * 0.6;
+            let estimated_height = self.config.font_size * 1.2;
+            let line_height = estimated_height * self.config.line_height;
+            (estimated_width, estimated_height, line_height)
+        }
     }
 
     /// 调整字体大小
@@ -1319,6 +1535,8 @@ impl TerminalPool {
     /// - 重置：恢复到默认 14.0pt
     /// - 减小：每次 -1.0pt，最小 6.0pt
     /// - 增大：每次 +1.0pt，最大 100.0pt
+    ///
+    /// 使用 try_lock 避免阻塞主线程
     pub fn change_font_size(&mut self, operation: u8) {
         use crate::domain::primitives::LogicalPixels;
 
@@ -1333,10 +1551,18 @@ impl TerminalPool {
         // 更新配置
         self.config.font_size = new_font_size;
 
-        // 更新渲染器
-        {
-            let mut renderer = self.renderer.lock();
-            renderer.set_font_size(LogicalPixels::new(new_font_size));
+        // 更新渲染器（非阻塞）
+        let updated = self.renderer.try_lock().map(|mut r| {
+            r.set_font_size(LogicalPixels::new(new_font_size));
+            true
+        }).unwrap_or(false);
+
+        if updated {
+            // 成功时清除待处理队列（避免旧值被回滚）
+            self.pending_font_size.lock().take();
+        } else {
+            // 锁被占用，排队待处理更新
+            *self.pending_font_size.lock() = Some(new_font_size);
         }
 
         // 标记需要重新渲染
