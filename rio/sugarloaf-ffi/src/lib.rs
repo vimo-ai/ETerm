@@ -2,9 +2,12 @@ use sugarloaf::font::fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle};
 use sugarloaf::font::FontLibrary;
 use std::sync::OnceLock;
 
-// 同步原语（FairMutex）
+// 同步原语（FairMutex, FairRwLock）
 mod sync;
 pub use sync::*;
+
+mod fair_rwlock;
+pub use fair_rwlock::FairRwLock;
 
 // ============================================================================
 // 全局共享 FontLibrary（所有 TerminalPool 共享同一个实例）
@@ -117,6 +120,10 @@ pub use rio_event::{EventCallback, EventQueue, FFIEvent, FFIEventListener, RioEv
 // Rio Machine（照抄 Rio 的 PTY 事件循环）
 mod rio_machine;
 pub use rio_machine::Machine;
+
+// 锁竞争测试（FairRwLock, resize 阻塞等）
+#[cfg(test)]
+mod lock_contention_test;
 
 
 #[repr(C)]
