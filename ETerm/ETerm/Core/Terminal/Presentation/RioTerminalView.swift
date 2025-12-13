@@ -91,10 +91,13 @@ struct RioRenderView: NSViewRepresentable {
         // 触发 Panel 视图更新
         nsView.updatePanelViews()
 
-        // 容器尺寸变化时触发重新渲染
+        // 只在尺寸变化时触发渲染（避免 updateNSView 过度触发）
         let newSize = nsView.bounds.size
-        if newSize.width > 0 && newSize.height > 0 {
-            nsView.renderView.requestRender()
+        if newSize != nsView.renderView.lastReportedSize {
+            nsView.renderView.lastReportedSize = newSize
+            if newSize.width > 0 && newSize.height > 0 {
+                nsView.renderView.requestRender()
+            }
         }
     }
 }
@@ -591,6 +594,9 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 布局缓存（用于检测布局是否变化）
     private var lastLayoutHash: Int = 0
+
+    /// 上次报告的尺寸（用于检测 updateNSView 中尺寸是否变化）
+    var lastReportedSize: CGSize = .zero
 
     // MARK: - 光标闪烁相关（照抄 Rio）
 
