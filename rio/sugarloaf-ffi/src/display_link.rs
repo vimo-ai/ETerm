@@ -9,6 +9,10 @@
 
 use std::ffi::c_void;
 
+// Objective-C runtime 用于 autoreleasepool
+#[cfg(target_os = "macos")]
+use objc2::rc::autoreleasepool;
+
 // ============================================================================
 // CVDisplayLink C API 类型和函数声明
 // ============================================================================
@@ -154,6 +158,9 @@ impl DisplayLink {
     ///
     /// 在 VSync 时被 macOS 调用（注意：在非主线程）
     /// 每帧都会调用，由回调内部决定是否真正渲染
+    ///
+    /// ⚠️ 重要：Metal 渲染会创建 autoreleased 对象（commandBuffer, drawable 等）
+    /// 必须在 autoreleasepool 中执行，否则这些对象无法释放，导致内存泄漏
     extern "C" fn display_link_callback(
         _display_link: CVDisplayLinkRef,
         _in_now: *const c_void,
@@ -168,7 +175,15 @@ impl DisplayLink {
 
         let context = unsafe { &*(display_link_context as *const CallbackContext) };
 
-        // 每帧都调用回调，由回调内部决定是否渲染
+        // ⚠️ 关键修复：包裹在 autoreleasepool 中
+        // Metal 的 commandBuffer、drawable、encoder 等都是 autoreleased 对象
+        // 没有 autoreleasepool 会导致这些对象累积，造成内存泄漏
+        #[cfg(target_os = "macos")]
+        autoreleasepool(|_| {
+            (context.callback)();
+        });
+
+        #[cfg(not(target_os = "macos"))]
         (context.callback)();
 
         kCVReturnSuccess
