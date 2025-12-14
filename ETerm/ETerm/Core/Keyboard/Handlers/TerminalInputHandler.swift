@@ -19,7 +19,8 @@ final class TerminalInputHandler {
 
     /// 需要直接处理的特殊键 keyCode
     private let specialKeyCodes: Set<UInt16> = [
-        36,   // Return
+        36,   // Return (主键盘)
+        76,   // Enter (小键盘)
         48,   // Tab
         51,   // Delete (Backspace)
         53,   // Escape

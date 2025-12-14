@@ -621,7 +621,8 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 需要直接处理的特殊键 keyCode
     private let specialKeyCodes: Set<UInt16> = [
-        36,   // Return
+        36,   // Return (主键盘)
+        76,   // Enter (小键盘)
         48,   // Tab
         51,   // Delete (Backspace)
         53,   // Escape
@@ -1142,9 +1143,14 @@ class RioMetalView: NSView, RenderViewProtocol {
         // Cmd+V 粘贴
         if keyStroke.matches(.cmd("v")) {
             if let text = NSPasteboard.general.string(forType: .string) {
-                // 使用 Bracketed Paste Mode，告诉终端这是粘贴操作
-                let bracketedText = "\u{1B}[200~" + text + "\u{1B}[201~"
-                _ = pool.writeInput(terminalId: Int(terminalId), data: bracketedText)
+                // 根据终端是否启用 Bracketed Paste Mode 决定是否包裹转义序列
+                if pool.isBracketedPasteEnabled(terminalId: Int(terminalId)) {
+                    let bracketedText = "\u{1B}[200~" + text + "\u{1B}[201~"
+                    _ = pool.writeInput(terminalId: Int(terminalId), data: bracketedText)
+                } else {
+                    // 未启用 Bracketed Paste Mode，直接发送原始文本
+                    _ = pool.writeInput(terminalId: Int(terminalId), data: text)
+                }
             }
             return true
         }

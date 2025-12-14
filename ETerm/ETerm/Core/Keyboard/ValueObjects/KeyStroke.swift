@@ -155,7 +155,7 @@ struct KeyStroke: Hashable {
 
         // 特殊键处理
         switch keyCode {
-        case 36: return "\r"           // Return
+        case 36, 76: return "\r"       // Return (主键盘) / Enter (小键盘)
         case 48: return "\t"           // Tab
         case 51: return "\u{7F}"       // Delete (Backspace)
         case 53: return "\u{1B}"       // Escape
@@ -204,7 +204,7 @@ struct KeyStroke: Hashable {
         // 特殊键名称
         switch keyCode {
         case 53: return result + "Esc"
-        case 36: return result + "↩"
+        case 36, 76: return result + "↩"
         case 48: return result + "⇥"
         case 51: return result + "⌫"
         case 114: return result + "Ins"
