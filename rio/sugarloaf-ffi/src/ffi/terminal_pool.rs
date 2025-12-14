@@ -161,6 +161,27 @@ pub extern "C" fn terminal_pool_has_running_process(
     pool.has_running_process(terminal_id)
 }
 
+/// 检查终端是否启用了 Bracketed Paste Mode
+///
+/// 当启用时（应用程序发送了 \x1b[?2004h），粘贴时应该用转义序列包裹内容。
+/// 当未启用时，直接发送原始文本。
+///
+/// # 返回
+/// - true: 启用了 Bracketed Paste Mode，粘贴时需要添加 \x1b[200~ 和 \x1b[201~
+/// - false: 未启用，直接发送原始文本
+#[no_mangle]
+pub extern "C" fn terminal_pool_is_bracketed_paste_enabled(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.is_bracketed_paste_enabled(terminal_id)
+}
+
 /// 调整终端大小
 #[no_mangle]
 pub extern "C" fn terminal_pool_resize_terminal(

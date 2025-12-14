@@ -1024,6 +1024,17 @@ class TerminalWindowCoordinator: ObservableObject {
         return terminalPool.hasRunningProcess(terminalId: Int(terminalId))
     }
 
+    /// 检查当前激活的终端是否启用了 Bracketed Paste Mode
+    ///
+    /// 当启用时（应用程序发送了 \x1b[?2004h），粘贴时应该用转义序列包裹内容。
+    /// 当未启用时，直接发送原始文本。
+    func isActiveTerminalBracketedPasteEnabled() -> Bool {
+        guard let terminalId = getActiveTerminalId() else {
+            return false
+        }
+        return terminalPool.isBracketedPasteEnabled(terminalId: Int(terminalId))
+    }
+
     /// 获取当前激活终端的前台进程名称
     func getActiveTerminalForegroundProcessName() -> String? {
         guard let terminalId = getActiveTerminalId() else {

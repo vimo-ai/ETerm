@@ -472,9 +472,14 @@ extension TerminalWindowCoordinator {
 
         // 检查文本
         if let text = pasteboard.string(forType: .string) {
-            // 使用 Bracketed Paste Mode，告诉终端这是粘贴操作
-            let bracketedText = "\u{1B}[200~" + text + "\u{1B}[201~"
-            writeInput(terminalId: terminalId, data: bracketedText)
+            // 根据终端是否启用 Bracketed Paste Mode 决定是否包裹转义序列
+            if isActiveTerminalBracketedPasteEnabled() {
+                let bracketedText = "\u{1B}[200~" + text + "\u{1B}[201~"
+                writeInput(terminalId: terminalId, data: bracketedText)
+            } else {
+                // 未启用 Bracketed Paste Mode，直接发送原始文本
+                writeInput(terminalId: terminalId, data: text)
+            }
         }
     }
 

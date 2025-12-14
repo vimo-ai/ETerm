@@ -122,6 +122,19 @@ bool terminal_pool_has_running_process(
     size_t terminal_id
 );
 
+/// Check if terminal has Bracketed Paste Mode enabled
+///
+/// When enabled (app sent \x1b[?2004h), paste should be wrapped with escape sequences.
+/// When disabled, send raw text directly.
+///
+/// Returns:
+/// - true: Bracketed Paste Mode is enabled, need to wrap with \x1b[200~ and \x1b[201~
+/// - false: Not enabled, send raw text
+bool terminal_pool_is_bracketed_paste_enabled(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
 /// Resize terminal
 bool terminal_pool_resize_terminal(
     TerminalPoolHandle handle,

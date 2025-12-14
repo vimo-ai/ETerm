@@ -107,6 +107,12 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 返回 true 如果前台进程不是 shell 本身（如正在运行 vim, cargo, python 等）
     func hasRunningProcess(terminalId: Int) -> Bool
 
+    /// 检查终端是否启用了 Bracketed Paste Mode
+    ///
+    /// 当启用时（应用程序发送了 \x1b[?2004h），粘贴时应该用转义序列包裹内容。
+    /// 当未启用时，直接发送原始文本。
+    func isBracketedPasteEnabled(terminalId: Int) -> Bool
+
     // MARK: - 光标和选区
 
     /// 获取光标位置
@@ -184,6 +190,7 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func getCwd(terminalId: Int) -> String? { nil }
     func getForegroundProcessName(terminalId: Int) -> String? { nil }
     func hasRunningProcess(terminalId: Int) -> Bool { false }
+    func isBracketedPasteEnabled(terminalId: Int) -> Bool { false }
     func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
     func getWordAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalWordBoundary? { nil }
     func clearSelection(terminalId: Int) -> Bool { false }

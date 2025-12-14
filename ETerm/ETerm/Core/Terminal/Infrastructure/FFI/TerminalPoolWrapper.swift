@@ -217,6 +217,15 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return terminal_pool_has_running_process(handle, terminalId)
     }
 
+    /// 检查终端是否启用了 Bracketed Paste Mode
+    ///
+    /// 当启用时（应用程序发送了 \x1b[?2004h），粘贴时应该用转义序列包裹内容。
+    /// 当未启用时，直接发送原始文本。
+    func isBracketedPasteEnabled(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_is_bracketed_paste_enabled(handle, terminalId)
+    }
+
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool {
         guard let handle = handle else { return false }

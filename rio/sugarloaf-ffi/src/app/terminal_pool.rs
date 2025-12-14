@@ -580,6 +580,20 @@ impl TerminalPool {
         }
     }
 
+    /// 检查终端是否启用了 Bracketed Paste Mode
+    ///
+    /// 当启用时（应用程序发送了 \x1b[?2004h），粘贴时应该用转义序列包裹内容。
+    /// 当未启用时，直接发送原始文本。
+    pub fn is_bracketed_paste_enabled(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            terminal.is_bracketed_paste_enabled()
+        } else {
+            false
+        }
+    }
+
     /// 调整终端大小
     ///
     /// 分两阶段执行以避免死锁：

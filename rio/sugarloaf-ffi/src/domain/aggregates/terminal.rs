@@ -804,6 +804,18 @@ impl Terminal {
             crosswords.is_syncing
         })
     }
+
+    /// 检查终端是否启用了 Bracketed Paste Mode
+    ///
+    /// Bracketed Paste Mode（mode 2004）让应用程序可以区分用户输入和粘贴内容。
+    /// 当启用时，粘贴的内容应该被 \x1b[200~ 和 \x1b[201~ 包裹。
+    /// 当未启用时，直接发送原始文本。
+    pub fn is_bracketed_paste_enabled(&self) -> bool {
+        use rio_backend::crosswords::Mode;
+        with_crosswords!(self, crosswords, {
+            crosswords.mode().contains(Mode::BRACKETED_PASTE)
+        })
+    }
 }
 
 #[cfg(test)]
