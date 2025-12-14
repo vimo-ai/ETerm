@@ -114,58 +114,16 @@ final class SessionManager {
     ///
     /// - Returns: Session 状态，如果不存在或解析失败返回 nil
     func load() -> SessionState? {
-        print("🔍 [SessionManager] load() called")
-
         guard let data = userDefaults.data(forKey: sessionKey) else {
-            print("❌ [SessionManager] No session data found in UserDefaults")
             return nil
         }
-
-        print("✅ [SessionManager] Found session data: \(data.count) bytes")
 
         do {
             let decoder = JSONDecoder()
             let session = try decoder.decode(SessionState.self, from: data)
-            print("✅ [SessionManager] Successfully decoded session:")
-            print("   - Version: \(session.version)")
-            print("   - Windows count: \(session.windows.count)")
-            for (index, window) in session.windows.enumerated() {
-                print("   - Window[\(index)]:")
-                print("     - Pages: \(window.pages.count)")
-                print("     - Active page index: \(window.activePageIndex)")
-                for (pageIndex, page) in window.pages.enumerated() {
-                    print("     - Page[\(pageIndex)]: \"\(page.title)\"")
-                    printLayoutState(page.layout, indent: "       ")
-                }
-            }
             return session
         } catch {
-            print("❌ [SessionManager] Failed to decode session: \(error)")
             return nil
-        }
-    }
-
-    /// 递归打印布局状态（用于调试）
-    private func printLayoutState(_ layout: PanelLayoutState, indent: String) {
-        switch layout {
-        case .leaf(let panelId, let tabs, let activeTabIndex):
-            print("\(indent)Leaf Panel (\(panelId))")
-            print("\(indent)  Tabs: \(tabs.count), Active: \(activeTabIndex)")
-            for (index, tab) in tabs.enumerated() {
-                print("\(indent)  Tab[\(index)]: \"\(tab.title)\" CWD=\"\(tab.cwd)\"")
-            }
-        case .horizontal(let ratio, let first, let second):
-            print("\(indent)Horizontal Split (ratio: \(ratio))")
-            print("\(indent)  First:")
-            printLayoutState(first, indent: indent + "    ")
-            print("\(indent)  Second:")
-            printLayoutState(second, indent: indent + "    ")
-        case .vertical(let ratio, let first, let second):
-            print("\(indent)Vertical Split (ratio: \(ratio))")
-            print("\(indent)  First:")
-            printLayoutState(first, indent: indent + "    ")
-            print("\(indent)  Second:")
-            printLayoutState(second, indent: indent + "    ")
         }
     }
 
