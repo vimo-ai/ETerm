@@ -5,12 +5,19 @@
 //! 设计原则：
 //! - 渲染线程独占，无需锁
 //! - 通过消费 RenderEvent 更新状态
+//! - 支持从 Crosswords 增量同步（row_hash 对比）
 //! - 提供只读访问给渲染器
 
 use rio_backend::ansi::CursorShape;
 use rio_backend::config::colors::{AnsiColor, NamedColor};
+use rio_backend::crosswords::grid::Dimensions;
 use rio_backend::crosswords::pos::{Column, Line};
 use rio_backend::crosswords::square::Flags;
+use rio_backend::crosswords::{Crosswords, Mode};
+use rio_backend::event::EventListener;
+use smallvec::SmallVec;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use crate::domain::events::{CellData, LineClearMode, RenderEvent, ScreenClearMode};
@@ -20,7 +27,9 @@ const DEFAULT_HISTORY_SIZE: usize = 10_000;
 
 /// 渲染状态
 ///
-/// 渲染线程独占的终端状态，通过消费 RenderEvent 更新
+/// 渲染线程独占的终端状态，支持两种更新模式：
+/// 1. 事件驱动：通过消费 RenderEvent 更新
+/// 2. 增量同步：通过 sync_from_crosswords() 从 Crosswords 同步变化行
 pub struct RenderState {
     /// 网格数据（主屏幕）
     grid: Grid,
@@ -59,6 +68,17 @@ pub struct RenderState {
 
     /// 脏行标记
     dirty_lines: Vec<bool>,
+
+    // ==================== 增量同步相关字段 ====================
+
+    /// 上次同步时的行哈希（用于变化检测）
+    synced_row_hashes: Vec<u64>,
+
+    /// 上次同步时的 display_offset
+    synced_display_offset: usize,
+
+    /// 是否需要全量同步（首次或 resize 后）
+    needs_full_sync: bool,
 }
 
 /// 网格数据
@@ -81,6 +101,8 @@ struct Grid {
 }
 
 /// 单元格数据
+///
+/// 使用 SmallVec 存储零宽字符，大多数情况下零分配（内联 2 个字符）
 #[derive(Clone, Debug)]
 pub struct Cell {
     /// 字符
@@ -91,6 +113,11 @@ pub struct Cell {
     pub bg: AnsiColor,
     /// 标志位
     pub flags: Flags,
+    /// 零宽字符（如 VS16 U+FE0F emoji 变体选择符）
+    /// 使用 SmallVec 内联存储 2 个字符，超出时动态分配
+    pub zerowidth: SmallVec<[char; 2]>,
+    /// 下划线颜色（ANSI escape 支持自定义下划线颜色）
+    pub underline_color: Option<AnsiColor>,
 }
 
 impl Default for Cell {
@@ -100,6 +127,8 @@ impl Default for Cell {
             fg: AnsiColor::Named(NamedColor::Foreground),
             bg: AnsiColor::Named(NamedColor::Background),
             flags: Flags::empty(),
+            zerowidth: SmallVec::new(),
+            underline_color: None,
         }
     }
 }
@@ -111,7 +140,42 @@ impl From<CellData> for Cell {
             fg: data.fg,
             bg: data.bg,
             flags: data.flags,
+            zerowidth: SmallVec::new(), // CellData 没有 zerowidth，同步时单独处理
+            underline_color: None,
         }
+    }
+}
+
+impl Cell {
+    /// 从 Crosswords 的 Square 创建 Cell
+    #[inline]
+    pub fn from_square(square: &rio_backend::crosswords::square::Square) -> Self {
+        Self {
+            c: square.c,
+            fg: square.fg,
+            bg: square.bg,
+            flags: square.flags,
+            zerowidth: square
+                .zerowidth()
+                .map(|chars| SmallVec::from_iter(chars.iter().copied()))
+                .unwrap_or_default(),
+            underline_color: square.underline_color(),
+        }
+    }
+
+    /// 计算 Cell 的哈希值（用于变化检测）
+    #[inline]
+    pub fn content_hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.c.hash(&mut hasher);
+        self.fg.hash(&mut hasher);
+        self.bg.hash(&mut hasher);
+        self.flags.bits().hash(&mut hasher);
+        // zerowidth 也参与哈希
+        for &c in &self.zerowidth {
+            c.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 }
 
@@ -384,7 +448,299 @@ impl RenderState {
             display_offset: 0,
             damaged: true,
             dirty_lines: vec![true; rows],
+            // 增量同步字段
+            synced_row_hashes: vec![0; rows],
+            synced_display_offset: 0,
+            needs_full_sync: true, // 首次需要全量同步
         }
+    }
+
+    // ==================== 增量同步 API ====================
+
+    /// 从 Crosswords 增量同步变化
+    ///
+    /// 返回是否有变化（用于决定是否需要渲染）
+    ///
+    /// # 同步策略
+    /// 1. 如果 needs_full_sync 为 true，全量同步
+    /// 2. 如果 display_offset 变化（滚动），使用行移位 + 部分同步
+    /// 3. 否则，逐行对比 row_hash，只同步变化的行
+    pub fn sync_from_crosswords<T: EventListener>(
+        &mut self,
+        crosswords: &Crosswords<T>,
+    ) -> bool {
+        let grid = &crosswords.grid;
+        let new_display_offset = grid.display_offset();
+        let screen_lines = grid.screen_lines();
+        let columns = grid.columns();
+
+        // 检测 alt_screen 切换
+        let new_alt_screen = crosswords.mode().contains(Mode::ALT_SCREEN);
+        if new_alt_screen != self.alt_screen {
+            self.alt_screen = new_alt_screen;
+            self.needs_full_sync = true;
+        }
+
+        // 检测尺寸变化
+        if screen_lines != self.screen_lines() || columns != self.columns() {
+            self.handle_resize(columns, screen_lines);
+            self.needs_full_sync = true;
+        }
+
+        // 情况 1：需要全量同步
+        if self.needs_full_sync {
+            self.full_sync(crosswords);
+            self.needs_full_sync = false;
+            return true;
+        }
+
+        // 情况 2：display_offset 变化（滚动）
+        if new_display_offset != self.synced_display_offset {
+            return self.handle_scroll(crosswords, new_display_offset);
+        }
+
+        // 情况 3：逐行对比，增量同步
+        self.incremental_sync(crosswords)
+    }
+
+    /// 全量同步所有可见行
+    fn full_sync<T: EventListener>(&mut self, crosswords: &Crosswords<T>) {
+        let grid = &crosswords.grid;
+        let screen_lines = grid.screen_lines();
+        let columns = grid.columns();
+        let display_offset = grid.display_offset();
+
+        // 同步光标状态
+        self.sync_cursor(crosswords);
+
+        // 确保 synced_row_hashes 有正确的大小
+        self.synced_row_hashes.resize(screen_lines, 0);
+
+        // 同步所有可见行，并更新行哈希
+        for screen_line in 0..screen_lines {
+            let grid_line = Line(screen_line as i32 - display_offset as i32);
+            self.sync_row_from_crosswords(crosswords, screen_line, grid_line, columns);
+            // 更新行哈希，避免下一帧再次判定为脏
+            let hash = self.compute_row_hash_from_crosswords(crosswords, grid_line, columns);
+            self.synced_row_hashes[screen_line] = hash;
+        }
+
+        self.synced_display_offset = display_offset;
+        self.needs_full_sync = false;  // 全量同步完成，重置标记
+        self.mark_all_dirty();
+    }
+
+    /// 增量同步变化的行
+    fn incremental_sync<T: EventListener>(&mut self, crosswords: &Crosswords<T>) -> bool {
+        let grid = &crosswords.grid;
+        let screen_lines = grid.screen_lines();
+        let columns = grid.columns();
+        let display_offset = grid.display_offset();
+
+        let mut changed = false;
+
+        // 同步光标状态（光标移动也需要检测）
+        let cursor_changed = self.sync_cursor(crosswords);
+        if cursor_changed {
+            changed = true;
+        }
+
+        // 逐行对比 row_hash
+        for screen_line in 0..screen_lines {
+            let grid_line = Line(screen_line as i32 - display_offset as i32);
+
+            // 计算 Crosswords 中该行的哈希
+            let new_hash = self.compute_row_hash_from_crosswords(crosswords, grid_line, columns);
+
+            // 对比哈希
+            if self.synced_row_hashes.get(screen_line) != Some(&new_hash) {
+                // 哈希不同，同步该行
+                self.sync_row_from_crosswords(crosswords, screen_line, grid_line, columns);
+                if screen_line < self.synced_row_hashes.len() {
+                    self.synced_row_hashes[screen_line] = new_hash;
+                }
+                self.mark_line_dirty(Line(screen_line as i32));
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    /// 处理滚动（display_offset 变化）
+    fn handle_scroll<T: EventListener>(
+        &mut self,
+        crosswords: &Crosswords<T>,
+        new_offset: usize,
+    ) -> bool {
+        let delta = new_offset as i32 - self.synced_display_offset as i32;
+        let screen_lines = self.screen_lines();
+
+        if delta.abs() as usize >= screen_lines {
+            // 滚动太大，全量同步
+            self.full_sync(crosswords);
+        } else if delta > 0 {
+            // 向上滚动（查看历史）：内容下移，顶部露出新行
+            self.shift_rows_down(delta as usize);
+            // 同步新露出的顶部行
+            let grid = &crosswords.grid;
+            let columns = grid.columns();
+            for i in 0..(delta as usize) {
+                let screen_line = i;
+                let grid_line = Line(screen_line as i32 - new_offset as i32);
+                self.sync_row_from_crosswords(crosswords, screen_line, grid_line, columns);
+                let new_hash = self.compute_row_hash_from_crosswords(crosswords, grid_line, columns);
+                if screen_line < self.synced_row_hashes.len() {
+                    self.synced_row_hashes[screen_line] = new_hash;
+                }
+            }
+        } else {
+            // 向下滚动（回到底部）：内容上移，底部露出新行
+            let shift = (-delta) as usize;
+            self.shift_rows_up(shift);
+            // 同步新露出的底部行
+            let grid = &crosswords.grid;
+            let columns = grid.columns();
+            for i in 0..shift {
+                let screen_line = screen_lines - 1 - i;
+                let grid_line = Line(screen_line as i32 - new_offset as i32);
+                self.sync_row_from_crosswords(crosswords, screen_line, grid_line, columns);
+                let new_hash = self.compute_row_hash_from_crosswords(crosswords, grid_line, columns);
+                if screen_line < self.synced_row_hashes.len() {
+                    self.synced_row_hashes[screen_line] = new_hash;
+                }
+            }
+        }
+
+        self.synced_display_offset = new_offset;
+        self.display_offset = new_offset;
+        self.mark_all_dirty();
+        true
+    }
+
+    /// 行向上移位（用于向下滚动）
+    fn shift_rows_up(&mut self, count: usize) {
+        let grid = self.active_grid_mut();
+        if count > 0 && count < grid.lines.len() {
+            grid.lines.rotate_left(count);
+            self.synced_row_hashes.rotate_left(count);
+        }
+    }
+
+    /// 行向下移位（用于向上滚动）
+    fn shift_rows_down(&mut self, count: usize) {
+        let grid = self.active_grid_mut();
+        if count > 0 && count < grid.lines.len() {
+            grid.lines.rotate_right(count);
+            self.synced_row_hashes.rotate_right(count);
+        }
+    }
+
+    /// 同步单行数据
+    fn sync_row_from_crosswords<T: EventListener>(
+        &mut self,
+        crosswords: &Crosswords<T>,
+        screen_line: usize,
+        grid_line: Line,
+        columns: usize,
+    ) {
+        let crosswords_grid = &crosswords.grid;
+
+        // 获取目标行
+        let target_grid = self.active_grid_mut();
+        let target_line = Line(screen_line as i32);
+
+        if let Some(target_row) = target_grid.get_line_mut(target_line) {
+            // 确保行长度正确
+            target_row.resize(columns, Cell::default());
+
+            // 复制每个单元格
+            for col in 0..columns {
+                let col_idx = Column(col);
+                let square = &crosswords_grid[grid_line][col_idx];
+                target_row[col] = Cell::from_square(square);
+            }
+        }
+    }
+
+    /// 计算 Crosswords 中一行的哈希值
+    fn compute_row_hash_from_crosswords<T: EventListener>(
+        &self,
+        crosswords: &Crosswords<T>,
+        grid_line: Line,
+        columns: usize,
+    ) -> u64 {
+        let grid = &crosswords.grid;
+        let mut hasher = DefaultHasher::new();
+
+        for col in 0..columns {
+            let col_idx = Column(col);
+            let square = &grid[grid_line][col_idx];
+            square.c.hash(&mut hasher);
+            square.fg.hash(&mut hasher);
+            square.bg.hash(&mut hasher);
+            square.flags.bits().hash(&mut hasher);
+            // 下划线颜色也参与哈希
+            if let Some(underline_color) = square.underline_color() {
+                underline_color.hash(&mut hasher);
+            }
+            // 零宽字符也参与哈希
+            if let Some(zerowidth) = square.zerowidth() {
+                for &c in zerowidth {
+                    c.hash(&mut hasher);
+                }
+            }
+        }
+
+        hasher.finish()
+    }
+
+    /// 同步光标状态，返回是否有变化
+    fn sync_cursor<T: EventListener>(&mut self, crosswords: &Crosswords<T>) -> bool {
+        let cursor = &crosswords.grid.cursor;
+        let new_line = cursor.pos.row;
+        let new_col = cursor.pos.col;
+
+        // 获取光标可见性（考虑 SHOW_CURSOR 模式）
+        let cursor_state = crosswords.cursor();
+        let new_visible = cursor_state.is_visible();
+        let new_shape = cursor_state.content;
+
+        let changed = self.cursor_line != new_line
+            || self.cursor_col != new_col
+            || self.cursor_visible != new_visible
+            || self.cursor_shape != new_shape;
+
+        if changed {
+            // 标记旧位置和新位置为脏
+            self.mark_line_dirty(self.cursor_line);
+            self.cursor_line = new_line;
+            self.cursor_col = new_col;
+            self.cursor_visible = new_visible;
+            self.cursor_shape = new_shape;
+            self.mark_line_dirty(new_line);
+        }
+
+        changed
+    }
+
+    /// 处理尺寸变化
+    pub fn handle_resize(&mut self, new_cols: usize, new_rows: usize) {
+        self.grid.resize(new_cols, new_rows);
+        self.alt_grid.resize(new_cols, new_rows);
+        self.scroll_region = Line(0)..Line(new_rows as i32);
+        self.dirty_lines.resize(new_rows, true);
+        self.synced_row_hashes.resize(new_rows, 0);
+        // 重置同步状态，下次 sync 时进行全量同步
+        self.needs_full_sync = true;
+        self.synced_display_offset = 0;  // 重置偏移，避免滚动分支做错误的 rotate
+        self.mark_all_dirty();
+    }
+
+    /// 获取同步后的行哈希（供渲染器缓存使用）
+    #[inline]
+    pub fn get_row_hash(&self, screen_line: usize) -> Option<u64> {
+        self.synced_row_hashes.get(screen_line).copied()
     }
 
     /// 应用单个渲染事件
@@ -392,7 +748,14 @@ impl RenderState {
         match event {
             RenderEvent::CharInput { line, col, c, fg, bg, flags } => {
                 let grid = self.active_grid_mut();
-                grid.set_cell(line, col, Cell { c, fg, bg, flags });
+                grid.set_cell(line, col, Cell {
+                    c,
+                    fg,
+                    bg,
+                    flags,
+                    zerowidth: SmallVec::new(),
+                    underline_color: None,
+                });
                 self.mark_line_dirty(line);
             }
 

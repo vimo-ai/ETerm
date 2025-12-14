@@ -489,6 +489,16 @@ impl Terminal {
         base_state
     }
 
+    /// 增量同步 RenderState
+    ///
+    /// 从 Crosswords 增量同步到 RenderState，只更新变化的行
+    /// 返回是否有变化
+    pub fn sync_render_state(&self, render_state: &mut crate::domain::aggregates::render_state::RenderState) -> bool {
+        with_crosswords!(self, crosswords, {
+            render_state.sync_from_crosswords(&*crosswords)
+        })
+    }
+
     // ==================== Step 5: Selection ====================
 
     /// 开始选区

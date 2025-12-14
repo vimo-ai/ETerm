@@ -135,6 +135,9 @@ struct TerminalEntry {
     /// 原子脏标记（无锁读写）
     /// PTY 线程写入后标记为脏，渲染线程检查后清除
     dirty_flag: Arc<crate::infra::AtomicDirtyFlag>,
+
+    /// 持久化渲染状态（增量同步用，用 Mutex 包装以支持内部可变性）
+    render_state: Mutex<crate::domain::aggregates::render_state::RenderState>,
 }
 
 /// 终端池
@@ -404,6 +407,10 @@ impl TerminalPool {
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            render_state: Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
+                cols as usize,
+                rows as usize,
+            )),  // 增量同步用，首次 sync 时全量同步
         };
 
         self.terminals.write().insert(id, entry);
@@ -455,6 +462,10 @@ impl TerminalPool {
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            render_state: Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
+                cols as usize,
+                rows as usize,
+            )),  // 增量同步用，首次 sync 时全量同步
         };
 
         self.terminals.write().insert(id, entry);
@@ -650,6 +661,12 @@ impl TerminalPool {
                 // P4-S1 修复：同时清除 render_cache 并标记 dirty
                 entry.render_cache = None;
                 entry.dirty_flag.mark_dirty();
+
+                // 更新 RenderState 尺寸，标记需要全量同步
+                {
+                    let mut render_state = entry.render_state.lock();
+                    render_state.handle_resize(cols as usize, rows as usize);
+                }
 
                 // 获取需要的引用，稍后在锁外使用
                 (entry.terminal.clone(), entry.pty_tx.clone())
@@ -883,14 +900,21 @@ impl TerminalPool {
                                 return true;
                             }
 
-                            // 在锁范围内检查 damaged 状态（避免 TOCTOU）
-                            // 如果缓存有效、没有 damage、且 dirty_flag 未标记，跳过渲染
+                            // 增量同步 RenderState（核心优化点）
+                            // 只同步变化的行，避免每帧完整复制
+                            let state_changed = {
+                                let mut render_state = entry.render_state.lock();
+                                terminal.sync_render_state(&mut render_state)
+                            };
+
+                            // 检查是否需要渲染
+                            // 如果缓存有效、RenderState 无变化、无 damage、且 dirty_flag 未标记，跳过渲染
                             // 注：dirty_flag 用于外部触发（选区、滚动等），is_damaged() 用于内部 PTY 输出
-                            if cache_valid && !terminal.is_damaged() && !entry.dirty_flag.is_dirty() {
+                            if cache_valid && !state_changed && !terminal.is_damaged() && !entry.dirty_flag.is_dirty() {
                                 return true;
                             }
 
-                            // 获取状态快照
+                            // 获取状态快照（暂时保留，后续 Step 4 会从 RenderState 读取）
                             let state = terminal.state();
                             let rows = terminal.rows();
 
