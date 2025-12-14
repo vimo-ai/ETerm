@@ -477,7 +477,6 @@ extension TerminalWindowCoordinator {
                 let bracketedText = "\u{1B}[200~" + text + "\u{1B}[201~"
                 writeInput(terminalId: terminalId, data: bracketedText)
             } else {
-                // 未启用 Bracketed Paste Mode，直接发送原始文本
                 writeInput(terminalId: terminalId, data: text)
             }
         }
