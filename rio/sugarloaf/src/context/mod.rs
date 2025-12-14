@@ -34,6 +34,10 @@ pub struct Context<'a> {
     #[cfg(target_os = "macos")]
     command_queue_ptr: *mut std::ffi::c_void,
 
+    /// 上次 Skia 缓存清理的时间（用于节流，避免每帧都调用）
+    #[cfg(target_os = "macos")]
+    last_cleanup: std::time::Instant,
+
     pub size: SugarloafWindowSize,
     pub scale: f32,
 
@@ -247,6 +251,7 @@ impl Context<'_> {
             skia_context,
             layer_ptr,
             command_queue_ptr: command_queue,
+            last_cleanup: std::time::Instant::now(),
             size,
             scale,
             // #[cfg(feature = "wgpu-backend")]
@@ -360,6 +365,15 @@ impl Context<'_> {
 
     pub fn end_frame(&mut self, drawable: mtl::Handle) {
         self.skia_context.flush_and_submit();
+
+        // 节流：每 2 秒执行一次 Skia GPU 资源清理
+        // 避免每帧都调用导致频繁的缓存检查（60fps = 每秒 60 次）
+        // 清理超过 30 秒未使用的资源，平衡性能和内存
+        if self.last_cleanup.elapsed() >= std::time::Duration::from_secs(2) {
+            self.skia_context
+                .perform_deferred_cleanup(std::time::Duration::from_secs(30), None);
+            self.last_cleanup = std::time::Instant::now();
+        }
 
         unsafe {
             let command_buffer: *mut AnyObject =
