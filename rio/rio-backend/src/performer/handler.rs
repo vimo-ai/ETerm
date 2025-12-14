@@ -116,6 +116,32 @@ fn parse_number(input: &[u8]) -> Option<u8> {
     Some(num)
 }
 
+/// Decode percent-encoded URL path (e.g., %E5%B0%8F -> 小)
+///
+/// Used for OSC 7 (current working directory) which uses file:// URLs
+fn percent_decode_path(input: &str) -> String {
+    let mut result = Vec::with_capacity(input.len());
+    let mut chars = input.bytes().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == b'%' {
+            let hex: String = chars.by_ref().take(2).map(|b| b as char).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte);
+                    continue;
+                }
+            }
+            result.push(b'%');
+            result.extend(hex.bytes());
+        } else {
+            result.push(c);
+        }
+    }
+
+    String::from_utf8_lossy(&result).into_owned()
+}
+
 fn parse_sgr_color(params: &mut dyn Iterator<Item = u16>) -> Option<AnsiColor> {
     match params.next() {
         Some(2) => Some(AnsiColor::Spec(ColorRgb {
@@ -815,12 +841,13 @@ impl<U: Handler, T: Timeout> copa::Perform for Performer<'_, U, T> {
             b"7" => {
                 if let Ok(s) = simd_utf8::from_utf8_fast(params[1]) {
                     if let Ok(url) = url::Url::parse(s) {
-                        let path = url.path();
+                        // URL path is percent-encoded, decode it (e.g., %E5%B0%8F -> 小)
+                        let path = percent_decode_path(url.path());
 
                         // NB the path coming from Url has a leading slash; must slice that off
                         // in windows.
                         #[cfg(windows)]
-                        let path = &path[1..];
+                        let path = path[1..].to_string();
 
                         self.handler.set_current_directory(path.into());
                     }
