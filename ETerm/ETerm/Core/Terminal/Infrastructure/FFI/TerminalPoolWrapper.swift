@@ -264,8 +264,13 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
 
     @discardableResult
     func writeInput(terminalId: Int, data: String) -> Bool {
-        guard let handle = handle,
-              let dataBytes = data.data(using: .utf8) else { return false }
+        guard let handle = handle else { return false }
+
+        // 只处理 \r\n (Windows 换行符) 转换为 \n
+        // 保留独立的 \r（回车键需要它）
+        let normalizedData = data.replacingOccurrences(of: "\r\n", with: "\n")
+
+        guard let dataBytes = normalizedData.data(using: .utf8) else { return false }
         return dataBytes.withUnsafeBytes { ptr in
             guard let baseAddress = ptr.baseAddress else { return false }
             return terminal_pool_input(handle, terminalId, baseAddress.assumingMemoryBound(to: UInt8.self), dataBytes.count)
