@@ -136,8 +136,9 @@ struct TerminalEntry {
     /// PTY 线程写入后标记为脏，渲染线程检查后清除
     dirty_flag: Arc<crate::infra::AtomicDirtyFlag>,
 
-    /// 持久化渲染状态（增量同步用，用 Mutex 包装以支持内部可变性）
-    render_state: Mutex<crate::domain::aggregates::render_state::RenderState>,
+    /// 持久化渲染状态（增量同步用）
+    /// 使用 Arc<Mutex<...>> 以支持在释放 terminals 读锁后继续访问
+    render_state: Arc<Mutex<crate::domain::aggregates::render_state::RenderState>>,
 }
 
 /// 终端池
@@ -407,10 +408,10 @@ impl TerminalPool {
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
-            render_state: Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
+            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
                 cols as usize,
                 rows as usize,
-            )),  // 增量同步用，首次 sync 时全量同步
+            ))),  // 增量同步用，首次 sync 时全量同步
         };
 
         self.terminals.write().insert(id, entry);
@@ -462,10 +463,10 @@ impl TerminalPool {
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
-            render_state: Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
+            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
                 cols as usize,
                 rows as usize,
-            )),  // 增量同步用，首次 sync 时全量同步
+            ))),  // 增量同步用，首次 sync 时全量同步
         };
 
         self.terminals.write().insert(id, entry);
@@ -638,12 +639,15 @@ impl TerminalPool {
     /// - 如果我们在持有 terminals 写锁时调用 terminal.resize()（需要 crosswords 锁）
     /// - 就会形成死锁
     pub fn resize_terminal(&mut self, id: usize, cols: u16, rows: u16, width: f32, height: f32) -> bool {
+        use std::time::Duration;
+
         // 阶段 1：快速更新 entry 字段（持有写锁时间尽量短）
+        // 使用 try_write_for 让 writer 实际排队，parking_lot 对排队的 writer 是公平的
         let (terminal_arc, pty_tx) = {
-            let mut terminals = match self.terminals.try_write() {
+            let mut terminals = match self.terminals.try_write_for(Duration::from_micros(200)) {
                 Some(t) => t,
                 None => {
-                    // 写锁被占用，排队待处理
+                    // 写锁超时，排队待处理
                     self.pending_terminal_resizes.lock().push((id, cols, rows, width, height));
                     self.needs_render.store(true, Ordering::Release);
                     return true;
@@ -842,7 +846,9 @@ impl TerminalPool {
             let new_rows = (physical_height.value / physical_line_height).floor() as u16;
 
             if new_cols > 0 && new_rows > 0 {
-                // 先读取检查是否需要 resize
+                // 检查是否需要 resize，如果需要则放入 pending 队列
+                // 注意：不直接调用 resize_terminal，因为它会阻塞等待写锁，
+                // 而此时可能有其他线程持有读锁，导致死锁
                 let needs_resize = {
                     let terminals = self.terminals.read();
                     if let Some(entry) = terminals.get(&id) {
@@ -851,9 +857,10 @@ impl TerminalPool {
                         false
                     }
                 };
-                // 释放读锁后再调用 resize_terminal（它会获取写锁）
                 if needs_resize {
-                    self.resize_terminal(id, new_cols, new_rows, width, height);
+                    // 放入 pending 队列，由下一帧的 apply_pending_updates 处理
+                    self.pending_terminal_resizes.lock().push((id, new_cols, new_rows, width, height));
+                    self.needs_render.store(true, std::sync::atomic::Ordering::Release);
                 }
             }
         }
@@ -886,59 +893,72 @@ impl TerminalPool {
             }
         };
 
-        // P2 修复：需要重新渲染 - 在单次锁范围内完成所有操作
-        // 这样避免了 TOCTOU 竞态（dirty_flag/state/reset_damage 之间的窗口）
-        let (state, rows, cursor_cache, selection_cache, scroll_cache) = {
+        // ========================================================================
+        // 两阶段锁优化：避免写者饥饿
+        // ========================================================================
+        // 问题：之前在 terminals 读锁内执行 sync_render_state，导致 resize_terminal
+        //       的 try_write 永远失败（60fps 读锁几乎一直被占用）
+        // 解决：快速获取 Arc 引用后立即释放读锁，耗时操作在锁外执行
+
+        // 阶段 1：快速获取 Arc 引用（读锁只持有几微秒）
+        let (terminal_arc, render_state_arc, dirty_flag, cursor_cache, selection_cache, scroll_cache) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
                 Some(entry) => {
-                    match entry.terminal.try_lock() {
-                        Some(mut terminal) => {
-                            // 检查 DEC Synchronized Update (mode 2026)
-                            // 如果正在 sync 中（收到 BSU 但未收到 ESU），跳过渲染以避免闪烁
-                            if terminal.is_syncing() {
-                                return true;
-                            }
-
-                            // 增量同步 RenderState（核心优化点）
-                            // 只同步变化的行，避免每帧完整复制
-                            let state_changed = {
-                                let mut render_state = entry.render_state.lock();
-                                terminal.sync_render_state(&mut render_state)
-                            };
-
-                            // 检查是否需要渲染
-                            // 如果缓存有效、RenderState 无变化、无 damage、且 dirty_flag 未标记，跳过渲染
-                            // 注：dirty_flag 用于外部触发（选区、滚动等），is_damaged() 用于内部 PTY 输出
-                            if cache_valid && !state_changed && !terminal.is_damaged() && !entry.dirty_flag.is_dirty() {
-                                return true;
-                            }
-
-                            // 获取状态快照（暂时保留，后续 Step 4 会从 RenderState 读取）
-                            let state = terminal.state();
-                            let rows = terminal.rows();
-
-                            // 在同一锁范围内重置 damage（避免 TOCTOU）
-                            // 这样确保：获取的 state 和 reset_damage 是原子操作
-                            terminal.reset_damage();
-
-                            // 获取缓存引用
-                            let cursor_cache = entry.cursor_cache.clone();
-                            let selection_cache = entry.selection_cache.clone();
-                            let scroll_cache = entry.scroll_cache.clone();
-
-                            (state, rows, cursor_cache, selection_cache, scroll_cache)
-                        },
-                        None => {
-                            // 锁被占用，跳过这一帧
-                            return true;
-                        }
-                    }
+                    (
+                        entry.terminal.clone(),
+                        entry.render_state.clone(),
+                        entry.dirty_flag.clone(),
+                        entry.cursor_cache.clone(),
+                        entry.selection_cache.clone(),
+                        entry.scroll_cache.clone(),
+                    )
                 },
                 None => return false,
             }
         };
-        // 锁已释放，安全渲染（不持有 Terminal 锁）
+        // terminals 读锁已释放，resize_terminal 现在可以获取写锁
+
+        // 阶段 2：在锁外执行耗时操作
+        let (state, rows) = {
+            match terminal_arc.try_lock() {
+                Some(mut terminal) => {
+                    // 检查 DEC Synchronized Update (mode 2026)
+                    // 如果正在 sync 中（收到 BSU 但未收到 ESU），跳过渲染以避免闪烁
+                    if terminal.is_syncing() {
+                        return true;
+                    }
+
+                    // 增量同步 RenderState（核心优化点，现在在 terminals 读锁外执行）
+                    // 只同步变化的行，避免每帧完整复制
+                    let state_changed = {
+                        let mut render_state = render_state_arc.lock();
+                        terminal.sync_render_state(&mut render_state)
+                    };
+
+                    // 检查是否需要渲染
+                    // 如果缓存有效、RenderState 无变化、无 damage、且 dirty_flag 未标记，跳过渲染
+                    // 注：dirty_flag 用于外部触发（选区、滚动等），is_damaged() 用于内部 PTY 输出
+                    if cache_valid && !state_changed && !terminal.is_damaged() && !dirty_flag.is_dirty() {
+                        return true;
+                    }
+
+                    // 获取状态快照（暂时保留，后续 Step 4 会从 RenderState 读取）
+                    let state = terminal.state();
+                    let rows = terminal.rows();
+
+                    // 重置 damage（与获取 state 在同一 terminal 锁范围内，避免 TOCTOU）
+                    terminal.reset_damage();
+
+                    (state, rows)
+                },
+                None => {
+                    // 锁被占用，跳过这一帧
+                    return true;
+                }
+            }
+        };
+        // terminal 锁已释放，安全渲染
 
         // 更新原子光标缓存（无锁写入）
         // 这样主线程可以无锁读取光标位置
@@ -1014,54 +1034,63 @@ impl TerminalPool {
                 }
             };
 
-            // 更新 Surface 缓存（获取写锁）
-            let mut terminals = self.terminals.write();
-            if let Some(entry) = terminals.get_mut(&id) {
-                entry.surface_cache = Some(TerminalSurfaceCache {
-                    surface: new_surface,
-                    width: cache_width,
-                    height: cache_height,
-                });
+            // 更新 Surface 缓存（非阻塞获取写锁，避免死锁）
+            if let Some(mut terminals) = self.terminals.try_write() {
+                if let Some(entry) = terminals.get_mut(&id) {
+                    entry.surface_cache = Some(TerminalSurfaceCache {
+                        surface: new_surface,
+                        width: cache_width,
+                        height: cache_height,
+                    });
+                }
+            } else {
+                // 写锁被占用，跳过这一帧，下一帧重试
+                return true;
             }
         }
 
         // 渲染所有行到 Surface（复用缓存的 Surface）
         {
-            let mut terminals = self.terminals.write();
-            if let Some(entry) = terminals.get_mut(&id) {
-                if let Some(surface_cache) = &mut entry.surface_cache {
-                    let canvas = surface_cache.surface.canvas();
-                    canvas.clear(skia_safe::Color::TRANSPARENT);
+            // 非阻塞获取写锁，避免死锁
+            if let Some(mut terminals) = self.terminals.try_write() {
+                if let Some(entry) = terminals.get_mut(&id) {
+                    if let Some(surface_cache) = &mut entry.surface_cache {
+                        let canvas = surface_cache.surface.canvas();
+                        canvas.clear(skia_safe::Color::TRANSPARENT);
 
-                    let mut renderer = self.renderer.lock();
+                        let mut renderer = self.renderer.lock();
 
-                    let logical_cell_size = font_metrics.to_logical_size(scale);
-                    let logical_line_height = logical_cell_size.height * self.config.line_height;
+                        let logical_cell_size = font_metrics.to_logical_size(scale);
+                        let logical_line_height = logical_cell_size.height * self.config.line_height;
 
-                    for line in 0..rows {
-                        let image = renderer.render_line(line, &state);
+                        for line in 0..rows {
+                            let image = renderer.render_line(line, &state);
 
-                        // 计算该行在 Surface 内的位置（物理像素）
-                        let y_offset_pixels = (logical_line_height * (line as f32)) * scale;
-                        let y_offset = y_offset_pixels.value;
+                            // 计算该行在 Surface 内的位置（物理像素）
+                            let y_offset_pixels = (logical_line_height * (line as f32)) * scale;
+                            let y_offset = y_offset_pixels.value;
 
-                        canvas.draw_image(&image, (0.0f32, y_offset), None);
+                            canvas.draw_image(&image, (0.0f32, y_offset), None);
+                        }
+
+                        renderer.print_frame_stats(&format!("terminal_{}", id));
+
+                        // 从 Surface 获取 Image 快照并更新缓存
+                        let cached_image = surface_cache.surface.image_snapshot();
+                        entry.render_cache = Some(TerminalRenderCache {
+                            cached_image,
+                            width: cache_width,
+                            height: cache_height,
+                        });
+                    } else {
+                        return false;
                     }
-
-                    renderer.print_frame_stats(&format!("terminal_{}", id));
-
-                    // 从 Surface 获取 Image 快照并更新缓存
-                    let cached_image = surface_cache.surface.image_snapshot();
-                    entry.render_cache = Some(TerminalRenderCache {
-                        cached_image,
-                        width: cache_width,
-                        height: cache_height,
-                    });
                 } else {
                     return false;
                 }
             } else {
-                return false;
+                // 写锁被占用，跳过这一帧，下一帧重试
+                return true;
             }
         }
         // Surface 保留在缓存中，不会 drop（P4 优化目标）
