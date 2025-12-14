@@ -87,12 +87,14 @@ final class WindowManager: NSObject {
         if let screenId = windowState.screenIdentifier {
             // 恢复模式：使用保存的位置和尺寸
             let targetScreen = SessionManager.findScreen(withIdentifier: screenId)
-            windowFrame = adjustFrameToScreen(frame, screen: targetScreen)
+            windowFrame = repositionFrameToScreen(frame, savedScreenFrame: windowState.screenFrame, targetScreen: targetScreen)
         } else {
             windowFrame = frame
         }
 
         let window = KeyableWindow.create(contentRect: windowFrame)
+        // macOS 可能会把窗口移到主屏幕，需要显式设置 frame
+        window.setFrame(windowFrame, display: false)
 
         // 创建 TerminalWindow（从 WindowState 恢复完整结构）
         let terminalWindow = restoreTerminalWindow(from: windowState)
@@ -186,12 +188,10 @@ final class WindowManager: NSObject {
     private func restorePanelLayout(_ layoutState: PanelLayoutState, to page: Page) -> PanelLayout? {
         switch layoutState {
         case .leaf(_, let tabStates, let activeTabIndex):
-            print("🔨 [WindowManager] Restoring leaf panel with \(tabStates.count) tabs")
             // 恢复叶子节点（Panel）
             // 创建所有 Tabs（此时还不创建终端，等 Coordinator 初始化后再创建）
             var tabs: [TerminalTab] = []
-            for (index, tabState) in tabStates.enumerated() {
-                print("🔨 [WindowManager] Creating Tab[\(index)]: title=\"\(tabState.title)\", cwd=\"\(tabState.cwd)\"")
+            for tabState in tabStates {
                 let tab = TerminalTab(tabId: UUID(), title: tabState.title)
                 // 保存 CWD 到 Tab 的临时属性（用于后续创建终端）
                 tab.setPendingCwd(tabState.cwd)
@@ -301,6 +301,37 @@ final class WindowManager: NSObject {
         window.makeKeyAndOrderFront(nil)
 
         return window
+    }
+
+    /// 重新定位窗口到目标屏幕
+    ///
+    /// 根据窗口在保存时屏幕上的相对位置，将窗口移动到目标屏幕的对应位置
+    /// - Parameters:
+    ///   - frame: 保存的窗口 frame（全局坐标）
+    ///   - savedScreenFrame: 保存时屏幕的 frame
+    ///   - targetScreen: 目标屏幕
+    /// - Returns: 重新定位后的 frame
+    private func repositionFrameToScreen(_ frame: NSRect, savedScreenFrame: CodableRect?, targetScreen: NSScreen) -> NSRect {
+        let targetVisibleFrame = targetScreen.visibleFrame
+
+        // 如果没有保存的屏幕信息，直接调整到目标屏幕
+        guard let savedScreen = savedScreenFrame else {
+            return adjustFrameToScreen(frame, screen: targetScreen)
+        }
+
+        let savedScreenRect = savedScreen.cgRect
+
+        // 计算窗口在保存时屏幕上的相对位置（0-1）
+        let relativeX = (frame.origin.x - savedScreenRect.origin.x) / savedScreenRect.width
+        let relativeY = (frame.origin.y - savedScreenRect.origin.y) / savedScreenRect.height
+
+        // 将相对位置应用到目标屏幕
+        var newFrame = frame
+        newFrame.origin.x = targetVisibleFrame.origin.x + relativeX * targetVisibleFrame.width
+        newFrame.origin.y = targetVisibleFrame.origin.y + relativeY * targetVisibleFrame.height
+
+        // 确保窗口在目标屏幕可见区域内
+        return adjustFrameToScreen(newFrame, screen: targetScreen)
     }
 
     /// 调整窗口 frame 到指定屏幕
