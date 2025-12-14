@@ -423,10 +423,17 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 获取终端的当前工作目录（CWD）
     ///
+    /// 优先使用 OSC 7 缓存的 CWD（更可靠，不受子进程影响），
+    /// 如果缓存为空则 fallback 到 proc_pidinfo 系统调用。
+    ///
     /// - Parameter terminalId: 终端 ID
     /// - Returns: CWD 路径，失败返回 nil
     func getCwd(terminalId: Int) -> String? {
-        // 使用终端池协议获取 CWD
+        // 优先使用 OSC 7 缓存的 CWD（不受子进程如 vim、claude 影响）
+        if let cachedCwd = terminalPool.getCachedCwd(terminalId: terminalId) {
+            return cachedCwd
+        }
+        // Fallback 到 proc_pidinfo（shell 未配置 OSC 7 时使用）
         return terminalPool.getCwd(terminalId: terminalId)
     }
 

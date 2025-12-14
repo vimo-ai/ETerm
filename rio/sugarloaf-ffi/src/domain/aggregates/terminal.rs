@@ -816,6 +816,19 @@ impl Terminal {
             crosswords.mode().contains(Mode::BRACKETED_PASTE)
         })
     }
+
+    /// 获取 OSC 7 缓存的当前工作目录
+    ///
+    /// Shell 通过 OSC 7 转义序列主动上报 CWD（如 `\e]7;file://hostname/path\a`）。
+    /// 这比 `proc_pidinfo` 更可靠，因为：
+    /// - 不受子进程（如 vim、claude）干扰
+    /// - Shell 自己最清楚当前目录
+    /// - 每次 cd 后立即更新
+    pub fn get_current_directory(&self) -> Option<std::path::PathBuf> {
+        with_crosswords!(self, crosswords, {
+            crosswords.current_directory.clone()
+        })
+    }
 }
 
 #[cfg(test)]

@@ -534,11 +534,33 @@ impl TerminalPool {
         }
     }
 
-    /// 获取终端的当前工作目录
+    /// 获取终端的当前工作目录（通过 proc_pidinfo 系统调用）
+    ///
+    /// 注意：此方法获取的是前台进程的 CWD，如果有子进程运行（如 vim、claude），
+    /// 可能返回子进程的 CWD 而非 shell 的 CWD。
+    /// 推荐使用 `get_cached_cwd` 获取 OSC 7 缓存的 CWD。
     pub fn get_cwd(&self, id: usize) -> Option<std::path::PathBuf> {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
             teletypewriter::foreground_process_path(entry.pty_fd, entry.shell_pid).ok()
+        } else {
+            None
+        }
+    }
+
+    /// 获取终端的缓存工作目录（通过 OSC 7）
+    ///
+    /// Shell 通过 OSC 7 转义序列主动上报 CWD。此方法比 `get_cwd` 更可靠：
+    /// - 不受子进程（如 vim、claude）干扰
+    /// - Shell 自己最清楚当前目录
+    /// - 每次 cd 后立即更新
+    ///
+    /// 如果 OSC 7 缓存为空（shell 未配置或刚启动），返回 None。
+    pub fn get_cached_cwd(&self, id: usize) -> Option<std::path::PathBuf> {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            terminal.get_current_directory()
         } else {
             None
         }

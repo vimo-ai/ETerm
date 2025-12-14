@@ -94,10 +94,28 @@ bool terminal_pool_close_terminal(
     size_t terminal_id
 );
 
-/// Get terminal's current working directory
+/// Get terminal's current working directory (via proc_pidinfo)
+///
+/// Note: This returns the foreground process's CWD. If a child process is running
+/// (like vim, claude), it may return the child's CWD instead of the shell's.
+/// Prefer using `terminal_pool_get_cached_cwd` for OSC 7 cached CWD.
 ///
 /// Returns a string that must be freed with rio_free_string
 char* terminal_pool_get_cwd(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Get terminal's cached working directory (via OSC 7)
+///
+/// Shell reports CWD via OSC 7 escape sequence. This is more reliable than get_cwd:
+/// - Not affected by child processes (like vim, claude)
+/// - Shell knows its own directory best
+/// - Updated immediately after each cd
+///
+/// Returns NULL if OSC 7 cache is empty (shell not configured or just started).
+/// Returns a string that must be freed with rio_free_string
+char* terminal_pool_get_cached_cwd(
     TerminalPoolHandle handle,
     size_t terminal_id
 );

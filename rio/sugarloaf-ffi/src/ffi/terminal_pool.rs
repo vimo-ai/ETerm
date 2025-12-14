@@ -94,7 +94,11 @@ pub extern "C" fn terminal_pool_close_terminal(
     pool.close_terminal(terminal_id)
 }
 
-/// 获取终端的当前工作目录
+/// 获取终端的当前工作目录（通过 proc_pidinfo 系统调用）
+///
+/// 注意：此方法获取的是前台进程的 CWD，如果有子进程运行（如 vim、claude），
+/// 可能返回子进程的 CWD 而非 shell 的 CWD。
+/// 推荐使用 `terminal_pool_get_cached_cwd` 获取 OSC 7 缓存的 CWD。
 ///
 /// 返回的字符串需要调用者使用 `rio_free_string` 释放
 #[no_mangle]
@@ -109,6 +113,36 @@ pub extern "C" fn terminal_pool_get_cwd(
     let pool = unsafe { &*(handle as *mut TerminalPool) };
 
     if let Some(cwd) = pool.get_cwd(terminal_id) {
+        match std::ffi::CString::new(cwd.to_string_lossy().as_bytes()) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// 获取终端的缓存工作目录（通过 OSC 7）
+///
+/// Shell 通过 OSC 7 转义序列主动上报 CWD。此方法比 `terminal_pool_get_cwd` 更可靠：
+/// - 不受子进程（如 vim、claude）干扰
+/// - Shell 自己最清楚当前目录
+/// - 每次 cd 后立即更新
+///
+/// 如果 OSC 7 缓存为空（shell 未配置或刚启动），返回 NULL。
+/// 返回的字符串需要调用者使用 `rio_free_string` 释放
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_cached_cwd(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> *mut std::ffi::c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    if let Some(cwd) = pool.get_cached_cwd(terminal_id) {
         match std::ffi::CString::new(cwd.to_string_lossy().as_bytes()) {
             Ok(c_str) => c_str.into_raw(),
             Err(_) => std::ptr::null_mut(),
