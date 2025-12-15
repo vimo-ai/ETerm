@@ -1,12 +1,17 @@
 use std::collections::HashMap;
-
+use std::num::NonZeroUsize;
+use lru::LruCache;
 
 use crate::render::layout::GlyphInfo;
 use rio_backend::ansi::CursorShape;
 
-/// 两层缓存
+/// 外层缓存最大条目数（text_hash → LineCacheEntry）
+/// 15000 条 × ~150KB ≈ 2.2GB 上限（实际会更小，因为有内层复用）
+const MAX_TEXT_ENTRIES: usize = 15000;
+
+/// 两层缓存（带 LRU 淘汰）
 pub struct LineCache {
-    cache: HashMap<u64, LineCacheEntry>,
+    cache: LruCache<u64, LineCacheEntry>,
 }
 
 /// 缓存条目（每个文本内容一个）
@@ -66,6 +71,17 @@ pub struct SearchMatchInfo {
     pub focused_bg_color: [f32; 4],
 }
 
+/// 超链接悬停信息（用于渲染时添加下划线和颜色）
+#[derive(Debug, Clone, Copy)]
+pub struct HyperlinkHoverInfo {
+    /// 超链接起始列
+    pub start_col: usize,
+    /// 超链接结束列
+    pub end_col: usize,
+    /// 超链接前景色（通常是蓝色）
+    pub fg_color: [f32; 4],
+}
+
 /// 缓存查询结果
 pub enum CacheResult {
     /// 内层命中：直接返回最终渲染
@@ -79,12 +95,12 @@ pub enum CacheResult {
 impl LineCache {
     pub fn new() -> Self {
         Self {
-            cache: HashMap::new(),
+            cache: LruCache::new(NonZeroUsize::new(MAX_TEXT_ENTRIES).unwrap()),
         }
     }
 
-    /// 两层查询
-    pub fn get(&self, text_hash: u64, state_hash: u64) -> CacheResult {
+    /// 两层查询（注意：会更新 LRU 顺序）
+    pub fn get(&mut self, text_hash: u64, state_hash: u64) -> CacheResult {
         match self.cache.get(&text_hash) {
             Some(entry) => {
                 // 外层命中，检查内层
@@ -97,7 +113,7 @@ impl LineCache {
         }
     }
 
-    /// 两层插入
+    /// 两层插入（超过容量时自动淘汰最久未使用的条目）
     pub fn insert(
         &mut self,
         text_hash: u64,
@@ -105,22 +121,31 @@ impl LineCache {
         layout: GlyphLayout,
         image: skia_safe::Image,
     ) {
-        let entry = self.cache.entry(text_hash).or_insert_with(|| {
-            LineCacheEntry {
-                layout: layout.clone(),
-                renders: HashMap::new(),
-            }
-        });
-
-        // 更新布局（可能相同，但为了简化逻辑总是更新）
-        entry.layout = layout;
-        // 插入内层缓存
-        entry.renders.insert(state_hash, image);
+        // 先检查是否已存在
+        if let Some(entry) = self.cache.get_mut(&text_hash) {
+            // 更新布局和内层缓存
+            entry.layout = layout;
+            entry.renders.insert(state_hash, image);
+        } else {
+            // 新建条目（LruCache 会自动淘汰最旧的）
+            let mut renders = HashMap::new();
+            renders.insert(state_hash, image);
+            self.cache.put(text_hash, LineCacheEntry {
+                layout,
+                renders,
+            });
+        }
     }
 
     /// 清空缓存（窗口 resize 时调用）
     pub fn clear(&mut self) {
         self.cache.clear();
+    }
+
+    /// 获取当前缓存条目数（用于调试）
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.cache.len()
     }
 }
 
@@ -223,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_cache_miss() {
-        let cache = LineCache::new();
+        let mut cache = LineCache::new();
 
         // 查询空缓存
         match cache.get(999, 888) {
@@ -257,6 +282,71 @@ mod tests {
         match cache.get(text_hash_2, state_hash) {
             CacheResult::FullHit(_img) => {},
             _ => panic!("Expected FullHit for text_hash_2"),
+        }
+    }
+
+    #[test]
+    fn test_lru_eviction() {
+        // 创建一个小容量的缓存来测试淘汰
+        use std::num::NonZeroUsize;
+        use lru::LruCache;
+
+        // 直接测试 LruCache 的淘汰行为
+        let mut cache: LruCache<u64, String> = LruCache::new(NonZeroUsize::new(3).unwrap());
+
+        // 插入 3 个条目
+        cache.put(1, "one".to_string());
+        cache.put(2, "two".to_string());
+        cache.put(3, "three".to_string());
+
+        assert_eq!(cache.len(), 3);
+
+        // 访问 1，使其成为最近使用
+        let _ = cache.get(&1);
+
+        // 插入第 4 个，应该淘汰最久未使用的 2
+        cache.put(4, "four".to_string());
+
+        assert_eq!(cache.len(), 3);
+        assert!(cache.get(&1).is_some(), "1 should exist (recently used)");
+        assert!(cache.get(&2).is_none(), "2 should be evicted (LRU)");
+        assert!(cache.get(&3).is_some(), "3 should exist");
+        assert!(cache.get(&4).is_some(), "4 should exist (just added)");
+    }
+
+    #[test]
+    fn test_line_cache_capacity_limit() {
+        let mut cache = LineCache::new();
+        let state_hash = 100;
+
+        // 插入 MAX_TEXT_ENTRIES + 100 个条目
+        let total_entries = super::MAX_TEXT_ENTRIES + 100;
+        for i in 0..total_entries {
+            let text_hash = i as u64;
+            let layout = create_mock_layout(text_hash);
+            let image = create_mock_image(100, 20);
+            cache.insert(text_hash, state_hash, layout, image);
+        }
+
+        // 缓存大小应该不超过 MAX_TEXT_ENTRIES
+        assert!(
+            cache.len() <= super::MAX_TEXT_ENTRIES,
+            "Cache size {} should not exceed MAX_TEXT_ENTRIES {}",
+            cache.len(),
+            super::MAX_TEXT_ENTRIES
+        );
+
+        // 最近插入的应该还在
+        let recent_hash = (total_entries - 1) as u64;
+        match cache.get(recent_hash, state_hash) {
+            CacheResult::FullHit(_) => {},
+            _ => panic!("Recently inserted entry should exist"),
+        }
+
+        // 最早插入的应该被淘汰
+        match cache.get(0, state_hash) {
+            CacheResult::Miss => {},
+            _ => panic!("Oldest entry should be evicted"),
         }
     }
 }

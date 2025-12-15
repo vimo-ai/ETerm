@@ -33,6 +33,7 @@ regex = "1"
 
 # 内存优化
 smallvec = "1.13"
+lru = "0.12"
 
 [dev-dependencies]
 criterion = "0.5"
