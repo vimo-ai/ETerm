@@ -51,6 +51,9 @@ final class TabItemView: NSView {
     /// Tab 前缀 emoji（如 📱 表示 Mobile 正在查看）
     private var emoji: String?
 
+    /// 是否鼠标悬停
+    private var isHovered: Bool = false
+
     // MARK: - 回调
 
     /// 点击回调
@@ -158,10 +161,11 @@ final class TabItemView: NSView {
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
-        // 创建新的 SwiftUI 视图
-        let simpleTab = SimpleTabView(title, emoji: emoji, isActive: isActive, needsAttention: needsAttention, height: 26) { [weak self] in
+        // 创建新的 SwiftUI 视图（传入外部控制的 isHovered 状态）
+        // 必须显式使用 onClose: 标签，因为 trailing closure 会匹配最后一个参数 onDoubleTap
+        let simpleTab = SimpleTabView(title, emoji: emoji, isActive: isActive, needsAttention: needsAttention, height: 26, isHovered: isHovered, onClose: { [weak self] in
             self?.onClose?()
-        }
+        })
 
         let hosting = NSHostingView(rootView: simpleTab)
         hosting.frame = bounds
@@ -240,7 +244,52 @@ final class TabItemView: NSView {
         hostingView?.frame = bounds
     }
 
+    // MARK: - Mouse Tracking
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        // 移除旧的 tracking area
+        trackingAreas.forEach { removeTrackingArea($0) }
+
+        // 添加新的 tracking area
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        updateCyberView()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        updateCyberView()
+    }
+
     // MARK: - Event Handlers
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 检查点击是否在 bounds 内
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        // 关闭按钮在右侧约 30px 区域
+        // 直接返回 hostingView，让 NSHostingView 处理 SwiftUI Button 事件
+        let closeButtonArea: CGFloat = 30
+        if point.x > bounds.width - closeButtonArea {
+            return hostingView
+        }
+
+        // 其他区域返回自己，让 TabItemView 处理点击/拖拽
+        return self
+    }
 
     override func mouseDown(with event: NSEvent) {
         // 重置拖拽标志
@@ -251,10 +300,13 @@ final class TabItemView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        super.mouseDragged(with: event)
-
         // 如果已经在拖拽中，不重复启动
         if isDragging {
+            return
+        }
+
+        // 检查全局 drag 锁（防止在 UI 更新期间启动新 drag）
+        if DragLock.shared.isLocked {
             return
         }
 
@@ -290,6 +342,10 @@ final class TabItemView: NSView {
                 // 单击：切换 Tab
                 onTap?()
             }
+            // 重置拖拽状态并直接返回，不传递事件
+            isDragging = false
+            didActuallyDrag = false
+            return
         }
 
         // 重置拖拽状态
@@ -322,17 +378,72 @@ extension TabItemView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
-        // 拖拽结束
-        // 如果操作为 none（没有被任何目标接收），检查是否拖出了所有窗口
-        if operation == [] {
-            // 检查是否在任何窗口内
-            let isInAnyWindow = WindowManager.shared.findWindow(at: screenPoint) != nil
+        print("🟢 [TabItemView] draggingSession:endedAt 被调用 - tabId: \(tabId.uuidString.prefix(4))")
 
-            if !isInAnyWindow {
-                // 拖出了所有窗口，通知回调创建新窗口
-                onDragOutOfWindow?(screenPoint)
+        // 重置拖拽状态（确保在拖放源上也能正确重置）
+        isDragging = false
+        didActuallyDrag = false
+
+        // 捕获需要的值（因为 self 可能在回调后被销毁）
+        let capturedTabId = tabId
+        let capturedOnDragOutOfWindow = onDragOutOfWindow
+        let capturedOperation = operation
+        let capturedScreenPoint = screenPoint
+
+        // 延迟通知到下一个 runloop 迭代
+        // 这确保 AppKit 有机会完成其内部清理，再触发我们的 UI 更新
+        // 不使用 asyncAfter，因为 async 已经足够推迟到回调返回后
+        DispatchQueue.main.async {
+            print("🟢 [TabItemView] 延迟发送 tabDragSessionEnded 通知 - tabId: \(capturedTabId.uuidString.prefix(4))")
+
+            // 通知 drag session 已结束（用于安全地更新 UI）
+            NotificationCenter.default.post(
+                name: .tabDragSessionEnded,
+                object: nil,
+                userInfo: ["tabId": capturedTabId]
+            )
+
+            // 拖拽结束
+            // 如果操作为 none（没有被任何目标接收），检查是否拖出了所有窗口
+            if capturedOperation == [] {
+                // 检查是否在任何窗口内
+                let isInAnyWindow = WindowManager.shared.findWindow(at: capturedScreenPoint) != nil
+
+                if !isInAnyWindow {
+                    // 拖出了所有窗口，通知回调创建新窗口
+                    capturedOnDragOutOfWindow?(capturedScreenPoint)
+                }
             }
         }
+    }
+}
+
+// MARK: - Drag Session Notification
+
+extension Notification.Name {
+    /// Tab 拖拽 session 结束通知
+    static let tabDragSessionEnded = Notification.Name("tabDragSessionEnded")
+}
+
+/// 全局 drag 锁，用于防止在 UI 更新期间启动新的 drag
+/// 当 drag session 结束后，需要等待 UI 更新完成才能开始新的 drag
+final class DragLock {
+    static let shared = DragLock()
+    private init() {}
+
+    /// 是否锁定新 drag
+    private(set) var isLocked: Bool = false
+
+    /// 锁定 drag（在 drop 处理后调用）
+    func lock() {
+        isLocked = true
+        print("🔒 [DragLock] 锁定")
+    }
+
+    /// 解锁 drag（在 UI 更新完成后调用）
+    func unlock() {
+        isLocked = false
+        print("🔓 [DragLock] 解锁")
     }
 }
 
