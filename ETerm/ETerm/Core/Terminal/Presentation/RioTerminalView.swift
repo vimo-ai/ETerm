@@ -129,6 +129,9 @@ class RioContainerView: NSView {
     /// PageBar 高度（SwiftUI 层的 PageBar，这里需要预留空间）
     private let pageBarHeight: CGFloat = 28
 
+    /// 当前正在高亮的 Panel（用于清除旧高亮）
+    private weak var currentHighlightedPanel: DomainPanelView?
+
     weak var coordinator: TerminalWindowCoordinator? {
         didSet {
             renderView.coordinator = coordinator
@@ -155,12 +158,48 @@ class RioContainerView: NSView {
 
         // PageBar 已移至 SwiftUI 层（ContentView）
 
+        // 注册拖拽目标（Tab 拖拽）
+        registerForDraggedTypes([.string])
+
         // 监听状态变化，更新 UI
         setupObservers()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    // MARK: - Hit Testing
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        // 优先检查 Panel UI 视图（Tab 栏）
+        for (_, panelView) in panelUIViews {
+            // 检查点是否在这个 Panel 的 frame 内
+            if panelView.frame.contains(point) {
+                let pointInPanel = convert(point, to: panelView)
+                if let hitView = panelView.hitTest(pointInPanel) {
+                    return hitView
+                }
+            }
+        }
+
+        // 检查分割线
+        for dividerView in dividerViews {
+            if dividerView.frame.contains(point) {
+                let pointInDivider = convert(point, to: dividerView)
+                if let hitView = dividerView.hitTest(pointInDivider) {
+                    return hitView
+                }
+            }
+        }
+
+        // 其他区域返回 renderView（让 Metal 视图处理鼠标事件）
+        let pointInRender = convert(point, to: renderView)
+        return renderView.hitTest(pointInRender) ?? renderView
     }
 
     private func setupObservers() {
@@ -319,11 +358,18 @@ class RioContainerView: NSView {
         let panels = coordinator.terminalWindow.allPanels
         let panelIds = Set(panels.map { $0.panelId })
 
+        print("🟠 [RioTerminalView] updatePanelViews:")
+        print("  - 领域层 Panel IDs: \(panels.map { $0.panelId.uuidString.prefix(4) })")
+        print("  - 缓存的 UI View IDs: \(panelUIViews.keys.map { $0.uuidString.prefix(4) })")
+
         // 删除不存在的 Panel UI
+        // 注意：通过 DropIntentQueue 确保在 drag session 结束后才执行模型变更，
+        // 所以这里可以安全地立即删除视图
         let viewsToRemove = panelUIViews.filter { !panelIds.contains($0.key) }
         for (id, view) in viewsToRemove {
             view.removeFromSuperview()
             panelUIViews.removeValue(forKey: id)
+            print("🟠 [RioTerminalView] 移除视图 \(id.uuidString.prefix(4))")
         }
 
         // 更新或创建 Panel UI
@@ -361,8 +407,11 @@ class RioContainerView: NSView {
 
         // 只更新发光位置，不改变显示状态（显示由窗口焦点控制）
         updateActiveGlow(panels: panels, activePanelId: coordinator.activePanelId, forceShow: false)
-    }
 
+        // 强制同步布局，确保所有 frame 更新立即生效
+        // 这避免了拖拽时 hitTest 使用过时的 frame 导致目标检测错误
+        layoutSubtreeIfNeeded()
+    }
 
     /// 更新 Active 终端发光视图
     /// - Parameters:
@@ -545,6 +594,149 @@ class RioContainerView: NSView {
 
         // 断开 coordinator 引用
         coordinator = nil
+    }
+
+    // MARK: - Tab Drop Handling
+
+    /// 根据屏幕坐标找到对应的 Panel
+    /// - Parameter point: 在 RioContainerView 坐标系中的点
+    /// - Returns: 找到的 Panel 和对应的视图，如果没有找到返回 nil
+    private func findPanel(at point: NSPoint) -> (panel: EditorPanel, view: DomainPanelView)? {
+        for (panelId, view) in panelUIViews {
+            if view.frame.contains(point) {
+                // 从 coordinator 获取对应的 EditorPanel
+                if let panel = coordinator?.terminalWindow.allPanels.first(where: { $0.panelId == panelId }) {
+                    return (panel, view)
+                }
+            }
+        }
+        return nil
+    }
+
+    /// 拖拽数据结构（包含完整信息）
+    private struct DragPayload {
+        let tabId: UUID
+        let sourcePanelId: UUID
+        let sourceWindowNumber: Int
+    }
+
+    /// 解析拖拽数据（新格式）
+    /// - Parameter dataString: 粘贴板字符串，格式 `tab:{windowNumber}:{panelId}:{tabId}`
+    /// - Returns: 完整的拖拽数据，失败返回 nil
+    private func parseDragPayload(_ dataString: String) -> DragPayload? {
+        guard dataString.hasPrefix("tab:") else { return nil }
+
+        let components = dataString.components(separatedBy: ":")
+        guard components.count >= 4 else { return nil }
+
+        // 新格式：tab:{windowNumber}:{panelId}:{tabId}
+        guard let windowNumber = Int(components[1]),
+              let sourcePanelId = UUID(uuidString: components[2]),
+              let tabId = UUID(uuidString: components[3]) else {
+            return nil
+        }
+
+        return DragPayload(tabId: tabId, sourcePanelId: sourcePanelId, sourceWindowNumber: windowNumber)
+    }
+}
+
+// MARK: - NSDraggingDestination (Tab Drop)
+
+extension RioContainerView {
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 检查是否是 Tab 拖拽
+        guard let dataString = sender.draggingPasteboard.string(forType: .string),
+              parseDragPayload(dataString) != nil else {
+            return []
+        }
+
+        return .move
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 检查是否是 Tab 拖拽
+        guard let dataString = sender.draggingPasteboard.string(forType: .string),
+              parseDragPayload(dataString) != nil else {
+            return []
+        }
+
+        // 根据鼠标坐标计算目标 Panel
+        let location = convert(sender.draggingLocation, from: nil)
+        guard let (_, targetView) = findPanel(at: location) else {
+            // 没有找到 Panel，清除高亮
+            currentHighlightedPanel?.clearHighlight()
+            currentHighlightedPanel = nil
+            return []
+        }
+
+        // 如果切换到新的 Panel，清除旧 Panel 的高亮
+        if currentHighlightedPanel !== targetView {
+            currentHighlightedPanel?.clearHighlight()
+            currentHighlightedPanel = targetView
+        }
+
+        // 将坐标转换到 targetView 的坐标系
+        let locationInPanel = convert(location, to: targetView)
+
+        // 计算 Drop Zone
+        if let dropZone = targetView.calculateDropZone(mousePosition: locationInPanel) {
+            targetView.highlightDropZone(dropZone)
+            return .move
+        } else {
+            targetView.clearHighlight()
+            return []
+        }
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        // 清除高亮
+        currentHighlightedPanel?.clearHighlight()
+        currentHighlightedPanel = nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        print("⚡️ [RioContainerView] performDragOperation 被调用!")
+
+        // 清除高亮
+        currentHighlightedPanel?.clearHighlight()
+        currentHighlightedPanel = nil
+
+        // 解析完整的拖拽数据
+        guard let dataString = sender.draggingPasteboard.string(forType: .string),
+              let payload = parseDragPayload(dataString) else {
+            print("⚡️ [RioContainerView] 解析拖拽数据失败")
+            return false
+        }
+
+        // 根据鼠标坐标找到目标 Panel
+        let location = convert(sender.draggingLocation, from: nil)
+        guard let (targetPanel, targetView) = findPanel(at: location) else {
+            print("⚡️ [RioContainerView] 未找到目标 Panel")
+            return false
+        }
+
+        // 将坐标转换到 targetView 的坐标系
+        let locationInPanel = convert(location, to: targetView)
+
+        // 计算 Drop Zone
+        guard let dropZone = targetView.calculateDropZone(mousePosition: locationInPanel) else {
+            print("⚡️ [RioContainerView] 计算 DropZone 失败")
+            return false
+        }
+
+        // 调用 Coordinator 处理 Drop
+        guard let coordinator = coordinator else {
+            print("⚡️ [RioContainerView] coordinator 为 nil")
+            return false
+        }
+
+        print("⚡️ [RioContainerView] 调用 handleDrop: tabId=\(payload.tabId.uuidString.prefix(4)), sourcePanelId=\(payload.sourcePanelId.uuidString.prefix(4)), dropZone=\(dropZone.type), targetPanel=\(targetPanel.panelId.uuidString.prefix(4))")
+        return coordinator.handleDrop(
+            tabId: payload.tabId,
+            sourcePanelId: payload.sourcePanelId,
+            dropZone: dropZone,
+            targetPanelId: targetPanel.panelId
+        )
     }
 }
 

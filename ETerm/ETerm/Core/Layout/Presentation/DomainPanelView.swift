@@ -51,8 +51,40 @@ final class DomainPanelView: NSView {
 
         super.init(frame: .zero)
 
+        print("🟣 [DomainPanelView] init - panelId: \(panel.panelId.uuidString.prefix(4))")
         setupUI()
         updateUI()
+        setupNotifications()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        print("🟣 [DomainPanelView] deinit - panelId: \(panel?.panelId.uuidString.prefix(4) ?? "nil")")
+    }
+
+    // MARK: - Notifications
+
+    private func setupNotifications() {
+        // 监听 Tab 重排序通知（视图复用）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleApplyTabReorder(_:)),
+            name: .applyTabReorder,
+            object: nil
+        )
+    }
+
+    @objc private func handleApplyTabReorder(_ notification: Notification) {
+        guard let notifPanelId = notification.userInfo?["panelId"] as? UUID,
+              notifPanelId == panel?.panelId,
+              let tabIds = notification.userInfo?["tabIds"] as? [UUID] else {
+            return
+        }
+
+        print("🟣 [DomainPanelView] handleApplyTabReorder: panelId=\(notifPanelId.uuidString.prefix(4))")
+
+        // 应用视图重排序（复用视图，不重建）
+        headerView.applyTabReorder(tabIds)
     }
 
     required init?(coder: NSCoder) {
@@ -63,11 +95,20 @@ final class DomainPanelView: NSView {
 
     /// 让 content 区域的鼠标事件穿透到底层 Metal 视图
     override func hitTest(_ point: NSPoint) -> NSView? {
+        // 首先检查点是否在自己的 bounds 内
+        guard bounds.contains(point) else {
+            return nil
+        }
+
         // 检查是否在 Header 区域
-        let headerPoint = headerView.convert(point, from: self)
+        let headerPoint = convert(point, to: headerView)
         if headerView.bounds.contains(headerPoint) {
-            // Header 区域正常处理
-            return super.hitTest(point)
+            // 直接调用 headerView 的 hitTest，确保事件正确路由到 TabItemView
+            if let hitView = headerView.hitTest(headerPoint) {
+                return hitView
+            }
+            // 如果 headerView.hitTest 返回 nil，返回 headerView 自己
+            return headerView
         }
 
         // Content 区域：让事件穿透到底层
@@ -95,9 +136,6 @@ final class DomainPanelView: NSView {
         highlightLayer.cornerRadius = 4
         highlightLayer.isHidden = true
         contentView.layer?.addSublayer(highlightLayer)
-
-        // 注册拖拽类型
-        registerForDraggedTypes([.string])
 
         // 设置 Header 的回调
         headerView.onTabClick = { [weak self] tabId in
@@ -146,6 +184,7 @@ final class DomainPanelView: NSView {
 
         // 更新 Header 显示的 Tab
         let tabs = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
+        print("🔵 [DomainPanelView] updateUI: \(tabs.map { "\($0.title)(\($0.id.uuidString.prefix(4)))" })")
         headerView.setTabs(tabs)
 
         // 更新激活的 Tab
@@ -264,10 +303,12 @@ final class DomainPanelView: NSView {
         WindowManager.shared.moveTab(tabId, from: sourcePanelId, sourceWindowNumber: sourceWindowNumber, to: targetPanelId, targetWindowNumber: targetWindowNumber)
     }
 
-    // MARK: - Drop Zone Calculation
+    // MARK: - Drop Zone Calculation (Public for RioContainerView)
 
     /// 计算 Drop Zone
-    private func calculateDropZone(mousePosition: CGPoint) -> DropZone? {
+    /// - Parameter mousePosition: 在 DomainPanelView 坐标系中的鼠标位置
+    /// - Returns: 计算出的 Drop Zone，如果无法计算返回 nil
+    func calculateDropZone(mousePosition: CGPoint) -> DropZone? {
         guard let panel = panel else { return nil }
 
         let panelNode = PanelNode(
@@ -291,7 +332,8 @@ final class DomainPanelView: NSView {
     }
 
     /// 高亮 Drop Zone
-    private func highlightDropZone(_ zone: DropZone) {
+    /// - Parameter zone: 要高亮的 Drop Zone
+    func highlightDropZone(_ zone: DropZone) {
         currentDropZone = zone
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -301,66 +343,9 @@ final class DomainPanelView: NSView {
     }
 
     /// 清除高亮
-    private func clearHighlight() {
+    func clearHighlight() {
         currentDropZone = nil
         highlightLayer.isHidden = true
     }
 
-    /// 解析拖拽数据（新格式）
-    /// - Parameter dataString: 粘贴板字符串，格式 `tab:{windowNumber}:{panelId}:{tabId}`
-    /// - Returns: 提取到的 Tab ID
-    private func parseDraggedTabId(_ dataString: String) -> UUID? {
-        guard dataString.hasPrefix("tab:") else { return nil }
-
-        let components = dataString.components(separatedBy: ":")
-        guard components.count >= 4 else { return nil }
-
-        // 新格式：tab:{windowNumber}:{panelId}:{tabId}
-        return UUID(uuidString: components[3])
-    }
-}
-
-// MARK: - NSDraggingDestination
-
-extension DomainPanelView {
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let locationInView = convert(sender.draggingLocation, from: nil)
-        guard let dropZone = calculateDropZone(mousePosition: locationInView) else {
-            return []
-        }
-        highlightDropZone(dropZone)
-        return .move
-    }
-
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        return draggingEntered(sender)
-    }
-
-    override func draggingExited(_ sender: NSDraggingInfo?) {
-        clearHighlight()
-    }
-
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        // 先清除高亮，无论成功与否
-        clearHighlight()
-
-        // 解析拖拽数据（新格式）
-        guard let dataString = sender.draggingPasteboard.string(forType: .string),
-              let tabId = parseDraggedTabId(dataString) else {
-            return false
-        }
-
-        let locationInView = convert(sender.draggingLocation, from: nil)
-        guard let dropZone = calculateDropZone(mousePosition: locationInView) else {
-            return false
-        }
-
-        // 调用 Coordinator 处理 Drop
-        guard let panel = panel,
-              let coordinator = coordinator else {
-            return false
-        }
-
-        return coordinator.handleDrop(tabId: tabId, dropZone: dropZone, targetPanelId: panel.panelId)
-    }
 }
