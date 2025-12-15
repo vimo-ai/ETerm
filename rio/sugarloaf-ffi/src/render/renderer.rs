@@ -90,13 +90,13 @@ impl Renderer {
         let total = self.stats.cache_hits + self.stats.layout_hits + self.stats.cache_misses;
         if total > 0 {
             let hit_rate = (self.stats.cache_hits as f64 / total as f64) * 100.0;
-            eprintln!("📊 CACHE [{}] L1={} L2={} L3={} total={} hit={:.1}%",
-                frame_label,
-                self.stats.cache_hits,
-                self.stats.layout_hits,
-                self.stats.cache_misses,
-                total,
-                hit_rate);
+            // eprintln!("📊 CACHE [{}] L1={} L2={} L3={} total={} hit={:.1}%",
+            //     frame_label,
+            //     self.stats.cache_hits,
+            //     self.stats.layout_hits,
+            //     self.stats.cache_misses,
+            //     total,
+            //     hit_rate);
         }
         self.reset_stats();
     }

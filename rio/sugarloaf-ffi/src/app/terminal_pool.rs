@@ -1328,9 +1328,11 @@ impl TerminalPool {
             renderer.print_frame_stats("render_all");
         }
 
-        let frame_time = frame_start.elapsed().as_micros();
-        eprintln!("⚡️ FRAME_PERF render_all() took {}μs ({:.2}ms)",
-                  frame_time, frame_time as f32 / 1000.0);
+        // ⚠️ 性能监控日志，需要时取消注释
+        // let frame_time = frame_start.elapsed().as_micros();
+        // eprintln!("⚡️ FRAME_PERF render_all() took {}μs ({:.2}ms)",
+        //           frame_time, frame_time as f32 / 1000.0);
+        let _ = frame_start;  // 避免 unused 警告
     }
 
     /// 调整 Sugarloaf 尺寸
