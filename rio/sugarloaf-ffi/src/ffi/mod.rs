@@ -14,6 +14,7 @@ pub mod cursor;
 pub mod selection;
 pub mod render_scheduler;
 pub mod word_boundary;
+pub mod hyperlink;
 
 /// FFI 边界防护 - 捕获所有 panic，防止跨 FFI 边界传播
 ///
@@ -62,3 +63,4 @@ pub use cursor::*;
 pub use selection::*;
 pub use render_scheduler::*;
 pub use word_boundary::*;
+pub use hyperlink::*;

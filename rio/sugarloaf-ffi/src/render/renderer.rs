@@ -1,6 +1,6 @@
 use crate::domain::TerminalState;
 use crate::domain::views::grid::CellData;
-use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SelectionInfo, SearchMatchInfo};
+use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SelectionInfo, SearchMatchInfo, HyperlinkHoverInfo};
 use super::cache::{compute_text_hash, compute_state_hash_for_line};
 use super::font::FontContext;
 use super::layout::TextShaper;
@@ -566,12 +566,35 @@ impl Renderer {
             None
         };
 
+        // 🔧 从 state 动态计算 hyperlink_hover_info
+        let hyperlink_hover_info = if let Some(hover) = &state.hyperlink_hover {
+            // 转换屏幕行号为绝对行号
+            let abs_line = state.grid.history_size()
+                .saturating_add(line)
+                .saturating_sub(state.grid.display_offset());
+
+            // 检查本行是否在超链接范围内
+            if let Some((start_col, end_col)) = hover.column_range_on_line(abs_line, usize::MAX) {
+                Some(HyperlinkHoverInfo {
+                    start_col,
+                    end_col,
+                    // 超链接使用蓝色（标准超链接颜色）
+                    fg_color: [0.0, 0.5, 1.0, 1.0],
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         self.rasterizer
             .render(
                 &layout,
                 cursor_info.as_ref(),
                 selection_info.as_ref(),
                 search_info.as_ref(),
+                hyperlink_hover_info.as_ref(),
                 line_width,
                 metrics.cell_width.value,
                 metrics.cell_height.value,
@@ -715,6 +738,7 @@ mod tests {
             cursor,
             selection: None,
             search: None,
+            hyperlink_hover: None,
         }
     }
 
@@ -896,6 +920,7 @@ mod tests {
             cursor,
             selection: None,
             search: None,
+            hyperlink_hover: None,
         }
     }
 
@@ -1227,6 +1252,7 @@ mod tests {
                 SelectionType::Simple,
             )),
             search: None,
+            hyperlink_hover: None,
         };
 
         // === 第一帧：渲染所有 100 行（全部 cache miss）===

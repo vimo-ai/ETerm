@@ -136,6 +136,7 @@ mod tests {
             cursor,
             selection: None,
             search: None,
+            hyperlink_hover: None,
         }
     }
 
@@ -326,6 +327,7 @@ mod tests {
                 SelectionType::Simple,
             )),
             search: None,
+            hyperlink_hover: None,
         };
 
         // 计算所有 100 行的 state_hash

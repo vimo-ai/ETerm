@@ -449,6 +449,73 @@ FFIWordBoundary terminal_pool_get_word_at(
 void terminal_pool_free_word_boundary(FFIWordBoundary boundary);
 
 // =============================================================================
+// Hyperlink API
+// =============================================================================
+
+/// Hyperlink query result (C ABI compatible)
+typedef struct {
+    int64_t start_row;      // Start row (absolute coordinates)
+    uint16_t start_col;     // Start column
+    int64_t end_row;        // End row (absolute coordinates)
+    uint16_t end_col;       // End column
+    char* uri_ptr;          // URI pointer (must be freed with terminal_pool_free_hyperlink)
+    size_t uri_len;         // URI length in bytes
+    bool valid;             // Whether result is valid (true = has hyperlink)
+} FFIHyperlink;
+
+/// Get hyperlink at specified position
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param screen_row Screen row (0-based)
+/// @param screen_col Screen column (0-based)
+/// @return Hyperlink info, valid=false if no hyperlink at position
+///         If valid=true, uri_ptr must be freed with terminal_pool_free_hyperlink
+FFIHyperlink terminal_pool_get_hyperlink_at(
+    TerminalPoolHandle handle,
+    int32_t terminal_id,
+    int32_t screen_row,
+    int32_t screen_col
+);
+
+/// Free hyperlink resources
+///
+/// @param hyperlink Hyperlink returned by terminal_pool_get_hyperlink_at
+///
+/// Note: Only call this for valid=true hyperlinks, do not free the same hyperlink twice
+void terminal_pool_free_hyperlink(FFIHyperlink hyperlink);
+
+/// Set hyperlink hover state (triggers highlight rendering)
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param start_row Start row (absolute coordinates)
+/// @param start_col Start column
+/// @param end_row End row (absolute coordinates)
+/// @param end_col End column
+/// @param uri Hyperlink URI (C string)
+/// @return true if successful
+bool terminal_pool_set_hyperlink_hover(
+    TerminalPoolHandle handle,
+    int32_t terminal_id,
+    int64_t start_row,
+    uint16_t start_col,
+    int64_t end_row,
+    uint16_t end_col,
+    const char* uri
+);
+
+/// Clear hyperlink hover state
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return true if successful
+bool terminal_pool_clear_hyperlink_hover(
+    TerminalPoolHandle handle,
+    int32_t terminal_id
+);
+
+// =============================================================================
 // RenderScheduler API (CVDisplayLink in Rust)
 // =============================================================================
 

@@ -1,6 +1,6 @@
 
 use crate::render::cache::GlyphLayout;
-use crate::render::cache::{CursorInfo, SelectionInfo, SearchMatchInfo};
+use crate::render::cache::{CursorInfo, SelectionInfo, SearchMatchInfo, HyperlinkHoverInfo};
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};
 use rio_backend::ansi::CursorShape;
 use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f};
@@ -24,6 +24,7 @@ impl LineRasterizer {
     /// - cursor_info: 光标信息（从 TerminalState 动态计算，不从 layout 缓存读取）
     /// - selection_info: 选区信息（从 TerminalState 动态计算，不从 layout 缓存读取）
     /// - search_info: 搜索匹配信息（从 TerminalState 动态计算）
+    /// - hyperlink_hover_info: 超链接悬停信息（Cmd+hover 时显示下划线）
     /// - line_width: 行宽度（像素）
     /// - cell_width: 单元格宽度（像素）
     /// - cell_height: 单元格高度（像素）
@@ -44,6 +45,7 @@ impl LineRasterizer {
         cursor_info: Option<&CursorInfo>,
         selection_info: Option<&SelectionInfo>,
         search_info: Option<&SearchMatchInfo>,
+        hyperlink_hover_info: Option<&HyperlinkHoverInfo>,
         line_width: f32,
         cell_width: f32,
         cell_height: f32,
@@ -94,6 +96,11 @@ impl LineRasterizer {
                 })
             });
 
+            // 检查当前字符是否在超链接悬停范围内
+            let in_hyperlink_hover = hyperlink_hover_info.map_or(false, |info| {
+                current_col >= info.start_col && current_col <= info.end_col
+            });
+
             // 确定背景色优先级：选区 > 搜索 > 原始
             let effective_bg_color = if in_selection {
                 // 选区内：使用选区背景色
@@ -120,7 +127,7 @@ impl LineRasterizer {
                 canvas.draw_rect(rect, &bg_paint);
             }
 
-            // 确定前景色优先级：选区 > 搜索 > 原始
+            // 确定前景色优先级：选区 > 搜索 > 超链接悬停 > 原始
             let effective_fg_color = if in_selection {
                 let sel = selection_info.unwrap();
                 Color4f::new(sel.fg_color[0], sel.fg_color[1], sel.fg_color[2], sel.fg_color[3])
@@ -128,6 +135,10 @@ impl LineRasterizer {
                 let info = search_info.unwrap();
                 let fg = if is_focused { info.focused_fg_color } else { info.fg_color };
                 Color4f::new(fg[0], fg[1], fg[2], fg[3])
+            } else if in_hyperlink_hover {
+                // 超链接悬停：使用蓝色
+                let info = hyperlink_hover_info.unwrap();
+                Color4f::new(info.fg_color[0], info.fg_color[1], info.fg_color[2], info.fg_color[3])
             } else {
                 glyph.color
             };
@@ -257,6 +268,29 @@ impl LineRasterizer {
                 }
             }
 
+            // ===== 绘制超链接下划线（如果在悬停范围内）=====
+            if in_hyperlink_hover {
+                let glyph_width = cell_width * glyph.width;
+                let underline_y = (baseline_offset + 2.0).min(line_height - 2.0);
+                let stroke_width = 1.5;
+
+                let info = hyperlink_hover_info.unwrap();
+                let mut underline_paint = Paint::default();
+                underline_paint.set_color4f(
+                    Color4f::new(info.fg_color[0], info.fg_color[1], info.fg_color[2], info.fg_color[3]),
+                    None,
+                );
+                underline_paint.set_stroke_width(stroke_width);
+                underline_paint.set_style(skia_safe::PaintStyle::Stroke);
+                underline_paint.set_anti_alias(true);
+
+                canvas.draw_line(
+                    Point::new(glyph.x, underline_y),
+                    Point::new(glyph.x + glyph_width, underline_y),
+                    &underline_paint,
+                );
+            }
+
             // 更新列号（用于下一个字符的选区检测）
             current_col += glyph.width as usize;
         }
@@ -336,6 +370,7 @@ mod tests {
             None,   // cursor_info
             None,   // selection_info
             None,   // search_info
+            None,   // hyperlink_hover_info
             800.0,  // line_width
             10.0,   // cell_width
             16.0,   // cell_height
@@ -374,6 +409,7 @@ mod tests {
             None,   // cursor_info
             None,   // selection_info
             None,   // search_info
+            None,   // hyperlink_hover_info
             800.0,
             10.0,
             16.0,

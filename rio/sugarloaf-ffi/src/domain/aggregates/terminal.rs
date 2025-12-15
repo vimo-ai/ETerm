@@ -150,6 +150,9 @@ pub struct Terminal {
     /// 缓存的搜索视图（只在搜索事件时重建，避免每帧 O(N) 遍历）
     cached_search_view: Option<SearchView>,
 
+    /// 超链接悬停状态（Cmd+hover 时设置）
+    hyperlink_hover: Option<crate::domain::HyperlinkHoverView>,
+
     /// 运行模式（Active/Background）
     mode: TerminalMode,
 }
@@ -229,6 +232,7 @@ impl Terminal {
             rows,
             parser,
             cached_search_view: None,
+            hyperlink_hover: None,
             mode: TerminalMode::Active,
         }
     }
@@ -279,6 +283,7 @@ impl Terminal {
             rows,
             parser,
             cached_search_view: None,
+            hyperlink_hover: None,
             mode: TerminalMode::Active,
         }
     }
@@ -479,14 +484,123 @@ impl Terminal {
 
         // 4. 使用缓存的 SearchView（避免每帧 O(N) 遍历）
         // 缓存在 search()/next_match()/prev_match() 时更新
-        if let Some(ref search_view) = self.cached_search_view {
+        let mut result = if let Some(ref search_view) = self.cached_search_view {
             // 如果有搜索且没有选区，添加搜索
             if base_state.selection.is_none() {
-                return TerminalState::with_search(base_state.grid, base_state.cursor, search_view.clone());
+                TerminalState::with_search(base_state.grid, base_state.cursor, search_view.clone())
+            } else {
+                base_state
             }
+        } else {
+            base_state
+        };
+
+        // 5. 添加超链接悬停状态
+        if let Some(ref hover) = self.hyperlink_hover {
+            result.hyperlink_hover = Some(hover.clone());
         }
 
-        base_state
+        result
+    }
+
+    /// 设置超链接悬停状态
+    ///
+    /// # 参数
+    /// - `start_row`: 起始行（绝对坐标）
+    /// - `start_col`: 起始列
+    /// - `end_row`: 结束行（绝对坐标）
+    /// - `end_col`: 结束列
+    /// - `uri`: 超链接 URI
+    pub fn set_hyperlink_hover(
+        &mut self,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+        uri: String,
+    ) {
+        use crate::domain::HyperlinkHoverView;
+        use crate::domain::primitives::AbsolutePoint;
+
+        self.hyperlink_hover = Some(HyperlinkHoverView::new(
+            AbsolutePoint::new(start_row, start_col),
+            AbsolutePoint::new(end_row, end_col),
+            uri,
+        ));
+    }
+
+    /// 清除超链接悬停状态
+    pub fn clear_hyperlink_hover(&mut self) {
+        self.hyperlink_hover = None;
+    }
+
+    /// 获取指定位置的超链接信息
+    ///
+    /// # 参数
+    /// - `screen_row`: 屏幕行（0-based）
+    /// - `screen_col`: 屏幕列（0-based）
+    ///
+    /// # 返回
+    /// - `Some((start_col, end_col, uri))`: 如果有超链接
+    /// - `None`: 如果没有超链接
+    pub fn get_hyperlink_at(&self, screen_row: usize, screen_col: usize) -> Option<(usize, usize, String)> {
+        with_crosswords!(self, crosswords, {
+            use rio_backend::crosswords::pos::{Line, Column};
+
+            // 计算 grid line（考虑 display_offset）
+            let display_offset = crosswords.display_offset();
+            let grid_line = Line((screen_row as i32) - (display_offset as i32));
+
+            // 获取 cell
+            let col = Column(screen_col);
+            let grid = &crosswords.grid;
+
+            // 检查坐标是否有效
+            if screen_row >= grid.screen_lines() || screen_col >= grid.columns() {
+                return None;
+            }
+
+            let square = &grid[grid_line][col];
+
+            // 检查是否有超链接
+            if let Some(hyperlink) = square.hyperlink() {
+                let uri = hyperlink.uri().to_string();
+                let hyperlink_id = hyperlink.id();
+
+                // 向左右扩展找到完整的超链接范围
+                let columns = grid.columns();
+
+                // 向左扩展
+                let mut left = screen_col;
+                while left > 0 {
+                    let prev_col = Column(left - 1);
+                    if let Some(h) = grid[grid_line][prev_col].hyperlink() {
+                        if h.id() == hyperlink_id {
+                            left -= 1;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                // 向右扩展
+                let mut right = screen_col;
+                while right + 1 < columns {
+                    let next_col = Column(right + 1);
+                    if let Some(h) = grid[grid_line][next_col].hyperlink() {
+                        if h.id() == hyperlink_id {
+                            right += 1;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                Some((left, right, uri))
+            } else {
+                None
+            }
+        })
     }
 
     /// 增量同步 RenderState

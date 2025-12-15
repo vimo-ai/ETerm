@@ -50,6 +50,20 @@ struct TerminalWordBoundary {
     let text: String
 }
 
+/// 终端超链接信息
+struct TerminalHyperlink {
+    /// 起始行（绝对坐标）
+    let startRow: Int64
+    /// 起始列
+    let startCol: Int
+    /// 结束行（绝对坐标）
+    let endRow: Int64
+    /// 结束列
+    let endCol: Int
+    /// 超链接 URI
+    let uri: String
+}
+
 /// 终端池 Wrapper（新架构）
 ///
 /// 职责分离：
@@ -340,6 +354,70 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
             absoluteRow: result.absolute_row,
             text: text
         )
+    }
+
+    // MARK: - Hyperlink API
+
+    /// 获取指定位置的超链接
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - screenRow: 屏幕行号（相对于可见区域，从 0 开始）
+    ///   - screenCol: 屏幕列号（从 0 开始）
+    /// - Returns: 超链接信息，无超链接返回 nil
+    func getHyperlinkAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalHyperlink? {
+        guard let handle = handle else { return nil }
+        guard screenRow >= 0 && screenCol >= 0 else { return nil }
+
+        let result = terminal_pool_get_hyperlink_at(handle, Int32(terminalId), Int32(screenRow), Int32(screenCol))
+        guard result.valid else { return nil }
+
+        // 转换 C 字符串为 Swift String
+        guard let uriPtr = result.uri_ptr else { return nil }
+        let uri = String(cString: uriPtr)
+
+        // 释放 Rust 分配的内存
+        terminal_pool_free_hyperlink(result)
+
+        return TerminalHyperlink(
+            startRow: result.start_row,
+            startCol: Int(result.start_col),
+            endRow: result.end_row,
+            endCol: Int(result.end_col),
+            uri: uri
+        )
+    }
+
+    /// 设置超链接悬停状态（触发高亮渲染）
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - hyperlink: 超链接信息
+    /// - Returns: 是否成功
+    @discardableResult
+    func setHyperlinkHover(terminalId: Int, hyperlink: TerminalHyperlink) -> Bool {
+        guard let handle = handle else { return false }
+        return hyperlink.uri.withCString { uriPtr in
+            terminal_pool_set_hyperlink_hover(
+                handle,
+                Int32(terminalId),
+                hyperlink.startRow,
+                UInt16(hyperlink.startCol),
+                hyperlink.endRow,
+                UInt16(hyperlink.endCol),
+                uriPtr
+            )
+        }
+    }
+
+    /// 清除超链接悬停状态
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 是否成功
+    @discardableResult
+    func clearHyperlinkHover(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_clear_hyperlink_hover(handle, Int32(terminalId))
     }
 
     @discardableResult

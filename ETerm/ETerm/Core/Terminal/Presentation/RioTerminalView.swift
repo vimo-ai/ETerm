@@ -790,6 +790,17 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 当前选择所在的 Tab
     private weak var selectionTab: TerminalTab?
 
+    // MARK: - 超链接悬停状态
+
+    /// 是否按下 Cmd 键
+    private var isCmdKeyDown: Bool = false
+    /// 当前悬停的超链接（用于避免重复设置）
+    private var currentHoveredHyperlink: TerminalHyperlink?
+    /// 当前悬停的终端 ID
+    private var currentHoveredTerminalId: Int?
+    /// 鼠标追踪区域
+    private var trackingArea: NSTrackingArea?
+
     // MARK: - IME 支持
 
     /// IME 协调器
@@ -839,6 +850,34 @@ class RioMetalView: NSView, RenderViewProtocol {
         layer?.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
         layer?.isOpaque = false
         registerForDraggedTypes([.fileURL])
+
+        // 设置鼠标追踪区域（用于 Cmd+hover 超链接检测）
+        updateTrackingAreas()
+    }
+
+    override func updateTrackingAreas() {
+        // 移除旧的追踪区域
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+
+        // 创建新的追踪区域
+        let options: NSTrackingArea.Options = [
+            .mouseMoved,
+            .mouseEnteredAndExited,
+            .activeInKeyWindow,
+            .inVisibleRect
+        ]
+        let newTrackingArea = NSTrackingArea(
+            rect: bounds,
+            options: options,
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(newTrackingArea)
+        trackingArea = newTrackingArea
+
+        super.updateTrackingAreas()
     }
 
     override func viewDidMoveToWindow() {
@@ -1351,7 +1390,131 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     override func flagsChanged(with event: NSEvent) {
-        // 处理修饰键
+        // 检测 Cmd 键状态变化
+        let cmdPressed = event.modifierFlags.contains(.command)
+
+        if cmdPressed != isCmdKeyDown {
+            isCmdKeyDown = cmdPressed
+
+            if cmdPressed {
+                // Cmd 按下：检测当前鼠标位置的超链接
+                if let window = window {
+                    let mouseLocation = window.mouseLocationOutsideOfEventStream
+                    let location = convert(mouseLocation, from: nil)
+                    checkHyperlinkAtLocation(location)
+                }
+            } else {
+                // Cmd 释放：清除超链接悬停状态
+                clearHyperlinkHover()
+            }
+        }
+    }
+
+    // MARK: - 超链接悬停处理
+
+    /// 检测指定位置的超链接
+    private func checkHyperlinkAtLocation(_ location: CGPoint) {
+        guard isCmdKeyDown,
+              let coordinator = coordinator,
+              let pool = terminalPool else {
+            clearHyperlinkHover()
+            return
+        }
+
+        // 找到对应的 Panel
+        guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
+              let panel = coordinator.terminalWindow.getPanel(panelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId else {
+            clearHyperlinkHover()
+            return
+        }
+
+        // 转换为网格坐标
+        let gridPos = screenToGrid(location: location, panelId: panelId)
+
+        // 查询超链接
+        if let hyperlink = pool.getHyperlinkAt(
+            terminalId: Int(terminalId),
+            screenRow: Int(gridPos.row),
+            screenCol: Int(gridPos.col)
+        ) {
+            // 检查是否与当前悬停的超链接相同（避免重复设置）
+            if let current = currentHoveredHyperlink,
+               current.uri == hyperlink.uri,
+               current.startRow == hyperlink.startRow,
+               current.startCol == hyperlink.startCol,
+               currentHoveredTerminalId == Int(terminalId) {
+                return  // 相同，无需更新
+            }
+
+            // 清除旧的悬停状态
+            if let oldTerminalId = currentHoveredTerminalId {
+                pool.clearHyperlinkHover(terminalId: oldTerminalId)
+            }
+
+            // 设置新的悬停状态
+            pool.setHyperlinkHover(terminalId: Int(terminalId), hyperlink: hyperlink)
+            currentHoveredHyperlink = hyperlink
+            currentHoveredTerminalId = Int(terminalId)
+
+            // 切换鼠标指针为手型
+            NSCursor.pointingHand.set()
+
+            // 触发重新渲染
+            requestRender()
+        } else {
+            // 无超链接，清除悬停状态
+            clearHyperlinkHover()
+        }
+    }
+
+    /// 清除超链接悬停状态
+    private func clearHyperlinkHover() {
+        guard let pool = terminalPool else { return }
+
+        // 清除 Rust 侧悬停状态
+        if let terminalId = currentHoveredTerminalId {
+            pool.clearHyperlinkHover(terminalId: terminalId)
+        }
+
+        // 清除本地状态
+        let hadHyperlink = currentHoveredHyperlink != nil
+        currentHoveredHyperlink = nil
+        currentHoveredTerminalId = nil
+
+        // 恢复鼠标指针
+        NSCursor.arrow.set()
+
+        // 如果之前有高亮，触发重新渲染
+        if hadHyperlink {
+            requestRender()
+        }
+    }
+
+    /// 打开超链接
+    private func openHyperlink(_ uri: String) {
+        guard let url = URL(string: uri) else {
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        // 只有 Cmd 按下时才检测超链接
+        guard isCmdKeyDown else {
+            super.mouseMoved(with: event)
+            return
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+        checkHyperlinkAtLocation(location)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        // 鼠标离开视图时清除超链接悬停
+        clearHyperlinkHover()
+        super.mouseExited(with: event)
     }
 
     // MARK: - Inline AI Composer
@@ -1374,6 +1537,14 @@ class RioMetalView: NSView, RenderViewProtocol {
         window?.makeFirstResponder(self)
 
         let location = convert(event.locationInWindow, from: nil)
+
+        // Cmd+click：打开超链接
+        if event.modifierFlags.contains(.command),
+           let hyperlink = currentHoveredHyperlink {
+            openHyperlink(hyperlink.uri)
+            clearHyperlinkHover()
+            return
+        }
 
         guard let coordinator = coordinator else {
             super.mouseDown(with: event)
@@ -1701,6 +1872,11 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 清除坐标映射器
         coordinateMapper = nil
+
+        // 清除超链接状态
+        currentHoveredHyperlink = nil
+        currentHoveredTerminalId = nil
+        isCmdKeyDown = false
 
         // 清理 TerminalPoolWrapper
         terminalPool = nil

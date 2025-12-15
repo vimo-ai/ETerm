@@ -11,7 +11,7 @@ pub mod line_cache;
 pub mod hash;
 
 
-pub use line_cache::{LineCache, LineCacheEntry, CacheResult, GlyphLayout, CursorInfo, SelectionInfo, SearchMatchInfo};
+pub use line_cache::{LineCache, LineCacheEntry, CacheResult, GlyphLayout, CursorInfo, SelectionInfo, SearchMatchInfo, HyperlinkHoverInfo};
 
 
 pub use hash::{compute_text_hash, compute_state_hash_for_line};

@@ -9,7 +9,7 @@
 //! Phase 1 Step 3: 添加 Selection 支持
 //! Phase 1 Step 4: 添加 Search 支持
 
-use super::views::{CursorView, GridView, SelectionView, SearchView};
+use super::views::{CursorView, GridView, SelectionView, SearchView, HyperlinkHoverView};
 
 /// Terminal State - Read-only Snapshot
 ///
@@ -35,6 +35,9 @@ pub struct TerminalState {
 
     /// Search view - 搜索视图（可选）
     pub search: Option<SearchView>,
+
+    /// Hyperlink hover view - 超链接悬停视图（可选）
+    pub hyperlink_hover: Option<HyperlinkHoverView>,
 }
 
 impl TerminalState {
@@ -55,6 +58,7 @@ impl TerminalState {
             cursor,
             selection: None,
             search: None,
+            hyperlink_hover: None,
         }
     }
 
@@ -70,6 +74,7 @@ impl TerminalState {
             cursor,
             selection: Some(selection),
             search: None,
+            hyperlink_hover: None,
         }
     }
 
@@ -85,7 +90,14 @@ impl TerminalState {
             cursor,
             selection: None,
             search: Some(search),
+            hyperlink_hover: None,
         }
+    }
+
+    /// 设置超链接悬停状态
+    pub fn with_hyperlink_hover(mut self, hover: HyperlinkHoverView) -> Self {
+        self.hyperlink_hover = Some(hover);
+        self
     }
 }
 

@@ -44,7 +44,7 @@ pub use events::TerminalEvent;
 pub use state::TerminalState;
 
 
-pub use views::{GridView, RowView, GridData, CursorView, SelectionView, SelectionType, SearchView, MatchRange};
+pub use views::{GridView, RowView, GridData, CursorView, SelectionView, SelectionType, SearchView, MatchRange, HyperlinkHoverView};
 
 
 pub use primitives::{GridPoint, Absolute, AbsolutePoint, Screen, ScreenPoint};
