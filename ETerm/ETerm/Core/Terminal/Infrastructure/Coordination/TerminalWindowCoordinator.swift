@@ -151,6 +151,149 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 监听 Claude 响应完成通知
         setupClaudeNotifications()
+
+        // 监听 Drop 意图执行通知
+        setupDropIntentHandler()
+    }
+
+    /// 设置 Drop 意图执行监听
+    private func setupDropIntentHandler() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleExecuteDropIntent(_:)),
+            name: .executeDropIntent,
+            object: nil
+        )
+    }
+
+    /// 处理 Drop 意图执行
+    @objc private func handleExecuteDropIntent(_ notification: Notification) {
+        guard let intent = notification.userInfo?["intent"] as? DropIntent else {
+            return
+        }
+
+        print("📋 [Coordinator] handleExecuteDropIntent: \(intent)")
+
+        switch intent {
+        case .reorderTabs(let panelId, let tabIds):
+            executeTabReorder(panelId: panelId, tabIds: tabIds)
+
+        case .moveTabToPanel(let tabId, let sourcePanelId, let targetPanelId):
+            executeMoveTabToPanel(tabId: tabId, sourcePanelId: sourcePanelId, targetPanelId: targetPanelId)
+
+        case .splitWithNewPanel(let tabId, let sourcePanelId, let targetPanelId, let edge):
+            executeSplitWithNewPanel(tabId: tabId, sourcePanelId: sourcePanelId, targetPanelId: targetPanelId, edge: edge)
+
+        case .movePanelInLayout(let panelId, let targetPanelId, let edge):
+            executeMovePanelInLayout(panelId: panelId, targetPanelId: targetPanelId, edge: edge)
+
+        case .moveTabAcrossWindow(let tabId, let sourcePanelId, let sourceWindowNumber, let targetPanelId, let targetWindowNumber):
+            // 跨窗口移动由 WindowManager 处理
+            WindowManager.shared.moveTab(tabId, from: sourcePanelId, sourceWindowNumber: sourceWindowNumber, to: targetPanelId, targetWindowNumber: targetWindowNumber)
+            return
+        }
+
+        // 统一的后处理
+        syncLayoutToRust()
+        objectWillChange.send()
+        updateTrigger = UUID()
+        scheduleRender()
+        WindowManager.shared.saveSession()
+    }
+
+    // MARK: - Drop Intent Execution
+
+    /// 执行 Tab 重排序
+    private func executeTabReorder(panelId: UUID, tabIds: [UUID]) {
+        guard let panel = terminalWindow.getPanel(panelId) else {
+            print("📋 [Coordinator] executeTabReorder: Panel 不存在")
+            return
+        }
+
+        print("📋 [Coordinator] executeTabReorder: panelId=\(panelId.uuidString.prefix(4)), tabIds=\(tabIds.map { $0.uuidString.prefix(4) })")
+
+        if panel.reorderTabs(tabIds) {
+            // 通知视图层应用重排序（视图复用，不重建）
+            NotificationCenter.default.post(
+                name: .applyTabReorder,
+                object: nil,
+                userInfo: ["panelId": panelId, "tabIds": tabIds]
+            )
+        }
+    }
+
+    /// 执行跨 Panel 移动 Tab（合并）
+    private func executeMoveTabToPanel(tabId: UUID, sourcePanelId: UUID, targetPanelId: UUID) {
+        guard let sourcePanel = terminalWindow.getPanel(sourcePanelId),
+              let targetPanel = terminalWindow.getPanel(targetPanelId),
+              let tab = sourcePanel.tabs.first(where: { $0.tabId == tabId }) else {
+            print("📋 [Coordinator] executeMoveTabToPanel: 验证失败")
+            return
+        }
+
+        print("📋 [Coordinator] executeMoveTabToPanel: tabId=\(tabId.uuidString.prefix(4)), from=\(sourcePanelId.uuidString.prefix(4)), to=\(targetPanelId.uuidString.prefix(4))")
+
+        // 1. 添加到目标 Panel
+        targetPanel.addTab(tab)
+        _ = targetPanel.setActiveTab(tabId)
+
+        // 2. 从源 Panel 移除
+        if sourcePanel.tabCount > 1 {
+            _ = sourcePanel.closeTab(tabId)
+        } else {
+            _ = terminalWindow.removePanel(sourcePanelId)
+        }
+
+        // 设置目标 Panel 为激活
+        setActivePanel(targetPanelId)
+    }
+
+    /// 执行分割（创建新 Panel）
+    private func executeSplitWithNewPanel(tabId: UUID, sourcePanelId: UUID, targetPanelId: UUID, edge: EdgeDirection) {
+        guard let sourcePanel = terminalWindow.getPanel(sourcePanelId),
+              let tab = sourcePanel.tabs.first(where: { $0.tabId == tabId }) else {
+            print("📋 [Coordinator] executeSplitWithNewPanel: 验证失败")
+            return
+        }
+
+        print("📋 [Coordinator] executeSplitWithNewPanel: tabId=\(tabId.uuidString.prefix(4)), edge=\(edge)")
+
+        // 1. 从源 Panel 移除 Tab
+        _ = sourcePanel.closeTab(tabId)
+
+        // 2. 使用已有 Tab 分割目标 Panel
+        let layoutCalculator = BinaryTreeLayoutCalculator()
+        guard let newPanelId = terminalWindow.splitPanelWithExistingTab(
+            panelId: targetPanelId,
+            existingTab: tab,
+            edge: edge,
+            layoutCalculator: layoutCalculator
+        ) else {
+            // 分割失败，恢复 Tab 到源 Panel
+            sourcePanel.addTab(tab)
+            return
+        }
+
+        // 设置新 Panel 为激活
+        setActivePanel(newPanelId)
+    }
+
+    /// 执行 Panel 移动（复用 Panel，不创建新的）
+    private func executeMovePanelInLayout(panelId: UUID, targetPanelId: UUID, edge: EdgeDirection) {
+        print("📋 [Coordinator] executeMovePanelInLayout: panelId=\(panelId.uuidString.prefix(4)), targetPanelId=\(targetPanelId.uuidString.prefix(4)), edge=\(edge)")
+
+        let layoutCalculator = BinaryTreeLayoutCalculator()
+        if terminalWindow.movePanelInLayout(
+            panelId: panelId,
+            targetPanelId: targetPanelId,
+            edge: edge,
+            layoutCalculator: layoutCalculator
+        ) {
+            // 设置该 Panel 为激活
+            setActivePanel(panelId)
+        } else {
+            print("📋 [Coordinator] executeMovePanelInLayout: 移动失败")
+        }
     }
 
     /// 设置 Claude 通知监听
@@ -222,10 +365,11 @@ class TerminalWindowCoordinator: ObservableObject {
             return nil
         }
 
-        // 使用 Domain 生成的唯一标题
+        // 使用 tabId 前缀作为标题，方便调试
+        let tabId = UUID()
         let newTab = TerminalTab(
-            tabId: UUID(),
-            title: terminalWindow.generateNextTabTitle(),
+            tabId: tabId,
+            title: "终端 \(tabId.uuidString.prefix(4))",
             rustTerminalId: UInt32(terminalId)
         )
 
@@ -269,9 +413,11 @@ class TerminalWindowCoordinator: ObservableObject {
             return nil
         }
 
+        // 使用 tabId 前缀作为标题，方便调试
+        let tabId = UUID()
         let newTab = TerminalTab(
-            tabId: UUID(),
-            title: terminalWindow.generateNextTabTitle(),
+            tabId: tabId,
+            title: "终端 \(tabId.uuidString.prefix(4))",
             rustTerminalId: UInt32(terminalId)
         )
 
@@ -703,12 +849,22 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 用户重新排序 Tabs
     func handleTabReorder(panelId: UUID, tabIds: [UUID]) {
         guard let panel = terminalWindow.getPanel(panelId) else {
+            print("🔴 [Coordinator] handleTabReorder: Panel 不存在")
             return
         }
 
+        print("🟡 [Coordinator] handleTabReorder:")
+        print("  - panelId: \(panelId.uuidString.prefix(4))")
+        print("  - 请求顺序: \(tabIds.map { $0.uuidString.prefix(4) })")
+        print("  - 当前 Panel tabs: \(panel.tabs.map { "\($0.title)(\($0.tabId.uuidString.prefix(4)))" })")
+
         if panel.reorderTabs(tabIds) {
+            print("🟢 [Coordinator] reorderTabs 成功")
+            print("  - 更新后 Panel tabs: \(panel.tabs.map { "\($0.title)(\($0.tabId.uuidString.prefix(4)))" })")
             objectWillChange.send()
             updateTrigger = UUID()
+        } else {
+            print("🔴 [Coordinator] reorderTabs 失败")
         }
     }
 
@@ -880,120 +1036,76 @@ class TerminalWindowCoordinator: ObservableObject {
 
     // MARK: - Drag & Drop
 
-    /// 处理 Tab 拖拽 Drop
+    /// 处理 Tab 拖拽 Drop（两阶段模式）
+    ///
+    /// Phase 1: 只捕获意图，不执行任何模型变更
+    /// Phase 2: 在 drag session 结束后执行实际变更
     ///
     /// - Parameters:
     ///   - tabId: 被拖拽的 Tab ID
+    ///   - sourcePanelId: 源 Panel ID（从拖拽数据中获取，不再搜索）
     ///   - dropZone: Drop Zone
     ///   - targetPanelId: 目标 Panel ID
-    /// - Returns: 是否成功处理
-    func handleDrop(tabId: UUID, dropZone: DropZone, targetPanelId: UUID) -> Bool {
-        // 1. 找到源 Panel 和 Tab
-        guard let sourcePanel = terminalWindow.allPanels.first(where: { panel in
-            panel.tabs.contains(where: { $0.tabId == tabId })
-        }),
-              let tab = sourcePanel.tabs.first(where: { $0.tabId == tabId }) else {
+    /// - Returns: 是否成功接受 drop
+    func handleDrop(tabId: UUID, sourcePanelId: UUID, dropZone: DropZone, targetPanelId: UUID) -> Bool {
+        print("⚡️ [Coordinator] handleDrop - 使用新意图队列:")
+        print("  - tabId: \(tabId.uuidString.prefix(4))")
+        print("  - sourcePanelId: \(sourcePanelId.uuidString.prefix(4))")
+        print("  - dropZone: \(dropZone.type)")
+        print("  - targetPanelId: \(targetPanelId.uuidString.prefix(4))")
+
+        // 验证（不修改模型）
+        guard let sourcePanel = terminalWindow.getPanel(sourcePanelId),
+              sourcePanel.tabs.contains(where: { $0.tabId == tabId }) else {
+            print("⚡️ [Coordinator] handleDrop: 源 Panel 或 Tab 验证失败")
             return false
         }
 
-        // 2. 找到目标 Panel
-        guard let targetPanel = terminalWindow.getPanel(targetPanelId) else {
+        guard terminalWindow.getPanel(targetPanelId) != nil else {
+            print("⚡️ [Coordinator] handleDrop: 目标 Panel 验证失败")
             return false
         }
 
-        // 3. 根据 DropZone 类型处理
+        // 同一个 Panel 内部移动交给 PanelHeaderHostingView 处理
+        if sourcePanelId == targetPanelId && (dropZone.type == .header || dropZone.type == .body) {
+            print("⚡️ [Coordinator] handleDrop: 同 Panel 内移动，由 Header 处理")
+            return false
+        }
+
+        // 根据场景创建不同的意图
+        let intent: DropIntent
         switch dropZone.type {
-        case .header:
-            // Tab 合并：移动到目标 Panel
-            if sourcePanel.panelId == targetPanel.panelId {
-                // 同一个 Panel 内部移动（重新排序）暂未实现
-                return false
-            } else {
-                // 跨 Panel 移动
-                moveTabAcrossPanels(tab: tab, from: sourcePanel, to: targetPanel)
-            }
-
-        case .body:
-            // 合并到中心（同 .header）
-            if sourcePanel.panelId != targetPanel.panelId {
-                moveTabAcrossPanels(tab: tab, from: sourcePanel, to: targetPanel)
-            }
+        case .header, .body:
+            // Tab 合并到目标 Panel
+            intent = .moveTabToPanel(tabId: tabId, sourcePanelId: sourcePanelId, targetPanelId: targetPanelId)
 
         case .left, .right, .top, .bottom:
-            // 拖拽到边缘 → 分割 Panel
-
-            // 1. 确定分割方向
-            let splitDirection: SplitDirection = {
+            // 边缘分栏 - 将 dropZone.type 转换为 EdgeDirection
+            let edge: EdgeDirection = {
                 switch dropZone.type {
-                case .left, .right:
-                    return .horizontal  // 左右分割
-                case .top, .bottom:
-                    return .vertical    // 上下分割
-                default:
-                    fatalError("不应该到达这里")
+                case .top: return .top
+                case .bottom: return .bottom
+                case .left: return .left
+                case .right: return .right
+                default: return .bottom // fallback，不应该发生
                 }
             }()
 
-            // 2. 先从源 Panel 移除 Tab（如果是最后一个 Tab，会移除整个 Panel）
-            let sourcePanelWillBeRemoved = sourcePanel.tabCount == 1
-            if !sourcePanelWillBeRemoved {
-                // 源 Panel 还有其他 Tab，先移除拖拽的 Tab
-                _ = sourcePanel.closeTab(tabId)
-            }
-
-            // 3. 使用已有 Tab 分割目标 Panel（不消耗编号）
-            let layoutCalculator = BinaryTreeLayoutCalculator()
-            guard let _ = terminalWindow.splitPanelWithExistingTab(
-                panelId: targetPanelId,
-                existingTab: tab,
-                direction: splitDirection,
-                layoutCalculator: layoutCalculator
-            ) else {
-                // 分割失败，恢复 Tab 到源 Panel
-                if !sourcePanelWillBeRemoved {
-                    sourcePanel.addTab(tab)
-                }
-                return false
-            }
-
-            // 4. 如果源 Panel 只剩这一个 Tab，现在移除整个源 Panel
-            if sourcePanelWillBeRemoved {
-                _ = terminalWindow.removePanel(sourcePanel.panelId)
+            if sourcePanel.tabCount == 1 {
+                // 源 Panel 只有 1 个 Tab → 复用 Panel（关键优化！）
+                print("⚡️ [Coordinator] handleDrop: 源 Panel 只有 1 个 Tab，使用 Panel 复用，边缘: \(edge)")
+                intent = .movePanelInLayout(panelId: sourcePanelId, targetPanelId: targetPanelId, edge: edge)
+            } else {
+                // 源 Panel 有多个 Tab → 创建新 Panel
+                print("⚡️ [Coordinator] handleDrop: 源 Panel 有多个 Tab，创建新 Panel，边缘: \(edge)")
+                intent = .splitWithNewPanel(tabId: tabId, sourcePanelId: sourcePanelId, targetPanelId: targetPanelId, edge: edge)
             }
         }
 
-        // 4. 同步布局到 Rust（拖拽改变了布局）
-        syncLayoutToRust()
-
-        // 5. 触发 UI 更新
-        objectWillChange.send()
-        updateTrigger = UUID()
-        scheduleRender()
-
+        // 提交意图到队列，等待 drag session 结束后执行
+        DropIntentQueue.shared.submit(intent)
+        print("⚡️ [Coordinator] handleDrop: 意图已提交到队列")
         return true
-    }
-
-    // MARK: - Private Helpers for Drag & Drop
-
-    /// 跨 Panel 移动 Tab
-    private func moveTabAcrossPanels(tab: TerminalTab, from sourcePanel: EditorPanel, to targetPanel: EditorPanel) {
-        // 1. 添加到目标 Panel
-        targetPanel.addTab(tab)
-        _ = targetPanel.setActiveTab(tab.tabId)
-
-        // 2. 从源 Panel 移除
-        removeTabFromSource(tab: tab, sourcePanel: sourcePanel)
-    }
-
-    /// 从源 Panel 移除 Tab（如果只剩一个 Tab，则移除整个 Panel）
-    private func removeTabFromSource(tab: TerminalTab, sourcePanel: EditorPanel) {
-        if sourcePanel.tabCount > 1 {
-            // 还有其他 Tab，直接关闭
-            _ = sourcePanel.closeTab(tab.tabId)
-        } else {
-            // 最后一个 Tab，移除整个 Panel
-            _ = terminalWindow.removePanel(sourcePanel.panelId)
-        }
     }
 
     // MARK: - Input Handling
