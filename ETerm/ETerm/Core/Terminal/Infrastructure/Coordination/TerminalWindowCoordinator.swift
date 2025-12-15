@@ -343,19 +343,10 @@ class TerminalWindowCoordinator: ObservableObject {
             return nil
         }
 
-        guard let panel = terminalWindow.getPanel(panelId) else {
+        // 使用统一的 Tab 创建入口
+        guard let newTab = terminalWindow.createTab(in: panelId, rustTerminalId: UInt32(terminalId)) else {
             return nil
         }
-
-        // 使用 tabId 前缀作为标题，方便调试
-        let tabId = UUID()
-        let newTab = TerminalTab(
-            tabId: tabId,
-            title: "终端 \(tabId.uuidString.prefix(4))",
-            rustTerminalId: UInt32(terminalId)
-        )
-
-        panel.addTab(newTab)
 
         // 保存 Session
         WindowManager.shared.saveSession()
@@ -388,19 +379,10 @@ class TerminalWindowCoordinator: ObservableObject {
             return nil
         }
 
-        guard let panel = terminalWindow.getPanel(targetPanelId) else {
+        // 使用统一的 Tab 创建入口
+        guard let newTab = terminalWindow.createTab(in: targetPanelId, rustTerminalId: UInt32(terminalId)) else {
             return nil
         }
-
-        // 使用 tabId 前缀作为标题，方便调试
-        let tabId = UUID()
-        let newTab = TerminalTab(
-            tabId: tabId,
-            title: "终端 \(tabId.uuidString.prefix(4))",
-            rustTerminalId: UInt32(terminalId)
-        )
-
-        panel.addTab(newTab)
 
         // 如果有命令，延迟执行
         if let cmd = command, !cmd.isEmpty {

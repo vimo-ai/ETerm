@@ -231,7 +231,7 @@ struct TransparentWindowBackground: NSViewRepresentable {
 
 #Preview {
     // Preview 需要创建一个临时的 Coordinator
-    let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+    let initialTab = TerminalWindow.makeDefaultTab()
     let initialPanel = EditorPanel(initialTab: initialTab)
     let terminalWindow = TerminalWindow(initialPanel: initialPanel)
     let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)

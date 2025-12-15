@@ -45,11 +45,43 @@ final class TerminalWindow {
         return pages.first { $0.pageId == activePageId }
     }
 
-    // MARK: - Tab Title Generation
+    // MARK: - Tab Creation (统一入口)
 
-    /// 生成 Tab 标题
+    /// 默认 Tab 标题
+    private static let defaultTabTitle = "终端"
+
+    /// 创建默认 Tab（静态工厂方法）
+    ///
+    /// 用于创建新窗口时的初始 Tab，此时还没有 TerminalWindow 实例
+    static func makeDefaultTab(rustTerminalId: UInt32 = 0) -> TerminalTab {
+        return TerminalTab(
+            tabId: UUID(),
+            title: defaultTabTitle,
+            rustTerminalId: rustTerminalId
+        )
+    }
+
+    /// 在指定 Panel 中创建新 Tab
+    ///
+    /// - Parameters:
+    ///   - panelId: 目标 Panel ID
+    ///   - rustTerminalId: Rust 终端 ID
+    /// - Returns: 创建的 Tab，如果 Panel 不存在返回 nil
+    func createTab(in panelId: UUID, rustTerminalId: UInt32 = 0) -> TerminalTab? {
+        guard let panel = getPanel(panelId) else { return nil }
+
+        let tab = TerminalTab(
+            tabId: UUID(),
+            title: Self.defaultTabTitle,
+            rustTerminalId: rustTerminalId
+        )
+        panel.addTab(tab)
+        return tab
+    }
+
+    /// 生成 Tab 标题（保留兼容性）
     func generateNextTabTitle() -> String {
-        return "终端"
+        return Self.defaultTabTitle
     }
 
     // MARK: - Page Management

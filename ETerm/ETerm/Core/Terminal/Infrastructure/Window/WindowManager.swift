@@ -156,7 +156,7 @@ final class WindowManager: NSObject {
         // 创建 TerminalWindow
         guard let firstPage = pages.first else {
             // 如果恢复失败，创建一个默认的 TerminalWindow
-            let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+            let initialTab = TerminalWindow.makeDefaultTab()
             let initialPanel = EditorPanel(initialTab: initialTab)
             return TerminalWindow(initialPanel: initialPanel)
         }
@@ -266,7 +266,7 @@ final class WindowManager: NSObject {
         let window = KeyableWindow.create(contentRect: windowFrame)
 
         // 🔑 关键：在 WindowManager 中创建 Coordinator，而不是在 SwiftUI 中
-        let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+        let initialTab = TerminalWindow.makeDefaultTab()
         let initialPanel = EditorPanel(initialTab: initialTab)
         let terminalWindow = TerminalWindow(initialPanel: initialPanel)
         let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
@@ -468,7 +468,7 @@ final class WindowManager: NSObject {
         let window = KeyableWindow.create(contentRect: frame)
 
         // 🔑 在 WindowManager 中创建 Coordinator
-        let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+        let initialTab = TerminalWindow.makeDefaultTab()
         let initialPanel = EditorPanel(initialTab: initialTab)
         let terminalWindow = TerminalWindow(initialPanel: initialPanel)
         let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
@@ -576,7 +576,7 @@ final class WindowManager: NSObject {
         let window = KeyableWindow.create(contentRect: frame)
 
         // 🔑 在 WindowManager 中创建 Coordinator
-        let initialTab = TerminalTab(tabId: UUID(), title: "终端 1")
+        let initialTab = TerminalWindow.makeDefaultTab()
         let initialPanel = EditorPanel(initialTab: initialTab)
         let terminalWindow = TerminalWindow(initialPanel: initialPanel)
         let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
