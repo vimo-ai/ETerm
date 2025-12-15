@@ -2,6 +2,7 @@
 
 use crate::app::TerminalPool;
 use crate::ffi::terminal_pool::TerminalPoolHandle;
+use super::ffi_boundary;
 
 /// 屏幕坐标转绝对坐标结果
 #[repr(C)]
@@ -125,33 +126,37 @@ pub extern "C" fn terminal_pool_finalize_selection(
     handle: *mut TerminalPoolHandle,
     terminal_id: usize,
 ) -> FinalizeSelectionResult {
+    let default = FinalizeSelectionResult {
+        text: std::ptr::null_mut(),
+        text_len: 0,
+        has_selection: false,
+    };
+
     if handle.is_null() {
-        return FinalizeSelectionResult {
-            text: std::ptr::null_mut(),
-            text_len: 0,
-            has_selection: false,
-        };
+        return default;
     }
 
-    let pool = unsafe { &*(handle as *const TerminalPool) };
+    ffi_boundary(default, || {
+        let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    // 使用 TerminalPool 的方法，会自动标记 dirty_flag（如果清除了选区）
-    match pool.finalize_selection(terminal_id) {
-        Some(text) => {
-            let text_len = text.len();
-            let c_string = std::ffi::CString::new(text).unwrap_or_default();
-            FinalizeSelectionResult {
-                text: c_string.into_raw(),
-                text_len,
-                has_selection: true,
+        // 使用 TerminalPool 的方法，会自动标记 dirty_flag（如果清除了选区）
+        match pool.finalize_selection(terminal_id) {
+            Some(text) => {
+                let text_len = text.len();
+                let c_string = std::ffi::CString::new(text).unwrap_or_default();
+                FinalizeSelectionResult {
+                    text: c_string.into_raw(),
+                    text_len,
+                    has_selection: true,
+                }
             }
+            None => FinalizeSelectionResult {
+                text: std::ptr::null_mut(),
+                text_len: 0,
+                has_selection: false,
+            },
         }
-        None => FinalizeSelectionResult {
-            text: std::ptr::null_mut(),
-            text_len: 0,
-            has_selection: false,
-        },
-    }
+    })
 }
 
 /// 释放 finalize_selection 返回的字符串
@@ -185,38 +190,42 @@ pub extern "C" fn terminal_pool_get_selection_text(
     handle: *mut TerminalPoolHandle,
     terminal_id: usize,
 ) -> GetSelectionTextResult {
-    if handle.is_null() {
-        return GetSelectionTextResult {
-            text: std::ptr::null_mut(),
-            text_len: 0,
-            success: false,
-        };
-    }
-
-    let pool = unsafe { &*(handle as *const TerminalPool) };
-
-    // 使用 try_with_terminal 避免阻塞主线程
-    pool.try_with_terminal(terminal_id, |terminal| {
-        match terminal.selection_text() {
-            Some(text) => {
-                let text_len = text.len();
-                let c_string = std::ffi::CString::new(text).unwrap_or_default();
-                GetSelectionTextResult {
-                    text: c_string.into_raw(),
-                    text_len,
-                    success: true,
-                }
-            }
-            None => GetSelectionTextResult {
-                text: std::ptr::null_mut(),
-                text_len: 0,
-                success: false,
-            },
-        }
-    }).unwrap_or(GetSelectionTextResult {
+    let default = GetSelectionTextResult {
         text: std::ptr::null_mut(),
         text_len: 0,
         success: false,
+    };
+
+    if handle.is_null() {
+        return default;
+    }
+
+    ffi_boundary(default, || {
+        let pool = unsafe { &*(handle as *const TerminalPool) };
+
+        // 使用 try_with_terminal 避免阻塞主线程
+        pool.try_with_terminal(terminal_id, |terminal| {
+            match terminal.selection_text() {
+                Some(text) => {
+                    let text_len = text.len();
+                    let c_string = std::ffi::CString::new(text).unwrap_or_default();
+                    GetSelectionTextResult {
+                        text: c_string.into_raw(),
+                        text_len,
+                        success: true,
+                    }
+                }
+                None => GetSelectionTextResult {
+                    text: std::ptr::null_mut(),
+                    text_len: 0,
+                    success: false,
+                },
+            }
+        }).unwrap_or(GetSelectionTextResult {
+            text: std::ptr::null_mut(),
+            text_len: 0,
+            success: false,
+        })
     })
 }
 

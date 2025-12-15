@@ -300,6 +300,7 @@ impl Selection {
             return None;
         }
         start.point = start.point.grid_clamp(&term.grid, Boundary::Grid);
+        end.point = end.point.grid_clamp(&term.grid, Boundary::Grid);
 
         match self.ty {
             SelectionType::Simple => self.range_simple(start, end, columns),

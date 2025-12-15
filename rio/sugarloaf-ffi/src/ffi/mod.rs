@@ -7,11 +7,54 @@
 //! - render_scheduler: 渲染调度器
 //! - word_boundary: 分词相关
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 pub mod terminal_pool;
 pub mod cursor;
 pub mod selection;
 pub mod render_scheduler;
 pub mod word_boundary;
+
+/// FFI 边界防护 - 捕获所有 panic，防止跨 FFI 边界传播
+///
+/// Rust 的 panic 跨 FFI 边界是未定义行为，必须在边界处捕获。
+/// 此函数提供统一的 panic 捕获机制，确保 FFI 调用的安全性。
+///
+/// # 参数
+/// - `default`: panic 时返回的默认值
+/// - `f`: 要执行的闘数
+///
+/// # 示例
+/// ```ignore
+/// #[no_mangle]
+/// pub extern "C" fn some_ffi_function() -> bool {
+///     ffi_boundary(false, || {
+///         // 业务逻辑，即使 panic 也不会崩溃
+///         true
+///     })
+/// }
+/// ```
+#[inline]
+pub fn ffi_boundary<T, F>(default: T, f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(panic_info) => {
+            // 记录 panic 信息（可选：后续可接入日志系统）
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "Unknown panic".to_string()
+            };
+            eprintln!("[FFI panic captured] {}", msg);
+            default
+        }
+    }
+}
 
 // Re-export 所有 FFI 函数和类型，保持外部可见性
 pub use terminal_pool::*;
