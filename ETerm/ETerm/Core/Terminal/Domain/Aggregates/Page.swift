@@ -117,8 +117,14 @@ final class Page {
         direction: SplitDirection,
         layoutCalculator: LayoutCalculator
     ) -> Bool {
+        print("🔶 [Page] splitPanel 被调用:")
+        print("  - 目标 panelId: \(panelId.uuidString.prefix(4))")
+        print("  - 新 panelId: \(newPanel.panelId.uuidString.prefix(4))")
+        print("  - 当前 panelRegistry: \(panelRegistry.keys.map { $0.uuidString.prefix(4) })")
+
         // 检查 Panel 是否存在
         guard panelRegistry[panelId] != nil else {
+            print("🔶 [Page] splitPanel 失败: Panel 不存在")
             return false
         }
 
@@ -132,6 +138,50 @@ final class Page {
 
         // 注册新 Panel
         panelRegistry[newPanel.panelId] = newPanel
+        print("🔶 [Page] splitPanel 完成, 新 panelRegistry: \(panelRegistry.keys.map { $0.uuidString.prefix(4) })")
+
+        return true
+    }
+
+    /// 分割 Panel（使用 EdgeDirection 决定新 Panel 位置）
+    ///
+    /// 与接受 SplitDirection 的版本不同，此方法使用 EdgeDirection 精确控制新 Panel 的位置。
+    /// 适用于拖拽场景，可以区分上/下/左/右边缘。
+    ///
+    /// - Parameters:
+    ///   - panelId: 要分割的 Panel ID
+    ///   - newPanel: 新创建的 Panel
+    ///   - edge: 边缘方向（决定新 Panel 在目标 Panel 的哪个边缘）
+    ///   - layoutCalculator: 布局计算器
+    /// - Returns: 是否成功
+    func splitPanel(
+        panelId: UUID,
+        newPanel: EditorPanel,
+        edge: EdgeDirection,
+        layoutCalculator: LayoutCalculator
+    ) -> Bool {
+        print("🔶 [Page] splitPanel (edge) 被调用:")
+        print("  - 目标 panelId: \(panelId.uuidString.prefix(4))")
+        print("  - 新 panelId: \(newPanel.panelId.uuidString.prefix(4))")
+        print("  - 边缘: \(edge)")
+
+        // 检查 Panel 是否存在
+        guard panelRegistry[panelId] != nil else {
+            print("🔶 [Page] splitPanel (edge) 失败: Panel 不存在")
+            return false
+        }
+
+        // 计算新布局（使用 EdgeDirection 版本）
+        rootLayout = layoutCalculator.calculateSplitLayout(
+            currentLayout: rootLayout,
+            targetPanelId: panelId,
+            newPanelId: newPanel.panelId,
+            edge: edge
+        )
+
+        // 注册新 Panel
+        panelRegistry[newPanel.panelId] = newPanel
+        print("🔶 [Page] splitPanel (edge) 完成, 新 panelRegistry: \(panelRegistry.keys.map { $0.uuidString.prefix(4) })")
 
         return true
     }
@@ -191,24 +241,92 @@ final class Page {
     /// 当 Panel 中的最后一个 Tab 被移走时调用
     /// - Returns: 是否成功移除
     func removePanel(_ panelId: UUID) -> Bool {
+        print("🔶 [Page] removePanel 被调用:")
+        print("  - 要移除的 panelId: \(panelId.uuidString.prefix(4))")
+        print("  - 当前 panelRegistry: \(panelRegistry.keys.map { $0.uuidString.prefix(4) })")
+
         // 1. 检查 Panel 是否存在
         guard panelRegistry[panelId] != nil else {
+            print("🔶 [Page] removePanel 失败: Panel 不存在")
             return false
         }
 
         // 2. 根节点不能移除（至少保留一个 Panel）
         if case .leaf(let id) = rootLayout, id == panelId {
+            print("🔶 [Page] removePanel 失败: 不能移除根节点")
             return false
         }
 
         // 3. 从布局树中移除
         guard let newLayout = removePanelFromLayout(layout: rootLayout, panelId: panelId) else {
+            print("🔶 [Page] removePanel 失败: 无法从布局树移除")
             return false
         }
 
         // 4. 更新状态
         rootLayout = newLayout
         panelRegistry.removeValue(forKey: panelId)
+        print("🔶 [Page] removePanel 完成, 新 panelRegistry: \(panelRegistry.keys.map { $0.uuidString.prefix(4) })")
+
+        return true
+    }
+
+    /// 在布局树中移动 Panel（复用 Panel，不创建新的）
+    ///
+    /// 用于边缘分栏场景：当源 Panel 只有 1 个 Tab 时，不创建新 Panel，
+    /// 而是将源 Panel 从原位置移动到目标位置。
+    ///
+    /// - Parameters:
+    ///   - panelId: 要移动的 Panel ID
+    ///   - targetPanelId: 目标 Panel ID（在此 Panel 旁边插入）
+    ///   - direction: 分割方向
+    ///   - layoutCalculator: 布局计算器
+    /// - Returns: 是否成功
+    func movePanelInLayout(
+        panelId: UUID,
+        targetPanelId: UUID,
+        edge: EdgeDirection,
+        layoutCalculator: LayoutCalculator
+    ) -> Bool {
+        print("🔶 [Page] movePanelInLayout 被调用:")
+        print("  - 要移动的 panelId: \(panelId.uuidString.prefix(4))")
+        print("  - 目标 targetPanelId: \(targetPanelId.uuidString.prefix(4))")
+        print("  - 边缘: \(edge)")
+
+        // 1. 验证两个 Panel 都存在
+        guard panelRegistry[panelId] != nil else {
+            print("🔶 [Page] movePanelInLayout 失败: 源 Panel 不存在")
+            return false
+        }
+        guard panelRegistry[targetPanelId] != nil else {
+            print("🔶 [Page] movePanelInLayout 失败: 目标 Panel 不存在")
+            return false
+        }
+
+        // 2. 不能移动到自己
+        guard panelId != targetPanelId else {
+            print("🔶 [Page] movePanelInLayout 失败: 不能移动到自己")
+            return false
+        }
+
+        // 3. 从布局树中移除 panelId（保留 Panel 对象在 registry 中）
+        guard let layoutWithoutPanel = removePanelFromLayout(layout: rootLayout, panelId: panelId) else {
+            print("🔶 [Page] movePanelInLayout 失败: 无法从布局树移除源 Panel")
+            return false
+        }
+
+        // 4. 在目标位置分割并插入已有的 Panel
+        let newLayout = layoutCalculator.calculateSplitLayoutWithExistingPanel(
+            currentLayout: layoutWithoutPanel,
+            targetPanelId: targetPanelId,
+            existingPanelId: panelId,
+            edge: edge
+        )
+
+        // 5. 更新布局树
+        rootLayout = newLayout
+        print("🔶 [Page] movePanelInLayout 完成")
+        print("  - 新布局: \(rootLayout.allPanelIds().map { $0.uuidString.prefix(4) })")
 
         return true
     }

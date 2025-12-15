@@ -342,13 +342,13 @@ final class TerminalWindow {
     /// - Parameters:
     ///   - panelId: 要分割的 Panel ID
     ///   - existingTab: 已有的 Tab（将被移动到新 Panel）
-    ///   - direction: 分割方向
+    ///   - edge: 边缘方向（决定新 Panel 在目标 Panel 的哪个边缘）
     ///   - layoutCalculator: 布局计算器
     /// - Returns: 新创建的 Panel ID，如果失败返回 nil
     func splitPanelWithExistingTab(
         panelId: UUID,
         existingTab: TerminalTab,
-        direction: SplitDirection,
+        edge: EdgeDirection,
         layoutCalculator: LayoutCalculator
     ) -> UUID? {
         guard let page = activePage else {
@@ -367,7 +367,7 @@ final class TerminalWindow {
         guard page.splitPanel(
             panelId: panelId,
             newPanel: newPanel,
-            direction: direction,
+            edge: edge,
             layoutCalculator: layoutCalculator
         ) else {
             return nil
@@ -429,6 +429,35 @@ final class TerminalWindow {
     /// 移除指定 Panel（在当前 Page 中）
     func removePanel(_ panelId: UUID) -> Bool {
         return activePage?.removePanel(panelId) ?? false
+    }
+
+    /// 在布局树中移动 Panel（复用 Panel，不创建新的）
+    ///
+    /// 用于边缘分栏场景：当源 Panel 只有 1 个 Tab 时，不创建新 Panel，
+    /// 而是将源 Panel 移动到目标位置。
+    ///
+    /// - Parameters:
+    ///   - panelId: 要移动的 Panel ID
+    ///   - targetPanelId: 目标 Panel ID（在此 Panel 旁边插入）
+    ///   - edge: 边缘方向（决定在目标 Panel 的哪个边缘插入）
+    ///   - layoutCalculator: 布局计算器
+    /// - Returns: 是否成功
+    func movePanelInLayout(
+        panelId: UUID,
+        targetPanelId: UUID,
+        edge: EdgeDirection,
+        layoutCalculator: LayoutCalculator
+    ) -> Bool {
+        guard let page = activePage else {
+            return false
+        }
+
+        return page.movePanelInLayout(
+            panelId: panelId,
+            targetPanelId: targetPanelId,
+            edge: edge,
+            layoutCalculator: layoutCalculator
+        )
     }
 }
 
