@@ -25,6 +25,7 @@ struct PageBarView: View {
     @Binding var pages: [PageItem]
     @Binding var activePageId: UUID?
     @ObservedObject private var translationMode = TranslationModeStore.shared
+    @State private var editingPageId: UUID?
 
     // MARK: - 回调
 
@@ -52,8 +53,13 @@ struct PageBarView: View {
                         title: page.title,
                         isActive: page.id == activePageId,
                         showCloseButton: pages.count > 1,
+                        isEditing: Binding(
+                            get: { editingPageId == page.id },
+                            set: { if $0 { editingPageId = page.id } else { editingPageId = nil } }
+                        ),
                         onTap: { onPageClick?(page.id) },
-                        onClose: { onPageClose?(page.id) }
+                        onClose: { onPageClose?(page.id) },
+                        onRename: { newTitle in onPageRename?(page.id, newTitle) }
                     )
                 }
             }
@@ -177,22 +183,82 @@ struct PageTabView: View {
     let isActive: Bool
     let showCloseButton: Bool
     var needsAttention: Bool = false
+    @Binding var isEditing: Bool
     var onTap: (() -> Void)?
     var onClose: (() -> Void)?
+    var onRename: ((String) -> Void)?
 
+    @State private var isHovered: Bool = false
+    @State private var editingText: String = ""
+    @FocusState private var isFocused: Bool
+    @State private var lastTapTime: Date = .distantPast
     private let height: CGFloat = 22
+    private let doubleTapInterval: TimeInterval = 0.3
 
     var body: some View {
-        SimpleTabView(
-            title,
-            isActive: isActive,
-            needsAttention: needsAttention,
-            height: height,
-            onClose: showCloseButton ? onClose : nil
-        )
-        .onTapGesture {
-            onTap?()
+        if isEditing {
+            // 编辑模式：显示 TextField
+            TextField("", text: $editingText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .frame(height: height)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.white.opacity(0.1))
+                )
+                .focused($isFocused)
+                .onAppear {
+                    editingText = title
+                    // 延迟获取焦点
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        isFocused = true
+                    }
+                }
+                .onSubmit {
+                    finishEditing()
+                }
+                .onChange(of: isFocused) { _, focused in
+                    if !focused {
+                        finishEditing()
+                    }
+                }
+        } else {
+            // 正常模式：显示标签
+            // 点击手势在外层处理，Button（关闭按钮）会自动优先响应
+            SimpleTabView(
+                title,
+                isActive: isActive,
+                needsAttention: needsAttention,
+                height: height,
+                isHovered: isHovered,
+                onClose: showCloseButton ? onClose : nil
+            )
+            .onTapGesture {
+                // 自己检测双击，避免 onTapGesture(count: 2) 导致单击延迟
+                let now = Date()
+                if now.timeIntervalSince(lastTapTime) < doubleTapInterval {
+                    // 双击 -> 重命名
+                    isEditing = true
+                } else {
+                    // 单击 -> 切换
+                    onTap?()
+                }
+                lastTapTime = now
+            }
+            .onHover { hovering in
+                isHovered = hovering
+            }
         }
+    }
+
+    private func finishEditing() {
+        let trimmed = editingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty && trimmed != title {
+            onRename?(trimmed)
+        }
+        isEditing = false
     }
 }
 
@@ -204,24 +270,24 @@ struct StatusTabView: View {
     var onTap: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(isActive ? Color.green : Color.gray.opacity(0.6))
-                .frame(width: 8, height: 8)
-            Text(text)
-                .font(.caption)
-                .foregroundColor(isActive ? .primary : .secondary)
+        // 使用 Button 而非 onTapGesture，确保被 hitTest 识别为 NSControl
+        Button(action: { onTap?() }) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isActive ? Color.green : Color.gray.opacity(0.6))
+                    .frame(width: 8, height: 8)
+                Text(text)
+                    .font(.caption)
+                    .foregroundColor(isActive ? .primary : .secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isActive ? Color.green.opacity(0.15) : Color.gray.opacity(0.12))
+            )
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isActive ? Color.green.opacity(0.15) : Color.gray.opacity(0.12))
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            onTap?()
-        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -376,6 +442,37 @@ final class PageBarHostingView: NSView {
         // pageContainer 占满整个区域，但通过 hitTest 让点击穿透到下层
         pageContainer.frame = bounds
         layoutPageItems()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 检查点击是否在 bounds 内
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        // 优先检查 pageContainer 中的 PageItemView
+        let pointInPageContainer = convert(point, to: pageContainer)
+        for pageView in pageItemViews {
+            let pointInPage = pageContainer.convert(pointInPageContainer, to: pageView)
+            if pageView.bounds.contains(pointInPage) {
+                // 直接调用 PageItemView 的 hitTest
+                if let hitView = pageView.hitTest(pointInPage) {
+                    return hitView
+                }
+                return pageView
+            }
+        }
+
+        // 然后检查红绿灯和右侧按钮区域（SwiftUI）
+        if let hosting = hostingView {
+            let pointInHosting = convert(point, to: hosting)
+            if let swiftUIHit = hosting.hitTest(pointInHosting), swiftUIHit is NSControl {
+                return swiftUIHit
+            }
+        }
+
+        // 其他区域返回自己，用于窗口拖动
+        return self
     }
 
     /// 设置 Page 列表
@@ -598,6 +695,7 @@ struct SwiftUIPageBar: View {
     @ObservedObject private var translationMode = TranslationModeStore.shared
     @State private var isFullScreen = false
     @State private var pagesNeedingAttention: Set<UUID> = []
+    @State private var editingPageId: UUID?
 
     private let barHeight: CGFloat = 28
 
@@ -621,8 +719,15 @@ struct SwiftUIPageBar: View {
                         isActive: page.pageId == coordinator.terminalWindow.activePageId,
                         showCloseButton: coordinator.terminalWindow.pages.count > 1,
                         needsAttention: pagesNeedingAttention.contains(page.pageId),
+                        isEditing: Binding(
+                            get: { editingPageId == page.pageId },
+                            set: { if $0 { editingPageId = page.pageId } else { editingPageId = nil } }
+                        ),
                         onTap: { _ = coordinator.switchToPage(page.pageId) },
-                        onClose: { _ = coordinator.closePage(page.pageId) }
+                        onClose: { _ = coordinator.closePage(page.pageId) },
+                        onRename: { newTitle in
+                            _ = coordinator.renamePage(page.pageId, to: newTitle)
+                        }
                     )
                 }
             }
@@ -707,9 +812,9 @@ struct SwiftUIPageBar: View {
 
 #Preview("PageTabView") {
     VStack(spacing: 10) {
-        PageTabView(title: "Active Tab", isActive: true, showCloseButton: true)
-        PageTabView(title: "Inactive Tab", isActive: false, showCloseButton: true)
-        PageTabView(title: "No Close", isActive: true, showCloseButton: false)
+        PageTabView(title: "Active Tab", isActive: true, showCloseButton: true, isEditing: .constant(false))
+        PageTabView(title: "Inactive Tab", isActive: false, showCloseButton: true, isEditing: .constant(false))
+        PageTabView(title: "No Close", isActive: true, showCloseButton: false, isEditing: .constant(false))
     }
     .padding(20)
     .background(Color.black.opacity(0.8))

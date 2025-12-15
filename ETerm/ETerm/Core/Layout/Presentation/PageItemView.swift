@@ -45,6 +45,9 @@ final class PageItemView: NSView {
     /// Claude 响应完成提醒状态
     private var needsAttention: Bool = false
 
+    /// 是否鼠标悬停
+    private var isHovered: Bool = false
+
     // MARK: - 回调
 
     /// 点击回调
@@ -146,12 +149,12 @@ final class PageItemView: NSView {
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
-        // 创建新的 SwiftUI 视图
+        // 创建新的 SwiftUI 视图（传入外部控制的 isHovered 状态）
         let closeAction: (() -> Void)? = showCloseButton ? { [weak self] in
             self?.onClose?()
         } : nil
 
-        let simpleTab = SimpleTabView(title, isActive: isActive, needsAttention: needsAttention, height: 22, onClose: closeAction)
+        let simpleTab = SimpleTabView(title, isActive: isActive, needsAttention: needsAttention, height: 22, isHovered: isHovered, onClose: closeAction)
 
         let hosting = NSHostingView(rootView: simpleTab)
         // 让 NSHostingView 使用固有大小，不居中
@@ -246,15 +249,16 @@ final class PageItemView: NSView {
             return nil
         }
 
-        // 检查是否点击了关闭按钮（在 hostingView 内）
-        if let hosting = hostingView,
+        // 检查 SwiftUI 层是否有按钮（NSControl）响应
+        // 不硬编码区域，由 SwiftUI 按钮的实际 frame 决定
+        if showCloseButton,
+           let hosting = hostingView,
            let swiftUIHit = hosting.hitTest(convert(point, to: hosting)),
-           swiftUIHit !== hosting {
-            // 点击了 SwiftUI 的某个可交互元素（比如关闭按钮）
+           swiftUIHit is NSControl {
             return swiftUIHit
         }
 
-        // 其他区域返回自己，让 PageItemView 处理点击
+        // 其他区域返回自己，让 PageItemView 处理点击/拖拽
         return self
     }
 
@@ -333,11 +337,21 @@ final class PageItemView: NSView {
 
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.activeInKeyWindow, .mouseEnteredAndExited],
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
         addTrackingArea(trackingArea)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        updateCyberView()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        updateCyberView()
     }
 }
 

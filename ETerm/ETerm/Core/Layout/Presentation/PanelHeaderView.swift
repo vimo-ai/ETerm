@@ -126,9 +126,6 @@ final class PanelHeaderHostingView: NSView {
     private let tabContainer = NSView()
     private var tabItemViews: [TabItemView] = []
 
-    // 拖拽相关
-    private var draggingTabId: UUID?
-
     // 所属 Panel ID
     var panelId: UUID?
 
@@ -144,9 +141,14 @@ final class PanelHeaderHostingView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        print("🔴 [PanelHeader] init - 新实例被创建")
         setupHostingView()
         setupTabContainer()
         setupDragDestination()
+    }
+
+    deinit {
+        print("🔴 [PanelHeader] deinit - 实例被销毁")
     }
 
     required init?(coder: NSCoder) {
@@ -200,10 +202,6 @@ final class PanelHeaderHostingView: NSView {
                 self?.onTabRename?(tab.id, newTitle)
             }
 
-            tabView.onDragStart = { [weak self] in
-                self?.draggingTabId = tab.id
-            }
-
             tabView.onDragOutOfWindow = { [weak self] screenPoint in
                 self?.onTabDragOutOfWindow?(tab.id, screenPoint)
             }
@@ -237,10 +235,60 @@ final class PanelHeaderHostingView: NSView {
         layoutTabItems()
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 检查点击是否在 bounds 内
+        guard bounds.contains(point) else {
+            return nil
+        }
+
+        // 优先检查 tabContainer 中的 TabItemView
+        let pointInTabContainer = convert(point, to: tabContainer)
+        for tabView in tabItemViews {
+            let pointInTab = tabContainer.convert(pointInTabContainer, to: tabView)
+            if tabView.bounds.contains(pointInTab) {
+                // 直接调用 TabItemView 的 hitTest
+                if let hitView = tabView.hitTest(pointInTab) {
+                    return hitView
+                }
+                return tabView
+            }
+        }
+
+        // 然后检查右侧按钮区域（SwiftUI）
+        if let hosting = hostingView {
+            let pointInHosting = convert(point, to: hosting)
+            if let swiftUIHit = hosting.hitTest(pointInHosting), swiftUIHit is NSControl {
+                return swiftUIHit
+            }
+        }
+
+        // 其他区域返回 nil，让事件穿透
+        return nil
+    }
+
     /// 设置 Tab 列表
     func setTabs(_ newTabs: [(id: UUID, title: String, rustTerminalId: Int?)]) {
-        tabs = newTabs.map { TabItem(id: $0.id, title: $0.title, rustTerminalId: $0.rustTerminalId) }
-        rebuildTabItemViews()
+        let newTabItems = newTabs.map { TabItem(id: $0.id, title: $0.title, rustTerminalId: $0.rustTerminalId) }
+
+        // 检查 tabs 是否真的变化了（ID 列表和顺序）
+        let oldIds = tabs.map { $0.id }
+        let newIds = newTabItems.map { $0.id }
+
+        if oldIds == newIds {
+            // ID 和顺序相同，只更新标题（不重建视图）
+            for (index, newTab) in newTabItems.enumerated() {
+                tabs[index].title = newTab.title
+                tabs[index].rustTerminalId = newTab.rustTerminalId
+                if index < tabItemViews.count {
+                    tabItemViews[index].setTitle(newTab.title)
+                }
+            }
+        } else {
+            // tabs 真的变化了，重建视图
+            print("🔵 [PanelHeader] setTabs: 重建视图 old=\(oldIds.map { $0.uuidString.prefix(4) }) new=\(newIds.map { $0.uuidString.prefix(4) })")
+            tabs = newTabItems
+            rebuildTabItemViews()
+        }
     }
 
     /// 设置激活的 Tab
@@ -369,50 +417,86 @@ extension PanelHeaderHostingView {
             return true
         }
 
-        // 同窗口内重排序
-        guard let draggingId = draggingTabId else {
+        // 检查是否是同一个 Panel 内的重排序
+        guard sourcePanelId == panelId else {
+            // 跨 Panel 同窗口拖拽，返回 false 让 DomainPanelView 处理
             return false
         }
+
+        // 同 Panel 内重排序，使用粘贴板中的 tabId
+        let draggingId = tabId
 
         // 计算插入位置
         let location = convert(sender.draggingLocation, from: nil)
         guard let targetIndex = indexForInsertionAt(location: location) else {
+            print("🔴 [TabReorder] indexForInsertionAt 返回 nil")
             return false
         }
 
         // 获取当前拖拽的 Tab 索引
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == draggingId }) else {
+            print("🔴 [TabReorder] 找不到拖拽的 Tab: \(draggingId)")
+            print("🔴 [TabReorder] 当前 tabs: \(tabs.map { $0.id })")
             return false
         }
+
+        print("🟡 [TabReorder] 拖拽开始:")
+        print("  - 拖拽 Tab ID: \(draggingId)")
+        print("  - sourceIndex: \(sourceIndex), targetIndex: \(targetIndex)")
+        print("  - 当前 tabs: \(tabs.map { "\($0.title)(\($0.id.uuidString.prefix(4)))" })")
 
         // 如果位置相同，不处理
         if sourceIndex == targetIndex || sourceIndex + 1 == targetIndex {
+            print("🟡 [TabReorder] 位置相同，不处理")
             return false
         }
 
-        // 重新排列
-        var newTabs = tabs
-        let movedTab = newTabs.remove(at: sourceIndex)
+        // 计算新的顺序
+        var newOrder = tabs.map { $0.id }
+        let movedId = newOrder.remove(at: sourceIndex)
         let insertIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
-        newTabs.insert(movedTab, at: insertIndex)
+        newOrder.insert(movedId, at: insertIndex)
 
-        tabs = newTabs
-        rebuildTabItemViews()
+        print("🟢 [TabReorder] 计算新顺序: \(newOrder.map { $0.uuidString.prefix(4) })")
 
-        // 通知外部重排序
-        let tabIds = tabs.map { $0.id }
-        onTabReorder?(tabIds)
+        // 提交意图到队列，不立即执行
+        // drag session 结束后会通过 Notification 触发实际执行
+        guard let panelId = panelId else {
+            print("🔴 [TabReorder] panelId 为 nil")
+            return false
+        }
 
+        DropIntentQueue.shared.submit(.reorderTabs(panelId: panelId, tabIds: newOrder))
         return true
     }
 
-    override func draggingExited(_ sender: NSDraggingInfo?) {
-        draggingTabId = nil
+    /// 应用 Tab 重排序（视图复用，不重建）
+    ///
+    /// 由 Coordinator 通过 Notification 触发，在 drag session 结束后调用
+    func applyTabReorder(_ newOrder: [UUID]) {
+        print("🟢 [PanelHeader] applyTabReorder: \(newOrder.map { $0.uuidString.prefix(4) })")
+
+        // 1. 根据新顺序重新排列 tabItemViews（复用，不重建）
+        var reorderedViews: [TabItemView] = []
+        for tabId in newOrder {
+            if let view = tabItemViews.first(where: { $0.tabId == tabId }) {
+                reorderedViews.append(view)
+            }
+        }
+
+        // 2. 更新视图数组
+        tabItemViews = reorderedViews
+
+        // 3. 更新数据数组
+        let newTabs = newOrder.compactMap { id in tabs.first { $0.id == id } }
+        tabs = newTabs
+
+        // 4. 只调整位置，不重建
+        layoutTabItems()
+
+        print("🟢 [PanelHeader] applyTabReorder 完成，视图已复用")
     }
 
-    override func draggingEnded(_ sender: NSDraggingInfo) {
-        draggingTabId = nil
-    }
 
     /// 根据位置计算插入索引
     private func indexForInsertionAt(location: NSPoint) -> Int? {

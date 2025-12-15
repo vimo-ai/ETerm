@@ -12,17 +12,18 @@ struct SimpleTabView: View {
     let isActive: Bool
     let needsAttention: Bool
     let height: CGFloat
+    let isHovered: Bool  // 由外部控制的 hover 状态
     let onClose: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
-    @State private var isHovered: Bool = false
 
-    init(_ text: String, emoji: String? = nil, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, onClose: (() -> Void)? = nil) {
+    init(_ text: String, emoji: String? = nil, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, isHovered: Bool = false, onClose: (() -> Void)? = nil) {
         self.text = text
         self.emoji = emoji
         self.isActive = isActive
         self.needsAttention = needsAttention
         self.height = height
+        self.isHovered = isHovered
         self.onClose = onClose
     }
 
@@ -103,7 +104,7 @@ struct SimpleTabView: View {
 
             Spacer()
 
-            // 右侧：关闭按钮
+            // 右侧：关闭按钮（Button 会自动优先响应，不被外层手势拦截）
             if let onClose = onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -115,15 +116,13 @@ struct SimpleTabView: View {
         }
         .padding(.horizontal, 10)
         .frame(width: tabWidth, height: height)
+        .contentShape(Rectangle())  // 整个 Tab 可点击
         .background(
             RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(backgroundColor)
         )
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.15)) {
-                isHovered = hovering
-            }
-        }
+        // 点击手势由外层处理（PageTabView），这里只负责显示
+        // hover 状态由外部 AppKit 的 NSTrackingArea 控制
     }
 
     private var backgroundColor: Color {
@@ -138,15 +137,15 @@ struct SimpleTabView: View {
 #Preview("Simple Tab - Dark") {
     VStack(spacing: 16) {
         HStack(spacing: 8) {
-            SimpleTabView("终端 1", isActive: true, height: 26) { print("close") }
-            SimpleTabView("终端 2", isActive: false, height: 26) { print("close") }
-            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26) { print("close") }
+            SimpleTabView("终端 1", isActive: true, height: 26, onClose: { print("close") })
+            SimpleTabView("终端 2", isActive: false, height: 26, onClose: { print("close") })
+            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { print("close") })
         }
 
         HStack(spacing: 8) {
             SimpleTabView("Page 1", isActive: true, height: 22, onClose: nil)
             SimpleTabView("Page 2", isActive: false, height: 22, onClose: nil)
-            SimpleTabView("Settings", isActive: false, height: 22) { print("close") }
+            SimpleTabView("Settings", isActive: false, height: 22, onClose: { print("close") })
         }
     }
     .padding(40)
@@ -157,15 +156,15 @@ struct SimpleTabView: View {
 #Preview("Simple Tab - Light") {
     VStack(spacing: 16) {
         HStack(spacing: 8) {
-            SimpleTabView("终端 1", isActive: true, height: 26) { print("close") }
-            SimpleTabView("终端 2", isActive: false, height: 26) { print("close") }
-            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26) { print("close") }
+            SimpleTabView("终端 1", isActive: true, height: 26, onClose: { print("close") })
+            SimpleTabView("终端 2", isActive: false, height: 26, onClose: { print("close") })
+            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { print("close") })
         }
 
         HStack(spacing: 8) {
             SimpleTabView("Page 1", isActive: true, height: 22, onClose: nil)
             SimpleTabView("Page 2", isActive: false, height: 22, onClose: nil)
-            SimpleTabView("Settings", isActive: false, height: 22) { print("close") }
+            SimpleTabView("Settings", isActive: false, height: 22, onClose: { print("close") })
         }
     }
     .padding(40)
