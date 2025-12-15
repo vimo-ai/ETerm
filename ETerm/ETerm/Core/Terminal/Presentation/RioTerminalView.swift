@@ -176,22 +176,21 @@ class RioContainerView: NSView {
             return nil
         }
 
-        // 优先检查 Panel UI 视图（Tab 栏）
+        // 优先检查分割线（分割线在 Panel 之间，需要最先响应拖拽）
+        for dividerView in dividerViews {
+            if dividerView.frame.contains(point) {
+                // 直接返回 dividerView，因为分割线没有子视图需要检测
+                // 注意：hitTest 需要父视图坐标，不需要转换
+                return dividerView
+            }
+        }
+
+        // 检查 Panel UI 视图（Tab 栏）
         for (_, panelView) in panelUIViews {
             // 检查点是否在这个 Panel 的 frame 内
             if panelView.frame.contains(point) {
                 let pointInPanel = convert(point, to: panelView)
                 if let hitView = panelView.hitTest(pointInPanel) {
-                    return hitView
-                }
-            }
-        }
-
-        // 检查分割线
-        for dividerView in dividerViews {
-            if dividerView.frame.contains(point) {
-                let pointInDivider = convert(point, to: dividerView)
-                if let hitView = dividerView.hitTest(pointInDivider) {
                     return hitView
                 }
             }
