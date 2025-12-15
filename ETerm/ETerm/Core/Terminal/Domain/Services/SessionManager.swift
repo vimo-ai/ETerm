@@ -28,7 +28,6 @@ struct WindowState: Codable {
     let activePageIndex: Int
     let screenIdentifier: String?  // 屏幕唯一标识符（通过 UUID 或屏幕序号）
     let screenFrame: CodableRect?  // 创建时所在屏幕的尺寸（用于验证）
-    let nextTerminalNumber: Int  // 下一个终端编号（用于恢复计数器）
 }
 
 /// Page 状态

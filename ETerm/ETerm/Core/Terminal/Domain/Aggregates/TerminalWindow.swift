@@ -10,18 +10,14 @@ import SwiftUI
 
 /// 终端窗口
 ///
-/// 管理整个窗口的 Page 和 Tab 编号
+/// 管理整个窗口的 Page
 /// 这是窗口层级的聚合根，负责：
 /// - 维护 Page 列表
-/// - 管理全局 Tab 编号
 /// - 协调 Page 切换
 final class TerminalWindow {
     let windowId: UUID
     private(set) var pages: [Page]
     private(set) var activePageId: UUID?
-
-    /// 下一个终端编号（全局唯一，跨所有 Page）
-    private var nextTerminalNumber: Int = 1
 
     // MARK: - Initialization
 
@@ -32,9 +28,6 @@ final class TerminalWindow {
         let initialPage = Page(title: "Page 1", initialPanel: initialPanel)
         self.pages = [initialPage]
         self.activePageId = initialPage.pageId
-
-        // 初始化计数器
-        scanAndInitNextTerminalNumber()
     }
 
     /// 使用已有的 Page 初始化（用于恢复 Session）
@@ -42,9 +35,6 @@ final class TerminalWindow {
         self.windowId = UUID()
         self.pages = [initialPage]
         self.activePageId = initialPage.pageId
-
-        // 初始化计数器
-        scanAndInitNextTerminalNumber()
     }
 
     // MARK: - Active Page Access
@@ -57,43 +47,9 @@ final class TerminalWindow {
 
     // MARK: - Tab Title Generation
 
-    /// 生成下一个 Tab 标题（全局唯一）
+    /// 生成 Tab 标题
     func generateNextTabTitle() -> String {
-        let title = "终端 \(nextTerminalNumber)"
-        nextTerminalNumber += 1
-        return title
-    }
-
-    /// 获取当前的终端计数器（用于保存Session）
-    func getNextTerminalNumber() -> Int {
-        return nextTerminalNumber
-    }
-
-    /// 设置终端计数器（用于恢复Session）
-    func setNextTerminalNumber(_ number: Int) {
-        nextTerminalNumber = number
-    }
-
-    /// 扫描现有 Tab 初始化计数器
-    ///
-    /// 策略：找到所有已使用的编号，下次生成时使用最大编号+1
-    /// 注意：这样会导致编号跳号（如关闭"终端 2"后，新建会得到"终端 4"）
-    /// 这是自增ID的正常行为，确保编号不会重复
-    private func scanAndInitNextTerminalNumber() {
-        var maxNumber = 0
-        for page in pages {
-            for panel in page.allPanels {
-                for tab in panel.tabs {
-                    // 尝试从 "终端 N" 格式中提取编号
-                    // 如果 Tab 被重命名（如 "SSH Server"），则跳过
-                    if let title = tab.title.components(separatedBy: " ").last,
-                       let number = Int(title) {
-                        maxNumber = max(maxNumber, number)
-                    }
-                }
-            }
-        }
-        nextTerminalNumber = maxNumber + 1
+        return "终端"
     }
 
     // MARK: - Page Management
@@ -285,8 +241,6 @@ final class TerminalWindow {
     /// - Parameter page: 要添加的 Page
     func addExistingPage(_ page: Page) {
         pages.append(page)
-        // 重新扫描计数器以确保正确性
-        scanAndInitNextTerminalNumber()
     }
 
     // MARK: - Panel Management (通过 Active Page 代理)

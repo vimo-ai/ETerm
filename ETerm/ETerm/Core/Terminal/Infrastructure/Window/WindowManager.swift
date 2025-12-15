@@ -172,9 +172,6 @@ final class WindowManager: NSObject {
         let activePageIndex = max(0, min(windowState.activePageIndex, pages.count - 1))
         _ = terminalWindow.switchToPage(pages[activePageIndex].pageId)
 
-        // 恢复终端计数器（不再扫描，直接使用保存的值）
-        terminalWindow.setNextTerminalNumber(windowState.nextTerminalNumber)
-
         return terminalWindow
     }
 
@@ -694,17 +691,13 @@ final class WindowManager: NSObject {
             // 确定激活的 Page 索引
             let activePageIndex = terminalWindow.pages.firstIndex { $0.pageId == terminalWindow.activePageId } ?? 0
 
-            // 获取终端计数器
-            let nextTerminalNumber = terminalWindow.getNextTerminalNumber()
-
             // 创建窗口状态
             let windowState = WindowState(
                 frame: frame,
                 pages: pageStates,
                 activePageIndex: activePageIndex,
                 screenIdentifier: screenIdentifier,
-                screenFrame: screenFrame,
-                nextTerminalNumber: nextTerminalNumber
+                screenFrame: screenFrame
             )
 
             windowStates.append(windowState)
