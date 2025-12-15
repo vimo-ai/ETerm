@@ -51,6 +51,68 @@ final class BinaryTreeLayoutCalculator: LayoutCalculator {
         )
     }
 
+    func calculateSplitLayout(
+        currentLayout: PanelLayout,
+        targetPanelId: UUID,
+        newPanelId: UUID,
+        edge: EdgeDirection
+    ) -> PanelLayout {
+        // 根据边缘方向决定 Panel 顺序：
+        // - top/left: 新 Panel 放在 first（上/左）
+        // - bottom/right: 新 Panel 放在 second（下/右）
+        //
+        // 注意：macOS 坐标系 Y 轴向上
+        // - vertical split: first 在下方，second 在上方
+        // - horizontal split: first 在左方，second 在右方
+        let newPanelIsFirst = edge.existingPanelIsFirst  // 新 Panel 的位置与 existingPanel 相同
+        let (firstPanel, secondPanel): (UUID, UUID) = newPanelIsFirst
+            ? (newPanelId, targetPanelId)
+            : (targetPanelId, newPanelId)
+
+        return replaceNode(
+            in: currentLayout,
+            targetId: targetPanelId,
+            with: .split(
+                direction: edge.splitDirection,
+                first: .leaf(panelId: firstPanel),
+                second: .leaf(panelId: secondPanel),
+                ratio: 0.5
+            )
+        )
+    }
+
+    func calculateSplitLayoutWithExistingPanel(
+        currentLayout: PanelLayout,
+        targetPanelId: UUID,
+        existingPanelId: UUID,
+        edge: EdgeDirection
+    ) -> PanelLayout {
+        // 根据边缘方向决定 Panel 顺序：
+        // - top/left: existingPanel 放在 first（上/左）
+        // - bottom/right: existingPanel 放在 second（下/右）
+        let (firstPanel, secondPanel): (UUID, UUID) = {
+            if edge.existingPanelIsFirst {
+                // top/left: 被移动的 Panel 在上/左（first）
+                return (existingPanelId, targetPanelId)
+            } else {
+                // bottom/right: 被移动的 Panel 在下/右（second）
+                return (targetPanelId, existingPanelId)
+            }
+        }()
+
+        // 在布局树中找到目标节点并替换为分割节点
+        return replaceNode(
+            in: currentLayout,
+            targetId: targetPanelId,
+            with: .split(
+                direction: edge.splitDirection,
+                first: .leaf(panelId: firstPanel),
+                second: .leaf(panelId: secondPanel),
+                ratio: 0.5  // 默认 50/50 分割
+            )
+        )
+    }
+
     func calculatePanelBounds(
         layout: PanelLayout,
         containerSize: CGSize
