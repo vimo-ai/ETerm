@@ -21,11 +21,9 @@ final class ClaudePlugin: Plugin {
         socketServer = ClaudeSocketServer.shared
         socketServer?.start()
 
-        print("✅ [ClaudePlugin] 已激活")
     }
 
     func deactivate() {
         socketServer?.stop()
-        print("🛑 [ClaudePlugin] 已停用")
     }
 }

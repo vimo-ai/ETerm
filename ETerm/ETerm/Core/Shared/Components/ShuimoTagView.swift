@@ -231,9 +231,9 @@ struct ShuimoTabView: View {
 // MARK: - Preview
 #Preview("Tab States") {
     VStack(spacing: 16) {
-        ShuimoTabView("终端 1", isActive: true) { print("close") }
-        ShuimoTabView("终端 2", isActive: false) { print("close") }
-        ShuimoTabView("很长的标签名称", isActive: true) { print("close") }
+        ShuimoTabView("终端 1", isActive: true) { }
+        ShuimoTabView("终端 2", isActive: false) { }
+        ShuimoTabView("很长的标签名称", isActive: true) { }
     }
     .padding(40)
     .background(Color.black.opacity(0.8))

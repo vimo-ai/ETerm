@@ -104,7 +104,6 @@ final class UsageHistoryStore: ObservableObject {
             // 当利用率下降超过阈值时，生成新的周期ID
             if utilizationDrop > resetThreshold {
                 currentCycleId = generateCycleId()
-                print("📊 检测到周期重置：从 \(String(format: "%.1f", lastPoint.utilization))% 降到 \(String(format: "%.1f", utilization))%，新周期ID: \(currentCycleId)")
             }
 
             // 只在 utilization 变化时才记录新数据点
@@ -125,7 +124,6 @@ final class UsageHistoryStore: ObservableObject {
         dataPoints.append(dataPoint)
         saveData()
 
-        print("📊 记录用量数据点：utilization=\(String(format: "%.1f", utilization))%, cycleId=\(currentCycleId)")
         return true
     }
 
@@ -167,9 +165,7 @@ final class UsageHistoryStore: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             dataPoints = try decoder.decode([UsageDataPoint].self, from: data)
-            print("📊 已加载 \(dataPoints.count) 条用量历史记录")
         } catch {
-            print("⚠️ 加载用量历史失败: \(error.localizedDescription)")
             dataPoints = []
         }
     }
@@ -183,7 +179,6 @@ final class UsageHistoryStore: ObservableObject {
             let data = try encoder.encode(dataPoints)
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            print("⚠️ 保存用量历史失败: \(error.localizedDescription)")
         }
     }
 
@@ -200,7 +195,6 @@ final class UsageHistoryStore: ObservableObject {
 
         let removedCount = originalCount - dataPoints.count
         if removedCount > 0 {
-            print("📊 已清理 \(removedCount) 条过期用量记录")
             saveData()
         }
     }

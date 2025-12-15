@@ -45,11 +45,9 @@ class DictionaryService {
         let cleanWord = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         guard let url = URL(string: "\(baseURL)/\(cleanWord)") else {
-            print("❌ 无效的 URL")
             throw DictionaryError.invalidWord
         }
 
-        print("🌐 请求 URL: \(url.absoluteString)")
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -58,19 +56,15 @@ class DictionaryService {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            print("❌ 无效的响应类型")
             throw DictionaryError.requestFailed
         }
 
-        print("📡 HTTP 状态码: \(httpResponse.statusCode)")
 
         if httpResponse.statusCode == 404 {
-            print("❌ 单词未找到 (404)")
             throw DictionaryError.wordNotFound
         }
 
         guard httpResponse.statusCode == 200 else {
-            print("❌ 请求失败: \(httpResponse.statusCode)")
             throw DictionaryError.requestFailed
         }
 
@@ -85,9 +79,7 @@ class DictionaryService {
             return firstResult
         } catch {
             // 打印详细错误信息用于调试
-            print("❌ 解码错误: \(error)")
             if let jsonString = String(data: data, encoding: .utf8) {
-                print("📄 原始响应: \(jsonString)")
             }
             throw DictionaryError.invalidResponse
         }

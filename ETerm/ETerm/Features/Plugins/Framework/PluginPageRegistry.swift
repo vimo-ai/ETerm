@@ -40,7 +40,6 @@ final class PluginPageRegistry {
     /// - Parameter definition: 页面定义
     func register(_ definition: PageDefinition) {
         definitions[definition.pluginId] = definition
-        print("📄 [PluginPageRegistry] 注册插件页面: \(definition.title) (id: \(definition.pluginId))")
     }
 
     /// 获取插件页面定义
@@ -56,7 +55,6 @@ final class PluginPageRegistry {
     /// - Parameter pluginId: 插件 ID
     func openPage(pluginId: String) {
         guard let definition = definitions[pluginId] else {
-            print("⚠️ [PluginPageRegistry] 未找到插件页面定义: \(pluginId)")
             return
         }
 
@@ -64,7 +62,6 @@ final class PluginPageRegistry {
             // 获取当前激活的窗口
             guard let activeWindow = NSApp.keyWindow,
                   let coordinator = WindowManager.shared.getCoordinator(for: activeWindow.windowNumber) else {
-                print("⚠️ [PluginPageRegistry] No active window or coordinator found")
                 return
             }
 
@@ -82,7 +79,6 @@ final class PluginPageRegistry {
             coordinator.objectWillChange.send()
             coordinator.updateTrigger = UUID()
 
-            print("✅ [PluginPageRegistry] 已打开插件页面: \(definition.title)")
         }
     }
 
@@ -91,7 +87,6 @@ final class PluginPageRegistry {
     /// - Parameter pluginId: 插件 ID
     func unregister(pluginId: String) {
         if definitions.removeValue(forKey: pluginId) != nil {
-            print("📄 [PluginPageRegistry] 注销插件页面: \(pluginId)")
         }
     }
 }

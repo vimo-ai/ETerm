@@ -25,7 +25,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 for: WordEntry.self, GrammarErrorRecord.self,
                 configurations: ModelConfiguration(isStoredInMemoryOnly: false)
             )
-            print("✅ SwiftData ModelContainer initialized successfully")
 
             // 输出当前数据统计
             printDataStatistics()
@@ -46,17 +45,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         PluginManager.shared.loadBuiltinPlugins()
 
         // 尝试恢复 Session
-//        print("🚀 [ETermApp] Starting session restoration...")
         if let session = SessionManager.shared.load(), !session.windows.isEmpty {
-//            print("✅ [ETermApp] Found session with \(session.windows.count) window(s), restoring...")
             // 恢复每个窗口
             for (index, windowState) in session.windows.enumerated() {
-//                print("🔨 [ETermApp] Restoring window[\(index)]...")
                 restoreWindow(from: windowState)
             }
-//            print("✅ [ETermApp] Session restoration completed")
         } else {
-//            print("ℹ️ [ETermApp] No session found, creating default window")
             // 没有 Session，创建默认窗口
             WindowManager.shared.createWindow()
         }
@@ -110,37 +104,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 .sorted { $0.value > $1.value }
 
             // 输出统计信息
-            print("\n" + String(repeating: "=", count: 60))
-            print("📊 SwiftData 数据统计")
-            print(String(repeating: "=", count: 60))
 
-            print("\n📚 单词本:")
-            print("  总单词数: \(wordCount)")
-            print("  高频单词 (Hit ≥ 2): \(frequentWords.count)")
 
             if !frequentWords.isEmpty {
-                print("  TOP 5 高频单词:")
                 for (index, word) in frequentWords.prefix(5).enumerated() {
                     let lastQuery = word.lastQueryDate?.formatted(date: .omitted, time: .shortened) ?? "未知"
-                    print("    \(index + 1). \(word.word) - \(word.hitCount)次 (最近: \(lastQuery))")
                 }
             }
 
-            print("\n📝 语法档案:")
-            print("  总错误数: \(errorCount)")
 
             if !categoryStats.isEmpty {
-                print("  错误分类统计:")
                 for (category, count) in categoryStats.prefix(5) {
                     let displayName = categoryDisplayName(category)
-                    print("    • \(displayName): \(count)次")
                 }
             }
 
-            print("\n" + String(repeating: "=", count: 60) + "\n")
 
         } catch {
-            print("❌ 读取数据统计失败: \(error)")
         }
     }
 

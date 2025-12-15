@@ -64,7 +64,6 @@ struct FocusableTextField: NSViewRepresentable {
 
         override func becomeFirstResponder() -> Bool {
             let result = super.becomeFirstResponder()
-            print("🔍 [FocusableTextField] becomeFirstResponder: \(result)")
             return result
         }
     }

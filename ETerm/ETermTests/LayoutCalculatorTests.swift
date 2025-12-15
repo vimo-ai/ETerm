@@ -60,8 +60,6 @@ final class LayoutCalculatorTests: XCTestCase {
         }
 
         // 打印实际坐标，帮助理解坐标系
-        print("Panel A (first): y=\(boundsA.y), height=\(boundsA.height)")
-        print("Panel B (second): y=\(boundsB.y), height=\(boundsB.height)")
 
         // 验证：first 的 y 应该更小（在上方或下方取决于坐标系）
         XCTAssertEqual(boundsA.y, 0, "first panel 应该从 y=0 开始")
@@ -233,9 +231,6 @@ final class LayoutCalculatorTests: XCTestCase {
             // 当前逻辑：top → existingPanelIsFirst = true → panelA 在 first
             if case .leaf(let firstId) = first,
                case .leaf(let secondId) = second {
-                print("拖到 top 边缘后：")
-                print("  first (下方?): \(firstId == panelA ? "A" : "B")")
-                print("  second (上方?): \(secondId == panelA ? "A" : "B")")
 
                 // 如果注释正确（first=下方，second=上方）
                 // 且用户期望 A 出现在上方
@@ -270,9 +265,6 @@ final class LayoutCalculatorTests: XCTestCase {
 
             if case .leaf(let firstId) = first,
                case .leaf(let secondId) = second {
-                print("拖到 bottom 边缘后：")
-                print("  first (下方?): \(firstId == panelA ? "A" : "B")")
-                print("  second (上方?): \(secondId == panelA ? "A" : "B")")
 
                 // 当前逻辑：bottom → existingPanelIsFirst = false → panelA 在 second
                 XCTAssertEqual(firstId, panelB, "当前逻辑：panelB 放在 first")
@@ -302,9 +294,6 @@ final class LayoutCalculatorTests: XCTestCase {
         let boundsA = bounds[panelA]!
         let boundsB = bounds[panelB]!
 
-        print("=== 坐标系映射验证 ===")
-        print("Panel A (first): y=\(boundsA.y)")
-        print("Panel B (second): y=\(boundsB.y)")
 
         // 验证坐标
         XCTAssertEqual(boundsA.y, 0, "first 从 y=0 开始")
@@ -318,9 +307,6 @@ final class LayoutCalculatorTests: XCTestCase {
         // 说明使用的是原生坐标系（y=0 在下方）
         //
         // 但如果实际视觉效果相反，说明注释是错的！
-        print("如果注释正确 (y=0 在下)：A 在下，B 在上")
-        print("如果注释错误 (y=0 在上)：A 在上，B 在下")
-        print("========================")
     }
 
     // MARK: - Visual Verification Helper
@@ -342,19 +328,6 @@ final class LayoutCalculatorTests: XCTestCase {
             containerSize: CGSize(width: 100, height: 100)
         )
 
-        print("=== 坐标系验证 ===")
-        print("容器大小: 100x100")
-        print("Panel A (first): \(bounds[panelA]!)")
-        print("Panel B (second): \(bounds[panelB]!)")
-        print("")
-        print("如果 y=0 在屏幕上方（翻转坐标系）：")
-        print("  - Panel A (y=0) 显示在上方")
-        print("  - Panel B (y=50) 显示在下方")
-        print("")
-        print("如果 y=0 在屏幕下方（原生坐标系）：")
-        print("  - Panel A (y=0) 显示在下方")
-        print("  - Panel B (y=50) 显示在上方")
-        print("===================")
 
         // 这个测试总是通过，只是为了打印信息
         XCTAssertTrue(true)

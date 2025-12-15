@@ -72,7 +72,6 @@ final class TerminalWindow {
     /// 设置终端计数器（用于恢复Session）
     func setNextTerminalNumber(_ number: Int) {
         nextTerminalNumber = number
-        print("🔢 [TerminalWindow] Restored nextTerminalNumber: \(nextTerminalNumber)")
     }
 
     /// 扫描现有 Tab 初始化计数器
@@ -95,7 +94,6 @@ final class TerminalWindow {
             }
         }
         nextTerminalNumber = maxNumber + 1
-        print("🔢 [TerminalWindow] Scanned terminal numbers, next will be: \(nextTerminalNumber)")
     }
 
     // MARK: - Page Management
@@ -160,12 +158,10 @@ final class TerminalWindow {
     func openOrSwitchToPluginPage(pluginId: String, title: String, viewProvider: @escaping () -> AnyView) -> Page {
         // 检查是否已有该插件的页面
         if let existingPage = findPluginPage(pluginId: pluginId) {
-            print("🔄 [TerminalWindow] 切换到已有插件页面: \(title)")
             return existingPage
         }
 
         // 创建新页面
-        print("➕ [TerminalWindow] 创建新插件页面: \(title)")
         return addPluginPage(pluginId: pluginId, title: title, viewProvider: viewProvider)
     }
 

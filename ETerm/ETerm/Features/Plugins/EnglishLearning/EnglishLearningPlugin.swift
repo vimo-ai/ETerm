@@ -39,7 +39,6 @@ final class EnglishLearningPlugin: Plugin {
     func activate(context: PluginContext) {
         self.context = context
 
-        print("🔌 [\(Self.name)] 激活中...")
 
         // 注册侧边栏 Tab
         registerSidebarTabs(context: context)
@@ -53,7 +52,6 @@ final class EnglishLearningPlugin: Plugin {
         // 注册翻译内容到 InfoWindow
         registerInfoContent(context: context)
 
-        print("✅ [\(Self.name)] 已激活")
     }
 
     func deactivate() {
@@ -67,7 +65,6 @@ final class EnglishLearningPlugin: Plugin {
         context?.commands.unregister("translation.show")
         context?.commands.unregister("translation.hide")
 
-        print("🔌 [\(Self.name)] 已停用")
     }
 
     // MARK: - 注册侧边栏 Tab
@@ -103,7 +100,6 @@ final class EnglishLearningPlugin: Plugin {
         }
         context.ui.registerSidebarTab(for: Self.id, pluginName: Self.name, tab: grammarTab)
 
-        print("✅ [\(Self.name)] 已注册 3 个侧边栏 Tab")
     }
 
     // MARK: - 注册翻译命令
@@ -115,7 +111,6 @@ final class EnglishLearningPlugin: Plugin {
             title: "显示翻译",
             icon: "sparkles"
         ) { _ in
-            print("💬 translation.show 命令执行（当前无选中文本）")
         })
 
         // 隐藏翻译命令

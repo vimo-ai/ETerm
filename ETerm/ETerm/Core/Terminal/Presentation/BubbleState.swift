@@ -359,7 +359,6 @@ class BubbleState: ObservableObject {
         Task { @MainActor in
             guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
                   let modelContainer = appDelegate.modelContainer else {
-                print("❌ ModelContainer not available")
                 return
             }
 
@@ -377,7 +376,6 @@ class BubbleState: ObservableObject {
                 if let existing = try modelContext.fetch(descriptor).first {
                     // Already exists, increment hit count
                     existing.recordQuery(context: sourceContext, definition: definition, translation: translation)
-                    print("📚 Word already exists, Hit +1: \(word) (total: \(existing.hitCount) times)")
                 } else {
                     // New word
                     let entry = WordEntry(
@@ -388,12 +386,10 @@ class BubbleState: ObservableObject {
                         translation: translation
                     )
                     modelContext.insert(entry)
-                    print("📚 New word recorded: \(word)")
                 }
 
                 try modelContext.save()
             } catch {
-                print("❌ Failed to save word: \(error)")
             }
         }
     }

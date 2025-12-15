@@ -137,15 +137,15 @@ struct SimpleTabView: View {
 #Preview("Simple Tab - Dark") {
     VStack(spacing: 16) {
         HStack(spacing: 8) {
-            SimpleTabView("终端 1", isActive: true, height: 26, onClose: { print("close") })
-            SimpleTabView("终端 2", isActive: false, height: 26, onClose: { print("close") })
-            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { print("close") })
+            SimpleTabView("终端 1", isActive: true, height: 26, onClose: { })
+            SimpleTabView("终端 2", isActive: false, height: 26, onClose: { })
+            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { })
         }
 
         HStack(spacing: 8) {
             SimpleTabView("Page 1", isActive: true, height: 22, onClose: nil)
             SimpleTabView("Page 2", isActive: false, height: 22, onClose: nil)
-            SimpleTabView("Settings", isActive: false, height: 22, onClose: { print("close") })
+            SimpleTabView("Settings", isActive: false, height: 22, onClose: { })
         }
     }
     .padding(40)
@@ -156,15 +156,15 @@ struct SimpleTabView: View {
 #Preview("Simple Tab - Light") {
     VStack(spacing: 16) {
         HStack(spacing: 8) {
-            SimpleTabView("终端 1", isActive: true, height: 26, onClose: { print("close") })
-            SimpleTabView("终端 2", isActive: false, height: 26, onClose: { print("close") })
-            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { print("close") })
+            SimpleTabView("终端 1", isActive: true, height: 26, onClose: { })
+            SimpleTabView("终端 2", isActive: false, height: 26, onClose: { })
+            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { })
         }
 
         HStack(spacing: 8) {
             SimpleTabView("Page 1", isActive: true, height: 22, onClose: nil)
             SimpleTabView("Page 2", isActive: false, height: 22, onClose: nil)
-            SimpleTabView("Settings", isActive: false, height: 22, onClose: { print("close") })
+            SimpleTabView("Settings", isActive: false, height: 22, onClose: { })
         }
     }
     .padding(40)

@@ -74,12 +74,10 @@ final class PluginManager: ObservableObject {
         let pluginId = T.id
 
         guard pluginTypes[pluginId] == nil else {
-            print("⚠️ 插件类型已注册: \(T.name)")
             return
         }
 
         pluginTypes[pluginId] = pluginType
-        print("📝 插件类型已注册: \(T.name) (id: \(pluginId))")
     }
 
     /// 加载所有内置插件
@@ -99,7 +97,6 @@ final class PluginManager: ObservableObject {
         // 2. 拓扑排序并加载
         loadAllRegisteredPlugins()
 
-        print("🔌 插件管理器已初始化")
     }
 
     /// 使用 Kahn 算法加载所有已注册的插件
@@ -136,7 +133,6 @@ final class PluginManager: ObservableObject {
         // 4. 循环依赖检测
         if loadOrder.count != pluginTypes.count {
             let stuck = pluginTypes.keys.filter { !loadOrder.contains($0) }
-            print("🔴 [PluginManager] 检测到循环依赖: \(stuck)")
             // 不 fatal，继续加载可以加载的插件
         }
 
@@ -145,7 +141,6 @@ final class PluginManager: ObservableObject {
             if isPluginEnabled(pluginId) {
                 loadPluginById(pluginId)
             } else {
-                print("⏸️ 插件已禁用，跳过加载: \(pluginId)")
             }
         }
     }
@@ -153,19 +148,16 @@ final class PluginManager: ObservableObject {
     /// 按 ID 加载单个插件（内部方法）
     private func loadPluginById(_ pluginId: String) {
         guard let pluginType = pluginTypes[pluginId] else {
-            print("⚠️ 插件类型不存在: \(pluginId)")
             return
         }
 
         guard plugins[pluginId] == nil else {
-            print("⚠️ 插件已加载: \(pluginId)")
             return
         }
 
         // 检查依赖是否都已加载
         for depId in pluginType.dependencies {
             guard plugins[depId] != nil else {
-                print("🔴 插件 \(pluginId) 的依赖 \(depId) 未加载")
                 return
             }
         }
@@ -175,7 +167,6 @@ final class PluginManager: ObservableObject {
         plugin.activate(context: context)
         plugins[pluginId] = plugin
 
-        print("✅ 插件已加载: \(pluginType.name) v\(pluginType.version)")
     }
 
     /// 加载并激活插件（兼容旧 API）
@@ -201,7 +192,6 @@ final class PluginManager: ObservableObject {
         }
 
         if !dependentPlugins.isEmpty {
-            print("⚠️ 无法卸载插件 \(pluginId)，以下插件依赖它: \(dependentPlugins)")
             return false
         }
 
@@ -220,7 +210,6 @@ final class PluginManager: ObservableObject {
         // 移除插件实例（保留类型，以便重新启用）
         plugins.removeValue(forKey: pluginId)
 
-        print("🔌 插件已卸载: \(pluginId)")
         objectWillChange.send()
         return true
     }
@@ -253,7 +242,6 @@ final class PluginManager: ObservableObject {
     @discardableResult
     func enablePlugin(_ pluginId: String) -> Bool {
         guard pluginTypes[pluginId] != nil else {
-            print("⚠️ 插件类型不存在: \(pluginId)")
             return false
         }
 
@@ -261,9 +249,7 @@ final class PluginManager: ObservableObject {
         let deps = pluginTypes[pluginId]!.dependencies
         for depId in deps {
             if !isPluginEnabled(depId) {
-                print("📦 启用依赖插件: \(depId)")
                 if !enablePlugin(depId) {
-                    print("🔴 无法启用依赖 \(depId)，取消启用 \(pluginId)")
                     return false
                 }
             }
@@ -289,9 +275,7 @@ final class PluginManager: ObservableObject {
         let dependents = getDependents(of: pluginId)
         for depId in dependents {
             if isPluginLoaded(depId) {
-                print("📦 级联禁用插件: \(depId)")
                 if !disablePlugin(depId) {
-                    print("🔴 无法级联禁用 \(depId)")
                     return false
                 }
             }
@@ -408,9 +392,6 @@ final class KeyboardServiceImpl: KeyboardService {
     func bind(_ keyStroke: KeyStroke, to commandId: CommandID, when: String?) {
         // 检查冲突
         if let existing = bindings[keyStroke], !existing.isEmpty {
-            print("⚠️ [KeyboardService] 快捷键冲突：\(keyStroke.displayString)")
-            print("   已有绑定：\(existing.map { $0.commandId }.joined(separator: ", "))")
-            print("   新绑定：\(commandId) 将被忽略")
 
             // 发送冲突通知
             NotificationCenter.default.post(
@@ -427,12 +408,10 @@ final class KeyboardServiceImpl: KeyboardService {
 
         // 添加绑定
         bindings[keyStroke] = [CommandBinding(commandId: commandId, when: when)]
-        print("⌨️ [KeyboardService] 绑定快捷键: \(keyStroke.displayString) -> \(commandId)" + (when.map { " (when: \($0))" } ?? ""))
     }
 
     func unbind(_ keyStroke: KeyStroke) {
         bindings.removeValue(forKey: keyStroke)
-        print("⌨️ [KeyboardService] 解绑快捷键: \(keyStroke.displayString)")
     }
 
     // MARK: - 内部方法
@@ -507,7 +486,6 @@ final class UIServiceImpl: UIService {
             // 获取当前激活的窗口
             guard let activeWindow = NSApp.keyWindow,
                   let coordinator = WindowManager.shared.getCoordinator(for: activeWindow.windowNumber) else {
-                print("⚠️ [UIService] No active window or coordinator found")
                 return
             }
 
@@ -525,7 +503,6 @@ final class UIServiceImpl: UIService {
             coordinator.objectWillChange.send()
             coordinator.updateTrigger = UUID()
 
-            print("✅ [UIService] Registered plugin page: \(title) for plugin \(pluginId)")
         }
     }
 
@@ -565,7 +542,6 @@ final class UIServiceImpl: UIService {
             tab: entryTab
         )
 
-        print("✅ [UIService] Registered plugin page entry: \(pluginName) (id: \(pluginId))")
     }
 }
 

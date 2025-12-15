@@ -204,15 +204,15 @@ struct CyberTagView: View {
 #Preview("Cyber Tab States") {
     VStack(spacing: 16) {
         HStack(spacing: 8) {
-            CyberTabView("Terminal 1", isActive: true, height: 26) { print("close") }
-            CyberTabView("Terminal 2", isActive: false, height: 26) { print("close") }
-            CyberTabView("Claude", isActive: false, needsAttention: true, height: 26) { print("close") }
+            CyberTabView("Terminal 1", isActive: true, height: 26) { }
+            CyberTabView("Terminal 2", isActive: false, height: 26) { }
+            CyberTabView("Claude", isActive: false, needsAttention: true, height: 26) { }
         }
 
         HStack(spacing: 8) {
             CyberTabView("Page 1", isActive: true, height: 22, onClose: nil)
             CyberTabView("Page 2", isActive: false, height: 22, onClose: nil)
-            CyberTabView("Settings", isActive: false, height: 22) { print("close") }
+            CyberTabView("Settings", isActive: false, height: 22) { }
         }
     }
     .padding(40)

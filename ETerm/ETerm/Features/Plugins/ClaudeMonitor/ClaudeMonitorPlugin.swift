@@ -33,7 +33,6 @@ final class ClaudeMonitorPlugin: Plugin {
     func activate(context: PluginContext) {
         self.context = context
 
-        print("🔌 [\(Self.name)] 激活中...")
 
         // 1. 初始化周度用量追踪器（自动开始刷新）
         _ = WeeklyUsageTracker.shared
@@ -50,7 +49,6 @@ final class ClaudeMonitorPlugin: Plugin {
         // 5. 注册侧边栏 Tab（可选）
         registerSidebarTabs(context: context)
 
-        print("✅ [\(Self.name)] 已激活")
     }
 
     /// 注册信息窗口内容
@@ -69,7 +67,6 @@ final class ClaudeMonitorPlugin: Plugin {
         menuBarController?.cleanup()
         menuBarController = nil
 
-        print("🔌 [\(Self.name)] 已停用")
     }
 
     // MARK: - 私有方法
@@ -94,7 +91,6 @@ final class ClaudeMonitorPlugin: Plugin {
         }
         context.ui.registerSidebarTab(for: Self.id, pluginName: Self.name, tab: settingsTab)
 
-        print("✅ [\(Self.name)] 已注册 1 个侧边栏 Tab")
     }
 }
 

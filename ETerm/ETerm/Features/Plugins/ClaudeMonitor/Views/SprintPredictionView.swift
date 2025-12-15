@@ -1,5 +1,4 @@
 //
-//  SprintPredictionView.swift
 //  claude-helper
 //
 //  Created by claude-helper on 2025/11/23.

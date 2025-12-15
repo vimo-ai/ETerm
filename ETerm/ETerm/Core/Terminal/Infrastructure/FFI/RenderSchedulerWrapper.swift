@@ -34,9 +34,6 @@ class RenderSchedulerWrapper {
 
     init() {
         handle = render_scheduler_create()
-        if handle == nil {
-            print("⚠️ [RenderSchedulerWrapper] Failed to create RenderScheduler")
-        }
     }
 
     deinit {
@@ -57,7 +54,6 @@ class RenderSchedulerWrapper {
     func bind(to pool: TerminalPoolWrapper) {
         guard let schedulerHandle = handle,
               let poolHandle = pool.poolHandle else {
-            print("⚠️ [RenderSchedulerWrapper] Invalid handles for binding")
             return
         }
 
@@ -70,7 +66,6 @@ class RenderSchedulerWrapper {
     /// 启动渲染调度器
     func start() -> Bool {
         guard let handle = handle else {
-            print("⚠️ [RenderSchedulerWrapper] No handle to start")
             return false
         }
 
@@ -81,8 +76,6 @@ class RenderSchedulerWrapper {
         let success = render_scheduler_start(handle)
         if success {
             isRunning = true
-        } else {
-            print("❌ [RenderSchedulerWrapper] Failed to start")
         }
 
         return success
@@ -110,7 +103,6 @@ class RenderSchedulerWrapper {
     @available(*, deprecated, message: "New architecture: rendering is done in Rust, no callback needed")
     func setRenderCallback(_ callback: @escaping () -> Void) {
         // 新架构下不再需要此方法
-        print("⚠️ [RenderSchedulerWrapper] setRenderCallback is deprecated, rendering is now done in Rust")
     }
 
     /// 设置渲染布局（已废弃）
@@ -119,6 +111,5 @@ class RenderSchedulerWrapper {
     @available(*, deprecated, message: "Use TerminalPoolWrapper.setRenderLayout() instead")
     func setLayout(_ layouts: [(terminalId: Int, x: Float, y: Float, width: Float, height: Float)]) {
         // 新架构下布局由 TerminalPool 管理
-        print("⚠️ [RenderSchedulerWrapper] setLayout is deprecated, use TerminalPoolWrapper.setRenderLayout()")
     }
 }

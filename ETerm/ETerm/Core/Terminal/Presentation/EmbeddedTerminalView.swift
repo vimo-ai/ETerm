@@ -166,7 +166,6 @@ class EmbeddedTerminalMetalView: NSView {
         )
 
         guard let pool = terminalPool else {
-            print("❌ [EmbeddedTerminal] Failed to create pool")
             return
         }
 
@@ -186,11 +185,8 @@ class EmbeddedTerminalMetalView: NSView {
         }
 
         guard terminalId >= 0 else {
-            print("❌ [EmbeddedTerminal] Failed to create terminal")
             return
         }
-
-        print("✅ [EmbeddedTerminal] Created terminal \(terminalId)")
 
         // 设置外部输入监听
         setupExternalInputObserver()

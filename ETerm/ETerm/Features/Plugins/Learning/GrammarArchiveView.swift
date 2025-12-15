@@ -137,9 +137,7 @@ struct GrammarArchiveView: View {
     private func clearAllErrors() {
         do {
             try modelContext.delete(model: GrammarErrorRecord.self)
-            print("✅ 已清空所有语法错误记录")
         } catch {
-            print("❌ 清空失败: \(error)")
         }
     }
 }

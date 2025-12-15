@@ -51,7 +51,6 @@ final class DomainPanelView: NSView {
 
         super.init(frame: .zero)
 
-        print("🟣 [DomainPanelView] init - panelId: \(panel.panelId.uuidString.prefix(4))")
         setupUI()
         updateUI()
         setupNotifications()
@@ -59,7 +58,6 @@ final class DomainPanelView: NSView {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
-        print("🟣 [DomainPanelView] deinit - panelId: \(panel?.panelId.uuidString.prefix(4) ?? "nil")")
     }
 
     // MARK: - Notifications
@@ -81,7 +79,6 @@ final class DomainPanelView: NSView {
             return
         }
 
-        print("🟣 [DomainPanelView] handleApplyTabReorder: panelId=\(notifPanelId.uuidString.prefix(4))")
 
         // 应用视图重排序（复用视图，不重建）
         headerView.applyTabReorder(tabIds)
@@ -184,7 +181,6 @@ final class DomainPanelView: NSView {
 
         // 更新 Header 显示的 Tab
         let tabs = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
-        print("🔵 [DomainPanelView] updateUI: \(tabs.map { "\($0.title)(\($0.id.uuidString.prefix(4)))" })")
         headerView.setTabs(tabs)
 
         // 更新激活的 Tab

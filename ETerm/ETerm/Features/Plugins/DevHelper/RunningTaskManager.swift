@@ -60,14 +60,12 @@ final class RunningTaskManager: ObservableObject {
     func registerTask(project: DetectedProject, script: ProjectScript, terminalId: Int) {
         let task = RunningTask(project: project, script: script, terminalId: terminalId)
         tasks[task.id] = task
-        print("📦 [TaskManager] 注册任务: \(task.scriptName) @ \(task.projectName), terminalId=\(terminalId)")
     }
 
     /// 移除任务（终端关闭时调用）
     func removeTask(project: DetectedProject, script: ProjectScript) {
         let taskId = makeTaskId(project: project, script: script)
         if let task = tasks.removeValue(forKey: taskId) {
-            print("📦 [TaskManager] 移除任务: \(task.scriptName) @ \(task.projectName)")
         }
     }
 
@@ -75,7 +73,6 @@ final class RunningTaskManager: ObservableObject {
     func removeTask(byTerminalId terminalId: Int) {
         if let taskId = tasks.first(where: { $0.value.terminalId == terminalId })?.key {
             if let task = tasks.removeValue(forKey: taskId) {
-                print("📦 [TaskManager] 移除任务: \(task.scriptName) @ \(task.projectName)")
             }
         }
     }

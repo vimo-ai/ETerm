@@ -108,18 +108,15 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         handle = terminal_pool_create(config)
 
         guard handle != nil else {
-            print("❌ [TerminalPoolWrapper] Failed to create pool")
             return nil
         }
 
-        print("✅ [TerminalPoolWrapper] Pool created")
         setupEventCallback()
     }
 
     deinit {
         if let handle = handle {
             terminal_pool_destroy(handle)
-            print("🗑️ [TerminalPoolWrapper] Pool destroyed")
         }
     }
 
@@ -170,15 +167,12 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int {
         guard let handle = handle else { return -1 }
         let id = terminal_pool_create_terminal(handle, cols, rows)
-        print("🆕 [TerminalPoolWrapper] Created terminal \(id)")
         return Int(id)
     }
 
     func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int {
         guard let handle = handle else { return -1 }
-        print("🆕 [TerminalPoolWrapper] Creating terminal with CWD: \(cwd)")
         let id = terminal_pool_create_terminal_with_cwd(handle, cols, rows, cwd)
-        print("🆕 [TerminalPoolWrapper] Created terminal \(id) with CWD")
         return Int(id)
     }
 
@@ -253,7 +247,6 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     func closeTerminal(_ terminalId: Int) -> Bool {
         guard let handle = handle else { return false }
         let result = terminal_pool_close_terminal(handle, terminalId)
-        print("🗑️ [TerminalPoolWrapper] Closed terminal \(terminalId): \(result)")
         return result
     }
 

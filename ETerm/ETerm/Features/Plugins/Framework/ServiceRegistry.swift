@@ -44,12 +44,10 @@ final class ServiceRegistry {
         defer { lock.unlock() }
 
         guard services[key] == nil else {
-            print("⚠️ [ServiceRegistry] 服务已存在: \(key)")
             return false
         }
 
         services[key] = service
-        print("📦 [ServiceRegistry] 注册服务: \(key) (\(type(of: service)))")
         return true
     }
 
@@ -77,12 +75,10 @@ final class ServiceRegistry {
         defer { lock.unlock() }
 
         guard let service = services[key] else {
-            print("⚠️ [ServiceRegistry] 服务不存在: \(key)")
             return nil
         }
 
         guard let typed = service as? T else {
-            print("⚠️ [ServiceRegistry] 类型不匹配: \(key), 期望 \(T.self), 实际 \(Swift.type(of: service))")
             return nil
         }
 
@@ -111,7 +107,6 @@ final class ServiceRegistry {
 
         for key in keysToRemove {
             services.removeValue(forKey: key)
-            print("📦 [ServiceRegistry] 注销服务: \(key)")
         }
     }
 

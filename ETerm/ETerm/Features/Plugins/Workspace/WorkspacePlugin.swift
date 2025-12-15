@@ -16,7 +16,6 @@ final class WorkspacePlugin: Plugin {
     static let version = "1.0.0"
 
     func activate(context: PluginContext) {
-        print("🔌 [\(Self.name)] 激活中...")
 
         context.ui.registerPluginPageEntry(
             for: Self.id,
@@ -26,11 +25,9 @@ final class WorkspacePlugin: Plugin {
             AnyView(WorkspaceView())
         }
 
-        print("✅ [\(Self.name)] 已激活")
     }
 
     func deactivate() {
-        print("🔌 [\(Self.name)] 停用")
     }
 }
 
@@ -175,21 +172,18 @@ private struct WorkspaceContentView: View {
 
         // 检查是否已存在
         guard !folders.contains(where: { $0.path == normalizedPath }) else {
-            print("⚠️ [Workspace] 路径已存在: \(normalizedPath)")
             return
         }
 
         let folder = WorkspaceFolder(path: normalizedPath)
         modelContext.insert(folder)
 
-        print("📁 [Workspace] 添加路径: \(normalizedPath)")
     }
 
     private func removeFolder(_ path: String) {
         guard let folder = folders.first(where: { $0.path == path }) else { return }
         modelContext.delete(folder)
 
-        print("📁 [Workspace] 移除路径: \(path)")
     }
 
     // MARK: - Tree Building

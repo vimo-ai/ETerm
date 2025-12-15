@@ -35,7 +35,6 @@ class ClaudeSessionMapper {
         terminalToSession[terminalId] = sessionId
         sessionToTerminal[sessionId] = terminalId
 
-//        print("🔗 [SessionMapper] Mapped: terminal=\(terminalId) ↔ session=\(sessionId)")
     }
 
     /// 根据 terminal_id 查找 session_id
@@ -60,7 +59,6 @@ class ClaudeSessionMapper {
         if let sessionId = terminalToSession[terminalId] {
             sessionToTerminal.removeValue(forKey: sessionId)
             terminalToSession.removeValue(forKey: terminalId)
-//            print("🗑️ [SessionMapper] Removed mapping for terminal=\(terminalId)")
         }
     }
 
@@ -70,18 +68,8 @@ class ClaudeSessionMapper {
         defer { lock.unlock() }
         terminalToSession.removeAll()
         sessionToTerminal.removeAll()
-//        print("🧹 [SessionMapper] Cleared all mappings")
     }
 
-    /// 调试：打印所有映射
-    func debugPrint() {
-        lock.lock()
-        defer { lock.unlock() }
-//        print("📊 [SessionMapper] Current mappings:")
-        for (terminalId, sessionId) in terminalToSession {
-            print("   Terminal \(terminalId) → Session \(sessionId)")
-        }
-    }
 
     /// 获取所有映射（session_id → terminal_id）
     func getAllMappings() -> [(sessionId: String, terminalId: Int)] {

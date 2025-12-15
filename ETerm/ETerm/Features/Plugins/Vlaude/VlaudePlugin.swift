@@ -58,7 +58,6 @@ final class VlaudePlugin: Plugin {
             object: nil
         )
 
-        print("✅ [VlaudePlugin] 已激活")
     }
 
     func deactivate() {
@@ -66,7 +65,6 @@ final class VlaudePlugin: Plugin {
         pendingRequests.removeAll()
         daemonClient?.disconnect()
         daemonClient = nil
-        print("🛑 [VlaudePlugin] 已停用")
     }
 
     // MARK: - Claude Response Complete
@@ -75,21 +73,15 @@ final class VlaudePlugin: Plugin {
         guard let userInfo = notification.userInfo,
               let sessionId = userInfo["session_id"] as? String,
               let terminalId = userInfo["terminal_id"] as? Int else {
-            print("⚠️ [VlaudePlugin] 收到 claudeResponseComplete 但 userInfo 无效")
             return
         }
 
-        print("📍 [VlaudePlugin] 上报 session 可用: \(sessionId.prefix(8))... -> Terminal \(terminalId)")
 
         // 上报 session 可用
         daemonClient?.reportSessionAvailable(sessionId: sessionId, terminalId: terminalId)
 
         // 检查是否有待上报的 requestId
         if let pending = pendingRequests.removeValue(forKey: terminalId) {
-            print("✅ [VlaudePlugin] 会话创建完成，上报给 daemon:")
-            print("   RequestId: \(pending.requestId)")
-            print("   SessionId: \(sessionId.prefix(8))...")
-            print("   ProjectPath: \(pending.projectPath)")
 
             daemonClient?.reportSessionCreated(
                 requestId: pending.requestId,
@@ -116,7 +108,6 @@ final class VlaudePlugin: Plugin {
             return
         }
 
-        print("🗑️ [VlaudePlugin] Terminal \(terminalId) 关闭，上报 session 不可用: \(sessionId.prefix(8))...")
 
         // 清理本地映射
         ClaudeSessionMapper.shared.remove(terminalId: terminalId)
@@ -134,7 +125,6 @@ final class VlaudePlugin: Plugin {
             return
         }
 
-        print("🛑 [VlaudePlugin] Claude 退出，上报 session 不可用: \(sessionId.prefix(8))... (Terminal \(terminalId))")
 
         // 清理待上报的 requestId（如果有）
         pendingRequests.removeValue(forKey: terminalId)
@@ -150,7 +140,6 @@ final class VlaudePlugin: Plugin {
 
     /// 创建 Claude 会话（供 daemon 调用）
     private func createClaudeSession(projectPath: String, prompt: String?, requestId: String?) {
-        print("🖥️ [VlaudePlugin] 创建 Claude 会话: \(projectPath), requestId: \(requestId ?? "N/A")")
 
         // 构建 claude 命令
         var command = "claude"
@@ -168,7 +157,6 @@ final class VlaudePlugin: Plugin {
             // 获取当前活动窗口的 Coordinator
             guard let keyWindow = WindowManager.shared.keyWindow,
                   let coordinator = WindowManager.shared.getCoordinator(for: keyWindow.windowNumber) else {
-                print("❌ [VlaudePlugin] 无法获取当前窗口的 Coordinator")
                 return
             }
 
@@ -177,16 +165,13 @@ final class VlaudePlugin: Plugin {
                 cwd: projectPath,
                 command: command
             ) else {
-                print("❌ [VlaudePlugin] 创建终端失败")
                 return
             }
 
-            print("✅ [VlaudePlugin] 终端已创建: Terminal \(result.terminalId)")
 
             // 如果有 requestId，保存到待上报映射
             if let reqId = requestId {
                 self.pendingRequests[result.terminalId] = (reqId, projectPath)
-                print("📝 [VlaudePlugin] 保存 requestId 待上报: Terminal \(result.terminalId) -> \(reqId)")
             }
         }
     }
@@ -198,7 +183,6 @@ extension VlaudePlugin: VlaudeDaemonClientDelegate {
     func daemonClientDidConnect(_ client: VlaudeDaemonClient) {
         // 连接成功后，上报所有已存在的 session 映射
         let mappings = ClaudeSessionMapper.shared.getAllMappings()
-        print("🔄 [VlaudePlugin] 连接成功，上报 \(mappings.count) 个已存在的 session")
 
         for (sessionId, terminalId) in mappings {
             client.reportSessionAvailable(sessionId: sessionId, terminalId: terminalId)
@@ -206,7 +190,6 @@ extension VlaudePlugin: VlaudeDaemonClientDelegate {
     }
 
     func daemonClient(_ client: VlaudeDaemonClient, didReceiveInject sessionId: String, terminalId: Int, text: String) {
-        print("💉 [VlaudePlugin] 注入消息: session=\(sessionId), terminal=\(terminalId)")
 
         // 在主线程写入
         DispatchQueue.main.async {
@@ -226,7 +209,6 @@ extension VlaudePlugin: VlaudeDaemonClientDelegate {
 
     func daemonClient(_ client: VlaudeDaemonClient, didReceiveMobileViewing sessionId: String, isViewing: Bool) {
         // 更新 Tab emoji
-        print("📱 [VlaudePlugin] Mobile \(isViewing ? "正在查看" : "离开了") session \(sessionId)")
 
         guard let terminalId = ClaudeSessionMapper.shared.getTerminalId(for: sessionId) else {
             return

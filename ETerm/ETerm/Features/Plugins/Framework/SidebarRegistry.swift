@@ -61,7 +61,6 @@ final class SidebarRegistry: ObservableObject {
         }
         tabs[pluginId]?.append(tab)
         pluginNames[pluginId] = pluginName
-        print("🎨 [Sidebar] 插件 \(pluginName) 注册了 Tab: \(tab.title)")
     }
 
     /// 注销插件的所有 Tab
@@ -70,7 +69,6 @@ final class SidebarRegistry: ObservableObject {
         let pluginName = pluginNames[pluginId] ?? pluginId
         tabs.removeValue(forKey: pluginId)
         pluginNames.removeValue(forKey: pluginId)
-        print("🎨 [Sidebar] 插件 \(pluginName) 的 Tab 已注销")
     }
 
     /// 获取所有已注册的 Tab（扁平化）

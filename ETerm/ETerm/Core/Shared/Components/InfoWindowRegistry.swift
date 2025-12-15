@@ -61,7 +61,6 @@ final class InfoWindowRegistry: ObservableObject {
     func registerContent(id: String, title: String, viewProvider: @escaping () -> AnyView) {
         let content = InfoContent(id: id, title: title, viewProvider: viewProvider)
         registeredContents[id] = content
-        print("📋 [InfoWindow] 注册内容: \(title) (id: \(id))")
     }
 
     /// 注销内容
@@ -74,26 +73,22 @@ final class InfoWindowRegistry: ObservableObject {
             visibleContentIds.remove(at: index)
         }
 
-        print("📋 [InfoWindow] 注销内容: \(id)")
     }
 
     /// 显示内容
     /// - Parameter id: 内容 ID
     func showContent(id: String) {
         guard registeredContents[id] != nil else {
-            print("⚠️ [InfoWindow] 内容未注册: \(id)")
             return
         }
 
         // 如果已经可见，不重复添加
         if visibleContentIds.contains(id) {
-            print("ℹ️ [InfoWindow] 内容已显示: \(id)")
             return
         }
 
         // 添加到可见列表
         visibleContentIds.append(id)
-        print("📋 [InfoWindow] 显示内容: \(id)")
     }
 
     /// 隐藏内容
@@ -104,7 +99,6 @@ final class InfoWindowRegistry: ObservableObject {
         }
 
         visibleContentIds.remove(at: index)
-        print("📋 [InfoWindow] 隐藏内容: \(id)")
     }
 
     /// 查询内容是否可见

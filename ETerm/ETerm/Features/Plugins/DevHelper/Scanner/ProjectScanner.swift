@@ -30,7 +30,6 @@ final class ProjectScanner {
     /// 注册项目检测器
     func register(_ detector: ProjectDetector) {
         detectors.append(detector)
-        print("📦 [Scanner] 注册检测器: \(detector.projectType) (\(detector.configFileName))")
     }
 
     // MARK: - 扫描
@@ -112,7 +111,6 @@ final class ProjectScanner {
                 let configPath = dir.appendingPathComponent(configFileName)
                 if let project = detector.parse(configPath: configPath, folderPath: dir) {
                     results.append(project)
-                    print("📦 [Scanner] 发现项目: \(project.name) (\(project.type)) @ \(dir.path)")
                 }
             }
         }

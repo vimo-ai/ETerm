@@ -74,9 +74,6 @@ struct RioRenderView: NSViewRepresentable {
 
     func updateNSView(_ nsView: RioContainerView, context: Context) {
         Self.updateCount += 1
-        if Self.updateCount % 60 == 0 {
-            print("⚠️ updateNSView called \(Self.updateCount) times")
-        }
 
         // 读取 updateTrigger 触发更新
         let _ = coordinator.updateTrigger
@@ -357,10 +354,6 @@ class RioContainerView: NSView {
         let panels = coordinator.terminalWindow.allPanels
         let panelIds = Set(panels.map { $0.panelId })
 
-        print("🟠 [RioTerminalView] updatePanelViews:")
-        print("  - 领域层 Panel IDs: \(panels.map { $0.panelId.uuidString.prefix(4) })")
-        print("  - 缓存的 UI View IDs: \(panelUIViews.keys.map { $0.uuidString.prefix(4) })")
-
         // 删除不存在的 Panel UI
         // 注意：通过 DropIntentQueue 确保在 drag session 结束后才执行模型变更，
         // 所以这里可以安全地立即删除视图
@@ -368,7 +361,6 @@ class RioContainerView: NSView {
         for (id, view) in viewsToRemove {
             view.removeFromSuperview()
             panelUIViews.removeValue(forKey: id)
-            print("🟠 [RioTerminalView] 移除视图 \(id.uuidString.prefix(4))")
         }
 
         // 更新或创建 Panel UI
@@ -694,8 +686,6 @@ extension RioContainerView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        print("⚡️ [RioContainerView] performDragOperation 被调用!")
-
         // 清除高亮
         currentHighlightedPanel?.clearHighlight()
         currentHighlightedPanel = nil
@@ -703,14 +693,12 @@ extension RioContainerView {
         // 解析完整的拖拽数据
         guard let dataString = sender.draggingPasteboard.string(forType: .string),
               let payload = parseDragPayload(dataString) else {
-            print("⚡️ [RioContainerView] 解析拖拽数据失败")
             return false
         }
 
         // 根据鼠标坐标找到目标 Panel
         let location = convert(sender.draggingLocation, from: nil)
         guard let (targetPanel, targetView) = findPanel(at: location) else {
-            print("⚡️ [RioContainerView] 未找到目标 Panel")
             return false
         }
 
@@ -719,17 +707,14 @@ extension RioContainerView {
 
         // 计算 Drop Zone
         guard let dropZone = targetView.calculateDropZone(mousePosition: locationInPanel) else {
-            print("⚡️ [RioContainerView] 计算 DropZone 失败")
             return false
         }
 
         // 调用 Coordinator 处理 Drop
         guard let coordinator = coordinator else {
-            print("⚡️ [RioContainerView] coordinator 为 nil")
             return false
         }
 
-        print("⚡️ [RioContainerView] 调用 handleDrop: tabId=\(payload.tabId.uuidString.prefix(4)), sourcePanelId=\(payload.sourcePanelId.uuidString.prefix(4)), dropZone=\(dropZone.type), targetPanel=\(targetPanel.panelId.uuidString.prefix(4))")
         return coordinator.handleDrop(
             tabId: payload.tabId,
             sourcePanelId: payload.sourcePanelId,

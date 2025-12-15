@@ -100,7 +100,6 @@ final class DashScopeClient {
     private let decoder: JSONDecoder
 
     private func debugLog(_ message: String) {
-        print("🟡 DashScope: \(message)")
     }
 
     init(configuration: Configuration, session: URLSession = .shared) {
@@ -146,7 +145,6 @@ final class DashScopeClient {
         try validate(response: response, data: data)
         guard let result = try? decoder.decode(DashScopeChatResponse.self, from: data) else {
             if let body = String(data: data, encoding: .utf8) {
-                print("❌ DashScope decode failed, raw body: \(body)")
             }
             throw DashScopeError.decodingFailed
         }
@@ -199,7 +197,6 @@ final class DashScopeClient {
                             continuation.yield(chunk)
                         } catch {
                             if let body = String(data: data, encoding: .utf8) {
-                                print("❌ DashScope stream decode failed, raw line: \(body)")
                             }
                             throw error
                         }

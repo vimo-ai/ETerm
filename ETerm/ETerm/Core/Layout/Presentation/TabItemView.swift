@@ -378,7 +378,6 @@ extension TabItemView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
-        print("🟢 [TabItemView] draggingSession:endedAt 被调用 - tabId: \(tabId.uuidString.prefix(4))")
 
         // 重置拖拽状态（确保在拖放源上也能正确重置）
         isDragging = false
@@ -394,7 +393,6 @@ extension TabItemView: NSDraggingSource {
         // 这确保 AppKit 有机会完成其内部清理，再触发我们的 UI 更新
         // 不使用 asyncAfter，因为 async 已经足够推迟到回调返回后
         DispatchQueue.main.async {
-            print("🟢 [TabItemView] 延迟发送 tabDragSessionEnded 通知 - tabId: \(capturedTabId.uuidString.prefix(4))")
 
             // 通知 drag session 已结束（用于安全地更新 UI）
             NotificationCenter.default.post(
@@ -437,13 +435,11 @@ final class DragLock {
     /// 锁定 drag（在 drop 处理后调用）
     func lock() {
         isLocked = true
-        print("🔒 [DragLock] 锁定")
     }
 
     /// 解锁 drag（在 UI 更新完成后调用）
     func unlock() {
         isLocked = false
-        print("🔓 [DragLock] 解锁")
     }
 }
 

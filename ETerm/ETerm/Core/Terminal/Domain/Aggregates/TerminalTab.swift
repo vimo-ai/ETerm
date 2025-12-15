@@ -85,7 +85,6 @@ final class TerminalTab {
 
     /// 设置待恢复的 CWD（用于 Session 恢复）
     func setPendingCwd(_ cwd: String) {
-        print("🔧 [Tab \(tabId)] setPendingCwd: \"\(cwd)\"")
         self.pendingCwd = cwd
     }
 
@@ -93,7 +92,6 @@ final class TerminalTab {
     func takePendingCwd() -> String? {
         let cwd = pendingCwd
         pendingCwd = nil
-        print("🔄 [Tab \(tabId)] takePendingCwd: \(cwd != nil ? "\"\(cwd!)\"" : "nil")")
         return cwd
     }
 

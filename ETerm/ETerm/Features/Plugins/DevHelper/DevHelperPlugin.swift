@@ -15,7 +15,6 @@ final class DevHelperPlugin: Plugin {
     static let version = "1.0.0"
 
     func activate(context: PluginContext) {
-        print("🔌 [\(Self.name)] 激活中...")
 
         context.ui.registerPluginPageEntry(
             for: Self.id,
@@ -25,11 +24,9 @@ final class DevHelperPlugin: Plugin {
             AnyView(DevHelperView())
         }
 
-        print("✅ [\(Self.name)] 已激活")
     }
 
     func deactivate() {
-        print("🔌 [\(Self.name)] 停用")
     }
 }
 

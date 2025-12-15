@@ -136,10 +136,8 @@ struct CommandInputView: View {
     CommandInputView(
         cwd: "/Users/username/Documents/project",
         onExecute: { command in
-            print("Execute: \(command)")
         },
         onCancel: {
-            print("Cancel")
         }
     )
     .frame(width: 500, height: 80)

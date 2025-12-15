@@ -25,7 +25,6 @@ class MenuBarController: ObservableObject {
         statusItem = NSStatusBar.system.statusItem(withLength: 90)
         
         guard let button = statusItem?.button else {
-            print("❌ 无法创建状态栏按钮")
             return
         }
         

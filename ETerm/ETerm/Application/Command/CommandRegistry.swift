@@ -45,7 +45,6 @@ final class CommandRegistry: CommandService {
         }
 
         guard let command = command else {
-            print("⚠️ 命令不存在: \(id)")
             return
         }
 

@@ -43,7 +43,6 @@ class ClaudeSocketServer {
         // 创建 Unix Domain Socket
         socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
         guard socketFD >= 0 else {
-//            print("❌ [ClaudeSocket] Failed to create socket: \(String(cString: strerror(errno)))")
             return
         }
 
@@ -52,7 +51,6 @@ class ClaudeSocketServer {
         addr.sun_family = sa_family_t(AF_UNIX)
 
         guard path.utf8.count < MemoryLayout.size(ofValue: addr.sun_path) else {
-//            print("❌ [ClaudeSocket] Socket path too long")
             close(socketFD)
             socketFD = -1
             return
@@ -72,7 +70,6 @@ class ClaudeSocketServer {
         }
 
         guard bindResult >= 0 else {
-//            print("❌ [ClaudeSocket] Failed to bind socket: \(String(cString: strerror(errno)))")
             close(socketFD)
             socketFD = -1
             return
@@ -80,13 +77,11 @@ class ClaudeSocketServer {
 
         // Listen
         guard listen(socketFD, 5) >= 0 else {
-//            print("❌ [ClaudeSocket] Failed to listen: \(String(cString: strerror(errno)))")
             close(socketFD)
             socketFD = -1
             return
         }
 
-//        print("✅ [ClaudeSocket] Server started at: \(path)")
         socketPath = path
 
         // 设置环境变量，供子进程继承
@@ -112,7 +107,6 @@ class ClaudeSocketServer {
         }
 
         socketPath = nil
-//        print("🛑 [ClaudeSocket] Server stopped")
     }
 
     // MARK: - Connection Handling
@@ -146,11 +140,9 @@ class ClaudeSocketServer {
         }
 
         guard clientFD >= 0 else {
-//            print("❌ [ClaudeSocket] Failed to accept connection: \(String(cString: strerror(errno)))")
             return
         }
 
-//        print("📥 [ClaudeSocket] New connection accepted")
 
         // 在后台线程读取数据
         DispatchQueue.global().async { [weak self] in
@@ -168,7 +160,6 @@ class ClaudeSocketServer {
         let bytesRead = read(fd, &buffer, buffer.count)
 
         guard bytesRead > 0 else {
-//            print("⚠️ [ClaudeSocket] No data received")
             return
         }
 
@@ -184,9 +175,7 @@ class ClaudeSocketServer {
             }
 
         } catch {
-            print("❌ [ClaudeSocket] Failed to decode JSON: \(error)")
             if let json = String(data: data, encoding: .utf8) {
-                print("   Raw data: \(json)")
             }
         }
     }
@@ -198,7 +187,6 @@ class ClaudeSocketServer {
 
         // session_end 事件：Claude 退出，清理映射
         if eventType == "session_end" {
-            print("🛑 [ClaudeSocket] Session 结束: \(event.session_id)")
 
             // 发送 session 结束通知
             NotificationCenter.default.post(
@@ -224,9 +212,6 @@ class ClaudeSocketServer {
                 "terminal_id": event.terminal_id
             ]
         )
-
-        // 调试：打印所有映射
-        ClaudeSessionMapper.shared.debugPrint()
     }
 }
 

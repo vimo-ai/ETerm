@@ -155,7 +155,6 @@ struct VocabularyView: View {
     }
 
     private func exportData() {
-        print("导出单词本数据")
     }
 }
 

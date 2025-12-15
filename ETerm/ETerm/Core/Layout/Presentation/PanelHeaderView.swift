@@ -141,14 +141,12 @@ final class PanelHeaderHostingView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        print("🔴 [PanelHeader] init - 新实例被创建")
         setupHostingView()
         setupTabContainer()
         setupDragDestination()
     }
 
     deinit {
-        print("🔴 [PanelHeader] deinit - 实例被销毁")
     }
 
     required init?(coder: NSCoder) {
@@ -285,7 +283,6 @@ final class PanelHeaderHostingView: NSView {
             }
         } else {
             // tabs 真的变化了，重建视图
-            print("🔵 [PanelHeader] setTabs: 重建视图 old=\(oldIds.map { $0.uuidString.prefix(4) }) new=\(newIds.map { $0.uuidString.prefix(4) })")
             tabs = newTabItems
             rebuildTabItemViews()
         }
@@ -429,25 +426,17 @@ extension PanelHeaderHostingView {
         // 计算插入位置
         let location = convert(sender.draggingLocation, from: nil)
         guard let targetIndex = indexForInsertionAt(location: location) else {
-            print("🔴 [TabReorder] indexForInsertionAt 返回 nil")
             return false
         }
 
         // 获取当前拖拽的 Tab 索引
         guard let sourceIndex = tabs.firstIndex(where: { $0.id == draggingId }) else {
-            print("🔴 [TabReorder] 找不到拖拽的 Tab: \(draggingId)")
-            print("🔴 [TabReorder] 当前 tabs: \(tabs.map { $0.id })")
             return false
         }
 
-        print("🟡 [TabReorder] 拖拽开始:")
-        print("  - 拖拽 Tab ID: \(draggingId)")
-        print("  - sourceIndex: \(sourceIndex), targetIndex: \(targetIndex)")
-        print("  - 当前 tabs: \(tabs.map { "\($0.title)(\($0.id.uuidString.prefix(4)))" })")
 
         // 如果位置相同，不处理
         if sourceIndex == targetIndex || sourceIndex + 1 == targetIndex {
-            print("🟡 [TabReorder] 位置相同，不处理")
             return false
         }
 
@@ -457,12 +446,10 @@ extension PanelHeaderHostingView {
         let insertIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
         newOrder.insert(movedId, at: insertIndex)
 
-        print("🟢 [TabReorder] 计算新顺序: \(newOrder.map { $0.uuidString.prefix(4) })")
 
         // 提交意图到队列，不立即执行
         // drag session 结束后会通过 Notification 触发实际执行
         guard let panelId = panelId else {
-            print("🔴 [TabReorder] panelId 为 nil")
             return false
         }
 
@@ -474,7 +461,6 @@ extension PanelHeaderHostingView {
     ///
     /// 由 Coordinator 通过 Notification 触发，在 drag session 结束后调用
     func applyTabReorder(_ newOrder: [UUID]) {
-        print("🟢 [PanelHeader] applyTabReorder: \(newOrder.map { $0.uuidString.prefix(4) })")
 
         // 1. 根据新顺序重新排列 tabItemViews（复用，不重建）
         var reorderedViews: [TabItemView] = []
@@ -494,7 +480,6 @@ extension PanelHeaderHostingView {
         // 4. 只调整位置，不重建
         layoutTabItems()
 
-        print("🟢 [PanelHeader] applyTabReorder 完成，视图已复用")
     }
 
 

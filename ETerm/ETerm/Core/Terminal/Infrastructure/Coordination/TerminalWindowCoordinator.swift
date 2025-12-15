@@ -138,7 +138,6 @@ class TerminalWindowCoordinator: ObservableObject {
     init(initialWindow: TerminalWindow, terminalPool: TerminalPoolProtocol? = nil) {
         // 获取继承的 CWD（如果有）
         self.initialCwd = WindowCwdManager.shared.takePendingCwd()
-//        print("🎯 [Coordinator] Initialized with CWD: \(self.initialCwd ?? "nil")")
 
         self.terminalWindow = initialWindow
         self.terminalPool = terminalPool ?? MockTerminalPool()
@@ -172,8 +171,6 @@ class TerminalWindowCoordinator: ObservableObject {
             return
         }
 
-        print("📋 [Coordinator] handleExecuteDropIntent: \(intent)")
-
         switch intent {
         case .reorderTabs(let panelId, let tabIds):
             executeTabReorder(panelId: panelId, tabIds: tabIds)
@@ -206,11 +203,8 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 执行 Tab 重排序
     private func executeTabReorder(panelId: UUID, tabIds: [UUID]) {
         guard let panel = terminalWindow.getPanel(panelId) else {
-            print("📋 [Coordinator] executeTabReorder: Panel 不存在")
             return
         }
-
-        print("📋 [Coordinator] executeTabReorder: panelId=\(panelId.uuidString.prefix(4)), tabIds=\(tabIds.map { $0.uuidString.prefix(4) })")
 
         if panel.reorderTabs(tabIds) {
             // 通知视图层应用重排序（视图复用，不重建）
@@ -227,11 +221,8 @@ class TerminalWindowCoordinator: ObservableObject {
         guard let sourcePanel = terminalWindow.getPanel(sourcePanelId),
               let targetPanel = terminalWindow.getPanel(targetPanelId),
               let tab = sourcePanel.tabs.first(where: { $0.tabId == tabId }) else {
-            print("📋 [Coordinator] executeMoveTabToPanel: 验证失败")
             return
         }
-
-        print("📋 [Coordinator] executeMoveTabToPanel: tabId=\(tabId.uuidString.prefix(4)), from=\(sourcePanelId.uuidString.prefix(4)), to=\(targetPanelId.uuidString.prefix(4))")
 
         // 1. 添加到目标 Panel
         targetPanel.addTab(tab)
@@ -252,11 +243,8 @@ class TerminalWindowCoordinator: ObservableObject {
     private func executeSplitWithNewPanel(tabId: UUID, sourcePanelId: UUID, targetPanelId: UUID, edge: EdgeDirection) {
         guard let sourcePanel = terminalWindow.getPanel(sourcePanelId),
               let tab = sourcePanel.tabs.first(where: { $0.tabId == tabId }) else {
-            print("📋 [Coordinator] executeSplitWithNewPanel: 验证失败")
             return
         }
-
-        print("📋 [Coordinator] executeSplitWithNewPanel: tabId=\(tabId.uuidString.prefix(4)), edge=\(edge)")
 
         // 1. 从源 Panel 移除 Tab
         _ = sourcePanel.closeTab(tabId)
@@ -280,8 +268,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 执行 Panel 移动（复用 Panel，不创建新的）
     private func executeMovePanelInLayout(panelId: UUID, targetPanelId: UUID, edge: EdgeDirection) {
-        print("📋 [Coordinator] executeMovePanelInLayout: panelId=\(panelId.uuidString.prefix(4)), targetPanelId=\(targetPanelId.uuidString.prefix(4)), edge=\(edge)")
-
         let layoutCalculator = BinaryTreeLayoutCalculator()
         if terminalWindow.movePanelInLayout(
             panelId: panelId,
@@ -291,8 +277,6 @@ class TerminalWindowCoordinator: ObservableObject {
         ) {
             // 设置该 Panel 为激活
             setActivePanel(panelId)
-        } else {
-            print("📋 [Coordinator] executeMovePanelInLayout: 移动失败")
         }
     }
 
@@ -351,11 +335,9 @@ class TerminalWindowCoordinator: ObservableObject {
            let activeTab = panel.activeTab,
            let terminalId = activeTab.rustTerminalId {
             inheritedCwd = getCwd(terminalId: Int(terminalId))
-            print("🔍 [CreateNewTab] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
         }
 
         // 使用较大的默认尺寸 (120x40) 以减少初始 Reflow 的影响
-        print("📝 [CreateNewTab] Creating terminal with inherited CWD: \(inheritedCwd ?? "nil")")
         let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh", cwd: inheritedCwd)
         guard terminalId >= 0 else {
             return nil
@@ -397,19 +379,16 @@ class TerminalWindowCoordinator: ObservableObject {
     ) -> (tab: TerminalTab, terminalId: Int)? {
         let targetPanelId = panelId ?? activePanelId
         guard let targetPanelId = targetPanelId else {
-            print("⚠️ [Coordinator] createNewTabWithCommand: 没有目标 Panel")
             return nil
         }
 
         // 创建终端
         let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh", cwd: cwd)
         guard terminalId >= 0 else {
-            print("❌ [Coordinator] createNewTabWithCommand: 创建终端失败")
             return nil
         }
 
         guard let panel = terminalWindow.getPanel(targetPanelId) else {
-            print("❌ [Coordinator] createNewTabWithCommand: 找不到 Panel")
             return nil
         }
 
@@ -423,13 +402,10 @@ class TerminalWindowCoordinator: ObservableObject {
 
         panel.addTab(newTab)
 
-        print("✅ [Coordinator] 新 Tab 已创建: Terminal \(terminalId), CWD: \(cwd)")
-
         // 如果有命令，延迟执行
         if let cmd = command, !cmd.isEmpty {
             let tid = UInt32(terminalId)
             DispatchQueue.main.asyncAfter(deadline: .now() + commandDelay) { [weak self] in
-                print("🚀 [Coordinator] 执行命令: \(cmd.trimmingCharacters(in: .whitespacesAndNewlines))")
                 self?.writeInput(terminalId: tid, data: cmd)
             }
         }
@@ -592,7 +568,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 设置终端池（由 PanelRenderView 初始化后调用）
     func setTerminalPool(_ pool: TerminalPoolProtocol) {
-        // print("🔵 [Coordinator] setTerminalPool called")
         // 关闭旧终端池的所有终端，并清空 rustTerminalId
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
@@ -605,14 +580,12 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 切换到新终端池
         self.terminalPool = pool
-        // print("🔵 [Coordinator] terminalPool switched")
 
         // 重新创建所有终端
         createTerminalsForAllTabs()
 
         // 初始化键盘系统
         self.keyboardSystem = KeyboardSystem(coordinator: self)
-        // print("🟢 [Coordinator] setTerminalPool completed, keyboardSystem initialized")
     }
 
 
@@ -660,8 +633,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 如果有 CWD，使用 createTerminalWithCwd
         if let cwdPath = effectiveCwd {
-            print("🚀 [Coordinator] Creating terminal with CWD: \(cwdPath)")
-
             let terminalId = terminalPool.createTerminalWithCwd(cols: cols, rows: rows, shell: shell, cwd: cwdPath)
 
             if terminalId >= 0 {
@@ -704,41 +675,22 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 为所有 Tab 创建终端（只创建当前激活Page的终端）
     private func createTerminalsForAllTabs() {
-//        print("🟢 [Coordinator] createTerminalsForAllTabs called (only active page)")
         ensureTerminalsForActivePage()
     }
 
     /// 确保指定Page的所有终端都已创建（延迟创建）
     private func ensureTerminalsForPage(_ page: Page) {
-//        print("🟢 [Coordinator] Ensuring terminals for page '\(page.title)'")
-
-        for (panelIndex, panel) in page.allPanels.enumerated() {
-//            print("🟢 [Coordinator]   Panel[\(panelIndex)] \(panel.panelId), tabs: \(panel.tabs.count)")
-
-            for (tabIndex, tab) in panel.tabs.enumerated() {
+        for (_, panel) in page.allPanels.enumerated() {
+            for (_, tab) in panel.tabs.enumerated() {
                 // 如果 Tab 还没有终端，创建一个
                 if tab.rustTerminalId == nil {
-//                    print("🟢 [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) has no terminal, checking pendingCwd...")
                     // 检查是否有待恢复的 CWD（用于 Session 恢复）
                     let cwdToUse = tab.takePendingCwd()
 
-                    if let cwd = cwdToUse {
-//                        print("✅ [Coordinator]     Tab[\(tabIndex)] has pendingCwd: \"\(cwd)\"")
-                    } else {
-//                        print("⚠️ [Coordinator]     Tab[\(tabIndex)] has NO pendingCwd, will use default")
-                    }
-
-//                    print("🟢 [Coordinator]     Creating terminal for tab[\(tabIndex)]...")
                     let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: cwdToUse)
-//                    print("🟢 [Coordinator]     createTerminalInternal returned: \(terminalId)")
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))
-//                        print("✅ [Coordinator]     Terminal created with ID: \(terminalId)")
-                    } else {
-//                        print("❌ [Coordinator]     Failed to create terminal!")
                     }
-                } else {
-//                    print("ℹ️ [Coordinator]     Tab[\(tabIndex)] \(tab.tabId) already has terminal \(tab.rustTerminalId!)")
                 }
             }
         }
@@ -747,7 +699,6 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 确保当前激活Page的终端都已创建
     private func ensureTerminalsForActivePage() {
         guard let activePage = terminalWindow.activePage else {
-//            print("⚠️ [Coordinator] No active page")
             return
         }
         ensureTerminalsForPage(activePage)
@@ -849,22 +800,12 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 用户重新排序 Tabs
     func handleTabReorder(panelId: UUID, tabIds: [UUID]) {
         guard let panel = terminalWindow.getPanel(panelId) else {
-            print("🔴 [Coordinator] handleTabReorder: Panel 不存在")
             return
         }
 
-        print("🟡 [Coordinator] handleTabReorder:")
-        print("  - panelId: \(panelId.uuidString.prefix(4))")
-        print("  - 请求顺序: \(tabIds.map { $0.uuidString.prefix(4) })")
-        print("  - 当前 Panel tabs: \(panel.tabs.map { "\($0.title)(\($0.tabId.uuidString.prefix(4)))" })")
-
         if panel.reorderTabs(tabIds) {
-            print("🟢 [Coordinator] reorderTabs 成功")
-            print("  - 更新后 Panel tabs: \(panel.tabs.map { "\($0.title)(\($0.tabId.uuidString.prefix(4)))" })")
             objectWillChange.send()
             updateTrigger = UUID()
-        } else {
-            print("🔴 [Coordinator] reorderTabs 失败")
         }
     }
 
@@ -995,7 +936,6 @@ class TerminalWindowCoordinator: ObservableObject {
            let activeTab = panel.activeTab,
            let terminalId = activeTab.rustTerminalId {
             inheritedCwd = getCwd(terminalId: Int(terminalId))
-            print("🔍 [SplitPanel] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
         }
 
         // 使用 BinaryTreeLayoutCalculator 计算新布局
@@ -1010,7 +950,6 @@ class TerminalWindowCoordinator: ObservableObject {
             if let newPanel = terminalWindow.getPanel(newPanelId) {
                 for tab in newPanel.tabs {
                     if tab.rustTerminalId == nil {
-                        print("📝 [SplitPanel] Creating terminal with inherited CWD: \(inheritedCwd ?? "nil")")
                         let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: inheritedCwd)
                         if terminalId >= 0 {
                             tab.setRustTerminalId(UInt32(terminalId))
@@ -1048,27 +987,18 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - targetPanelId: 目标 Panel ID
     /// - Returns: 是否成功接受 drop
     func handleDrop(tabId: UUID, sourcePanelId: UUID, dropZone: DropZone, targetPanelId: UUID) -> Bool {
-        print("⚡️ [Coordinator] handleDrop - 使用新意图队列:")
-        print("  - tabId: \(tabId.uuidString.prefix(4))")
-        print("  - sourcePanelId: \(sourcePanelId.uuidString.prefix(4))")
-        print("  - dropZone: \(dropZone.type)")
-        print("  - targetPanelId: \(targetPanelId.uuidString.prefix(4))")
-
         // 验证（不修改模型）
         guard let sourcePanel = terminalWindow.getPanel(sourcePanelId),
               sourcePanel.tabs.contains(where: { $0.tabId == tabId }) else {
-            print("⚡️ [Coordinator] handleDrop: 源 Panel 或 Tab 验证失败")
             return false
         }
 
         guard terminalWindow.getPanel(targetPanelId) != nil else {
-            print("⚡️ [Coordinator] handleDrop: 目标 Panel 验证失败")
             return false
         }
 
         // 同一个 Panel 内部移动交给 PanelHeaderHostingView 处理
         if sourcePanelId == targetPanelId && (dropZone.type == .header || dropZone.type == .body) {
-            print("⚡️ [Coordinator] handleDrop: 同 Panel 内移动，由 Header 处理")
             return false
         }
 
@@ -1093,18 +1023,15 @@ class TerminalWindowCoordinator: ObservableObject {
 
             if sourcePanel.tabCount == 1 {
                 // 源 Panel 只有 1 个 Tab → 复用 Panel（关键优化！）
-                print("⚡️ [Coordinator] handleDrop: 源 Panel 只有 1 个 Tab，使用 Panel 复用，边缘: \(edge)")
                 intent = .movePanelInLayout(panelId: sourcePanelId, targetPanelId: targetPanelId, edge: edge)
             } else {
                 // 源 Panel 有多个 Tab → 创建新 Panel
-                print("⚡️ [Coordinator] handleDrop: 源 Panel 有多个 Tab，创建新 Panel，边缘: \(edge)")
                 intent = .splitWithNewPanel(tabId: tabId, sourcePanelId: sourcePanelId, targetPanelId: targetPanelId, edge: edge)
             }
         }
 
         // 提交意图到队列，等待 drag session 结束后执行
         DropIntentQueue.shared.submit(intent)
-        print("⚡️ [Coordinator] handleDrop: 意图已提交到队列")
         return true
     }
 
@@ -1330,7 +1257,6 @@ class TerminalWindowCoordinator: ObservableObject {
             headerHeight: headerHeight
         )
         let getTabsTime = (CFAbsoluteTimeGetCurrent() - getTabsStart) * 1000
-//        print("[Render] ⏱️ Get tabs to render (\(tabsToRender.count) tabs): \(String(format: "%.2f", getTabsTime))ms")
 
         // 🧹 清除渲染缓冲区（在渲染新内容前）
         // 这确保切换 Page 时旧内容不会残留
@@ -1386,19 +1312,12 @@ class TerminalWindowCoordinator: ObservableObject {
             }
         }
 
-        // 打印每个终端的渲染耗时
-        for (terminalId, time) in renderTimes {
-//            print("[Render] ⏱️ Terminal \(terminalId) render: \(String(format: "%.2f", time))ms")
-        }
-
         // 统一提交所有 objects
         let flushStart = CFAbsoluteTimeGetCurrent()
         terminalPool.flush()
         let flushTime = (CFAbsoluteTimeGetCurrent() - flushStart) * 1000
-//        print("[Render] ⏱️ Flush: \(String(format: "%.2f", flushTime))ms")
 
         let totalTime = (CFAbsoluteTimeGetCurrent() - totalStart) * 1000
-//        print("[Render] ⏱️ Total renderAllPanels: \(String(format: "%.2f", totalTime))ms")
     }
 
     // MARK: - Page Management
@@ -1428,7 +1347,6 @@ class TerminalWindowCoordinator: ObservableObject {
         var inheritedCwd: String? = nil
         if let terminalId = getActiveTerminalId() {
             inheritedCwd = getCwd(terminalId: Int(terminalId))
-            print("🔍 [CreatePage] Got CWD from terminal \(terminalId): \(inheritedCwd ?? "nil")")
         }
 
         let newPage = terminalWindow.createPage(title: title)
@@ -1437,7 +1355,6 @@ class TerminalWindowCoordinator: ObservableObject {
         for panel in newPage.allPanels {
             for tab in panel.tabs {
                 if tab.rustTerminalId == nil {
-                    print("📝 [CreatePage] Creating terminal with inherited CWD: \(inheritedCwd ?? "nil")")
                     let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: inheritedCwd)
                     if terminalId >= 0 {
                         tab.setRustTerminalId(UInt32(terminalId))

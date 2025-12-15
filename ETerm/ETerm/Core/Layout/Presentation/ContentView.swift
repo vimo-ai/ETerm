@@ -34,7 +34,6 @@ class WindowCwdManager {
         defer { lock.unlock() }
         let cwd = pendingCwd
         pendingCwd = nil
-        print("🔄 [WindowCwdManager] takePendingCwd: \(cwd ?? "nil")")
         return cwd
     }
 }

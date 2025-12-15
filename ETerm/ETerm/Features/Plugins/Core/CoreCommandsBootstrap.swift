@@ -38,7 +38,6 @@ final class CoreCommandsBootstrap {
     /// 注册所有核心命令和快捷键
     static func registerCoreCommands() {
         guard !isRegistered else {
-            print("⚠️ [CoreCommands] 核心命令已经注册过了，跳过")
             return
         }
         isRegistered = true
@@ -319,7 +318,6 @@ final class CoreCommandsBootstrap {
         })
         keyboard.bind(.cmd("f"), to: "terminal.search", when: nil)
 
-        print("✅ [CoreCommands] 已注册所有核心命令和快捷键")
     }
 
     // MARK: - 关闭确认
@@ -535,7 +533,6 @@ extension TerminalWindowCoordinator {
     func selectAll() {
         // TODO: 实现全选功能
         // 需要获取终端的所有内容范围并设置选区
-        print("⚠️ [CoreCommands] selectAll 功能待实现")
     }
 
     /// 清除选中

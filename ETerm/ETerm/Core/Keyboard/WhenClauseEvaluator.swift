@@ -90,7 +90,6 @@ struct WhenClauseEvaluator {
             return context.imeActive
         default:
             // 未知条件默认返回 true（宽容策略）
-            print("⚠️ [WhenClause] 未知条件: \(trimmed)")
             return true
         }
     }

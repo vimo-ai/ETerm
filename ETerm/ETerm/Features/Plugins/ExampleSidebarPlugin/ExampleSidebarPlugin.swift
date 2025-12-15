@@ -13,7 +13,6 @@ final class ExampleSidebarPlugin: Plugin {
     static let version = "1.0.0"
 
     func activate(context: PluginContext) {
-        print("🔌 [\(Self.name)] 激活中...")
 
         // 注册第一个 Tab
         let tab1 = SidebarTab(
@@ -35,11 +34,9 @@ final class ExampleSidebarPlugin: Plugin {
         }
         context.ui.registerSidebarTab(for: Self.id, pluginName: Self.name, tab: tab2)
 
-        print("✅ [\(Self.name)] 已注册 2 个侧边栏 Tab")
     }
 
     func deactivate() {
-        print("🔌 [\(Self.name)] 停用")
     }
 }
 

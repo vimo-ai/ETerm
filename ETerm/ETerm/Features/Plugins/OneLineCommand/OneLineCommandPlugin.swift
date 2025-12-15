@@ -45,7 +45,6 @@ final class OneLineCommandPlugin: Plugin {
         // 绑定快捷键
         bindKeyboard(context: context)
 
-        print("✅ \(Self.name) 已激活")
     }
 
     func deactivate() {
@@ -59,7 +58,6 @@ final class OneLineCommandPlugin: Plugin {
         // 清理资源
         inputController = nil
 
-        print("🔌 \(Self.name) 已停用")
     }
 
     // MARK: - 注册命令
@@ -95,7 +93,6 @@ final class OneLineCommandPlugin: Plugin {
     /// 显示命令输入面板
     private func showInputPanel(_ context: CommandContext) {
         guard let coordinator = context.coordinator else {
-            print("⚠️ 无法显示输入框：coordinator 不可用")
             return
         }
 
@@ -125,7 +122,6 @@ final class OneLineCommandPlugin: Plugin {
 
     /// 执行命令
     private func executeCommand(_ command: String, cwd: String) {
-        print("💬 执行命令: \(command) (cwd: \(cwd))")
 
         // 执行命令
         ImmediateExecutor.execute(command, cwd: cwd) { [weak self] result in
@@ -139,7 +135,6 @@ final class OneLineCommandPlugin: Plugin {
     private func handleExecutionResult(_ result: CommandExecutionResult) {
         switch result {
         case .success(let output):
-            print("✅ 命令执行成功")
             // 显示结果 3 秒后自动关闭
             inputController?.showResult(output, isError: false)
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
@@ -147,7 +142,6 @@ final class OneLineCommandPlugin: Plugin {
             }
 
         case .failure(let error):
-            print("❌ 命令执行失败: \(error)")
             // 显示错误 5 秒后自动关闭
             inputController?.showResult(error, isError: true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in

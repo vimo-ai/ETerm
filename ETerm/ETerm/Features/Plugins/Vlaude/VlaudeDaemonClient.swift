@@ -70,7 +70,6 @@ final class VlaudeDaemonClient {
         setupEventHandlers()
 
         socket?.connect()
-        print("🔌 [VlaudeDaemonClient] 正在连接 daemon...")
     }
 
     func disconnect() {
@@ -78,7 +77,6 @@ final class VlaudeDaemonClient {
         socket = nil
         manager = nil
         isConnected = false
-        print("🔌 [VlaudeDaemonClient] 已断开")
     }
 
     // MARK: - Event Handlers
@@ -90,24 +88,20 @@ final class VlaudeDaemonClient {
         socket.on(clientEvent: .connect) { [weak self] _, _ in
             guard let self = self else { return }
             self.isConnected = true
-            print("✅ [VlaudeDaemonClient] 已连接到 daemon")
             self.delegate?.daemonClientDidConnect(self)
         }
 
         // 断开连接
         socket.on(clientEvent: .disconnect) { [weak self] _, _ in
             self?.isConnected = false
-            print("🔌 [VlaudeDaemonClient] 连接已断开")
         }
 
         // 连接错误
         socket.on(clientEvent: .error) { data, _ in
-            print("❌ [VlaudeDaemonClient] 连接错误: \(data)")
         }
 
         // 重连中
         socket.on(clientEvent: .reconnectAttempt) { data, _ in
-            print("🔄 [VlaudeDaemonClient] 正在重连...")
         }
 
         // 业务事件：注入消息
@@ -138,12 +132,10 @@ final class VlaudeDaemonClient {
             guard let self = self,
                   let dict = data.first as? [String: Any],
                   let projectPath = dict["projectPath"] as? String else {
-                print("⚠️ [VlaudeDaemonClient] session:create 参数无效")
                 return
             }
             let prompt = dict["prompt"] as? String
             let requestId = dict["requestId"] as? String
-            print("📥 [VlaudeDaemonClient] 收到创建会话请求: \(projectPath), requestId: \(requestId ?? "N/A")")
             self.delegate?.daemonClient(self, didReceiveCreateSession: projectPath, prompt: prompt, requestId: requestId)
         }
     }
@@ -152,12 +144,9 @@ final class VlaudeDaemonClient {
 
     func reportSessionAvailable(sessionId: String, terminalId: Int) {
         guard isConnected else {
-            print("⚠️ [VlaudeDaemonClient] 未连接，无法发送消息")
-            print("   Terminal \(terminalId) → Session \(sessionId)")
             return
         }
 
-        print("📤 [VlaudeDaemonClient] 发送 session:available - \(sessionId.prefix(8))... -> Terminal \(terminalId)")
         socket?.emit("session:available", [
             "sessionId": sessionId,
             "terminalId": terminalId
@@ -166,7 +155,6 @@ final class VlaudeDaemonClient {
 
     func reportSessionUnavailable(sessionId: String) {
         guard isConnected else {
-            print("⚠️ [VlaudeDaemonClient] 未连接，无法发送消息")
             return
         }
 
@@ -178,14 +166,9 @@ final class VlaudeDaemonClient {
     /// 上报会话创建完成（带 requestId）
     func reportSessionCreated(requestId: String, sessionId: String, projectPath: String) {
         guard isConnected else {
-            print("⚠️ [VlaudeDaemonClient] 未连接，无法发送消息")
             return
         }
 
-        print("📤 [VlaudeDaemonClient] 发送 session:created")
-        print("   RequestId: \(requestId)")
-        print("   SessionId: \(sessionId.prefix(8))...")
-        print("   ProjectPath: \(projectPath)")
 
         socket?.emit("session:created", [
             "requestId": requestId,

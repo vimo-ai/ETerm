@@ -904,7 +904,6 @@ struct InlineComposerView: View {
             } catch {
                 self.isLoading = false
                 self.suggestion = "❌ Error: \(error.localizedDescription)"
-                print("写作检查失败: \(error)")
             }
         }
     }
@@ -914,7 +913,6 @@ struct InlineComposerView: View {
         Task { @MainActor in
             guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
                   let modelContainer = appDelegate.modelContainer else {
-                print("❌ ModelContainer not available")
                 return
             }
 
@@ -932,9 +930,7 @@ struct InlineComposerView: View {
                     modelContext.insert(record)
                 }
                 try modelContext.save()
-                print("📝 Saved \(fixes.count) grammar error(s)")
             } catch {
-                print("❌ Failed to save grammar errors: \(error)")
             }
         }
     }
@@ -957,7 +953,6 @@ struct InlineComposerView: View {
                 self.isLoadingDetail = false
             } catch {
                 self.isLoadingDetail = false
-                print("加载详细解释失败: \(error)")
             }
         }
     }

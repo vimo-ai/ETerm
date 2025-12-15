@@ -65,8 +65,6 @@ final class DropIntentQueue {
     ///
     /// - Parameter intent: 拖拽意图
     func submit(_ intent: DropIntent) {
-        print("📋 [DropIntentQueue] submit: \(intent)")
-
         // 如果已有待处理意图，先取消
         cancelPending()
 
@@ -80,8 +78,6 @@ final class DropIntentQueue {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
-
-            print("📋 [DropIntentQueue] 收到 tabDragSessionEnded 通知")
 
             // 移除监听器
             self.removeObserver()
@@ -99,7 +95,6 @@ final class DropIntentQueue {
         let workItem = DispatchWorkItem { [weak self] in
             guard let self = self, self.pendingIntent != nil else { return }
 
-            print("📋 [DropIntentQueue] 超时触发执行")
             self.removeObserver()
             self.executeIntent()
         }
@@ -110,7 +105,6 @@ final class DropIntentQueue {
     /// 取消待处理的意图
     func cancelPending() {
         if pendingIntent != nil {
-            print("📋 [DropIntentQueue] 取消待处理意图")
         }
         pendingIntent = nil
         removeObserver()
@@ -128,7 +122,6 @@ final class DropIntentQueue {
         }
         pendingIntent = nil
 
-        print("📋 [DropIntentQueue] executeIntent: \(intent)")
 
         // 发送执行通知，由 Coordinator 处理
         NotificationCenter.default.post(
