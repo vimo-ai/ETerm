@@ -722,6 +722,38 @@ impl Terminal {
         })
     }
 
+    /// 获取指定范围内的文本（不需要设置选区）
+    ///
+    /// # 参数
+    /// - `start_row`, `start_col`: 起始位置（绝对坐标）
+    /// - `end_row`, `end_col`: 结束位置（绝对坐标）
+    ///
+    /// # 返回
+    /// - `Some(String)` - 范围内的文本
+    /// - `None` - 范围无效
+    pub fn text_in_range(&self, start_row: i32, start_col: u32, end_row: i32, end_col: u32) -> Option<String> {
+        use rio_backend::crosswords::pos::{Line, Column, Pos};
+
+        with_crosswords!(self, crosswords, {
+            let history_size = crosswords.grid.history_size() as i32;
+
+            // 规范化：确保 start <= end
+            let (sr, sc, er, ec) = if start_row < end_row || (start_row == end_row && start_col <= end_col) {
+                (start_row, start_col, end_row, end_col)
+            } else {
+                (end_row, end_col, start_row, start_col)
+            };
+
+            // 转换为 Grid Line 坐标
+            let start_line = Line(sr - history_size);
+            let end_line = Line(er - history_size);
+            let start_pos = Pos::new(start_line, Column(sc as usize));
+            let end_pos = Pos::new(end_line, Column(ec as usize));
+
+            Some(crosswords.bounds_to_string(start_pos, end_pos))
+        })
+    }
+
     /// 完成选区（mouseUp 时调用）
     ///
     /// 业务逻辑：

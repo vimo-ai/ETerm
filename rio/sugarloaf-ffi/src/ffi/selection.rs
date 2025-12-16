@@ -203,29 +203,23 @@ pub extern "C" fn terminal_pool_get_selection_text(
     ffi_boundary(default, || {
         let pool = unsafe { &*(handle as *const TerminalPool) };
 
-        // 使用 try_with_terminal 避免阻塞主线程
-        pool.try_with_terminal(terminal_id, |terminal| {
-            match terminal.selection_text() {
-                Some(text) => {
-                    let text_len = text.len();
-                    let c_string = std::ffi::CString::new(text).unwrap_or_default();
-                    GetSelectionTextResult {
-                        text: c_string.into_raw(),
-                        text_len,
-                        success: true,
-                    }
+        // 从 SelectionOverlay 读取选区坐标并获取文本
+        match pool.get_selection_text(terminal_id) {
+            Some(text) => {
+                let text_len = text.len();
+                let c_string = std::ffi::CString::new(text).unwrap_or_default();
+                GetSelectionTextResult {
+                    text: c_string.into_raw(),
+                    text_len,
+                    success: true,
                 }
-                None => GetSelectionTextResult {
-                    text: std::ptr::null_mut(),
-                    text_len: 0,
-                    success: false,
-                },
             }
-        }).unwrap_or(GetSelectionTextResult {
-            text: std::ptr::null_mut(),
-            text_len: 0,
-            success: false,
-        })
+            None => GetSelectionTextResult {
+                text: std::ptr::null_mut(),
+                text_len: 0,
+                success: false,
+            },
+        }
     })
 }
 

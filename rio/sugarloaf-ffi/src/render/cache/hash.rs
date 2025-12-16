@@ -1,6 +1,6 @@
 use std::hash::Hasher;
 use std::collections::hash_map::DefaultHasher;
-use crate::domain::{TerminalState, SelectionView, MatchRange};
+use crate::domain::{TerminalState, MatchRange};
 #[cfg(test)]
 use crate::domain::SearchView;
 
@@ -53,18 +53,7 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
         hasher.write_u8(state.cursor.shape as u8);
     }
 
-    // 2. 选区覆盖本行？（使用绝对行号比较）
-    if let Some(sel) = &state.selection {
-        let in_sel = line_in_selection(abs_line, sel);
-        if in_sel {
-            let (start_col, end_col) = selection_range_on_line(abs_line, sel);
-            hasher.write_usize(start_col);
-            hasher.write_usize(end_col);
-            hasher.write_u8(sel.ty as u8);
-        }
-    }
-
-    // 3. 搜索覆盖本行？（使用绝对行号比较）
+    // 2. 搜索覆盖本行？（使用绝对行号比较）
     // 🚀 性能优化：使用按行索引的 HashMap，避免遍历所有匹配
     if let Some(search) = &state.search {
         // 先通过行号快速查找该行的匹配索引（usize 类型）
@@ -81,7 +70,7 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
         }
     }
 
-    // 4. 超链接悬停覆盖本行？（使用绝对行号比较）
+    // 3. 超链接悬停覆盖本行？（使用绝对行号比较）
     if let Some(hover) = &state.hyperlink_hover {
         if let Some((start_col, end_col)) = hover.column_range_on_line(abs_line, usize::MAX) {
             hasher.write_usize(start_col);
@@ -91,26 +80,6 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
     }
 
     hasher.finish()
-}
-
-/// 判断选区是否覆盖本行
-///
-/// # 参数
-/// - `abs_line`: 绝对行号（已转换）
-/// - `sel`: 选区视图（使用绝对坐标）
-fn line_in_selection(abs_line: usize, sel: &SelectionView) -> bool {
-    abs_line >= sel.start.line && abs_line <= sel.end.line
-}
-
-/// 获取选区在本行的范围
-///
-/// # 参数
-/// - `abs_line`: 绝对行号（已转换）
-/// - `sel`: 选区视图（使用绝对坐标）
-fn selection_range_on_line(abs_line: usize, sel: &SelectionView) -> (usize, usize) {
-    let start_col = if abs_line == sel.start.line { sel.start.col } else { 0 };
-    let end_col = if abs_line == sel.end.line { sel.end.col } else { usize::MAX };
-    (start_col, end_col)
 }
 
 /// 获取匹配在本行的范围
@@ -127,7 +96,7 @@ fn match_range_on_line(abs_line: usize, m: &MatchRange) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{AbsolutePoint, SelectionType, GridView, GridData, CursorView};
+    use crate::domain::{AbsolutePoint, SelectionType, SelectionView, GridView, GridData, CursorView};
     use rio_backend::ansi::CursorShape;
     use std::sync::Arc;
 

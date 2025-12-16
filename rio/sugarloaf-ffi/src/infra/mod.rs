@@ -9,6 +9,7 @@
 
 pub mod spsc_queue;
 pub mod atomic_cache;
+pub mod selection_overlay;
 
 #[cfg(test)]
 mod stress_tests;
@@ -24,3 +25,4 @@ pub use atomic_cache::{
     AtomicTitleCache,
     AtomicScrollCache,
 };
+pub use selection_overlay::{SelectionOverlay, SelectionSnapshot, SelectionType};

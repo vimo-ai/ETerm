@@ -1,6 +1,6 @@
 use crate::domain::TerminalState;
 use crate::domain::views::grid::CellData;
-use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SelectionInfo, SearchMatchInfo, HyperlinkHoverInfo};
+use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SearchMatchInfo, HyperlinkHoverInfo};
 use super::cache::{compute_text_hash, compute_state_hash_for_line};
 use super::font::FontContext;
 use super::layout::TextShaper;
@@ -482,41 +482,6 @@ impl Renderer {
             None
         };
 
-        // 🔧 从 state 动态计算 selection_info（不从 layout 缓存读取）
-        // 注意：selection 使用绝对坐标，需要转换为屏幕行号进行比较
-        let selection_info = if let Some(selection) = &state.selection {
-            // 转换屏幕行号为绝对行号
-            let abs_line = state.grid.history_size()
-                .saturating_add(line)
-                .saturating_sub(state.grid.display_offset());
-
-            // 检查本行是否在选区范围内
-            if abs_line >= selection.start.line && abs_line <= selection.end.line {
-                // 计算本行的选区列范围
-                let start_col = if abs_line == selection.start.line {
-                    selection.start.col
-                } else {
-                    0
-                };
-                let end_col = if abs_line == selection.end.line {
-                    selection.end.col
-                } else {
-                    usize::MAX
-                };
-
-                Some(SelectionInfo {
-                    start_col,
-                    end_col,
-                    fg_color: self.config.colors.selection_foreground,
-                    bg_color: self.config.colors.selection_background,
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
         // 🔧 从 state 动态计算 search_info（不从 layout 缓存读取）
         // 注意：search 使用绝对坐标，需要转换为屏幕行号进行比较
         let search_info = if let Some(search) = &state.search {
@@ -597,7 +562,6 @@ impl Renderer {
             .render(
                 &layout,
                 cursor_info.as_ref(),
-                selection_info.as_ref(),
                 search_info.as_ref(),
                 hyperlink_hover_info.as_ref(),
                 &url_ranges,

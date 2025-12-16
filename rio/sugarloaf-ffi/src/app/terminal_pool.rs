@@ -139,6 +139,9 @@ struct TerminalEntry {
     /// 持久化渲染状态（增量同步用）
     /// 使用 Arc<Mutex<...>> 以支持在释放 terminals 读锁后继续访问
     render_state: Arc<Mutex<crate::domain::aggregates::render_state::RenderState>>,
+
+    /// 独立选区叠加层（不在 Terminal 内）
+    selection_overlay: Arc<crate::infra::SelectionOverlay>,
 }
 
 /// 终端池
@@ -412,6 +415,7 @@ impl TerminalPool {
                 cols as usize,
                 rows as usize,
             ))),  // 增量同步用，首次 sync 时全量同步
+            selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
         };
 
         self.terminals.write().insert(id, entry);
@@ -467,6 +471,7 @@ impl TerminalPool {
                 cols as usize,
                 rows as usize,
             ))),  // 增量同步用，首次 sync 时全量同步
+            selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
         };
 
         self.terminals.write().insert(id, entry);
@@ -524,6 +529,7 @@ impl TerminalPool {
                 cols as usize,
                 rows as usize,
             ))),
+            selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
         };
 
         self.terminals.write().insert(id, entry);
@@ -586,6 +592,7 @@ impl TerminalPool {
                 cols as usize,
                 rows as usize,
             ))),
+            selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
         };
 
         self.terminals.write().insert(id, entry);
@@ -865,23 +872,20 @@ impl TerminalPool {
     ///
     /// 使用 try_lock 避免阻塞主线程
     pub fn set_selection(&self, id: usize, start_row: usize, start_col: usize, end_row: usize, end_col: usize) -> bool {
-        use crate::domain::primitives::AbsolutePoint;
-        use crate::domain::views::SelectionType;
-
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            if let Some(mut terminal) = entry.terminal.try_lock() {
-                let start_pos = AbsolutePoint::new(start_row, start_col);
-                let end_pos = AbsolutePoint::new(end_row, end_col);
-                terminal.start_selection(start_pos, SelectionType::Simple);
-                terminal.update_selection(end_pos);
-                // 选区变化后标记脏，触发重新渲染
-                entry.dirty_flag.mark_dirty();
-                self.needs_render.store(true, Ordering::Release);
-                true
-            } else {
-                false
-            }
+            // 直接操作 SelectionOverlay，无需 Terminal 锁
+            entry.selection_overlay.update(
+                start_row as i32,
+                start_col as u32,
+                end_row as i32,
+                end_col as u32,
+                crate::infra::SelectionType::Simple,
+            );
+
+            // 标记需要渲染
+            self.needs_render.store(true, Ordering::Release);
+            true
         } else {
             false
         }
@@ -893,15 +897,9 @@ impl TerminalPool {
     pub fn clear_selection(&self, id: usize) -> bool {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            if let Some(mut terminal) = entry.terminal.try_lock() {
-                terminal.clear_selection();
-                // 选区变化后标记脏，触发重新渲染
-                entry.dirty_flag.mark_dirty();
-                self.needs_render.store(true, Ordering::Release);
-                true
-            } else {
-                false
-            }
+            entry.selection_overlay.clear();
+            self.needs_render.store(true, Ordering::Release);
+            true
         } else {
             false
         }
@@ -909,26 +907,66 @@ impl TerminalPool {
 
     /// 完成选区（mouseUp 时调用）
     ///
+    /// 从 SelectionOverlay 读取坐标，获取文本
     /// 如果选区内容全是空白，自动清除选区并触发渲染
     pub fn finalize_selection(&self, id: usize) -> Option<String> {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            if let Some(mut terminal) = entry.terminal.try_lock() {
-                let result = terminal.finalize_selection();
-                // finalize_selection 可能会清除选区（空白内容时）
-                // 无论是否清除，都标记脏以确保渲染最新状态
-                if result.is_none() {
-                    // 选区被清除了，需要重新渲染
-                    entry.dirty_flag.mark_dirty();
-                    self.needs_render.store(true, Ordering::Release);
+            let snapshot = entry.selection_overlay.snapshot()?;
+
+            if let Some(terminal) = entry.terminal.try_lock() {
+                let text = terminal.text_in_range(
+                    snapshot.start_row,
+                    snapshot.start_col,
+                    snapshot.end_row,
+                    snapshot.end_col,
+                );
+
+                match text {
+                    Some(ref t) if t.chars().all(|c| c.is_whitespace()) => {
+                        entry.selection_overlay.clear();
+                        self.needs_render.store(true, Ordering::Release);
+                        None
+                    }
+                    Some(t) => Some(t),
+                    None => None,
                 }
-                result
             } else {
                 None
             }
         } else {
             None
         }
+    }
+
+    /// 获取选区文本（不清除选区）
+    ///
+    /// 从 SelectionOverlay 读取坐标，获取文本
+    pub fn get_selection_text(&self, id: usize) -> Option<String> {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let snapshot = entry.selection_overlay.snapshot()?;
+
+            if let Some(terminal) = entry.terminal.try_lock() {
+                terminal.text_in_range(
+                    snapshot.start_row,
+                    snapshot.start_col,
+                    snapshot.end_row,
+                    snapshot.end_col,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// 获取选区叠加层
+    ///
+    /// 返回 Arc 以便调用方持有引用
+    pub fn get_selection_overlay(&self, id: usize) -> Option<Arc<crate::infra::SelectionOverlay>> {
+        self.terminals.read().get(&id).map(|e| e.selection_overlay.clone())
     }
 
     /// 设置超链接悬停状态
@@ -1055,8 +1093,9 @@ impl TerminalPool {
                         Some(cache) => cache.width == cache_width && cache.height == cache_height,
                         None => false,
                     };
-                    // 快速路径：缓存有效且不脏，直接跳过
-                    if valid && !entry.dirty_flag.is_dirty() {
+                    // 快速路径：缓存有效且不脏且选区无变化，直接跳过
+                    // 注意：selection_overlay.is_dirty() 是无锁检查
+                    if valid && !entry.dirty_flag.is_dirty() && !entry.selection_overlay.is_dirty() {
                         return true;
                     }
                     valid
@@ -1073,7 +1112,7 @@ impl TerminalPool {
         // 解决：快速获取 Arc 引用后立即释放读锁，耗时操作在锁外执行
 
         // 阶段 1：快速获取 Arc 引用（读锁只持有几微秒）
-        let (terminal_arc, render_state_arc, dirty_flag, cursor_cache, selection_cache, scroll_cache) = {
+        let (terminal_arc, render_state_arc, dirty_flag, cursor_cache, selection_cache, scroll_cache, selection_overlay) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
                 Some(entry) => {
@@ -1084,6 +1123,7 @@ impl TerminalPool {
                         entry.cursor_cache.clone(),
                         entry.selection_cache.clone(),
                         entry.scroll_cache.clone(),
+                        entry.selection_overlay.clone(),
                     )
                 },
                 None => return false,
@@ -1109,9 +1149,10 @@ impl TerminalPool {
                     };
 
                     // 检查是否需要渲染
-                    // 如果缓存有效、RenderState 无变化、无 damage、且 dirty_flag 未标记，跳过渲染
-                    // 注：dirty_flag 用于外部触发（选区、滚动等），is_damaged() 用于内部 PTY 输出
-                    if cache_valid && !state_changed && !terminal.is_damaged() && !dirty_flag.is_dirty() {
+                    // 如果缓存有效、RenderState 无变化、无 damage、dirty_flag 未标记、且选区无变化，跳过渲染
+                    // 注：dirty_flag 用于外部触发（滚动等），is_damaged() 用于内部 PTY 输出
+                    // selection_overlay.is_dirty() 用于选区变化检测
+                    if cache_valid && !state_changed && !terminal.is_damaged() && !dirty_flag.is_dirty() && !selection_overlay.is_dirty() {
                         return true;
                     }
 
@@ -1245,6 +1286,33 @@ impl TerminalPool {
                             canvas.draw_image(&image, (0.0f32, y_offset), None);
                         }
 
+                        // 绘制选区叠加层
+                        if let Some(snapshot) = entry.selection_overlay.snapshot() {
+                            // 检查选区内容是否全是空白
+                            let is_all_whitespace = self.is_selection_all_whitespace(
+                                &state.grid,
+                                &snapshot,
+                            );
+
+                            if is_all_whitespace {
+                                // 空白选区，自动清除
+                                entry.selection_overlay.clear();
+                            } else {
+                                use crate::domain::primitives::PhysicalPixels;
+                                let physical_cell_width = PhysicalPixels::new(logical_cell_size.width.value * scale);
+                                let physical_line_height = PhysicalPixels::new(logical_line_height.value * scale);
+                                self.draw_selection_overlay(
+                                    canvas,
+                                    &snapshot,
+                                    physical_cell_width,
+                                    physical_line_height,
+                                    rows,
+                                    state.grid.history_size(),
+                                    state.grid.display_offset(),
+                                );
+                            }
+                        }
+
                         renderer.print_frame_stats(&format!("terminal_{}", id));
 
                         // 从 Surface 获取 Image 快照并更新缓存
@@ -1273,12 +1341,10 @@ impl TerminalPool {
         // - dirty_flag: PTY 写入后立即标记（无锁，快速检查）
         // - Terminal.damage: Crosswords 内部标记（需要锁，精确检查）
         // 两者配合使用：dirty_flag 用于快速跳过，damage 用于精确判断
-        {
-            let terminals = self.terminals.read();
-            if let Some(entry) = terminals.get(&id) {
-                entry.dirty_flag.check_and_clear();
-            }
-        }
+        dirty_flag.check_and_clear();
+
+        // 清除选区叠加层的脏标记（无锁）
+        selection_overlay.check_and_clear_dirty();
 
         true
     }
@@ -1970,6 +2036,147 @@ impl TerminalPool {
                 crate::domain::aggregates::TerminalMode::Active
             }
         })
+    }
+
+    /// 检查选区内容是否全是空白
+    ///
+    /// # 参数
+    /// - grid: 网格视图
+    /// - selection: 选区快照
+    ///
+    /// # 返回
+    /// - true: 选区内容全是空白字符
+    /// - false: 选区内容包含非空白字符
+    fn is_selection_all_whitespace(
+        &self,
+        grid: &crate::domain::views::GridView,
+        selection: &crate::infra::SelectionSnapshot,
+    ) -> bool {
+        let history_size = grid.history_size() as i32;
+        let display_offset = grid.display_offset() as i32;
+        let screen_lines = grid.lines();
+
+        // 规范化选区坐标
+        let (start_row, start_col, end_row, end_col) =
+            if selection.start_row < selection.end_row
+               || (selection.start_row == selection.end_row && selection.start_col <= selection.end_col) {
+                (selection.start_row, selection.start_col, selection.end_row, selection.end_col)
+            } else {
+                (selection.end_row, selection.end_col, selection.start_row, selection.start_col)
+            };
+
+        // 遍历选区范围内的可见行
+        for abs_row in start_row..=end_row {
+            // 转换为屏幕行号
+            let screen_row = abs_row - history_size + display_offset;
+            if screen_row < 0 || screen_row >= screen_lines as i32 {
+                continue; // 不在可见区域
+            }
+
+            if let Some(row) = grid.row(screen_row as usize) {
+                let cells = row.cells();
+                let row_start_col = if abs_row == start_row { start_col as usize } else { 0 };
+                let row_end_col = if abs_row == end_row { end_col as usize } else { cells.len().saturating_sub(1) };
+
+                for col in row_start_col..=row_end_col.min(cells.len().saturating_sub(1)) {
+                    let c = cells[col].c;
+                    if !c.is_whitespace() && c != '\0' {
+                        return false; // 找到非空白字符
+                    }
+                }
+            }
+        }
+
+        true // 全是空白
+    }
+
+    /// 绘制选区叠加层
+    ///
+    /// # 参数
+    /// - canvas: Skia Canvas
+    /// - selection: 选区快照
+    /// - cell_width: 单元格宽度（物理像素）
+    /// - line_height: 行高（物理像素）
+    /// - screen_rows: 可见行数
+    /// - history_size: 历史缓冲区大小
+    /// - display_offset: 滚动偏移
+    fn draw_selection_overlay(
+        &self,
+        canvas: &skia_safe::Canvas,
+        selection: &crate::infra::SelectionSnapshot,
+        cell_width: crate::domain::primitives::PhysicalPixels,
+        line_height: crate::domain::primitives::PhysicalPixels,
+        screen_rows: usize,
+        history_size: usize,
+        display_offset: usize,
+    ) {
+        use crate::infra::SelectionType;
+
+        // 选区背景色：半透明蓝色
+        let selection_color = skia_safe::Color4f::new(0.3, 0.5, 0.8, 0.35);
+
+        let mut paint = skia_safe::Paint::default();
+        paint.set_color4f(selection_color, None);
+        paint.set_anti_alias(false);  // 矩形不需要抗锯齿
+
+        // 规范化选区：确保 start <= end（支持反向选择）
+        let (sel_start_row, sel_start_col, sel_end_row, sel_end_col) =
+            if selection.start_row < selection.end_row
+               || (selection.start_row == selection.end_row && selection.start_col <= selection.end_col) {
+                // 正向选择
+                (selection.start_row, selection.start_col, selection.end_row, selection.end_col)
+            } else {
+                // 反向选择：交换 start 和 end
+                (selection.end_row, selection.end_col, selection.start_row, selection.start_col)
+            };
+
+        // 遍历可见行
+        for screen_row in 0..screen_rows {
+            // 计算绝对行号
+            let abs_row = (history_size + screen_row).saturating_sub(display_offset) as i32;
+
+            // 检查是否在选区范围内
+            if abs_row < sel_start_row || abs_row > sel_end_row {
+                continue;
+            }
+
+            // 计算该行的选区列范围
+            let (start_col, end_col) = match selection.ty {
+                SelectionType::Block => {
+                    // 块选区：固定列范围（也需要规范化）
+                    (sel_start_col.min(sel_end_col), sel_start_col.max(sel_end_col))
+                }
+                SelectionType::Lines => {
+                    // 行选区：整行
+                    (0, u32::MAX)
+                }
+                SelectionType::Simple => {
+                    // 普通选区
+                    let start = if abs_row == sel_start_row {
+                        sel_start_col
+                    } else {
+                        0
+                    };
+                    let end = if abs_row == sel_end_row {
+                        sel_end_col
+                    } else {
+                        u32::MAX
+                    };
+                    (start, end)
+                }
+            };
+
+            // 绘制矩形
+            let x = start_col as f32 * cell_width.value;
+            let y = screen_row as f32 * line_height.value;
+            let w = ((end_col.saturating_sub(start_col)).min(1000) + 1) as f32 * cell_width.value;
+            let h = line_height.value;
+
+            canvas.draw_rect(
+                skia_safe::Rect::from_xywh(x, y, w, h),
+                &paint,
+            );
+        }
     }
 }
 
