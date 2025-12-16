@@ -156,7 +156,11 @@ struct KeyStroke: Hashable {
         // 特殊键处理
         switch keyCode {
         case 36, 76: return "\r"       // Return (主键盘) / Enter (小键盘)
-        case 48: return "\t"           // Tab
+        case 48:
+            if modifiers.contains(.shift) {
+                return "\u{1B}[Z"      // Shift+Tab: CSI Z (Backtab)
+            }
+            return "\t"                // Tab
         case 51: return "\u{7F}"       // Delete (Backspace)
         case 53: return "\u{1B}"       // Escape
         case 114: return "\u{1B}[2~"   // Insert
