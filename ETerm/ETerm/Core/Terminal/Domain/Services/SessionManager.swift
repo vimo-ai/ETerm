@@ -14,10 +14,13 @@ import AppKit
 struct SessionState: Codable {
     let windows: [WindowState]
     let version: Int
+    /// 插件数据（namespace -> 插件自己序列化的 JSON 字符串）
+    var plugins: [String: String]?
 
-    init(windows: [WindowState]) {
+    init(windows: [WindowState], plugins: [String: String]? = nil) {
         self.windows = windows
         self.version = 1
+        self.plugins = plugins
     }
 }
 
@@ -51,6 +54,7 @@ indirect enum PanelLayoutState: Codable {
 
 /// Tab 状态
 struct TabState: Codable {
+    let tabId: String  // UUID string（用于持久化，确保重启后 ID 一致）
     let title: String
     let cwd: String  // 工作目录
 }
@@ -82,13 +86,23 @@ struct CodableRect: Codable {
 /// - 保存所有窗口状态到 UserDefaults
 /// - 启动时恢复窗口状态
 /// - 窗口关闭时从 session 移除
+/// - 管理插件数据的存取
 final class SessionManager {
     static let shared = SessionManager()
 
     private let userDefaults = UserDefaults.standard
     private let sessionKey = "com.eterm.windowSession"
 
-    private init() {}
+    /// 插件数据缓存（内存中，保存时合并）
+    private var pluginDataCache: [String: String] = [:]
+    private let pluginLock = NSLock()
+
+    private init() {
+        // 启动时加载插件数据到缓存
+        if let session = load() {
+            pluginDataCache = session.plugins ?? [:]
+        }
+    }
 
     // MARK: - Session 保存和加载
 
@@ -96,7 +110,11 @@ final class SessionManager {
     ///
     /// - Parameter windows: 窗口状态数组
     func save(windows: [WindowState]) {
-        let session = SessionState(windows: windows)
+        pluginLock.lock()
+        let plugins = pluginDataCache.isEmpty ? nil : pluginDataCache
+        pluginLock.unlock()
+
+        let session = SessionState(windows: windows, plugins: plugins)
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -107,6 +125,38 @@ final class SessionManager {
         } catch {
             // 保存失败时静默处理
         }
+    }
+
+    // MARK: - 插件数据 API
+
+    /// 保存插件数据
+    ///
+    /// - Parameters:
+    ///   - namespace: 插件命名空间（如 "claude"）
+    ///   - data: 插件自己序列化的 JSON 字符串
+    func setPluginData(namespace: String, data: String) {
+        pluginLock.lock()
+        pluginDataCache[namespace] = data
+        pluginLock.unlock()
+    }
+
+    /// 获取插件数据
+    ///
+    /// - Parameter namespace: 插件命名空间
+    /// - Returns: 插件数据，不存在返回 nil
+    func getPluginData(namespace: String) -> String? {
+        pluginLock.lock()
+        defer { pluginLock.unlock() }
+        return pluginDataCache[namespace]
+    }
+
+    /// 移除插件数据
+    ///
+    /// - Parameter namespace: 插件命名空间
+    func removePluginData(namespace: String) {
+        pluginLock.lock()
+        pluginDataCache.removeValue(forKey: namespace)
+        pluginLock.unlock()
     }
 
     /// 加载 Session
