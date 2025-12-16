@@ -737,4 +737,33 @@ ScrollInfo terminal_pool_get_scroll_info(
     size_t terminal_id
 );
 
+// =============================================================================
+// Keyboard API (key to escape sequence conversion)
+// =============================================================================
+
+/// Convert keyboard event to terminal escape sequence
+///
+/// @param key_code macOS keyCode (NSEvent.keyCode)
+/// @param modifiers Modifier key flags:
+///   - bit 0: Shift
+///   - bit 1: Control
+///   - bit 2: Option (Alt)
+///   - bit 3: Command (Meta)
+///
+/// @return Escape sequence string on success (must be freed with free_key_sequence),
+///         NULL if not a special key (caller should use character input)
+///
+/// Example:
+///   const char* seq = key_to_escape_sequence(126, 1);  // Shift+Up -> "\x1b[1;2A"
+///   if (seq) {
+///       write_to_terminal(seq);
+///       free_key_sequence(seq);
+///   }
+const char* key_to_escape_sequence(uint16_t key_code, uint32_t modifiers);
+
+/// Free string returned by key_to_escape_sequence
+///
+/// @param ptr Pointer returned by key_to_escape_sequence (NULL is safe)
+void free_key_sequence(const char* ptr);
+
 #endif /* SugarloafBridge_h */
