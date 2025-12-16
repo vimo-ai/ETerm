@@ -63,8 +63,16 @@ impl TextShaper {
                 }
 
                 // ===== 字体选择优先级（1401-1416 行）=====
-                let (best_font, _is_emoji) = if is_keycap_sequence || next_is_vs16 {
-                    // 优先级 1: Keycap/VS16 → 强制使用 emoji 字体
+                let (best_font, _is_emoji) = if is_keycap_sequence {
+                    // 优先级 1: Keycap → 直接获取 emoji 字体（不检查字符）
+                    // 因为 keycap 的基础字符是 ASCII 数字，Apple Color Emoji 没有单独的数字字形
+                    if let Some(emoji_font) = self.font_context.get_emoji_font(font_size) {
+                        (emoji_font, true)
+                    } else {
+                        self.font_context.find_font_for_char(ch, font_size, &styled_font)
+                    }
+                } else if next_is_vs16 {
+                    // 优先级 2: VS16 emoji → 尝试匹配 emoji 字体
                     if let Some(emoji_font) = self.font_context.find_emoji_font(ch, font_size) {
                         (emoji_font, true)
                     } else {
@@ -76,6 +84,18 @@ impl TextShaper {
                 } else {
                     // 优先级 3: ASCII → 直接使用 styled_font
                     (styled_font.clone(), false)
+                };
+
+                // ===== 构建完整 grapheme cluster（用于渲染）=====
+                let grapheme = if is_keycap_sequence {
+                    // Keycap sequence: "2\u{FE0F}\u{20E3}"
+                    format!("{}\u{FE0F}\u{20E3}", ch)
+                } else if next_is_vs16 {
+                    // VS16 emoji: "❤\u{FE0F}"
+                    format!("{}\u{FE0F}", ch)
+                } else {
+                    // 普通字符: "A", "中", "1"
+                    ch.to_string()
                 };
 
                 // ===== 记录字形（1418-1422 行）=====
@@ -94,7 +114,7 @@ impl TextShaper {
                 let final_font = self.font_context.apply_font_attrs(&best_font, &fragment.style.font_attrs, font_size);
 
                 glyphs.push(GlyphInfo {
-                    ch,
+                    grapheme,
                     font: final_font,
                     x,
                     color,
@@ -167,9 +187,9 @@ mod tests {
         // 验证字形数量
         assert_eq!(layout.glyphs.len(), 5);
 
-        // 验证字符
-        let chars: Vec<char> = layout.glyphs.iter().map(|g| g.ch).collect();
-        assert_eq!(chars, vec!['H', 'e', 'l', 'l', 'o']);
+        // 验证 grapheme
+        let graphemes: Vec<&str> = layout.glyphs.iter().map(|g| g.grapheme.as_str()).collect();
+        assert_eq!(graphemes, vec!["H", "e", "l", "l", "o"]);
 
         // 验证 x 坐标（等宽布局）
         assert_eq!(layout.glyphs[0].x, 0.0);
@@ -188,9 +208,9 @@ mod tests {
         // 验证字形数量
         assert_eq!(layout.glyphs.len(), 7);
 
-        // 验证字符
-        let chars: Vec<char> = layout.glyphs.iter().map(|g| g.ch).collect();
-        assert_eq!(chars, vec!['H', 'e', 'l', 'l', 'o', '世', '界']);
+        // 验证 grapheme
+        let graphemes: Vec<&str> = layout.glyphs.iter().map(|g| g.grapheme.as_str()).collect();
+        assert_eq!(graphemes, vec!["H", "e", "l", "l", "o", "世", "界"]);
     }
 
     #[test]
@@ -202,9 +222,9 @@ mod tests {
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
-        // 验证只有一个字形（VS16 被跳过）
+        // 验证只有一个字形（VS16 被包含在 grapheme 中）
         assert_eq!(layout.glyphs.len(), 1);
-        assert_eq!(layout.glyphs[0].ch, '❤');
+        assert_eq!(layout.glyphs[0].grapheme, "❤\u{FE0F}");
     }
 
     #[test]
@@ -216,9 +236,9 @@ mod tests {
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
-        // 验证只有一个字形（VS16 和 Keycap 被跳过）
+        // 验证只有一个字形（完整的 keycap sequence 存储在 grapheme 中）
         assert_eq!(layout.glyphs.len(), 1);
-        assert_eq!(layout.glyphs[0].ch, '1');
+        assert_eq!(layout.glyphs[0].grapheme, "1\u{FE0F}\u{20E3}");
     }
 
     #[test]
@@ -230,9 +250,10 @@ mod tests {
 
         let layout = shaper.shape_line(&line, 14.0, 8.0, 0, &state);
 
-        // 验证字形（selector 被跳过）
-        let chars: Vec<char> = layout.glyphs.iter().map(|g| g.ch).collect();
-        assert_eq!(chars, vec!['A', '❤', '1', 'B']);
+        // 验证字形（每个逻辑字符一个 glyph，完整序列存储在 grapheme 中）
+        assert_eq!(layout.glyphs.len(), 4);
+        let graphemes: Vec<&str> = layout.glyphs.iter().map(|g| g.grapheme.as_str()).collect();
+        assert_eq!(graphemes, vec!["A", "❤\u{FE0F}", "1\u{FE0F}\u{20E3}", "B"]);
 
         // 验证 x 坐标连续
         assert_eq!(layout.glyphs[0].x, 0.0);

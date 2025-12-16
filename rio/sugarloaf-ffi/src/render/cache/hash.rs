@@ -81,6 +81,15 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
         }
     }
 
+    // 4. 超链接悬停覆盖本行？（使用绝对行号比较）
+    if let Some(hover) = &state.hyperlink_hover {
+        if let Some((start_col, end_col)) = hover.column_range_on_line(abs_line, usize::MAX) {
+            hasher.write_usize(start_col);
+            hasher.write_usize(end_col);
+            hasher.write_u8(1); // 标记有超链接悬停
+        }
+    }
+
     hasher.finish()
 }
 

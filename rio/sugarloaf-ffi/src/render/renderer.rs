@@ -588,6 +588,11 @@ impl Renderer {
             None
         };
 
+        // 🔧 获取当前行的 URL 范围（用于绘制下划线）
+        let url_ranges: Vec<_> = state.grid.row(line)
+            .map(|row| row.urls().to_vec())
+            .unwrap_or_default();
+
         self.rasterizer
             .render(
                 &layout,
@@ -595,6 +600,7 @@ impl Renderer {
                 selection_info.as_ref(),
                 search_info.as_ref(),
                 hyperlink_hover_info.as_ref(),
+                &url_ranges,
                 line_width,
                 metrics.cell_width.value,
                 metrics.cell_height.value,

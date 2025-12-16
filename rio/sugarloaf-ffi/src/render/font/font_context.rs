@@ -170,6 +170,14 @@ impl FontContext {
             .map(|tf| Self::create_font_with_emoji_support(&tf, font_size, true))
     }
 
+    /// 直接获取 Apple Color Emoji 字体（不检查字符）
+    /// 用于 keycap sequence 等需要强制使用 emoji 字体的场景
+    pub fn get_emoji_font(&self, font_size: f32) -> Option<Font> {
+        self.font_mgr
+            .match_family_style("Apple Color Emoji", FontStyle::normal())
+            .map(|tf| Font::from_typeface(&tf, font_size))
+    }
+
     /// 从 font_id 获取或创建 Typeface（带缓存）
     pub fn get_typeface_for_font_id(&self, font_id: usize) -> Option<Typeface> {
         // 检查缓存

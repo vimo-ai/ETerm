@@ -5,8 +5,11 @@ use sugarloaf::layout::FragmentStyleDecoration;
 /// 单个字形信息（渲染层数据）
 #[derive(Debug, Clone)]
 pub struct GlyphInfo {
-    /// 原始字符
-    pub ch: char,
+    /// 完整的 grapheme cluster（用于渲染）
+    /// - 普通字符: "A", "中", "1"
+    /// - VS16 emoji: "❤\u{FE0F}"
+    /// - Keycap emoji: "2\u{FE0F}\u{20E3}"
+    pub grapheme: String,
     /// 用于渲染此字符的字体
     pub font: Font,
     /// 字符在行内的 x 像素坐标（相对于行左上角）
