@@ -88,6 +88,27 @@ int32_t terminal_pool_create_terminal_with_cwd(
     const char* working_dir
 );
 
+/// Create new terminal with specific ID (for session restore)
+///
+/// Returns: Terminal ID on success, -1 on failure
+int64_t terminal_pool_create_terminal_with_id(
+    TerminalPoolHandle handle,
+    int64_t id,
+    uint16_t cols,
+    uint16_t rows
+);
+
+/// Create new terminal with specific ID and working directory (for session restore)
+///
+/// Returns: Terminal ID on success, -1 on failure
+int64_t terminal_pool_create_terminal_with_id_and_cwd(
+    TerminalPoolHandle handle,
+    int64_t id,
+    uint16_t cols,
+    uint16_t rows,
+    const char* working_dir
+);
+
 /// Close terminal
 bool terminal_pool_close_terminal(
     TerminalPoolHandle handle,
@@ -513,6 +534,21 @@ bool terminal_pool_set_hyperlink_hover(
 bool terminal_pool_clear_hyperlink_hover(
     TerminalPoolHandle handle,
     int32_t terminal_id
+);
+
+/// Get auto-detected URL at specified position
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param screen_row Screen row (0-based)
+/// @param screen_col Screen column (0-based)
+/// @return URL info, valid=false if no URL at position
+///         If valid=true, uri_ptr must be freed with terminal_pool_free_hyperlink
+FFIHyperlink terminal_pool_get_url_at(
+    TerminalPoolHandle handle,
+    int32_t terminal_id,
+    int32_t screen_row,
+    int32_t screen_col
 );
 
 // =============================================================================

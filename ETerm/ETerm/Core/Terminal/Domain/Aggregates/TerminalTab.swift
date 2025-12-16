@@ -54,7 +54,8 @@ final class TerminalTab {
     private(set) var currentInputRow: UInt16?
 
     /// Rust 终端 ID（用于渲染）
-    private(set) var rustTerminalId: UInt32?
+    /// 使用 Int 以支持 UUID 低 64 位作为稳定 ID
+    private(set) var rustTerminalId: Int?
 
     /// 滚动偏移量（用于选区跟随）
     private(set) var displayOffset: Int = 0
@@ -67,7 +68,7 @@ final class TerminalTab {
 
     // MARK: - 初始化
 
-    init(tabId: UUID, title: String = "Terminal", rustTerminalId: UInt32? = nil) {
+    init(tabId: UUID, title: String = "Terminal", rustTerminalId: Int? = nil) {
         self.tabId = tabId
         self.title = title
         self.isActive = false
@@ -79,7 +80,7 @@ final class TerminalTab {
     }
 
     /// 设置 Rust 终端 ID
-    func setRustTerminalId(_ terminalId: UInt32?) {
+    func setRustTerminalId(_ terminalId: Int?) {
         self.rustTerminalId = terminalId
     }
 
@@ -412,4 +413,24 @@ extension TerminalTab: CustomStringConvertible {
 // MARK: - Identifiable (SwiftUI 支持)
 extension TerminalTab: Identifiable {
     var id: UUID { tabId }
+}
+
+// MARK: - UUID Stable ID Extension
+extension UUID {
+    /// 从 UUID 生成稳定的 Int ID（用于传递给 Rust）
+    ///
+    /// 使用 UUID 的低 31 位作为稳定 ID（确保正数且在 Int32 范围内）
+    /// 这确保了同一个 UUID 在重启后仍然映射到相同的数字 ID
+    /// 冲突概率：约 21 亿个唯一值，对终端数量绝对足够
+    var stableId: Int {
+        let (_, _, _, _, _, _, _, _, _, _, _, _, b12, b13, b14, b15) = uuid
+        // 使用 UUID 的低 32 位（后 4 个字节）
+        let low32: UInt32 =
+            UInt32(b12) << 24 |
+            UInt32(b13) << 16 |
+            UInt32(b14) << 8 |
+            UInt32(b15)
+        // 取低 31 位，确保是正数且在 Int32 范围内
+        return Int(low32 & 0x7FFFFFFF)
+    }
 }

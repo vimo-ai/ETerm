@@ -153,7 +153,8 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     private func handleEvent(_ event: TerminalPoolEvent) {
-        let terminalId = Int(event.data)
+        // 使用位模式转换，避免 UInt64 超过 Int.max 时崩溃
+        let terminalId = Int(bitPattern: UInt(event.data))
 
         switch event.event_type {
         case TerminalEventType_Wakeup, TerminalEventType_Render:
@@ -188,6 +189,29 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         guard let handle = handle else { return -1 }
         let id = terminal_pool_create_terminal_with_cwd(handle, cols, rows, cwd)
         return Int(id)
+    }
+
+    /// 创建终端（使用指定的 ID）
+    ///
+    /// 用于 Session 恢复，确保 ID 在重启后保持一致
+    func createTerminalWithId(_ id: Int, cols: UInt16, rows: UInt16) -> Int {
+        guard let handle = handle else { return -1 }
+        let result = terminal_pool_create_terminal_with_id(handle, Int64(id), cols, rows)
+        return Int(result)
+    }
+
+    /// 创建终端（使用指定的 ID + 工作目录）
+    ///
+    /// 用于 Session 恢复，确保 ID 在重启后保持一致
+    func createTerminalWithIdAndCwd(_ id: Int, cols: UInt16, rows: UInt16, cwd: String?) -> Int {
+        guard let handle = handle else { return -1 }
+        let result: Int64
+        if let cwd = cwd {
+            result = terminal_pool_create_terminal_with_id_and_cwd(handle, Int64(id), cols, rows, cwd)
+        } else {
+            result = terminal_pool_create_terminal_with_id(handle, Int64(id), cols, rows)
+        }
+        return Int(result)
     }
 
     /// 获取终端的当前工作目录（通过 proc_pidinfo 系统调用）
@@ -418,6 +442,36 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     func clearHyperlinkHover(terminalId: Int) -> Bool {
         guard let handle = handle else { return false }
         return terminal_pool_clear_hyperlink_hover(handle, Int32(terminalId))
+    }
+
+    /// 获取指定位置的自动检测 URL
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - screenRow: 屏幕行号（相对于可见区域，从 0 开始）
+    ///   - screenCol: 屏幕列号（从 0 开始）
+    /// - Returns: URL 信息，无 URL 返回 nil
+    func getUrlAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalHyperlink? {
+        guard let handle = handle else { return nil }
+        guard screenRow >= 0 && screenCol >= 0 else { return nil }
+
+        let result = terminal_pool_get_url_at(handle, Int32(terminalId), Int32(screenRow), Int32(screenCol))
+        guard result.valid else { return nil }
+
+        // 转换 C 字符串为 Swift String
+        guard let uriPtr = result.uri_ptr else { return nil }
+        let uri = String(cString: uriPtr)
+
+        // 释放 Rust 分配的内存
+        terminal_pool_free_hyperlink(result)
+
+        return TerminalHyperlink(
+            startRow: result.start_row,
+            startCol: Int(result.start_col),
+            endRow: result.end_row,
+            endCol: Int(result.end_col),
+            uri: uri
+        )
     }
 
     @discardableResult

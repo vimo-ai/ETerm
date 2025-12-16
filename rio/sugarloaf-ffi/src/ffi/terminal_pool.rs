@@ -80,6 +80,52 @@ pub extern "C" fn terminal_pool_create_terminal_with_cwd(
     pool.create_terminal_with_cwd(cols, rows, working_dir_opt)
 }
 
+/// 创建新终端（使用 Swift 传入的 ID）
+///
+/// 用于 Session 恢复，确保 ID 在重启后保持一致
+/// 返回终端 ID，失败返回 -1
+#[no_mangle]
+pub extern "C" fn terminal_pool_create_terminal_with_id(
+    handle: *mut TerminalPoolHandle,
+    id: i64,
+    cols: u16,
+    rows: u16,
+) -> i64 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.create_terminal_with_id(id as usize, cols, rows)
+}
+
+/// 创建新终端（使用 Swift 传入的 ID + 指定工作目录）
+///
+/// 用于 Session 恢复，确保 ID 在重启后保持一致
+/// 返回终端 ID，失败返回 -1
+#[no_mangle]
+pub extern "C" fn terminal_pool_create_terminal_with_id_and_cwd(
+    handle: *mut TerminalPoolHandle,
+    id: i64,
+    cols: u16,
+    rows: u16,
+    working_dir: *const std::ffi::c_char,
+) -> i64 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+
+    let working_dir_opt = if working_dir.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(working_dir).to_str().ok().map(|s| s.to_string()) }
+    };
+
+    pool.create_terminal_with_id_and_cwd(id as usize, cols, rows, working_dir_opt)
+}
+
 /// 关闭终端
 #[no_mangle]
 pub extern "C" fn terminal_pool_close_terminal(
