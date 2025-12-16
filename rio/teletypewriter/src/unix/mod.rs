@@ -530,10 +530,13 @@ pub fn create_pty_with_spawn(
             ];
 
             if let Some(directory) = working_directory {
-                with_args.push(format!(
-                    "--directory={}",
-                    std::path::Path::new(directory).display()
-                ));
+                let path = std::path::Path::new(directory);
+                // Only set directory if it exists and is accessible
+                if path.is_absolute() && path.exists() && path.is_dir() {
+                    if std::fs::read_dir(path).is_ok() {
+                        with_args.push(format!("--directory={}", path.display()));
+                    }
+                }
             }
 
             let output = std::process::Command::new("flatpak-spawn")
@@ -625,8 +628,20 @@ pub fn create_pty_with_spawn(
     }
 
     // Handle set working directory option.
+    // Validate that the directory exists and is accessible before setting it.
+    // This prevents issues when restoring sessions with deleted/inaccessible directories.
     if let Some(dir) = &working_directory {
-        builder.current_dir(dir);
+        let path = std::path::Path::new(dir);
+        if path.is_absolute() && path.exists() && path.is_dir() {
+            // Additional check: verify we have read permission
+            if std::fs::read_dir(path).is_ok() {
+                builder.current_dir(dir);
+            } else {
+                tracing::warn!("Working directory '{}' is not accessible, using default", dir);
+            }
+        } else {
+            tracing::warn!("Working directory '{}' does not exist or is not a directory, using default", dir);
+        }
     }
 
     // Prepare signal handling before spawning child.
