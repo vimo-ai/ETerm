@@ -42,6 +42,9 @@ final class InfoWindow: NSPanel {
         // 允许在所有 Space 显示
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
+        // 应用失去焦点时不自动隐藏
+        hidesOnDeactivate = false
+
         // 关闭时隐藏而不是释放
         isReleasedWhenClosed = false
 

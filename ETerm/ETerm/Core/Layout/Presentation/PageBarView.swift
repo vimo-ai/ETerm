@@ -9,12 +9,25 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - Page 数据模型
 
 struct PageItem: Identifiable, Equatable {
     let id: UUID
     var title: String
+}
+
+// MARK: - Page 拖拽数据
+
+/// Page 拖拽数据（用于同窗口和跨窗口拖拽）
+struct PageDragData: Codable, Transferable {
+    let windowNumber: Int
+    let pageId: UUID
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .plainText)
+    }
 }
 
 // MARK: - PageBarView (SwiftUI)
@@ -690,6 +703,8 @@ struct PageBarControlsView: View {
 
 /// 纯 SwiftUI 实现的 PageBar，用于在 ContentView 层显示
 /// 解决 NSView 嵌套时 safe area 无法正确传递的问题
+///
+/// TODO: Page 拖拽排序功能暂时禁用，需要用 AppKit 方案实现
 struct SwiftUIPageBar: View {
     @ObservedObject var coordinator: TerminalWindowCoordinator
     @ObservedObject private var translationMode = TranslationModeStore.shared

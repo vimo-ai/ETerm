@@ -34,7 +34,7 @@ struct CommandContext {
     // MARK: - 便捷访问
 
     /// 获取当前活跃的终端 ID
-    var activeTerminalId: UInt32? {
+    var activeTerminalId: Int? {
         coordinator?.getActiveTerminalId()
     }
 

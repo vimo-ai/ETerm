@@ -299,7 +299,7 @@ class TerminalWindowCoordinator: ObservableObject {
         // 找到包含该终端的 Page 和 Tab
         for page in terminalWindow.pages {
             for panel in page.allPanels {
-                if let tab = panel.tabs.first(where: { $0.rustTerminalId == UInt32(terminalId) }) {
+                if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
                     // 检查 Tab 是否激活且 Page 也激活
                     let isTabActive = (panel.activeTabId == tab.tabId)
                     let isPageActive = (page.pageId == terminalWindow.activePageId)
@@ -337,16 +337,21 @@ class TerminalWindowCoordinator: ObservableObject {
             inheritedCwd = getCwd(terminalId: Int(terminalId))
         }
 
-        // 使用较大的默认尺寸 (120x40) 以减少初始 Reflow 的影响
-        let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh", cwd: inheritedCwd)
-        guard terminalId >= 0 else {
+        // 先创建 Tab（不分配终端 ID）
+        guard let newTab = terminalWindow.createTab(in: panelId, rustTerminalId: 0) else {
             return nil
         }
 
-        // 使用统一的 Tab 创建入口
-        guard let newTab = terminalWindow.createTab(in: panelId, rustTerminalId: UInt32(terminalId)) else {
+        // 使用 Tab 的 stableId 创建终端
+        let terminalId = createTerminalForTab(newTab, cols: 120, rows: 40, cwd: inheritedCwd)
+        guard terminalId >= 0 else {
+            // 创建失败，需要移除 Tab
+            // TODO: 添加移除 Tab 的逻辑
             return nil
         }
+
+        // 设置终端 ID
+        newTab.setRustTerminalId(terminalId)
 
         // 保存 Session
         WindowManager.shared.saveSession()
@@ -373,20 +378,23 @@ class TerminalWindowCoordinator: ObservableObject {
             return nil
         }
 
-        // 创建终端
-        let terminalId = createTerminalInternal(cols: 120, rows: 40, shell: "/bin/zsh", cwd: cwd)
+        // 先创建 Tab（不分配终端 ID）
+        guard let newTab = terminalWindow.createTab(in: targetPanelId, rustTerminalId: 0) else {
+            return nil
+        }
+
+        // 使用 Tab 的 stableId 创建终端
+        let terminalId = createTerminalForTab(newTab, cols: 120, rows: 40, cwd: cwd)
         guard terminalId >= 0 else {
             return nil
         }
 
-        // 使用统一的 Tab 创建入口
-        guard let newTab = terminalWindow.createTab(in: targetPanelId, rustTerminalId: UInt32(terminalId)) else {
-            return nil
-        }
+        // 设置终端 ID
+        newTab.setRustTerminalId(terminalId)
 
         // 如果有命令，延迟执行
         if let cmd = command, !cmd.isEmpty {
-            let tid = UInt32(terminalId)
+            let tid = terminalId
             DispatchQueue.main.asyncAfter(deadline: .now() + commandDelay) { [weak self] in
                 self?.writeInput(terminalId: tid, data: cmd)
             }
@@ -492,7 +500,7 @@ class TerminalWindowCoordinator: ObservableObject {
     func handleTerminalClosed(terminalId: Int) {
         // 找到对应的 Tab 并关闭
         for panel in terminalWindow.allPanels {
-            if let tab = panel.tabs.first(where: { $0.rustTerminalId == UInt32(terminalId) }) {
+            if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
                 handleTabClose(panelId: panel.panelId, tabId: tab.tabId)
                 return
             }
@@ -509,7 +517,7 @@ class TerminalWindowCoordinator: ObservableObject {
     func handleTitleChange(terminalId: Int, title: String) {
         // 找到对应的 Tab 并更新标题
         for panel in terminalWindow.allPanels {
-            if let tab = panel.tabs.first(where: { $0.rustTerminalId == UInt32(terminalId) }) {
+            if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
                 tab.setTitle(title)
                 objectWillChange.send()
                 updateTrigger = UUID()
@@ -632,6 +640,49 @@ class TerminalWindowCoordinator: ObservableObject {
         return terminalPool.createTerminal(cols: cols, rows: rows, shell: shell)
     }
 
+    /// 恢复 Claude 会话
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - sessionId: Claude Session ID
+    private func restoreClaudeSession(terminalId: Int, sessionId: String) {
+        // 发送 claude --resume 命令
+        let command = "claude --resume \(sessionId)\n"
+        terminalPool.writeInput(terminalId: terminalId, data: command)
+    }
+
+    /// 为 Tab 创建终端（使用 Tab 的 stableId）
+    ///
+    /// 用于确保重启后 Terminal ID 保持一致
+    private func createTerminalForTab(_ tab: TerminalTab, cols: UInt16, rows: UInt16, cwd: String? = nil) -> Int {
+        let stableId = tab.tabId.stableId
+
+        // 优先使用传入的 CWD
+        var effectiveCwd = cwd
+
+        // 如果没有传入 CWD，检查是否有 initialCwd（用于新窗口继承）
+        if effectiveCwd == nil {
+            effectiveCwd = initialCwd
+        }
+
+        // 使用 stableId 创建终端
+        let terminalId = terminalPool.createTerminalWithIdAndCwd(
+            stableId,
+            cols: cols,
+            rows: rows,
+            cwd: effectiveCwd
+        )
+
+        if terminalId >= 0 {
+            // 如果使用的是 initialCwd，清除它（只有第一个终端使用）
+            if cwd == nil && initialCwd != nil {
+                initialCwd = nil
+            }
+        }
+
+        return terminalId
+    }
+
     /// 写入输入（统一入口）
     @discardableResult
     private func writeInputInternal(terminalId: Int, data: String) -> Bool {
@@ -669,9 +720,20 @@ class TerminalWindowCoordinator: ObservableObject {
                     // 检查是否有待恢复的 CWD（用于 Session 恢复）
                     let cwdToUse = tab.takePendingCwd()
 
-                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: cwdToUse)
+                    // 使用 Tab 的 stableId 创建终端
+                    let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: cwdToUse)
                     if terminalId >= 0 {
-                        tab.setRustTerminalId(UInt32(terminalId))
+                        tab.setRustTerminalId(terminalId)
+
+                        // 检查是否需要恢复 Claude 会话
+                        let tabIdString = tab.tabId.uuidString
+                        if let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabIdString) {
+                            // 延迟发送恢复命令，等待终端完全启动
+                            let capturedTerminalId = terminalId
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                                self?.restoreClaudeSession(terminalId: capturedTerminalId, sessionId: sessionId)
+                            }
+                        }
                     }
                 }
             }
@@ -932,9 +994,10 @@ class TerminalWindowCoordinator: ObservableObject {
             if let newPanel = terminalWindow.getPanel(newPanelId) {
                 for tab in newPanel.tabs {
                     if tab.rustTerminalId == nil {
-                        let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: inheritedCwd)
+                        // 使用 Tab 的 stableId 创建终端
+                        let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: inheritedCwd)
                         if terminalId >= 0 {
-                            tab.setRustTerminalId(UInt32(terminalId))
+                            tab.setRustTerminalId(terminalId)
                         }
                     }
                 }
@@ -1020,7 +1083,7 @@ class TerminalWindowCoordinator: ObservableObject {
     // MARK: - Input Handling
 
     /// 获取当前激活的终端 ID
-    func getActiveTerminalId() -> UInt32? {
+    func getActiveTerminalId() -> Int? {
         // 使用激活的 Panel
         guard let activePanelId = activePanelId,
               let panel = terminalWindow.getPanel(activePanelId),
@@ -1095,7 +1158,7 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - point: 鼠标位置（容器坐标，PageBar 下方区域）
     ///   - containerBounds: 容器区域（PageBar 下方区域）
     /// - Returns: 目标终端 ID，如果找不到则返回当前激活终端
-    func getTerminalIdAtPoint(_ point: CGPoint, containerBounds: CGRect) -> UInt32? {
+    func getTerminalIdAtPoint(_ point: CGPoint, containerBounds: CGRect) -> Int? {
         if let panelId = findPanel(at: point, containerBounds: containerBounds),
            let panel = terminalWindow.getPanel(panelId),
            let activeTab = panel.activeTab,
@@ -1107,8 +1170,8 @@ class TerminalWindowCoordinator: ObservableObject {
     }
 
     /// 写入输入到指定终端
-    func writeInput(terminalId: UInt32, data: String) {
-        writeInputInternal(terminalId: Int(terminalId), data: data)
+    func writeInput(terminalId: Int, data: String) {
+        writeInputInternal(terminalId: terminalId, data: data)
         // 不主动触发渲染，依赖 Wakeup 事件（终端有输出时自动触发）
     }
 
@@ -1133,8 +1196,8 @@ class TerminalWindowCoordinator: ObservableObject {
     }
 
     /// 处理滚动
-    func handleScroll(terminalId: UInt32, deltaLines: Int32) {
-        _ = scrollInternal(terminalId: Int(terminalId), deltaLines: deltaLines)
+    func handleScroll(terminalId: Int, deltaLines: Int32) {
+        _ = scrollInternal(terminalId: terminalId, deltaLines: deltaLines)
         renderView?.requestRender()
     }
 
@@ -1146,7 +1209,7 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - terminalId: 终端 ID
     ///   - selection: 选中范围（使用真实行号）
     /// - Returns: 是否成功
-    func setSelection(terminalId: UInt32, selection: TextSelection) -> Bool {
+    func setSelection(terminalId: Int, selection: TextSelection) -> Bool {
         let (startRow, startCol, endRow, endCol) = selection.normalized()
 
         // 使用终端池设置选区
@@ -1155,7 +1218,7 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         let success = wrapper.setSelection(
-            terminalId: Int(terminalId),
+            terminalId: terminalId,
             startAbsoluteRow: startRow,
             startCol: Int(startCol),
             endAbsoluteRow: endRow,
@@ -1174,8 +1237,8 @@ class TerminalWindowCoordinator: ObservableObject {
     ///
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 是否成功
-    func clearSelection(terminalId: UInt32) -> Bool {
-        let success = clearSelectionInternal(terminalId: Int(terminalId))
+    func clearSelection(terminalId: Int) -> Bool {
+        let success = clearSelectionInternal(terminalId: terminalId)
 
         if success {
             renderView?.requestRender()
@@ -1190,24 +1253,24 @@ class TerminalWindowCoordinator: ObservableObject {
     ///
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 选中的文本，或 nil（无选区）
-    func getSelectionText(terminalId: UInt32) -> String? {
-        return terminalPool.getSelectionText(terminalId: Int(terminalId))
+    func getSelectionText(terminalId: Int) -> String? {
+        return terminalPool.getSelectionText(terminalId: terminalId)
     }
 
     /// 获取指定终端的当前输入行号
     ///
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 输入行号，如果不在输入模式返回 nil
-    func getInputRow(terminalId: UInt32) -> UInt16? {
-        return terminalPool.getInputRow(terminalId: Int(terminalId))
+    func getInputRow(terminalId: Int) -> UInt16? {
+        return terminalPool.getInputRow(terminalId: terminalId)
     }
 
     /// 获取指定终端的光标位置
     ///
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 光标位置，失败返回 nil
-    func getCursorPosition(terminalId: UInt32) -> CursorPosition? {
-        return getCursorPositionInternal(terminalId: Int(terminalId))
+    func getCursorPosition(terminalId: Int) -> CursorPosition? {
+        return getCursorPositionInternal(terminalId: terminalId)
     }
 
     // MARK: - Rendering (核心方法)
@@ -1337,9 +1400,10 @@ class TerminalWindowCoordinator: ObservableObject {
         for panel in newPage.allPanels {
             for tab in panel.tabs {
                 if tab.rustTerminalId == nil {
-                    let terminalId = createTerminalInternal(cols: 80, rows: 24, shell: "/bin/zsh", cwd: inheritedCwd)
+                    // 使用 Tab 的 stableId 创建终端
+                    let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: inheritedCwd)
                     if terminalId >= 0 {
-                        tab.setRustTerminalId(UInt32(terminalId))
+                        tab.setRustTerminalId(terminalId)
                     }
                 }
             }
@@ -1372,7 +1436,7 @@ class TerminalWindowCoordinator: ObservableObject {
     @discardableResult
     func switchToPage(_ pageId: UUID) -> Bool {
         // Step 0: 收集旧 Page 的所有终端 ID（用于设置为 Background）
-        var oldTerminalIds: [UInt32] = []
+        var oldTerminalIds: [Int] = []
         if let oldPage = terminalWindow.activePage {
             for panel in oldPage.allPanels {
                 for tab in panel.tabs {
@@ -1602,9 +1666,17 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 添加已有的 Page（用于跨窗口移动）
     ///
-    /// - Parameter page: 要添加的 Page
-    func addPage(_ page: Page) {
-        terminalWindow.addExistingPage(page)
+    /// - Parameters:
+    ///   - page: 要添加的 Page
+    ///   - insertBefore: 插入到指定 Page 之前（nil 表示插入到末尾）
+    func addPage(_ page: Page, insertBefore targetPageId: UUID? = nil) {
+        if let targetId = targetPageId {
+            // 插入到指定位置
+            terminalWindow.addExistingPage(page, insertBefore: targetId)
+        } else {
+            // 添加到末尾
+            terminalWindow.addExistingPage(page)
+        }
 
         // 切换到新添加的 Page
         _ = terminalWindow.switchToPage(page.pageId)
@@ -1854,5 +1926,99 @@ class TerminalWindowCoordinator: ObservableObject {
         let nextPath = Array(path.dropFirst())
         let nextLayout = path[0] == 0 ? first : second
         return getRatioAtPath(nextPath, in: nextLayout)
+    }
+
+    // MARK: - Page Drag & Drop (SwiftUI PageBar)
+
+    /// 处理 Page 重排序（同窗口内）
+    ///
+    /// - Parameters:
+    ///   - draggedPageId: 被拖拽的 Page ID
+    ///   - targetPageId: 目标 Page ID（插入到该 Page 之前）
+    /// - Returns: 是否成功
+    @discardableResult
+    func handlePageReorder(draggedPageId: UUID, targetPageId: UUID) -> Bool {
+        // 获取当前 Page 列表
+        let pages = terminalWindow.pages
+        guard let sourceIndex = pages.firstIndex(where: { $0.pageId == draggedPageId }),
+              let targetIndex = pages.firstIndex(where: { $0.pageId == targetPageId }) else {
+            return false
+        }
+
+        // 如果位置相同或相邻，不处理
+        if sourceIndex == targetIndex || sourceIndex + 1 == targetIndex {
+            return false
+        }
+
+        // 构建新的 Page ID 顺序
+        var newPageIds = pages.map { $0.pageId }
+        let movedPageId = newPageIds.remove(at: sourceIndex)
+        let insertIndex = targetIndex > sourceIndex ? targetIndex - 1 : targetIndex
+        newPageIds.insert(movedPageId, at: insertIndex)
+
+        // 调用重排序方法
+        return reorderPages(newPageIds)
+    }
+
+    /// 处理 Page 移动到末尾（同窗口内）
+    ///
+    /// - Parameter pageId: 要移动的 Page ID
+    /// - Returns: 是否成功
+    @discardableResult
+    func handlePageMoveToEnd(pageId: UUID) -> Bool {
+        let pages = terminalWindow.pages
+        guard let sourceIndex = pages.firstIndex(where: { $0.pageId == pageId }) else {
+            return false
+        }
+
+        // 如果已经在末尾，不处理
+        if sourceIndex == pages.count - 1 {
+            return false
+        }
+
+        // 构建新的 Page ID 顺序
+        var newPageIds = pages.map { $0.pageId }
+        let movedPageId = newPageIds.remove(at: sourceIndex)
+        newPageIds.append(movedPageId)
+
+        return reorderPages(newPageIds)
+    }
+
+    /// 处理从其他窗口接收 Page（跨窗口拖拽）
+    ///
+    /// - Parameters:
+    ///   - pageId: 被拖拽的 Page ID
+    ///   - sourceWindowNumber: 源窗口编号
+    ///   - insertBefore: 插入到指定 Page 之前（nil 表示插入到末尾）
+    func handlePageReceivedFromOtherWindow(_ pageId: UUID, sourceWindowNumber: Int, insertBefore targetPageId: UUID?) {
+        // 通过 WindowManager 处理跨窗口移动
+        let currentWindowNumber = NSApplication.shared.keyWindow?.windowNumber ?? 0
+        WindowManager.shared.movePage(
+            pageId,
+            from: sourceWindowNumber,
+            to: currentWindowNumber,
+            insertBefore: targetPageId
+        )
+    }
+
+    /// 处理 Page 拖出窗口（创建新窗口）
+    ///
+    /// - Parameters:
+    ///   - pageId: 被拖拽的 Page ID
+    ///   - screenPoint: 屏幕坐标
+    func handlePageDragOutOfWindow(_ pageId: UUID, at screenPoint: NSPoint) {
+        // 检查是否拖到了其他窗口
+        if WindowManager.shared.findWindow(at: screenPoint) != nil {
+            // 拖到了其他窗口，由 dropDestination 处理
+            return
+        }
+
+        // 拖出了所有窗口，创建新窗口
+        guard let page = terminalWindow.pages.first(where: { $0.pageId == pageId }) else {
+            return
+        }
+
+        // 在新窗口位置创建窗口
+        WindowManager.shared.createWindowWithPage(page, from: self, at: screenPoint)
     }
 }

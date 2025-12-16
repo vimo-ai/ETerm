@@ -53,7 +53,7 @@ final class TerminalWindow {
     /// 创建默认 Tab（静态工厂方法）
     ///
     /// 用于创建新窗口时的初始 Tab，此时还没有 TerminalWindow 实例
-    static func makeDefaultTab(rustTerminalId: UInt32 = 0) -> TerminalTab {
+    static func makeDefaultTab(rustTerminalId: Int = 0) -> TerminalTab {
         return TerminalTab(
             tabId: UUID(),
             title: defaultTabTitle,
@@ -67,7 +67,7 @@ final class TerminalWindow {
     ///   - panelId: 目标 Panel ID
     ///   - rustTerminalId: Rust 终端 ID
     /// - Returns: 创建的 Tab，如果 Panel 不存在返回 nil
-    func createTab(in panelId: UUID, rustTerminalId: UInt32 = 0) -> TerminalTab? {
+    func createTab(in panelId: UUID, rustTerminalId: Int = 0) -> TerminalTab? {
         guard let panel = getPanel(panelId) else { return nil }
 
         let tab = TerminalTab(
@@ -270,9 +270,18 @@ final class TerminalWindow {
 
     /// 添加已有的 Page（用于跨窗口移动）
     ///
-    /// - Parameter page: 要添加的 Page
-    func addExistingPage(_ page: Page) {
-        pages.append(page)
+    /// - Parameters:
+    ///   - page: 要添加的 Page
+    ///   - insertBefore: 插入到指定 Page 之前（nil 表示插入到末尾）
+    func addExistingPage(_ page: Page, insertBefore targetPageId: UUID? = nil) {
+        if let targetId = targetPageId,
+           let targetIndex = pages.firstIndex(where: { $0.pageId == targetId }) {
+            // 插入到指定位置
+            pages.insert(page, at: targetIndex)
+        } else {
+            // 添加到末尾
+            pages.append(page)
+        }
     }
 
     // MARK: - Panel Management (通过 Active Page 代理)
@@ -389,7 +398,7 @@ final class TerminalWindow {
     func getActiveTabsForRendering(
         containerBounds: CGRect,
         headerHeight: CGFloat
-    ) -> [(UInt32, CGRect)] {
+    ) -> [(Int, CGRect)] {
         return activePage?.getActiveTabsForRendering(
             containerBounds: containerBounds,
             headerHeight: headerHeight

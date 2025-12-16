@@ -145,4 +145,3 @@ pub extern "C" fn rio_free_string(s: *mut std::ffi::c_char) {
         }
     }
 }
-

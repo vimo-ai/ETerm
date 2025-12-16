@@ -23,5 +23,5 @@ struct KeyboardContext {
     let hasSelection: Bool
 
     /// 终端 ID
-    let terminalId: UInt32?
+    let terminalId: Int?
 }

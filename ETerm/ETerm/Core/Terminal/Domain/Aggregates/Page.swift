@@ -324,12 +324,12 @@ final class Page {
     func getActiveTabsForRendering(
         containerBounds: CGRect,
         headerHeight: CGFloat
-    ) -> [(UInt32, CGRect)] {
+    ) -> [(Int, CGRect)] {
         // 先更新所有 Panel 的 bounds
         updatePanelBounds(containerBounds: containerBounds)
 
         // 收集所有激活的 Tab
-        var result: [(UInt32, CGRect)] = []
+        var result: [(Int, CGRect)] = []
 
         for panel in allPanels {
             if let (terminalId, contentBounds) = panel.getActiveTabForRendering(headerHeight: headerHeight) {

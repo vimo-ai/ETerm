@@ -1101,7 +1101,7 @@ class RioMetalView: NSView, RenderViewProtocol {
             let y = Float(bounds.height - contentBounds.origin.y - contentBounds.height)
             let width = Float(contentBounds.width)
             let height = Float(contentBounds.height)
-            return (terminalId: Int(terminalId), x: x, y: y, width: width, height: height)
+            return (terminalId: terminalId, x: x, y: y, width: width, height: height)
         }
 
         pool.setRenderLayout(layouts, containerHeight: Float(bounds.height))
@@ -1110,7 +1110,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 计算布局的 hash 值
     ///
     /// 用于检测布局是否发生变化，避免不必要的 FFI 调用
-    private func calculateLayoutHash(_ tabs: [(UInt32, CGRect)]) -> Int {
+    private func calculateLayoutHash(_ tabs: [(Int, CGRect)]) -> Int {
         var hasher = Hasher()
         for (id, rect) in tabs {
             hasher.combine(id)
@@ -1538,12 +1538,32 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         let location = convert(event.locationInWindow, from: nil)
 
-        // Cmd+click：打开超链接
-        if event.modifierFlags.contains(.command),
-           let hyperlink = currentHoveredHyperlink {
-            openHyperlink(hyperlink.uri)
-            clearHyperlinkHover()
-            return
+        // Cmd+click：打开超链接（OSC 8 或自动检测的 URL）
+        if event.modifierFlags.contains(.command) {
+            // 优先检查 OSC 8 超链接
+            if let hyperlink = currentHoveredHyperlink {
+                openHyperlink(hyperlink.uri)
+                clearHyperlinkHover()
+                return
+            }
+
+            // 检查自动检测的 URL
+            if let coordinator = coordinator,
+               let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
+               let panel = coordinator.terminalWindow.getPanel(panelId),
+               let activeTab = panel.activeTab,
+               let terminalId = activeTab.rustTerminalId,
+               let pool = terminalPool {
+                let gridPos = screenToGrid(location: location, panelId: panelId)
+                if let url = pool.getUrlAt(
+                    terminalId: Int(terminalId),
+                    screenRow: Int(gridPos.row),
+                    screenCol: Int(gridPos.col)
+                ) {
+                    openHyperlink(url.uri)
+                    return
+                }
+            }
         }
 
         guard let coordinator = coordinator else {
@@ -1624,7 +1644,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     private func selectWordAt(
         gridPos: CursorPosition,
         activeTab: TerminalTab,
-        terminalId: UInt32,
+        terminalId: Int,
         panelId: UUID,
         event: NSEvent
     ) {
@@ -1636,7 +1656,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 直接调用 Rust API 获取单词边界（支持中文分词）
         guard let boundary = pool.getWordAt(
-            terminalId: Int(terminalId),
+            terminalId: terminalId,
             screenRow: row,
             screenCol: col
         ) else {
@@ -1650,7 +1670,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 通知 Rust 层渲染高亮（新架构：使用 terminalPool）
         if let selection = activeTab.textSelection {
             _ = pool.setSelection(
-                terminalId: Int(terminalId),
+                terminalId: terminalId,
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
                 endAbsoluteRow: selection.endAbsoluteRow,

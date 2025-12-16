@@ -73,6 +73,18 @@ struct ContentView: View {
                 Spacer()
             }
 
+            // 侧边栏背景遮罩：点击关闭侧边栏（放在详情面板和侧边栏下面）
+            if showSidebar {
+                Color.black.opacity(0.01)  // 几乎透明但可点击
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showSidebar = false
+                            selectedSidebarItem = nil
+                        }
+                    }
+            }
+
             // 侧边栏选中项的详情视图
             if showSidebar, let item = selectedSidebarItem {
                 sidebarDetailView(for: item)

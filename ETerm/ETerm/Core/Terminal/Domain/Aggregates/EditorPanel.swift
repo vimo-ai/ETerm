@@ -129,7 +129,7 @@ final class EditorPanel {
     ///
     /// - Parameter headerHeight: Tab Bar 的高度
     /// - Returns: (terminalId, contentBounds) 如果有激活的 Tab
-    func getActiveTabForRendering(headerHeight: CGFloat) -> (UInt32, CGRect)? {
+    func getActiveTabForRendering(headerHeight: CGFloat) -> (Int, CGRect)? {
         guard let activeTab = activeTab,
               let terminalId = activeTab.rustTerminalId else {
             return nil

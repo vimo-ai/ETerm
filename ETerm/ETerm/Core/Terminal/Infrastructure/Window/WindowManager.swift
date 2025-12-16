@@ -189,7 +189,9 @@ final class WindowManager: NSObject {
             // 创建所有 Tabs（此时还不创建终端，等 Coordinator 初始化后再创建）
             var tabs: [TerminalTab] = []
             for tabState in tabStates {
-                let tab = TerminalTab(tabId: UUID(), title: tabState.title)
+                // 从 Session 恢复 tabId（如果有），否则生成新的
+                let tabId = UUID(uuidString: tabState.tabId) ?? UUID()
+                let tab = TerminalTab(tabId: tabId, title: tabState.title)
                 // 保存 CWD 到 Tab 的临时属性（用于后续创建终端）
                 tab.setPendingCwd(tabState.cwd)
                 tabs.append(tab)
@@ -509,9 +511,10 @@ final class WindowManager: NSObject {
     ///   - pageId: 要移动的 Page ID
     ///   - sourceWindowNumber: 源窗口编号
     ///   - targetWindowNumber: 目标窗口编号
+    ///   - insertBefore: 插入到指定 Page 之前（nil 表示插入到末尾）
     /// - Returns: 是否成功
     @discardableResult
-    func movePage(_ pageId: UUID, from sourceWindowNumber: Int, to targetWindowNumber: Int) -> Bool {
+    func movePage(_ pageId: UUID, from sourceWindowNumber: Int, to targetWindowNumber: Int, insertBefore targetPageId: UUID? = nil) -> Bool {
         guard let sourceCoordinator = coordinators[sourceWindowNumber],
               let targetCoordinator = coordinators[targetWindowNumber] else {
             return false
@@ -534,8 +537,8 @@ final class WindowManager: NSObject {
             return false
         }
 
-        // 3. 添加到目标窗口
-        targetCoordinator.addPage(page)
+        // 3. 添加到目标窗口（支持指定插入位置）
+        targetCoordinator.addPage(page, insertBefore: targetPageId)
 
         // 5. 激活目标窗口
         if let targetWindow = windows.first(where: { $0.windowNumber == targetWindowNumber }) {
@@ -760,7 +763,11 @@ final class WindowManager: NSObject {
                     cwd = actualCwd
                 }
 
-                let tabState = TabState(title: tab.title, cwd: cwd)
+                let tabState = TabState(
+                    tabId: tab.tabId.uuidString,
+                    title: tab.title,
+                    cwd: cwd
+                )
                 tabStates.append(tabState)
             }
 
@@ -834,5 +841,25 @@ extension WindowManager: NSWindowDelegate {
             }
         }
         SessionManager.shared.save(windows: windowStates)
+    }
+
+    // MARK: - Tab 查找
+
+    /// 根据 terminalId 查找对应的 tabId
+    ///
+    /// - Parameter terminalId: Rust 终端 ID
+    /// - Returns: Tab 的 UUID string，找不到返回 nil
+    func findTabId(for terminalId: Int) -> String? {
+        for window in windows {
+            guard let coordinator = coordinators[window.windowNumber] else { continue }
+            for panel in coordinator.terminalWindow.allPanels {
+                for tab in panel.tabs {
+                    if tab.rustTerminalId == terminalId {
+                        return tab.tabId.uuidString
+                    }
+                }
+            }
+        }
+        return nil
     }
 }

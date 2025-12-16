@@ -44,6 +44,16 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 创建新终端（指定工作目录）
     func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int
 
+    /// 创建终端（使用指定的 ID）
+    ///
+    /// 用于 Session 恢复，确保 ID 在重启后保持一致
+    func createTerminalWithId(_ id: Int, cols: UInt16, rows: UInt16) -> Int
+
+    /// 创建终端（使用指定的 ID + 工作目录）
+    ///
+    /// 用于 Session 恢复，确保 ID 在重启后保持一致
+    func createTerminalWithIdAndCwd(_ id: Int, cols: UInt16, rows: UInt16, cwd: String?) -> Int
+
     /// 关闭终端
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool
@@ -192,6 +202,8 @@ protocol TerminalPoolProtocol: AnyObject {
 final class MockTerminalPool: TerminalPoolProtocol {
     func createTerminal(cols: UInt16, rows: UInt16, shell: String) -> Int { -1 }
     func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int { -1 }
+    func createTerminalWithId(_ id: Int, cols: UInt16, rows: UInt16) -> Int { -1 }
+    func createTerminalWithIdAndCwd(_ id: Int, cols: UInt16, rows: UInt16, cwd: String?) -> Int { -1 }
     func closeTerminal(_ terminalId: Int) -> Bool { false }
     func getTerminalCount() -> Int { 0 }
     func writeInput(terminalId: Int, data: String) -> Bool { false }
