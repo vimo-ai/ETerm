@@ -1,10 +1,32 @@
 
+use crate::domain::views::grid::UrlRange;
 use crate::render::cache::GlyphLayout;
 use crate::render::cache::{CursorInfo, SelectionInfo, SearchMatchInfo, HyperlinkHoverInfo};
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};
 use rio_backend::ansi::CursorShape;
-use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f};
+use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f, FontMgr, Color};
+use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
 use sugarloaf::layout::{FragmentStyleDecoration, UnderlineShape};
+use std::cell::RefCell;
+
+thread_local! {
+    /// 线程本地 FontCollection（用于 emoji shaping）
+    static FONT_COLLECTION: RefCell<FontCollection> = RefCell::new({
+        let mut fc = FontCollection::new();
+        fc.set_default_font_manager(FontMgr::new(), None);
+        fc
+    });
+}
+
+/// Color4f 转 Color
+fn color4f_to_color(c: Color4f) -> Color {
+    Color::from_argb(
+        (c.a * 255.0) as u8,
+        (c.r * 255.0) as u8,
+        (c.g * 255.0) as u8,
+        (c.b * 255.0) as u8,
+    )
+}
 
 /// 行光栅化器（渲染 GlyphLayout → SkImage）
 /// 复用老代码的 render_line_to_image 逻辑（sugarloaf.rs:535-627 行）
@@ -25,6 +47,7 @@ impl LineRasterizer {
     /// - selection_info: 选区信息（从 TerminalState 动态计算，不从 layout 缓存读取）
     /// - search_info: 搜索匹配信息（从 TerminalState 动态计算）
     /// - hyperlink_hover_info: 超链接悬停信息（Cmd+hover 时显示下划线）
+    /// - url_ranges: 自动检测的 URL 范围（始终显示下划线）
     /// - line_width: 行宽度（像素）
     /// - cell_width: 单元格宽度（像素）
     /// - cell_height: 单元格高度（像素）
@@ -46,6 +69,7 @@ impl LineRasterizer {
         selection_info: Option<&SelectionInfo>,
         search_info: Option<&SearchMatchInfo>,
         hyperlink_hover_info: Option<&HyperlinkHoverInfo>,
+        url_ranges: &[UrlRange],
         line_width: f32,
         cell_width: f32,
         cell_height: f32,
@@ -101,6 +125,11 @@ impl LineRasterizer {
                 current_col >= info.start_col && current_col <= info.end_col
             });
 
+            // 检查当前字符是否在自动检测的 URL 范围内
+            let in_url = url_ranges.iter().any(|url| {
+                current_col >= url.start_col && current_col <= url.end_col
+            });
+
             // 确定背景色优先级：选区 > 搜索 > 原始
             let effective_bg_color = if in_selection {
                 // 选区内：使用选区背景色
@@ -146,8 +175,17 @@ impl LineRasterizer {
             // 设置字符颜色
             paint.set_color4f(effective_fg_color, None);
 
+            // 检查是否是多字符 grapheme（emoji 序列）
+            let char_count = glyph.grapheme.chars().count();
+            let is_emoji_sequence = char_count > 1;
+
             // 🎯 对 box-drawing 字符进行形变拉伸，填满整个 line_height
-            if detect_drawable_character(glyph.ch).is_some() && box_drawing_config.enabled {
+            // 只有单字符的 grapheme 才可能是 box-drawing 字符
+            let is_box_drawing = char_count == 1
+                && detect_drawable_character(glyph.grapheme.chars().next().unwrap()).is_some()
+                && box_drawing_config.enabled;
+
+            if is_box_drawing {
                 // 计算缩放比例：让字形填满整个 line_height
                 let scale_y = line_height / cell_height;
 
@@ -159,15 +197,38 @@ impl LineRasterizer {
                 canvas.scale((1.0, scale_y));
 
                 // 绘制（缩放后 baseline 也需要调整）
-                let ch_str = glyph.ch.to_string();
-                canvas.draw_str(&ch_str, Point::new(0.0, baseline_offset / scale_y), &glyph.font, &paint);
+                canvas.draw_str(&glyph.grapheme, Point::new(0.0, baseline_offset / scale_y), &glyph.font, &paint);
 
                 // 恢复画布状态
                 canvas.restore();
+            } else if is_emoji_sequence {
+                // 🎯 Emoji 序列：使用 Paragraph 进行 HarfBuzz shaping
+                // 这样才能正确渲染 keycap、ZWJ 序列等复杂 emoji
+                FONT_COLLECTION.with(|fc| {
+                    let font_collection = fc.borrow();
+
+                    let mut paragraph_style = ParagraphStyle::new();
+                    let mut text_style = TextStyle::new();
+                    text_style.set_font_size(glyph.font.size());
+                    text_style.set_color(color4f_to_color(effective_fg_color));
+                    // 使用 emoji 字体
+                    text_style.set_font_families(&["Apple Color Emoji"]);
+                    paragraph_style.set_text_style(&text_style);
+
+                    let mut builder = ParagraphBuilder::new(&paragraph_style, font_collection.clone());
+                    builder.add_text(&glyph.grapheme);
+
+                    let mut paragraph = builder.build();
+                    paragraph.layout(cell_width * glyph.width + 10.0);
+
+                    // Paragraph 从左上角开始绘制，对齐基线
+                    let para_baseline = paragraph.alphabetic_baseline();
+                    let y_offset = baseline_offset - para_baseline;
+                    paragraph.paint(canvas, Point::new(glyph.x, y_offset));
+                });
             } else {
-                // 普通字符：正常绘制
-                let ch_str = glyph.ch.to_string();
-                canvas.draw_str(&ch_str, Point::new(glyph.x, baseline_offset), &glyph.font, &paint);
+                // 普通字符：正常绘制（使用完整 grapheme cluster）
+                canvas.draw_str(&glyph.grapheme, Point::new(glyph.x, baseline_offset), &glyph.font, &paint);
             }
 
             // ===== 绘制装饰（下划线、删除线）=====
@@ -291,6 +352,28 @@ impl LineRasterizer {
                 );
             }
 
+            // ===== 绘制 URL 下划线（自动检测的 URL，始终显示）=====
+            // 如果已经在超链接悬停范围内，不重复绘制下划线
+            if in_url && !in_hyperlink_hover {
+                let glyph_width = cell_width * glyph.width;
+                let underline_y = (baseline_offset + 2.0).min(line_height - 2.0);
+                let stroke_width = 1.0;
+
+                // URL 使用蓝色下划线
+                let url_color = Color4f::new(0.4, 0.6, 1.0, 1.0);
+                let mut underline_paint = Paint::default();
+                underline_paint.set_color4f(url_color, None);
+                underline_paint.set_stroke_width(stroke_width);
+                underline_paint.set_style(skia_safe::PaintStyle::Stroke);
+                underline_paint.set_anti_alias(true);
+
+                canvas.draw_line(
+                    Point::new(glyph.x, underline_y),
+                    Point::new(glyph.x + glyph_width, underline_y),
+                    &underline_paint,
+                );
+            }
+
             // 更新列号（用于下一个字符的选区检测）
             current_col += glyph.width as usize;
         }
@@ -371,6 +454,7 @@ mod tests {
             None,   // selection_info
             None,   // search_info
             None,   // hyperlink_hover_info
+            &[],    // url_ranges
             800.0,  // line_width
             10.0,   // cell_width
             16.0,   // cell_height
@@ -394,7 +478,7 @@ mod tests {
 
         let layout = GlyphLayout {
             glyphs: vec![GlyphInfo {
-                ch: 'A',
+                grapheme: "A".to_string(),
                 font,
                 x: 0.0,
                 color: Color4f::new(1.0, 1.0, 1.0, 1.0),  // 白色
@@ -410,6 +494,7 @@ mod tests {
             None,   // selection_info
             None,   // search_info
             None,   // hyperlink_hover_info
+            &[],    // url_ranges
             800.0,
             10.0,
             16.0,

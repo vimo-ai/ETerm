@@ -12,7 +12,8 @@
 
 use std::sync::Arc;
 
-
+use once_cell::sync::Lazy;
+use regex::Regex;
 use rio_backend::crosswords::Crosswords;
 
 use rio_backend::crosswords::grid::Dimensions;
@@ -205,6 +206,15 @@ impl RowView {
             .expect("RowView should always have valid screen_line");
         &self.data.rows[array_index].cells
     }
+
+    /// 获取行的 URL 列表
+    #[inline]
+    pub fn urls(&self) -> &[UrlRange] {
+        // 计算实际数组索引
+        let array_index = self.data.screen_line_to_array_index(self.screen_line)
+            .expect("RowView should always have valid screen_line");
+        &self.data.rows[array_index].urls
+    }
 }
 
 /// Cell Data - 单个字符的数据
@@ -236,12 +246,83 @@ impl Default for CellData {
     }
 }
 
-/// Row Data - 单行的数据
+// ========================================================================
+// URL 自动检测
+// ========================================================================
 
+/// 预编译的 URL 正则表达式
+///
+/// 匹配 http:// 和 https:// 开头的 URL
+/// 使用 \S+ 匹配非空白字符，简单高效
+static URL_REGEX: Lazy<Regex> = Lazy::new(|| {
+    // 匹配 http:// 和 https:// 开头的 URL
+    // 排除空白符、控制字符、和一些特殊标点
+    Regex::new(r#"https?://[^\s\x00-\x1f\x7f<>"'`\[\]{}|\\^]+"#).unwrap()
+});
+
+/// URL 范围信息
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrlRange {
+    /// 起始列（0-based，字符索引）
+    pub start_col: usize,
+    /// 结束列（包含，字符索引）
+    pub end_col: usize,
+    /// URL 字符串
+    pub uri: String,
+}
+
+/// 检测文本中的 URL
+///
+/// # 参数
+/// - `text`: 要检测的文本
+///
+/// # 返回
+/// URL 范围列表，按起始位置排序
+/// 需要从 URL 尾部移除的标点符号
+const TRAILING_PUNCTUATION: &[char] = &['.', ',', ')', ']', ';', ':', '!', '?', '\'', '"'];
+
+fn detect_urls(text: &str) -> Vec<UrlRange> {
+    let mut urls = Vec::new();
+
+    for mat in URL_REGEX.find_iter(text) {
+        // 获取匹配的 URL 并移除尾部标点
+        let raw_url = mat.as_str();
+        let trimmed_url = raw_url.trim_end_matches(TRAILING_PUNCTUATION);
+
+        // 如果 trim 后为空或太短，跳过
+        if trimmed_url.len() < 10 {
+            // http://x 至少 10 个字符
+            continue;
+        }
+
+        // 计算 trim 掉了多少字符
+        let trimmed_chars = raw_url.len() - trimmed_url.len();
+
+        // 获取字节位置
+        let byte_start = mat.start();
+        let byte_end = mat.end() - trimmed_chars;
+
+        // 转换为字符位置（处理 UTF-8 多字节字符）
+        let char_start = text[..byte_start].chars().count();
+        let char_end = char_start + text[byte_start..byte_end].chars().count() - 1;
+
+        urls.push(UrlRange {
+            start_col: char_start,
+            end_col: char_end,
+            uri: trimmed_url.to_string(),
+        });
+    }
+
+    urls
+}
+
+/// Row Data - 单行的数据
 #[derive(Debug, Clone)]
 pub struct RowData {
     pub cells: Vec<CellData>,
     pub content_hash: u64,
+    /// 该行检测到的 URL 列表
+    pub urls: Vec<UrlRange>,
 }
 
 
@@ -250,6 +331,7 @@ impl RowData {
         Self {
             cells: vec![CellData::default(); columns],
             content_hash: 0,
+            urls: Vec::new(),
         }
     }
 }
@@ -429,11 +511,15 @@ impl GridData {
 
         let mut cells = Vec::with_capacity(columns);
         let mut hasher = DefaultHasher::new();
+        let mut row_text = String::with_capacity(columns);
 
         // 遍历该行的所有列
         for col_index in 0..columns {
             let col = Column(col_index);
             let square = &grid[line][col];
+
+            // 收集行文本用于 URL 检测
+            row_text.push(square.c);
 
             // 转换 cell 数据
             let cell = CellData {
@@ -460,9 +546,13 @@ impl GridData {
 
         let content_hash = hasher.finish();
 
+        // 检测 URL（使用预编译的正则，性能开销很小）
+        let urls = detect_urls(&row_text);
+
         RowData {
             cells,
             content_hash,
+            urls,
         }
     }
 }
@@ -542,5 +632,160 @@ mod tests {
         let grid_view = GridView::new(grid_data);
 
         assert_eq!(grid_view.display_offset(), 5);
+    }
+
+    // ========================================================================
+    // URL 检测测试
+    // ========================================================================
+
+    /// 测试：检测简单的 HTTP URL
+    #[test]
+    fn test_detect_urls_simple_http() {
+        let text = "Visit http://example.com for more info";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].uri, "http://example.com");
+        assert_eq!(urls[0].start_col, 6);  // "Visit " = 6 chars
+        assert_eq!(urls[0].end_col, 23);   // end of URL
+    }
+
+    /// 测试：检测 HTTPS URL
+    #[test]
+    fn test_detect_urls_https() {
+        let text = "Check https://github.com/user/repo";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].uri, "https://github.com/user/repo");
+        assert_eq!(urls[0].start_col, 6);
+    }
+
+    /// 测试：一行中有多个 URL
+    #[test]
+    fn test_detect_urls_multiple() {
+        let text = "http://a.com and https://b.com";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0].uri, "http://a.com");
+        assert_eq!(urls[1].uri, "https://b.com");
+    }
+
+    /// 测试：没有 URL 的文本
+    #[test]
+    fn test_detect_urls_none() {
+        let text = "No URLs here, just plain text";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 0);
+    }
+
+    /// 测试：URL 在行首
+    #[test]
+    fn test_detect_urls_at_start() {
+        let text = "https://start.com is at the beginning";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].start_col, 0);
+        assert_eq!(urls[0].uri, "https://start.com");
+    }
+
+    /// 测试：URL 在行尾
+    #[test]
+    fn test_detect_urls_at_end() {
+        let text = "End with https://end.com";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].uri, "https://end.com");
+    }
+
+    /// 测试：URL 带路径和查询参数
+    #[test]
+    fn test_detect_urls_with_path_and_query() {
+        let text = "API: https://api.example.com/v1/users?id=123&sort=name";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].uri, "https://api.example.com/v1/users?id=123&sort=name");
+    }
+
+    /// 测试：URL 后面紧跟标点（应该不包含标点）
+    #[test]
+    fn test_detect_urls_followed_by_punctuation() {
+        // 尾部标点应该被移除
+        let text = "See https://example.com, for details.";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        // 验证逗号被移除
+        assert_eq!(urls[0].uri, "https://example.com");
+    }
+
+    /// 测试：各种尾部标点都应该被移除
+    #[test]
+    fn test_detect_urls_trim_various_punctuation() {
+        // 句号
+        let urls = detect_urls("Visit https://example.com.");
+        assert_eq!(urls[0].uri, "https://example.com");
+
+        // 感叹号
+        let urls = detect_urls("Check https://example.com!");
+        assert_eq!(urls[0].uri, "https://example.com");
+
+        // 问号（URL 中的有效字符，但作为句子结尾时应移除）
+        let urls = detect_urls("Is it https://example.com?");
+        assert_eq!(urls[0].uri, "https://example.com");
+
+        // 右括号
+        let urls = detect_urls("(see https://example.com)");
+        assert_eq!(urls[0].uri, "https://example.com");
+
+        // 多个标点
+        let urls = detect_urls("Really? https://example.com...");
+        assert_eq!(urls[0].uri, "https://example.com");
+    }
+
+    /// 测试：验证 end_col 在移除尾部标点后正确调整
+    #[test]
+    fn test_detect_urls_end_col_after_trim() {
+        // "See https://example.com, for"
+        //  0123456789...
+        // URL 从位置 4 开始，"https://example.com" 有 19 个字符
+        // 所以 end_col 应该是 4 + 19 - 1 = 22
+        let text = "See https://example.com, for";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].start_col, 4); // "See " = 4 个字符
+        assert_eq!(urls[0].end_col, 22);  // 4 + 19 - 1 = 22 (不包含逗号)
+        assert_eq!(urls[0].uri, "https://example.com");
+
+        // 验证逗号在位置 23
+        let chars: Vec<char> = text.chars().collect();
+        assert_eq!(chars[23], ',');
+        // 验证 'm' 在位置 22
+        assert_eq!(chars[22], 'm');
+    }
+
+    /// 测试：包含中文的文本中的 URL
+    #[test]
+    fn test_detect_urls_with_chinese() {
+        let text = "访问 https://example.com 获取更多信息";
+        let urls = detect_urls(text);
+
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].uri, "https://example.com");
+        // 中文字符按字符计数
+        assert_eq!(urls[0].start_col, 3);  // "访问 " = 3 chars
+    }
+
+    /// 测试：空字符串
+    #[test]
+    fn test_detect_urls_empty_string() {
+        let urls = detect_urls("");
+        assert_eq!(urls.len(), 0);
     }
 }

@@ -474,6 +474,130 @@ impl TerminalPool {
         id as i32
     }
 
+    /// 创建新终端（使用 Swift 传入的 ID）
+    ///
+    /// 用于 Session 恢复，确保 ID 在重启后保持一致
+    /// 返回终端 ID，失败返回 -1
+    pub fn create_terminal_with_id(&mut self, id: usize, cols: u16, rows: u16) -> i64 {
+        // 检查 ID 是否已存在
+        if self.terminals.read().contains_key(&id) {
+            eprintln!("❌ [TerminalPool] Terminal ID {} already exists", id);
+            return -1;
+        }
+
+        // 1. 创建 Terminal
+        let terminal_id = TerminalId(id);
+        let terminal = Terminal::new_with_pty(
+            terminal_id,
+            cols as usize,
+            rows as usize,
+            self.event_queue.clone(),
+        );
+
+        // 2. 创建 PTY 和 Machine
+        let (machine_handle, pty_tx, pty_fd, shell_pid) = match Self::create_pty_and_machine(&terminal, self.event_queue.clone()) {
+            Ok(result) => result,
+            Err(e) => {
+                eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
+                return -1;
+            }
+        };
+
+        // 3. 存储条目
+        let entry = TerminalEntry {
+            terminal: Arc::new(Mutex::new(terminal)),
+            pty_tx,
+            machine_handle,
+            cols,
+            rows,
+            pty_fd,
+            shell_pid,
+            render_cache: None,
+            surface_cache: None,
+            cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
+            is_background: Arc::new(AtomicBool::new(false)),
+            selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
+            title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
+            scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
+            dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
+                cols as usize,
+                rows as usize,
+            ))),
+        };
+
+        self.terminals.write().insert(id, entry);
+
+        // 更新 next_id（确保不会冲突）
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
+
+        id as i64
+    }
+
+    /// 创建新终端（使用 Swift 传入的 ID + 指定工作目录）
+    ///
+    /// 用于 Session 恢复，确保 ID 在重启后保持一致
+    /// 返回终端 ID，失败返回 -1
+    pub fn create_terminal_with_id_and_cwd(&mut self, id: usize, cols: u16, rows: u16, working_dir: Option<String>) -> i64 {
+        // 检查 ID 是否已存在
+        if self.terminals.read().contains_key(&id) {
+            eprintln!("❌ [TerminalPool] Terminal ID {} already exists", id);
+            return -1;
+        }
+
+        // 1. 创建 Terminal
+        let terminal_id = TerminalId(id);
+        let terminal = Terminal::new_with_pty(
+            terminal_id,
+            cols as usize,
+            rows as usize,
+            self.event_queue.clone(),
+        );
+
+        // 2. 创建 PTY 和 Machine（带工作目录）
+        let (machine_handle, pty_tx, pty_fd, shell_pid) = match Self::create_pty_and_machine_with_cwd(&terminal, self.event_queue.clone(), working_dir) {
+            Ok(result) => result,
+            Err(e) => {
+                eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
+                return -1;
+            }
+        };
+
+        // 3. 存储条目
+        let entry = TerminalEntry {
+            terminal: Arc::new(Mutex::new(terminal)),
+            pty_tx,
+            machine_handle,
+            cols,
+            rows,
+            pty_fd,
+            shell_pid,
+            render_cache: None,
+            surface_cache: None,
+            cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
+            is_background: Arc::new(AtomicBool::new(false)),
+            selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
+            title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
+            scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
+            dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
+                cols as usize,
+                rows as usize,
+            ))),
+        };
+
+        self.terminals.write().insert(id, entry);
+
+        // 更新 next_id（确保不会冲突）
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
+
+        id as i64
+    }
+
     /// 创建 PTY 和 Machine
     ///
     /// 默认使用 $HOME 作为工作目录
@@ -804,6 +928,54 @@ impl TerminalPool {
             }
         } else {
             None
+        }
+    }
+
+    /// 设置超链接悬停状态
+    ///
+    /// 使用 try_lock 避免阻塞主线程
+    pub fn set_hyperlink_hover(
+        &self,
+        id: usize,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+        uri: String,
+    ) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.set_hyperlink_hover(start_row, start_col, end_row, end_col, uri);
+                // 超链接悬停状态变化后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// 清除超链接悬停状态
+    ///
+    /// 使用 try_lock 避免阻塞主线程
+    pub fn clear_hyperlink_hover(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.clear_hyperlink_hover();
+                // 超链接悬停状态变化后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
         }
     }
 

@@ -59,7 +59,7 @@ pub extern "C" fn terminal_pool_get_hyperlink_at(
     screen_row: i32,
     screen_col: i32,
 ) -> FFIHyperlink {
-    if handle.is_null() || screen_row < 0 || screen_col < 0 {
+    if handle.is_null() || terminal_id < 0 || screen_row < 0 || screen_col < 0 {
         return FFIHyperlink::default();
     }
 
@@ -151,16 +151,14 @@ pub extern "C" fn terminal_pool_set_hyperlink_hover(
         }
     };
 
-    pool.try_with_terminal(terminal_id as usize, |terminal| {
-        terminal.set_hyperlink_hover(
-            start_row as usize,
-            start_col as usize,
-            end_row as usize,
-            end_col as usize,
-            uri_str.clone(),
-        );
-        true
-    }).unwrap_or(false)
+    pool.set_hyperlink_hover(
+        terminal_id as usize,
+        start_row as usize,
+        start_col as usize,
+        end_row as usize,
+        end_col as usize,
+        uri_str,
+    )
 }
 
 /// 清除超链接悬停状态
@@ -183,10 +181,78 @@ pub extern "C" fn terminal_pool_clear_hyperlink_hover(
 
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
-    pool.try_with_terminal(terminal_id as usize, |terminal| {
-        terminal.clear_hyperlink_hover();
-        true
-    }).unwrap_or(false)
+    pool.clear_hyperlink_hover(terminal_id as usize)
+}
+
+/// 获取指定位置的自动检测 URL
+///
+/// # 参数
+/// - `handle`: TerminalPool 句柄
+/// - `terminal_id`: 终端 ID
+/// - `screen_row`: 屏幕行（0-based）
+/// - `screen_col`: 屏幕列（0-based）
+///
+/// # 返回
+/// - `FFIHyperlink`: URL 信息，无 URL 时 valid=false
+///
+/// # 注意
+/// - 返回的 uri_ptr 需要调用者使用 `terminal_pool_free_hyperlink` 释放
+/// - 如果 valid=false，uri_ptr 为 null，不需要释放
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_url_at(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: i32,
+    screen_row: i32,
+    screen_col: i32,
+) -> FFIHyperlink {
+    if handle.is_null() || terminal_id < 0 || screen_row < 0 || screen_col < 0 {
+        return FFIHyperlink::default();
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+
+    // 获取终端状态
+    let state = pool.try_with_terminal(terminal_id as usize, |terminal| {
+        terminal.state()
+    });
+
+    let Some(state) = state else {
+        return FFIHyperlink::default();
+    };
+
+    // 获取行的 URL 信息
+    let Some(row) = state.grid.row(screen_row as usize) else {
+        return FFIHyperlink::default();
+    };
+
+    let col = screen_col as usize;
+
+    // 查找包含该列的 URL
+    for url in row.urls() {
+        if col >= url.start_col && col <= url.end_col {
+            // 找到 URL，转换为绝对行号
+            let absolute_row = state.grid.screen_to_absolute(screen_row as usize, 0).line as i64;
+
+            // 分配 C 字符串
+            match std::ffi::CString::new(url.uri.as_bytes()) {
+                Ok(c_string) => {
+                    let ptr = c_string.into_raw();
+                    return FFIHyperlink {
+                        start_row: absolute_row,
+                        start_col: url.start_col as u16,
+                        end_row: absolute_row,
+                        end_col: url.end_col as u16,
+                        uri_ptr: ptr,
+                        uri_len: url.uri.len(),
+                        valid: true,
+                    };
+                }
+                Err(_) => return FFIHyperlink::default(),
+            }
+        }
+    }
+
+    FFIHyperlink::default()
 }
 
 #[cfg(test)]
