@@ -38,6 +38,7 @@ struct PageBarView: View {
     @Binding var pages: [PageItem]
     @Binding var activePageId: UUID?
     @ObservedObject private var translationMode = TranslationModeStore.shared
+    @ObservedObject private var pageBarItems = PageBarItemRegistry.shared
     @State private var editingPageId: UUID?
 
     // MARK: - 回调
@@ -87,6 +88,12 @@ struct PageBarView: View {
             }
             .buttonStyle(.plain)
             .padding(.trailing, 6)
+
+            // 插件注册的 PageBar 组件
+            ForEach(pageBarItems.items) { item in
+                item.viewProvider()
+                    .padding(.trailing, 6)
+            }
 
             StatusTabView(
                 text: translationMode.statusText,
@@ -657,6 +664,7 @@ extension PageBarHostingView {
 /// 只包含红绿灯和添加按钮的控制栏
 struct PageBarControlsView: View {
     @ObservedObject private var translationMode = TranslationModeStore.shared
+    @ObservedObject private var pageBarItems = PageBarItemRegistry.shared
     var onAddPage: (() -> Void)?
 
     var body: some View {
@@ -688,6 +696,12 @@ struct PageBarControlsView: View {
             .buttonStyle(.plain)
             .padding(.trailing, 6)
 
+            // 插件注册的 PageBar 组件
+            ForEach(pageBarItems.items) { item in
+                item.viewProvider()
+                    .padding(.trailing, 6)
+            }
+
             StatusTabView(
                 text: translationMode.statusText,
                 isActive: translationMode.isEnabled,
@@ -708,6 +722,7 @@ struct PageBarControlsView: View {
 struct SwiftUIPageBar: View {
     @ObservedObject var coordinator: TerminalWindowCoordinator
     @ObservedObject private var translationMode = TranslationModeStore.shared
+    @ObservedObject private var pageBarItems = PageBarItemRegistry.shared
     @State private var isFullScreen = false
     @State private var pagesNeedingAttention: Set<UUID> = []
     @State private var editingPageId: UUID?
@@ -768,6 +783,12 @@ struct SwiftUIPageBar: View {
             }
             .buttonStyle(.plain)
             .padding(.trailing, 6)
+
+            // 插件注册的 PageBar 组件
+            ForEach(pageBarItems.items) { item in
+                item.viewProvider()
+                    .padding(.trailing, 6)
+            }
 
             StatusTabView(
                 text: translationMode.statusText,

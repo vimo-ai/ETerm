@@ -78,4 +78,15 @@ protocol UIService: AnyObject {
         icon: String,
         viewProvider: @escaping () -> AnyView
     )
+
+    /// 注册 PageBar 组件（显示在 PageBar 右侧，翻译模式左边）
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - id: 组件 ID（唯一标识）
+    ///   - viewProvider: 视图提供者
+    func registerPageBarItem(
+        for pluginId: String,
+        id: String,
+        viewProvider: @escaping () -> AnyView
+    )
 }

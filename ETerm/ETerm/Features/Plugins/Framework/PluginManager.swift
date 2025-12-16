@@ -207,6 +207,9 @@ final class PluginManager: ObservableObject {
         // 注销插件页面
         PluginPageRegistry.shared.unregister(pluginId: pluginId)
 
+        // 注销 PageBar 组件
+        PageBarItemRegistry.shared.unregisterItems(for: pluginId)
+
         // 移除插件实例（保留类型，以便重新启用）
         plugins.removeValue(forKey: pluginId)
 
@@ -541,8 +544,9 @@ final class UIServiceImpl: UIService {
             pluginName: pluginName,
             tab: entryTab
         )
+    }
 
+    func registerPageBarItem(for pluginId: String, id: String, viewProvider: @escaping () -> AnyView) {
+        PageBarItemRegistry.shared.registerItem(for: pluginId, id: id, viewProvider: viewProvider)
     }
 }
-
-

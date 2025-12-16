@@ -18,9 +18,6 @@ final class ClaudeMonitorPlugin: Plugin {
 
     // MARK: - 私有属性
 
-    /// 菜单栏控制器
-    private var menuBarController: MenuBarController?
-
     /// 插件上下文
     private weak var context: PluginContext?
 
@@ -33,7 +30,6 @@ final class ClaudeMonitorPlugin: Plugin {
     func activate(context: PluginContext) {
         self.context = context
 
-
         // 1. 初始化周度用量追踪器（自动开始刷新）
         _ = WeeklyUsageTracker.shared
 
@@ -43,12 +39,21 @@ final class ClaudeMonitorPlugin: Plugin {
         // 3. 注册 InfoWindow 内容
         registerInfoContent(context: context)
 
-        // 4. 创建菜单栏
-        setupMenuBar()
+        // 4. 注册 PageBar 组件
+        registerPageBarItem(context: context)
 
         // 5. 注册侧边栏 Tab（可选）
         registerSidebarTabs(context: context)
+    }
 
+    /// 注册 PageBar 组件
+    private func registerPageBarItem(context: PluginContext) {
+        context.ui.registerPageBarItem(
+            for: Self.id,
+            id: "claude-usage-tab"
+        ) {
+            AnyView(ClaudeUsageTabView())
+        }
     }
 
     /// 注册信息窗口内容
@@ -63,21 +68,10 @@ final class ClaudeMonitorPlugin: Plugin {
     }
 
     func deactivate() {
-        // 清理菜单栏
-        menuBarController?.cleanup()
-        menuBarController = nil
-
+        // 无需清理，用量监控已移至 PageBar
     }
 
     // MARK: - 私有方法
-
-    /// 设置菜单栏
-    private func setupMenuBar() {
-        DispatchQueue.main.async {
-            self.menuBarController = MenuBarController()
-            self.menuBarController?.setup()
-        }
-    }
 
     /// 注册侧边栏 Tab
     private func registerSidebarTabs(context: PluginContext) {
