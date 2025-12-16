@@ -74,14 +74,15 @@ class ComposerNSTextView: NSTextView {
 
 // MARK: - Custom TextEditor with Enter to Submit
 
-/// 自定义文本编辑器：Enter 发送，Cmd+Enter 换行
+/// 自定义文本编辑器：Enter 发送，Cmd+Enter 换行，Option+Enter 直接发送到 Terminal
 struct ComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     var onSubmit: () -> Void
+    var onOptionEnter: () -> Void
     @Binding var textHeight: CGFloat
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onSubmit: onSubmit, textHeight: $textHeight)
+        Coordinator(text: $text, onSubmit: onSubmit, onOptionEnter: onOptionEnter, textHeight: $textHeight)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -135,12 +136,14 @@ struct ComposerTextEditor: NSViewRepresentable {
     class Coordinator: NSObject, NSTextViewDelegate {
         @Binding var text: String
         var onSubmit: () -> Void
+        var onOptionEnter: () -> Void
         @Binding var textHeight: CGFloat
         weak var textView: NSTextView?
 
-        init(text: Binding<String>, onSubmit: @escaping () -> Void, textHeight: Binding<CGFloat>) {
+        init(text: Binding<String>, onSubmit: @escaping () -> Void, onOptionEnter: @escaping () -> Void, textHeight: Binding<CGFloat>) {
             self._text = text
             self.onSubmit = onSubmit
+            self.onOptionEnter = onOptionEnter
             self._textHeight = textHeight
         }
 
@@ -179,16 +182,27 @@ struct ComposerTextEditor: NSViewRepresentable {
                                  commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
 
             if isEnterCommand {
-                // 检查是否有 Command 修饰符
-                if let event = NSApp.currentEvent, event.modifierFlags.contains(.command) {
-                    // Cmd+Enter：换行
-                    textView.insertText("\n", replacementRange: textView.selectedRange())
-                    return true
-                } else {
-                    // Enter：发送
+                guard let event = NSApp.currentEvent else {
+                    // 无事件，默认发送
                     onSubmit()
                     return true
                 }
+
+                // Option+Enter：直接发送到 Terminal（跳过检查）
+                if event.modifierFlags.contains(.option) {
+                    onOptionEnter()
+                    return true
+                }
+
+                // Cmd+Enter：换行
+                if event.modifierFlags.contains(.command) {
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                    return true
+                }
+
+                // Enter：发送（第一次检查，第二次发送到 Terminal）
+                onSubmit()
+                return true
             }
 
             return false  // 其他命令保持原生行为
@@ -500,6 +514,10 @@ struct InlineComposerView: View {
     @State private var isLoadingDetail: Bool = false
     @State private var showDetailedExplanation: Bool = false
 
+    // 双击回车发送到 Terminal
+    @State private var lastSubmittedText: String = ""
+    @State private var hasChecked: Bool = false  // 是否已完成检查
+
     var onCancel: () -> Void
     var coordinator: TerminalWindowCoordinator?
 
@@ -529,7 +547,7 @@ struct InlineComposerView: View {
                     .font(.system(size: 14))
                     .padding(.top, 4)
 
-                ComposerTextEditor(text: $inputText, onSubmit: checkWritingWithTools, textHeight: $textHeight)
+                ComposerTextEditor(text: $inputText, onSubmit: handleEnterSubmit, onOptionEnter: sendToTerminal, textHeight: $textHeight)
                     .frame(height: textHeight)
                     .padding(.top, 4)
 
@@ -538,7 +556,7 @@ struct InlineComposerView: View {
                         .scaleEffect(0.6)
                         .padding(.top, 4)
                 } else {
-                    Button(action: checkWritingWithTools) {
+                    Button(action: handleEnterSubmit) {
                         Image(systemName: "arrow.right.circle.fill")
                             .foregroundColor(inputText.isEmpty ? .gray : ComposerTheme.accent)
                     }
@@ -866,10 +884,29 @@ struct InlineComposerView: View {
         .cornerRadius(6)
     }
 
+    /// Enter 键处理：第一次检查，相同内容第二次发送到 Terminal
+    private func handleEnterSubmit() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        // 如果已完成检查且内容相同，发送到 Terminal
+        if hasChecked && text == lastSubmittedText {
+            sendToTerminal()
+            return
+        }
+
+        // 否则执行检查
+        checkWritingWithTools()
+    }
+
     /// 新的写作检查方法（使用 Tools）
     private func checkWritingWithTools() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isLoading else { return }
+
+        // 记录本次提交的内容
+        lastSubmittedText = text
+        hasChecked = false
 
         isLoading = true
         reasoning = ""
@@ -896,6 +933,7 @@ struct InlineComposerView: View {
                 let result = try await AIService.shared.performAnalysis(text, plan: plan, model: pluginConfig.analysisModel)
                 self.analysisResult = result
                 self.isLoading = false
+                self.hasChecked = true  // 标记检查完成
 
                 // Save grammar errors to database
                 if let fixes = result.fixes, !fixes.isEmpty {
@@ -903,9 +941,26 @@ struct InlineComposerView: View {
                 }
             } catch {
                 self.isLoading = false
+                self.hasChecked = true  // 即使失败也标记完成，允许发送
                 self.suggestion = "❌ Error: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// 发送内容到 Terminal（带换行）
+    private func sendToTerminal() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        // 获取当前活跃终端并写入
+        if let coordinator = coordinator,
+           let terminalId = coordinator.getActiveTerminalId() {
+            // 发送内容 + 换行符（执行命令）
+            coordinator.writeInput(terminalId: terminalId, data: text + "\n")
+        }
+
+        // 关闭 Composer
+        onCancel()
     }
 
     /// Save grammar errors to database

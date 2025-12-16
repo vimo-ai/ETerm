@@ -76,13 +76,17 @@ final class VlaudePlugin: Plugin {
             return
         }
 
+        // 查找对应的 tabId 用于持久化
+        let tabId = WindowManager.shared.findTabId(for: terminalId)
+
+        // 更新映射（包含持久化）
+        ClaudeSessionMapper.shared.map(terminalId: terminalId, sessionId: sessionId, tabId: tabId)
 
         // 上报 session 可用
         daemonClient?.reportSessionAvailable(sessionId: sessionId, terminalId: terminalId)
 
         // 检查是否有待上报的 requestId
         if let pending = pendingRequests.removeValue(forKey: terminalId) {
-
             daemonClient?.reportSessionCreated(
                 requestId: pending.requestId,
                 sessionId: sessionId,
@@ -108,9 +112,12 @@ final class VlaudePlugin: Plugin {
             return
         }
 
+        // 查找对应的 tabId 用于清理持久化数据
+        // 注意：terminalDidClose 通知中可能已经包含 tabId
+        let tabId = userInfo["tab_id"] as? String
 
-        // 清理本地映射
-        ClaudeSessionMapper.shared.remove(terminalId: terminalId)
+        // 清理本地映射（包含持久化）
+        ClaudeSessionMapper.shared.remove(terminalId: terminalId, tabId: tabId)
 
         // 通知 daemon
         daemonClient?.reportSessionUnavailable(sessionId: sessionId)
@@ -125,12 +132,14 @@ final class VlaudePlugin: Plugin {
             return
         }
 
-
         // 清理待上报的 requestId（如果有）
         pendingRequests.removeValue(forKey: terminalId)
 
-        // 清理本地映射
-        ClaudeSessionMapper.shared.remove(terminalId: terminalId)
+        // 查找对应的 tabId 用于清理持久化数据
+        let tabId = WindowManager.shared.findTabId(for: terminalId)
+
+        // 清理本地映射（包含持久化）
+        ClaudeSessionMapper.shared.remove(terminalId: terminalId, tabId: tabId)
 
         // 通知 daemon
         daemonClient?.reportSessionUnavailable(sessionId: sessionId)
@@ -195,13 +204,13 @@ extension VlaudePlugin: VlaudeDaemonClientDelegate {
         DispatchQueue.main.async {
             // 遍历所有 Coordinator 写入（terminalId 是全局唯一的，只有一个会真正写入）
             for coordinator in WindowManager.shared.getAllCoordinators() {
-                coordinator.writeInput(terminalId: UInt32(terminalId), data: text)
+                coordinator.writeInput(terminalId: terminalId, data: text)
             }
 
             // 延迟一点发送回车
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 for coordinator in WindowManager.shared.getAllCoordinators() {
-                    coordinator.writeInput(terminalId: UInt32(terminalId), data: "\r")
+                    coordinator.writeInput(terminalId: terminalId, data: "\r")
                 }
             }
         }
