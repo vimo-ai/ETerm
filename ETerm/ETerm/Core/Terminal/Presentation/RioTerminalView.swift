@@ -399,9 +399,10 @@ class RioContainerView: NSView {
         // 只更新发光位置，不改变显示状态（显示由窗口焦点控制）
         updateActiveGlow(panels: panels, activePanelId: coordinator.activePanelId, forceShow: false)
 
-        // 强制同步布局，确保所有 frame 更新立即生效
-        // 这避免了拖拽时 hitTest 使用过时的 frame 导致目标检测错误
-        layoutSubtreeIfNeeded()
+        // 标记需要布局，让系统在下一个 run loop 自然触发
+        // 注意：不能调用 layoutSubtreeIfNeeded()，因为可能在 SwiftUI updateNSView 中被调用，
+        // 此时系统可能正在布局过程中，会触发递归布局警告
+        needsLayout = true
     }
 
     /// 更新 Active 终端发光视图
@@ -943,8 +944,9 @@ class RioMetalView: NSView, RenderViewProtocol {
             coordinator?.setCoordinateMapper(mapper)
 
             // 4. 触发 layout（确保 resize 被正确调用）
+            // 注意：只设置 needsLayout，不调用 layoutSubtreeIfNeeded()
+            // 因为此方法可能在系统布局过程中被调用，直接调用会导致递归布局
             needsLayout = true
-            layoutSubtreeIfNeeded()
 
             // 5. DPI 变化，布局需要重新同步
             onLayoutChanged()

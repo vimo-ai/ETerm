@@ -44,8 +44,9 @@ final class EventBus: EventService {
     }
 
     func publish<T>(_ eventId: String, payload: T) {
-        // 读操作
-        queue.sync { [weak self] in
+        // 异步读取订阅者列表，避免阻塞调用线程
+        // 注意：之前用 sync 会导致主线程阻塞（如果队列正忙）
+        queue.async { [weak self] in
             guard let eventSubscribers = self?.subscribers[eventId] else {
                 return
             }
