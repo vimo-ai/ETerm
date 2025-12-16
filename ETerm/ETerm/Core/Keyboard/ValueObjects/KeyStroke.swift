@@ -131,46 +131,14 @@ struct KeyStroke: Hashable {
     // MARK: - 转换为终端序列
 
     func toTerminalSequence() -> String {
-        // Option 组合键
-        // macOS 终端标准：Option+Left/Right 用于按单词移动光标
-        if modifiers.contains(.option) {
-            switch keyCode {
-            case 51: return "\u{17}"      // Option+Delete: Ctrl+W (删除前一个单词)
-            case 123: return "\u{1B}b"    // Option+Left: ESC+b (向左移动一个单词)
-            case 124: return "\u{1B}f"    // Option+Right: ESC+f (向右移动一个单词)
-            default: break
-            }
+        // 尝试使用 Rust FFI 处理特殊键
+        let rustModifiers = modifiers.toRustFlags()
+        if let seq = key_to_escape_sequence(keyCode, rustModifiers) {
+            defer { free_key_sequence(seq) }
+            return String(cString: seq)
         }
 
-        // Cmd 组合键
-        // macOS 终端标准：Cmd+Left/Right 用于跳到行首/行尾
-        if modifiers.contains(.command) {
-            switch keyCode {
-            case 51: return "\u{15}"      // Cmd+Delete: Ctrl+U (删除到行首)
-            case 123: return "\u{01}"     // Cmd+Left: Ctrl+A (跳到行首)
-            case 124: return "\u{05}"     // Cmd+Right: Ctrl+E (跳到行尾)
-            default: break
-            }
-        }
-
-        // 特殊键处理
-        switch keyCode {
-        case 36, 76: return "\r"       // Return (主键盘) / Enter (小键盘)
-        case 48:
-            if modifiers.contains(.shift) {
-                return "\u{1B}[Z"      // Shift+Tab: CSI Z (Backtab)
-            }
-            return "\t"                // Tab
-        case 51: return "\u{7F}"       // Delete (Backspace)
-        case 53: return "\u{1B}"       // Escape
-        case 114: return "\u{1B}[2~"   // Insert
-        case 117: return "\u{1B}[3~"   // Forward Delete (Del)
-        case 123: return "\u{1B}[D"    // Left
-        case 124: return "\u{1B}[C"    // Right
-        case 125: return "\u{1B}[B"    // Down
-        case 126: return "\u{1B}[A"    // Up
-        default: break
-        }
+        // Rust 返回 NULL，说明不是特殊键，使用字符处理
 
         // Ctrl 组合键
         if modifiers.contains(.control), let char = character?.lowercased() {

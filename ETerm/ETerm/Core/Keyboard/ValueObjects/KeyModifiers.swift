@@ -34,4 +34,20 @@ struct KeyModifiers: OptionSet, Hashable {
     var isShiftOnly: Bool {
         self == .shift
     }
+
+    /// 转换为 Rust FFI 的 modifier 位格式
+    ///
+    /// Rust 端格式：
+    /// - bit 0: Shift
+    /// - bit 1: Control
+    /// - bit 2: Option (Alt)
+    /// - bit 3: Command (Meta)
+    func toRustFlags() -> UInt32 {
+        var result: UInt32 = 0
+        if contains(.shift)   { result |= 1 << 0 }
+        if contains(.control) { result |= 1 << 1 }
+        if contains(.option)  { result |= 1 << 2 }
+        if contains(.command) { result |= 1 << 3 }
+        return result
+    }
 }
