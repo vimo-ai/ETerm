@@ -200,6 +200,59 @@ final class CoreCommandsBootstrap {
         })
         keyboard.bind(.cmdShift("d"), to: "panel.splitVertical", when: nil)
 
+        // Panel 导航（Cmd+Option+方向键）
+        commands.register(Command(
+            id: "panel.navigateUp",
+            title: "向上导航 Panel",
+            icon: "arrow.up.square"
+        ) { context in
+            context.coordinator?.navigatePanelUp()
+        })
+        keyboard.bind(
+            .key(126, modifiers: [.command, .option]),
+            to: "panel.navigateUp",
+            when: nil
+        )
+
+        commands.register(Command(
+            id: "panel.navigateDown",
+            title: "向下导航 Panel",
+            icon: "arrow.down.square"
+        ) { context in
+            context.coordinator?.navigatePanelDown()
+        })
+        keyboard.bind(
+            .key(125, modifiers: [.command, .option]),
+            to: "panel.navigateDown",
+            when: nil
+        )
+
+        commands.register(Command(
+            id: "panel.navigateLeft",
+            title: "向左导航 Panel",
+            icon: "arrow.left.square"
+        ) { context in
+            context.coordinator?.navigatePanelLeft()
+        })
+        keyboard.bind(
+            .key(123, modifiers: [.command, .option]),
+            to: "panel.navigateLeft",
+            when: nil
+        )
+
+        commands.register(Command(
+            id: "panel.navigateRight",
+            title: "向右导航 Panel",
+            icon: "arrow.right.square"
+        ) { context in
+            context.coordinator?.navigatePanelRight()
+        })
+        keyboard.bind(
+            .key(124, modifiers: [.command, .option]),
+            to: "panel.navigateRight",
+            when: nil
+        )
+
         // ─────────────────────────────────────────
         // 编辑操作
         // ─────────────────────────────────────────
