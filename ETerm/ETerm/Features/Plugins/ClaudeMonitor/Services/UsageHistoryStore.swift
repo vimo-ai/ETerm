@@ -1,8 +1,8 @@
 //
 //  UsageHistoryStore.swift
-//  claude-helper
+//  ETerm
 //
-//  Created by 💻higuaifan on 2025/11/23.
+//  用量历史存储 - 支持持久化到 JSON 文件
 //
 
 import Foundation
@@ -50,7 +50,7 @@ final class UsageHistoryStore: ObservableObject {
     private(set) var currentCycleId: String = ""
 
     /// 存储文件路径
-    private let fileURL: URL
+    private let filePath: String
 
     /// 周期重置阈值：当利用率下降超过此百分比时，认为发生了重置
     private let resetThreshold: Double = 50.0
@@ -59,21 +59,13 @@ final class UsageHistoryStore: ObservableObject {
     private let retentionDays: Int = 30
 
     private init() {
-        // 获取 Application Support 目录
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first!
+        // 使用新的统一路径
+        filePath = ETermPaths.claudeMonitorUsageHistory
 
-        let appFolder = appSupport.appendingPathComponent("claude-helper")
+        // MARK: - Migration (TODO: Remove after v1.1)
+        // 从旧位置迁移数据
+        migrateFromOldLocation()
 
-        // 确保目录存在
-        try? FileManager.default.createDirectory(
-            at: appFolder,
-            withIntermediateDirectories: true
-        )
-
-        fileURL = appFolder.appendingPathComponent("usage_history.json")
         loadData()
         cleanOldData()
 
@@ -155,17 +147,18 @@ final class UsageHistoryStore: ObservableObject {
 
     /// 从磁盘加载数据
     private func loadData() {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        guard FileManager.default.fileExists(atPath: filePath) else {
             dataPoints = []
             return
         }
 
         do {
-            let data = try Data(contentsOf: fileURL)
+            let data = try Data(contentsOf: URL(fileURLWithPath: filePath))
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             dataPoints = try decoder.decode([UsageDataPoint].self, from: data)
         } catch {
+            logError("加载用量历史数据失败: \(error)")
             dataPoints = []
         }
     }
@@ -173,12 +166,61 @@ final class UsageHistoryStore: ObservableObject {
     /// 保存数据到磁盘
     private func saveData() {
         do {
+            // 确保父目录存在
+            try ETermPaths.ensureParentDirectory(for: filePath)
+
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = .prettyPrinted
             let data = try encoder.encode(dataPoints)
-            try data.write(to: fileURL, options: .atomic)
+            try data.write(to: URL(fileURLWithPath: filePath), options: .atomic)
         } catch {
+            logError("保存用量历史数据失败: \(error)")
+        }
+    }
+
+    // MARK: - Migration (TODO: Remove after v1.1)
+
+    /// 从旧的 Application Support 目录迁移数据
+    private func migrateFromOldLocation() {
+        // 构建旧路径
+        guard let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return
+        }
+
+        let oldFileURL = appSupport
+            .appendingPathComponent("claude-helper")
+            .appendingPathComponent("usage_history.json")
+
+        // 检查旧文件是否存在
+        guard FileManager.default.fileExists(atPath: oldFileURL.path) else {
+            return
+        }
+
+        do {
+            // 读取旧数据
+            let data = try Data(contentsOf: oldFileURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let oldData = try decoder.decode([UsageDataPoint].self, from: data)
+
+            // 确保新目录存在
+            try ETermPaths.ensureParentDirectory(for: filePath)
+
+            // 保存到新位置
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .prettyPrinted
+            let newData = try encoder.encode(oldData)
+            try newData.write(to: URL(fileURLWithPath: filePath), options: .atomic)
+
+            // 删除旧文件
+            try FileManager.default.removeItem(at: oldFileURL)
+        } catch {
+            logError("迁移用量历史数据失败: \(error)")
         }
     }
 

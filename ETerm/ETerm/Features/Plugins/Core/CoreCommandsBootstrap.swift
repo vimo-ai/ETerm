@@ -21,9 +21,7 @@ final class CoreCommandsBootstrap {
     /// 清理剪贴板临时目录中的所有文件
     /// 应在应用启动时调用
     static func cleanupClipboardTempFiles() {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ETerm")
-            .appendingPathComponent("clipboard")
+        let tempDir = URL(fileURLWithPath: ETermPaths.clipboard)
 
         do {
             let files = try FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)
@@ -540,9 +538,7 @@ extension TerminalWindowCoordinator {
 
     /// 获取剪贴板图片临时目录（静态）
     private static func getClipboardTempDirectory() -> URL {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ETerm")
-            .appendingPathComponent("clipboard")
+        let tempDir = URL(fileURLWithPath: ETermPaths.clipboard)
 
         // 确保目录存在
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)

@@ -2,7 +2,7 @@
 //  SessionManager.swift
 //  ETerm
 //
-//  Session 管理器 - 负责保存和恢复应用窗口状态
+//  Session 管理器 - 负责保存和恢复应用窗口状态（JSON 文件存储）
 //
 
 import Foundation
@@ -83,15 +83,14 @@ struct CodableRect: Codable {
 /// Session 管理器（单例）
 ///
 /// 职责：
-/// - 保存所有窗口状态到 UserDefaults
+/// - 保存所有窗口状态到 JSON 文件
 /// - 启动时恢复窗口状态
 /// - 窗口关闭时从 session 移除
 /// - 管理插件数据的存取
 final class SessionManager {
     static let shared = SessionManager()
 
-    private let userDefaults = UserDefaults.standard
-    private let sessionKey = "com.eterm.windowSession"
+    private let sessionFilePath = ETermPaths.sessionConfig
 
     /// 插件数据缓存（内存中，保存时合并）
     private var pluginDataCache: [String: String] = [:]
@@ -101,6 +100,11 @@ final class SessionManager {
         // 启动时加载插件数据到缓存
         if let session = load() {
             pluginDataCache = session.plugins ?? [:]
+        } else if let migratedSession = migrateFromUserDefaults() {
+            // MARK: - Migration (TODO: Remove after v1.1)
+            // 从旧的 UserDefaults 迁移数据
+            pluginDataCache = migratedSession.plugins ?? [:]
+            save(windows: migratedSession.windows)
         }
     }
 
@@ -116,14 +120,17 @@ final class SessionManager {
 
         let session = SessionState(windows: windows, plugins: plugins)
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-
         do {
+            // 确保父目录存在
+            try ETermPaths.ensureParentDirectory(for: sessionFilePath)
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(session)
-            userDefaults.set(data, forKey: sessionKey)
+
+            try data.write(to: URL(fileURLWithPath: sessionFilePath))
         } catch {
-            // 保存失败时静默处理
+            logError("保存 Session 失败: \(error)")
         }
     }
 
@@ -163,6 +170,39 @@ final class SessionManager {
     ///
     /// - Returns: Session 状态，如果不存在或解析失败返回 nil
     func load() -> SessionState? {
+        guard FileManager.default.fileExists(atPath: sessionFilePath) else {
+            return nil
+        }
+
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: sessionFilePath))
+            let decoder = JSONDecoder()
+            let session = try decoder.decode(SessionState.self, from: data)
+            return session
+        } catch {
+            logError("加载 Session 失败: \(error)")
+            return nil
+        }
+    }
+
+    /// 清除 Session
+    func clear() {
+        do {
+            if FileManager.default.fileExists(atPath: sessionFilePath) {
+                try FileManager.default.removeItem(atPath: sessionFilePath)
+            }
+        } catch {
+            logError("清除 Session 失败: \(error)")
+        }
+    }
+
+    // MARK: - Migration (TODO: Remove after v1.1)
+
+    /// 从旧的 UserDefaults 迁移数据
+    private func migrateFromUserDefaults() -> SessionState? {
+        let userDefaults = UserDefaults.standard
+        let sessionKey = "com.eterm.windowSession"
+
         guard let data = userDefaults.data(forKey: sessionKey) else {
             return nil
         }
@@ -170,15 +210,14 @@ final class SessionManager {
         do {
             let decoder = JSONDecoder()
             let session = try decoder.decode(SessionState.self, from: data)
+
+            // 清除旧数据
+            userDefaults.removeObject(forKey: sessionKey)
+
             return session
         } catch {
             return nil
         }
-    }
-
-    /// 清除 Session
-    func clear() {
-        userDefaults.removeObject(forKey: sessionKey)
     }
 
     // MARK: - 窗口状态更新

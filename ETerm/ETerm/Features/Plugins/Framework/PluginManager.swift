@@ -2,7 +2,7 @@
 //  PluginManager.swift
 //  ETerm
 //
-//  插件层 - 插件管理器
+//  插件层 - 插件管理器（JSON 文件存储）
 
 import Foundation
 import SwiftUI
@@ -28,9 +28,9 @@ struct PluginInfo: Identifiable {
 final class PluginManager: ObservableObject {
     static let shared = PluginManager()
 
-    // MARK: - 持久化 Key
+    // MARK: - 持久化配置
 
-    private static let disabledPluginsKey = "com.eterm.disabledPlugins"
+    private let configFilePath = ETermPaths.pluginsConfig
 
     // MARK: - 私有属性
 
@@ -46,10 +46,10 @@ final class PluginManager: ObservableObject {
     /// 禁用的插件 ID 集合（持久化）
     private var disabledPluginIds: Set<String> {
         get {
-            Set(UserDefaults.standard.stringArray(forKey: Self.disabledPluginsKey) ?? [])
+            loadDisabledPlugins()
         }
         set {
-            UserDefaults.standard.set(Array(newValue), forKey: Self.disabledPluginsKey)
+            saveDisabledPlugins(newValue)
             objectWillChange.send()
         }
     }
@@ -65,6 +65,10 @@ final class PluginManager: ObservableObject {
             ui: UIServiceImpl.shared,
             services: ServiceRegistry.shared
         )
+
+        // MARK: - Migration (TODO: Remove after v1.1)
+        // 从 UserDefaults 迁移数据
+        migrateFromUserDefaults()
     }
 
     // MARK: - 公共方法
@@ -343,6 +347,64 @@ final class PluginManager: ObservableObject {
                 dependents: getDependents(of: id)
             )
         }.sorted { $0.name < $1.name }
+    }
+
+    // MARK: - 持久化
+
+    /// 插件配置数据模型
+    private struct PluginsConfig: Codable {
+        var disabledPlugins: [String]
+    }
+
+    /// 从 JSON 文件加载禁用的插件列表
+    private func loadDisabledPlugins() -> Set<String> {
+        guard FileManager.default.fileExists(atPath: configFilePath) else {
+            return []
+        }
+
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: configFilePath))
+            let config = try JSONDecoder().decode(PluginsConfig.self, from: data)
+            return Set(config.disabledPlugins)
+        } catch {
+            logError("加载插件配置失败: \(error)")
+            return []
+        }
+    }
+
+    /// 保存禁用的插件列表到 JSON 文件
+    private func saveDisabledPlugins(_ disabledPlugins: Set<String>) {
+        do {
+            // 确保父目录存在
+            try ETermPaths.ensureParentDirectory(for: configFilePath)
+
+            let config = PluginsConfig(disabledPlugins: Array(disabledPlugins))
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(config)
+
+            try data.write(to: URL(fileURLWithPath: configFilePath))
+        } catch {
+            logError("保存插件配置失败: \(error)")
+        }
+    }
+
+    // MARK: - Migration (TODO: Remove after v1.1)
+
+    /// 从旧的 UserDefaults 迁移数据
+    private func migrateFromUserDefaults() {
+        let disabledPluginsKey = "com.eterm.disabledPlugins"
+        let userDefaults = UserDefaults.standard
+
+        guard let disabledPlugins = userDefaults.stringArray(forKey: disabledPluginsKey) else {
+            return
+        }
+
+        // 保存到新位置
+        saveDisabledPlugins(Set(disabledPlugins))
+
+        // 清除旧数据
+        userDefaults.removeObject(forKey: disabledPluginsKey)
     }
 }
 
