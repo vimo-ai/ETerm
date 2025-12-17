@@ -18,6 +18,12 @@ final class KeyableWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    /// 禁用 titlebar 区域的窗口拖动，让 PageBar 可以正确处理拖拽
+    override var isMovable: Bool {
+        get { false }
+        set { }
+    }
+
     /// 创建配置好的透明标题栏窗口
     static func create(
         contentRect: NSRect,

@@ -15,6 +15,16 @@ import AppKit
 import SwiftUI
 import Foundation
 
+// MARK: - 禁止窗口拖动的 NSHostingView
+
+/// 自定义 NSHostingView 子类，禁止窗口拖动
+/// 让 PageItemView 可以正确处理拖拽事件
+final class PageItemHostingView<Content: View>: NSHostingView<Content> {
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+}
+
 /// 单个 Page 的视图
 ///
 /// 显示 Page 的标题和关闭按钮，支持点击、双击编辑
@@ -41,6 +51,12 @@ final class PageItemView: NSView {
 
     /// 是否真正发生了拖动（鼠标移动）
     private var didActuallyDrag: Bool = false
+
+    /// mouseDown 位置（用于计算拖拽阈值）
+    private var mouseDownLocation: NSPoint = .zero
+
+    /// 拖拽阈值（像素）
+    private let dragThreshold: CGFloat = 3
 
     /// Claude 响应完成提醒状态
     private var needsAttention: Bool = false
@@ -156,8 +172,8 @@ final class PageItemView: NSView {
 
         let simpleTab = SimpleTabView(title, isActive: isActive, needsAttention: needsAttention, height: 22, isHovered: isHovered, onClose: closeAction)
 
-        let hosting = NSHostingView(rootView: simpleTab)
-        // 让 NSHostingView 使用固有大小，不居中
+        // 使用自定义子类禁止窗口拖动
+        let hosting = PageItemHostingView(rootView: simpleTab)
         hosting.translatesAutoresizingMaskIntoConstraints = true
 
         addSubview(hosting)
@@ -225,10 +241,12 @@ final class PageItemView: NSView {
     /// ShuimoTabView 的固定高度
     private static let tabHeight: CGFloat = 22
 
+    /// SimpleTabView 的固定宽度（与 SimpleTabView.tabWidth 保持一致）
+    private static let tabWidth: CGFloat = 180
+
     override var fittingSize: NSSize {
-        // 宽度用 hostingView 的，高度用固定值（避免 NSHostingView 返回错误高度）
-        let width = hostingView?.fittingSize.width ?? 0
-        return NSSize(width: width, height: Self.tabHeight)
+        // 使用固定宽度，避免 NSHostingView 还没布局时返回 0
+        return NSSize(width: Self.tabWidth, height: Self.tabHeight)
     }
 
     override var intrinsicContentSize: NSSize {
@@ -242,6 +260,12 @@ final class PageItemView: NSView {
     }
 
     // MARK: - Event Handlers
+
+    // MARK: - 阻止窗口拖动
+
+    override var mouseDownCanMoveWindow: Bool {
+        return false  // 阻止窗口跟着拖动，让 Page 拖拽生效
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         // 检查点击是否在 bounds 内
@@ -263,69 +287,112 @@ final class PageItemView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // 如果正在编辑，不处理拖拽
+        guard !isEditing else { return }
+
         // 重置拖拽标志
         isDragging = false
         didActuallyDrag = false
+        mouseDownLocation = convert(event.locationInWindow, from: nil)
 
-        // 不立即启动拖拽，等待 mouseDragged 确认真正拖动
-    }
+        // 使用事件追踪循环判断是拖拽还是点击（macOS 标准方式）
+        guard let theWindow = window else { return }
 
-    override func mouseDragged(with event: NSEvent) {
-        super.mouseDragged(with: event)
+        var dragStarted = false
+        var mouseUpEvent: NSEvent?
 
-        // 如果已经在拖拽中，不重复启动
-        if isDragging {
-            return
+        theWindow.trackEvents(matching: [.leftMouseUp, .leftMouseDragged], timeout: .infinity, mode: .eventTracking) { trackedEvent, stop in
+            guard let trackedEvent = trackedEvent else {
+                stop.pointee = true
+                return
+            }
+
+            switch trackedEvent.type {
+            case .leftMouseUp:
+                mouseUpEvent = trackedEvent
+                stop.pointee = true
+
+            case .leftMouseDragged:
+                let currentLocation = self.convert(trackedEvent.locationInWindow, from: nil)
+                let dx = currentLocation.x - self.mouseDownLocation.x
+                let dy = currentLocation.y - self.mouseDownLocation.y
+                let distance = sqrt(dx * dx + dy * dy)
+
+                if distance >= self.dragThreshold {
+                    dragStarted = true
+                    self.didActuallyDrag = true
+                    self.isDragging = true
+                    stop.pointee = true
+                }
+
+            default:
+                break
+            }
         }
 
-        // 标记真正发生了拖动
-        didActuallyDrag = true
-        isDragging = true
+        if dragStarted {
+            startDragSession(with: event)
+        } else if let upEvent = mouseUpEvent {
+            handleClick(event: upEvent)
+        }
+    }
 
-        // 现在才启动拖拽会话
+    /// 处理点击事件
+    private func handleClick(event: NSEvent) {
+        if event.clickCount == 2 {
+            startEditing()
+        } else if event.clickCount == 1 {
+            onTap?()
+        }
+    }
+
+    /// 启动拖拽会话
+    private func startDragSession(with event: NSEvent) {
+        let snapshot = createSnapshot()
+
         let pasteboardItem = NSPasteboardItem()
         pasteboardItem.setDataProvider(self, forTypes: [.string])
 
         let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
-        draggingItem.setDraggingFrame(bounds, contents: createSnapshot())
+        let dragFrame = NSRect(origin: .zero, size: bounds.size)
+        draggingItem.setDraggingFrame(dragFrame, contents: snapshot)
 
         onDragStart?()
-
         beginDraggingSession(with: [draggingItem], event: event, source: self)
     }
 
+    override func mouseDragged(with event: NSEvent) {
+        // 拖拽由 mouseDown 中的事件追踪循环处理
+        // 这里不需要额外处理
+    }
+
     override func mouseUp(with event: NSEvent) {
-        // 如果正在编辑，不处理
-        guard !isEditing else {
-            super.mouseUp(with: event)
-            return
-        }
-
-        // 只有在没有真正拖动时才处理点击
-        if !didActuallyDrag {
-            if event.clickCount == 2 {
-                // 双击：开始编辑
-                startEditing()
-            } else if event.clickCount == 1 {
-                // 单击：切换 Page
-                onTap?()
-            }
-        }
-
-        // 重置拖拽状态
+        // 点击逻辑已在 mouseDown 的事件追踪循环中处理
+        // 这里只重置状态
         isDragging = false
         didActuallyDrag = false
-
-        super.mouseUp(with: event)
     }
 
     // MARK: - 拖拽预览
 
     /// 创建拖拽预览图像
     private func createSnapshot() -> NSImage {
-        // 使用 PDF 数据创建快照
-        let pdfData = dataWithPDF(inside: bounds)
-        return NSImage(data: pdfData) ?? NSImage()
+        guard bounds.width > 0 && bounds.height > 0 else {
+            return NSImage()
+        }
+
+        // 使用 bitmapImageRepForCachingDisplay 创建快照
+        guard let bitmapRep = bitmapImageRepForCachingDisplay(in: bounds) else {
+            // 回退到 PDF 方式
+            let pdfData = dataWithPDF(inside: bounds)
+            return NSImage(data: pdfData) ?? NSImage()
+        }
+
+        cacheDisplay(in: bounds, to: bitmapRep)
+
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(bitmapRep)
+        return image
     }
 
     // MARK: - Mouse Tracking
@@ -360,23 +427,16 @@ final class PageItemView: NSView {
 extension PageItemView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        // 允许在窗口外部移动（用于创建新窗口）
-        return context == .outsideApplication ? .move : .move
+        return .move
     }
 
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
-        // 拖拽结束
-        // 如果操作为 none（没有被任何目标接收），检查是否拖出了所有窗口
-        if operation == [] {
-            // 检查是否在任何窗口内
-            let isInAnyWindow = WindowManager.shared.findWindow(at: screenPoint) != nil
-
-            if !isInAnyWindow {
-                // 拖出了所有窗口，通知回调创建新窗口
-                onDragOutOfWindow?(screenPoint)
-            }
+        // 检查是否拖出了所有窗口（不依赖 operation，因为 PageBarHostingView 会接收拖拽）
+        let isInAnyWindow = WindowManager.shared.findWindow(at: screenPoint) != nil
+        if !isInAnyWindow {
+            onDragOutOfWindow?(screenPoint)
         }
     }
 }

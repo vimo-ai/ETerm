@@ -68,8 +68,10 @@ struct ContentView: View {
             }
 
             // PageBar 在顶部（覆盖在终端上方，与红绿灯同一行）
-            VStack {
-                SwiftUIPageBar(coordinator: coordinator)
+            // 使用 AppKit 版本实现 Page 拖拽排序
+            VStack(spacing: 0) {
+                AppKitPageBar(coordinator: coordinator)
+                    .frame(height: PageBarView.recommendedHeight())
                 Spacer()
             }
 

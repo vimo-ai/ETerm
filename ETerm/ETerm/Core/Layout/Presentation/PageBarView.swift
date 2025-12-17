@@ -327,11 +327,31 @@ private class PassthroughContainerView: NSView {
     }
 }
 
+// MARK: - NSHostingView 忽略 Safe Area
+
+/// 自定义 NSHostingView 子类，覆盖 safeAreaInsets 和 safeAreaRect
+/// 解决 macOS SwiftUI 中 titlebar safe area 无法被 ignoresSafeArea() 忽略的问题
+/// 同时禁止窗口拖动，让子视图可以正确处理拖拽事件
+/// 参考: https://ardentswift.com/posts/macos-hide-toolbar/
+final class NSHostingViewIgnoringSafeArea<Content: View>: NSHostingView<Content> {
+    override var safeAreaInsets: NSEdgeInsets {
+        NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+    }
+
+    override var safeAreaRect: NSRect {
+        bounds
+    }
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+}
+
 // MARK: - AppKit Bridge（供 RioContainerView 使用）
 
 /// AppKit 桥接类，用于在 NSView 层级中使用 SwiftUI PageBarView
 final class PageBarHostingView: NSView {
-    private var hostingView: NSHostingView<PageBarControlsView>?
+    private var hostingView: NSView?  // NSHostingView with wrapped view
 
     // 数据状态
     private var pages: [PageItem] = []
@@ -384,12 +404,13 @@ final class PageBarHostingView: NSView {
     }
 
     private func setupHostingView() {
-        // 只使用 SwiftUI 渲染红绿灯和添加按钮，Page 标签用 AppKit
+        // 只使用 SwiftUI 渲染添加按钮等控件，Page 标签用 AppKit
         // 使用闭包捕获 self，确保能访问到后续设置的 onAddPage
         let controlsView = PageBarControlsView(onAddPage: { [weak self] in
             self?.onAddPage?()
         })
-        let hosting = NSHostingView(rootView: controlsView)
+        // 使用自定义 NSHostingView 子类，覆盖 safeAreaInsets 确保贴顶
+        let hosting = NSHostingViewIgnoringSafeArea(rootView: controlsView)
         hosting.translatesAutoresizingMaskIntoConstraints = true
         addSubview(hosting)
         hostingView = hosting
@@ -465,7 +486,6 @@ final class PageBarHostingView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // 检查点击是否在 bounds 内
         guard bounds.contains(point) else {
             return nil
         }
@@ -475,7 +495,6 @@ final class PageBarHostingView: NSView {
         for pageView in pageItemViews {
             let pointInPage = pageContainer.convert(pointInPageContainer, to: pageView)
             if pageView.bounds.contains(pointInPage) {
-                // 直接调用 PageItemView 的 hitTest
                 if let hitView = pageView.hitTest(pointInPage) {
                     return hitView
                 }
@@ -483,22 +502,36 @@ final class PageBarHostingView: NSView {
             }
         }
 
-        // 然后检查红绿灯和右侧按钮区域（SwiftUI）
-        if let hosting = hostingView {
-            let pointInHosting = convert(point, to: hosting)
-            if let swiftUIHit = hosting.hitTest(pointInHosting), swiftUIHit is NSControl {
-                return swiftUIHit
-            }
+        // 检查是否在右侧按钮区域（PageItemView 右边的区域）
+        // 计算 PageItemView 区域的右边界
+        let leftPadding: CGFloat = 88
+        let spacing: CGFloat = 2
+        var pageAreaRightEdge = leftPadding
+        for pageView in pageItemViews {
+            pageAreaRightEdge += pageView.fittingSize.width + spacing
         }
 
-        // 其他区域返回自己，用于窗口拖动
+        // 如果点击位置在 PageItemView 区域右侧，让 SwiftUI hostingView 处理
+        if point.x > pageAreaRightEdge, let hosting = hostingView {
+            return hosting
+        }
+
+        // 其他区域（PageItemView 左侧空白和间隙）返回自己，用于窗口拖动
         return self
     }
 
-    /// 设置 Page 列表
+    /// 设置 Page 列表（只在数据变化时重建）
     func setPages(_ newPages: [(id: UUID, title: String)]) {
-        pages = newPages.map { PageItem(id: $0.id, title: $0.title) }
-        rebuildPageItemViews()
+        let newPageItems = newPages.map { PageItem(id: $0.id, title: $0.title) }
+
+        // 检查是否需要重建（ID 列表或标题变化）
+        let needsRebuild = pages.count != newPageItems.count ||
+            zip(pages, newPageItems).contains { $0.id != $1.id || $0.title != $1.title }
+
+        if needsRebuild {
+            pages = newPageItems
+            rebuildPageItemViews()
+        }
     }
 
     /// 设置激活的 Page
@@ -530,11 +563,25 @@ final class PageBarHostingView: NSView {
     // MARK: - 窗口拖动
 
     override var mouseDownCanMoveWindow: Bool {
-        return true
+        // 禁用自动窗口拖动，手动控制
+        return false
     }
 
     override func mouseDown(with event: NSEvent) {
-        // 在 PageBar 区域拖动窗口
+        // 只在空白区域（非 PageItemView）启动窗口拖动
+        let point = convert(event.locationInWindow, from: nil)
+
+        // 检查是否点击在 PageItemView 上
+        let pointInPageContainer = convert(point, to: pageContainer)
+        for pageView in pageItemViews {
+            let pointInPage = pageContainer.convert(pointInPageContainer, to: pageView)
+            if pageView.bounds.contains(pointInPage) {
+                // 点击在 Page 标签上，不拖动窗口
+                return
+            }
+        }
+
+        // 点击在空白区域，启动窗口拖动
         window?.performDrag(with: event)
     }
 }
@@ -669,9 +716,8 @@ struct PageBarControlsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // 红绿灯按钮
-            TrafficLightButtons()
-                .padding(.leading, 12)
+            // 系统红绿灯预留空间（系统窗口 .titled 样式自带原生红绿灯）
+            Spacer().frame(width: 78)
 
             Spacer()
 
@@ -825,6 +871,70 @@ struct SwiftUIPageBar: View {
     }
 }
 
+// MARK: - AppKitPageBar (NSViewRepresentable)
+
+/// SwiftUI 包装器，使用 AppKit 的 PageBarHostingView 实现 Page 拖拽排序
+/// 解决 SwiftUI .onDrag 与 titlebar 窗口拖动的事件竞争问题
+struct AppKitPageBar: NSViewRepresentable {
+    @ObservedObject var coordinator: TerminalWindowCoordinator
+
+    func makeNSView(context: Context) -> PageBarHostingView {
+        let pageBarView = PageBarHostingView(frame: .zero)
+
+        // 设置回调
+        pageBarView.onPageClick = { [weak coordinator] pageId in
+            _ = coordinator?.switchToPage(pageId)
+        }
+
+        pageBarView.onPageClose = { [weak coordinator] pageId in
+            _ = coordinator?.closePage(pageId)
+        }
+
+        pageBarView.onPageRename = { [weak coordinator] pageId, newTitle in
+            _ = coordinator?.renamePage(pageId, to: newTitle)
+        }
+
+        pageBarView.onAddPage = { [weak coordinator] in
+            _ = coordinator?.createPage()
+        }
+
+        pageBarView.onPageReorder = { [weak coordinator] pageIds in
+            coordinator?.reorderPages(pageIds)
+        }
+
+        pageBarView.onPageDragOutOfWindow = { [weak coordinator] pageId, screenPoint in
+            coordinator?.handlePageDragOutOfWindow(pageId, at: screenPoint)
+        }
+
+        pageBarView.onPageReceivedFromOtherWindow = { [weak coordinator, weak pageBarView] pageId, sourceWindowNumber in
+            let targetWindowNumber = pageBarView?.window?.windowNumber ?? 0
+            coordinator?.handlePageReceivedFromOtherWindow(pageId, sourceWindowNumber: sourceWindowNumber, targetWindowNumber: targetWindowNumber, insertBefore: nil)
+        }
+
+        // 初始设置 Pages
+        updatePages(pageBarView)
+
+        return pageBarView
+    }
+
+    func updateNSView(_ nsView: PageBarHostingView, context: Context) {
+        updatePages(nsView)
+    }
+
+    private func updatePages(_ pageBarView: PageBarHostingView) {
+        // 从 coordinator 获取 Pages 数据
+        let pages = coordinator.terminalWindow.pages.map { page in
+            (id: page.pageId, title: page.title)
+        }
+        pageBarView.setPages(pages)
+
+        // 设置激活的 Page
+        if let activePageId = coordinator.terminalWindow.activePageId {
+            pageBarView.setActivePage(activePageId)
+        }
+    }
+}
+
 // MARK: - Preview
 
 #Preview("PageBarView") {
@@ -836,7 +946,7 @@ struct SwiftUIPageBar: View {
         ]),
         activePageId: .constant(nil)
     )
-    .frame(width: 600)
+    .frame(width: 1200)
     .background(Color.black.opacity(0.8))
 }
 
@@ -848,7 +958,7 @@ struct SwiftUIPageBar: View {
 
 #Preview("PageTabView") {
     VStack(spacing: 10) {
-        PageTabView(title: "Active Tab", isActive: true, showCloseButton: true, isEditing: .constant(false))
+        PageTabView(title: "Active Tab", isActive: true, showCloseButton: true, isEditing: .constant(false))
         PageTabView(title: "Inactive Tab", isActive: false, showCloseButton: true, isEditing: .constant(false))
         PageTabView(title: "No Close", isActive: true, showCloseButton: false, isEditing: .constant(false))
     }
