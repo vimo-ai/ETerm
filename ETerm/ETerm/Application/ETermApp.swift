@@ -19,17 +19,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var modelContainer: ModelContainer!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 创建 ETerm 数据目录
+        do {
+            try ETermPaths.createDirectories()
+        } catch {
+            logError("创建 ETerm 数据目录失败: \(error)")
+        }
+
         // Initialize SwiftData ModelContainer
         do {
+            // 尝试使用自定义路径
+            let wordsDBURL = URL(fileURLWithPath: ETermPaths.wordsDatabase)
+            let config = ModelConfiguration(url: wordsDBURL)
+
             modelContainer = try ModelContainer(
                 for: WordEntry.self, GrammarErrorRecord.self,
-                configurations: ModelConfiguration(isStoredInMemoryOnly: false)
+                configurations: config
             )
 
             // 输出当前数据统计
             printDataStatistics()
         } catch {
-            fatalError("Failed to initialize ModelContainer: \(error)")
+            // 如果自定义路径失败，回退到默认路径
+            logWarn("使用自定义路径初始化 SwiftData 失败，回退到默认路径: \(error)")
+
+            do {
+                modelContainer = try ModelContainer(
+                    for: WordEntry.self, GrammarErrorRecord.self,
+                    configurations: ModelConfiguration(isStoredInMemoryOnly: false)
+                )
+            } catch {
+                fatalError("Failed to initialize ModelContainer: \(error)")
+            }
         }
 
         // 启动 Claude Socket Server（接收 Hook 调用）

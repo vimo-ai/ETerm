@@ -70,11 +70,25 @@ final class PathTreeNode: Identifiable, ObservableObject {
 enum WorkspaceDataStore {
     static let shared: ModelContainer = {
         let schema = Schema([WorkspaceFolder.self])
-        let config = ModelConfiguration("Workspace", schema: schema)
+
         do {
-            return try ModelContainer(for: schema, configurations: [config])
+            // 尝试使用自定义路径
+            let workspaceDBURL = URL(fileURLWithPath: ETermPaths.workspaceDatabase)
+            let config = ModelConfiguration(url: workspaceDBURL)
+
+            let container = try ModelContainer(for: schema, configurations: [config])
+            return container
         } catch {
-            fatalError("无法创建 Workspace ModelContainer: \(error)")
+            // 如果自定义路径失败，回退到默认路径
+            logWarn("使用自定义路径初始化工作区数据库失败，回退到默认路径: \(error)")
+
+            do {
+                let config = ModelConfiguration("Workspace", schema: schema)
+                let container = try ModelContainer(for: schema, configurations: [config])
+                return container
+            } catch {
+                fatalError("无法创建 Workspace ModelContainer: \(error)")
+            }
         }
     }()
 }
