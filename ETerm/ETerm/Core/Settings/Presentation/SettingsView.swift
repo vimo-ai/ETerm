@@ -18,6 +18,9 @@ struct SettingsView: View {
     @State private var showTestResult = false
     @State private var testMessage = ""
 
+    // 开发者选项
+    @State private var debugLogEnabled: Bool = LogManager.shared.debugEnabled
+
     enum TestStatus {
         case idle
         case testing
@@ -118,6 +121,62 @@ struct SettingsView: View {
                                     RoundedRectangle(cornerRadius: 6)
                                         .fill(testStatus == .success ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
                                 )
+                            }
+                        }
+                    }
+
+                    // 开发者选项
+                    SettingsSectionView(title: "开发者选项") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Toggle(isOn: $debugLogEnabled) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("调试日志")
+                                        .font(.body)
+                                    Text("启用后日志输出到 stderr，可在终端查看")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .onChange(of: debugLogEnabled) { _, newValue in
+                                LogManager.shared.debugEnabled = newValue
+                            }
+
+                            // 日志文件位置
+                            HStack {
+                                Text("日志目录")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text(ETermPaths.logs)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .textSelection(.enabled)
+                                Button(action: {
+                                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: ETermPaths.logs)
+                                }) {
+                                    Image(systemName: "folder")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("在 Finder 中打开")
+                            }
+
+                            // 数据目录
+                            HStack {
+                                Text("数据目录")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text(ETermPaths.root)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .textSelection(.enabled)
+                                Button(action: {
+                                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: ETermPaths.root)
+                                }) {
+                                    Image(systemName: "folder")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("在 Finder 中打开")
                             }
                         }
                     }
