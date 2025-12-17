@@ -1482,30 +1482,21 @@ impl TerminalPool {
                         }
 
                         // 绘制选区叠加层
+                        // 注意：空白检查只在 mouseUp (finalize_selection) 时执行，
+                        // 渲染时始终显示选区，让用户在拖拽过程中看到选区位置
                         if let Some(snapshot) = entry.selection_overlay.snapshot() {
-                            // 检查选区内容是否全是空白
-                            let is_all_whitespace = self.is_selection_all_whitespace(
-                                &state.grid,
+                            use crate::domain::primitives::PhysicalPixels;
+                            let physical_cell_width = PhysicalPixels::new(logical_cell_size.width.value * scale);
+                            let physical_line_height = PhysicalPixels::new(logical_line_height.value * scale);
+                            self.draw_selection_overlay(
+                                canvas,
                                 &snapshot,
+                                physical_cell_width,
+                                physical_line_height,
+                                rows,
+                                state.grid.history_size(),
+                                state.grid.display_offset(),
                             );
-
-                            if is_all_whitespace {
-                                // 空白选区，自动清除
-                                entry.selection_overlay.clear();
-                            } else {
-                                use crate::domain::primitives::PhysicalPixels;
-                                let physical_cell_width = PhysicalPixels::new(logical_cell_size.width.value * scale);
-                                let physical_line_height = PhysicalPixels::new(logical_line_height.value * scale);
-                                self.draw_selection_overlay(
-                                    canvas,
-                                    &snapshot,
-                                    physical_cell_width,
-                                    physical_line_height,
-                                    rows,
-                                    state.grid.history_size(),
-                                    state.grid.display_offset(),
-                                );
-                            }
                         }
 
                         renderer.print_frame_stats(&format!("terminal_{}", id));
@@ -2210,58 +2201,6 @@ impl TerminalPool {
                 crate::domain::aggregates::TerminalMode::Active
             }
         })
-    }
-
-    /// 检查选区内容是否全是空白
-    ///
-    /// # 参数
-    /// - grid: 网格视图
-    /// - selection: 选区快照
-    ///
-    /// # 返回
-    /// - true: 选区内容全是空白字符
-    /// - false: 选区内容包含非空白字符
-    fn is_selection_all_whitespace(
-        &self,
-        grid: &crate::domain::views::GridView,
-        selection: &crate::infra::SelectionSnapshot,
-    ) -> bool {
-        let history_size = grid.history_size() as i32;
-        let display_offset = grid.display_offset() as i32;
-        let screen_lines = grid.lines();
-
-        // 规范化选区坐标
-        let (start_row, start_col, end_row, end_col) =
-            if selection.start_row < selection.end_row
-               || (selection.start_row == selection.end_row && selection.start_col <= selection.end_col) {
-                (selection.start_row, selection.start_col, selection.end_row, selection.end_col)
-            } else {
-                (selection.end_row, selection.end_col, selection.start_row, selection.start_col)
-            };
-
-        // 遍历选区范围内的可见行
-        for abs_row in start_row..=end_row {
-            // 转换为屏幕行号
-            let screen_row = abs_row - history_size + display_offset;
-            if screen_row < 0 || screen_row >= screen_lines as i32 {
-                continue; // 不在可见区域
-            }
-
-            if let Some(row) = grid.row(screen_row as usize) {
-                let cells = row.cells();
-                let row_start_col = if abs_row == start_row { start_col as usize } else { 0 };
-                let row_end_col = if abs_row == end_row { end_col as usize } else { cells.len().saturating_sub(1) };
-
-                for col in row_start_col..=row_end_col.min(cells.len().saturating_sub(1)) {
-                    let c = cells[col].c;
-                    if !c.is_whitespace() && c != '\0' {
-                        return false; // 找到非空白字符
-                    }
-                }
-            }
-        }
-
-        true // 全是空白
     }
 
     /// 绘制选区叠加层
