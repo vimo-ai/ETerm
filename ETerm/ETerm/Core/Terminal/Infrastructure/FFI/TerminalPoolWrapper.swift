@@ -88,6 +88,10 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     /// Bell 回调
     var onBell: ((Int) -> Void)?
 
+    /// 调试：上次 Event 时间（用于计算间隔）
+    private var lastEventTime: Date?
+    private var eventCounter: Int = 0
+
     // MARK: - Initialization
 
     /// 创建终端池
@@ -158,7 +162,21 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
 
         switch event.event_type {
         case TerminalEventType_Wakeup, TerminalEventType_Render:
+            // 调试日志：记录 Event 间隔
+            if LogManager.shared.debugEnabled {
+                let now = Date()
+                let interval = lastEventTime.map { now.timeIntervalSince($0) } ?? 0
+                lastEventTime = now
+                eventCounter += 1
+
+                let eventType = event.event_type == TerminalEventType_Wakeup ? "Wakeup" : "Render"
+                logDebug("[TerminalPool] 📥 Event #\(eventCounter): \(eventType), interval=\(String(format: "%.3f", interval))s")
+            }
+
             DispatchQueue.main.async { [weak self] in
+                if LogManager.shared.debugEnabled {
+                    logDebug("[TerminalPool] 📤 DispatchQueue callback executing")
+                }
                 self?.renderCallback?()
             }
 

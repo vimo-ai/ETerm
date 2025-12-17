@@ -1136,6 +1136,10 @@ class RioMetalView: NSView, RenderViewProtocol {
     func requestRender() {
         guard isInitialized else { return }
 
+        if LogManager.shared.debugEnabled {
+            logDebug("[RioTerminalView] 🎯 requestRender")
+        }
+
         // 同步布局（有 hash 缓存优化，无变化时自动跳过）
         syncLayoutToRust()
 
