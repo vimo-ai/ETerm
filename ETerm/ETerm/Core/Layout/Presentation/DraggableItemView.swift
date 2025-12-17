@@ -440,11 +440,10 @@ extension DraggableItemView: NSDraggingSource {
             }
 
             // 检查是否拖出了所有窗口
-            if operation == [] {
-                let isInAnyWindow = WindowManager.shared.findWindow(at: screenPoint) != nil
-                if !isInAnyWindow {
-                    capturedOnDragOutOfWindow?(screenPoint)
-                }
+            // 不检查 operation，因为即使拖到其他区域 operation 也可能不为空
+            let isInAnyWindow = WindowManager.shared.findWindow(at: screenPoint) != nil
+            if !isInAnyWindow {
+                capturedOnDragOutOfWindow?(screenPoint)
             }
         }
     }
