@@ -80,19 +80,25 @@ private struct DevHelperContentView: View {
     @State private var isScanning = false
 
     var body: some View {
-        HSplitView {
-            // 左侧：项目列表
-            ProjectListView(
-                rootNodes: rootNodes,
-                selectedScript: $selectedScript,
-                isScanning: isScanning,
-                onRefresh: scanProjects
-            )
-            .frame(minWidth: 200, idealWidth: 280, maxWidth: 400)
+        VStack(spacing: 0) {
+            // 顶部安全区域（PageBar）
+            Color.clear.frame(height: 52)
 
-            // 右侧：终端
-            TerminalPanelView(selectedScript: $selectedScript)
+            HSplitView {
+                // 左侧：项目列表
+                ProjectListView(
+                    rootNodes: rootNodes,
+                    selectedScript: $selectedScript,
+                    isScanning: isScanning,
+                    onRefresh: scanProjects
+                )
+                .frame(minWidth: 200, idealWidth: 280, maxWidth: 400)
+
+                // 右侧：终端
+                TerminalPanelView(selectedScript: $selectedScript)
+            }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             scanProjects()
         }
@@ -207,8 +213,6 @@ private struct ProjectListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: 52)
-
             HStack {
                 Image(systemName: "hammer.fill")
                     .foregroundColor(.orange)
@@ -476,8 +480,6 @@ private struct TerminalPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: 52)
-
             // 标题栏
             HStack {
                 if let selected = selectedScript {
