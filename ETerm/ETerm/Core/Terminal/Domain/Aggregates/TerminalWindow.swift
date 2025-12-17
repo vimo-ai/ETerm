@@ -224,6 +224,26 @@ final class TerminalWindow {
         return true
     }
 
+    /// 强制移除 Page（用于跨窗口移动，允许移除最后一个 Page）
+    ///
+    /// - Parameter pageId: 要移除的 Page ID
+    /// - Returns: 被移除的 Page，失败返回 nil
+    func forceRemovePage(_ pageId: UUID) -> Page? {
+        guard let index = pages.firstIndex(where: { $0.pageId == pageId }) else {
+            return nil
+        }
+
+        let page = pages.remove(at: index)
+
+        // 如果还有其他 Page，更新激活状态
+        if !pages.isEmpty && activePageId == pageId {
+            let newIndex = min(index, pages.count - 1)
+            activePageId = pages[newIndex].pageId
+        }
+
+        return page
+    }
+
     /// 重命名 Page
     ///
     /// - Parameters:

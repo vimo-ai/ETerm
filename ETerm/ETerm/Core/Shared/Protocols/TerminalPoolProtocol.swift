@@ -61,6 +61,18 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 获取终端数量
     func getTerminalCount() -> Int
 
+    // MARK: - 终端迁移（跨窗口移动）
+
+    /// 分离终端（用于跨窗口迁移）
+    ///
+    /// 将终端从当前池中移除，返回句柄。PTY 连接保持活跃。
+    func detachTerminal(_ terminalId: Int) -> DetachedTerminalHandle?
+
+    /// 接收分离的终端（用于跨窗口迁移）
+    ///
+    /// 将分离的终端添加到当前池。
+    func attachTerminal(_ detached: DetachedTerminalHandle) -> Int
+
     // MARK: - PTY 输入输出
 
     /// 写入输入到指定终端
@@ -206,6 +218,8 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func createTerminalWithIdAndCwd(_ id: Int, cols: UInt16, rows: UInt16, cwd: String?) -> Int { -1 }
     func closeTerminal(_ terminalId: Int) -> Bool { false }
     func getTerminalCount() -> Int { 0 }
+    func detachTerminal(_ terminalId: Int) -> DetachedTerminalHandle? { nil }
+    func attachTerminal(_ detached: DetachedTerminalHandle) -> Int { -1 }
     func writeInput(terminalId: Int, data: String) -> Bool { false }
     func scroll(terminalId: Int, deltaLines: Int32) -> Bool { false }
     func resize(terminalId: Int, cols: UInt16, rows: UInt16) -> Bool { false }

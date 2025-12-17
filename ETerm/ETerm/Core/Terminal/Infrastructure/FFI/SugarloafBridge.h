@@ -766,4 +766,59 @@ const char* key_to_escape_sequence(uint16_t key_code, uint32_t modifiers);
 /// @param ptr Pointer returned by key_to_escape_sequence (NULL is safe)
 void free_key_sequence(const char* ptr);
 
+// =============================================================================
+// Terminal Migration API (Cross-window move)
+// =============================================================================
+
+/// DetachedTerminal handle (opaque pointer)
+///
+/// Used to transfer terminals between pools
+typedef void* DetachedTerminalHandle;
+
+/// Detach terminal (for cross-pool migration)
+///
+/// Removes terminal from current pool and returns a DetachedTerminal handle.
+/// PTY connection stays alive, terminal state is fully preserved.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID to detach
+/// @return DetachedTerminal handle on success, NULL on failure (terminal not found)
+///
+/// Note:
+/// - Returned handle must be passed to terminal_pool_attach_terminal
+/// - Or destroyed with detached_terminal_destroy
+DetachedTerminalHandle terminal_pool_detach_terminal(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Attach detached terminal (for cross-pool migration)
+///
+/// Adds DetachedTerminal to current pool.
+///
+/// @param handle TerminalPool handle (target pool)
+/// @param detached DetachedTerminal handle
+/// @return Terminal ID in target pool (>= 1) on success, -1 on failure
+///
+/// Note:
+/// - After calling, detached handle is no longer valid
+/// - Terminal will use original ID if no conflict, otherwise new ID
+int64_t terminal_pool_attach_terminal(
+    TerminalPoolHandle handle,
+    DetachedTerminalHandle detached
+);
+
+/// Destroy detached terminal (without migration, closes PTY)
+///
+/// If detached terminal doesn't need migration, use this to release resources.
+///
+/// @param detached DetachedTerminal handle
+void detached_terminal_destroy(DetachedTerminalHandle detached);
+
+/// Get original ID of detached terminal
+///
+/// @param detached DetachedTerminal handle
+/// @return Terminal's original ID on success, -1 on failure
+int64_t detached_terminal_get_id(DetachedTerminalHandle detached);
+
 #endif /* SugarloafBridge_h */

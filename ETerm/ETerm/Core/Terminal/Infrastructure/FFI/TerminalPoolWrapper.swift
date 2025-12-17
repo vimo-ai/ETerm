@@ -288,6 +288,49 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return result
     }
 
+    // MARK: - Terminal Migration (Cross-window move)
+
+    /// 分离终端（用于跨窗口迁移）
+    ///
+    /// 将终端从当前池中移除，返回 DetachedTerminalHandle。
+    /// PTY 连接保持活跃，终端状态完整保留。
+    ///
+    /// - Parameter terminalId: 要分离的终端 ID
+    /// - Returns: DetachedTerminalHandle，失败返回 nil
+    func detachTerminal(_ terminalId: Int) -> DetachedTerminalHandle? {
+        guard let handle = handle else { return nil }
+        let detached = terminal_pool_detach_terminal(handle, terminalId)
+        return detached
+    }
+
+    /// 接收分离的终端（用于跨窗口迁移）
+    ///
+    /// 将 DetachedTerminalHandle 添加到当前池。
+    ///
+    /// - Parameter detached: 分离的终端句柄
+    /// - Returns: 终端在当前池中的 ID，失败返回 -1
+    func attachTerminal(_ detached: DetachedTerminalHandle) -> Int {
+        guard let handle = handle else { return -1 }
+        let id = terminal_pool_attach_terminal(handle, detached)
+        return Int(id)
+    }
+
+    /// 销毁分离的终端（不迁移，直接关闭 PTY）
+    ///
+    /// - Parameter detached: 分离的终端句柄
+    static func destroyDetachedTerminal(_ detached: DetachedTerminalHandle) {
+        detached_terminal_destroy(detached)
+    }
+
+    /// 获取分离终端的原始 ID
+    ///
+    /// - Parameter detached: 分离的终端句柄
+    /// - Returns: 终端的原始 ID，失败返回 -1
+    static func getDetachedTerminalId(_ detached: DetachedTerminalHandle) -> Int {
+        let id = detached_terminal_get_id(detached)
+        return Int(id)
+    }
+
     func getTerminalCount() -> Int {
         guard let handle = handle else { return 0 }
         return Int(terminal_pool_terminal_count(handle))

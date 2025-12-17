@@ -125,6 +125,12 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 初始工作目录（继承自父窗口，可选）
     private var initialCwd: String?
 
+    // MARK: - Terminal Migration
+
+    /// 待附加的分离终端（跨窗口迁移时使用）
+    /// 当新窗口创建时，终端先分离存储在这里，等 TerminalPool 就绪后附加
+    private var pendingDetachedTerminals: [UUID: DetachedTerminalHandle] = [:]
+
     // MARK: - Render Debounce
 
     /// 防抖延迟任务
@@ -571,11 +577,47 @@ class TerminalWindowCoordinator: ObservableObject {
         // 切换到新终端池
         self.terminalPool = pool
 
-        // 重新创建所有终端
-        createTerminalsForAllTabs()
+        // 如果有待附加的分离终端，优先使用它们（跨窗口迁移场景）
+        if !pendingDetachedTerminals.isEmpty {
+            attachPendingDetachedTerminals()
+        } else {
+            // 否则创建新终端
+            createTerminalsForAllTabs()
+        }
 
         // 初始化键盘系统
         self.keyboardSystem = KeyboardSystem(coordinator: self)
+    }
+
+    /// 设置待附加的分离终端（跨窗口迁移时使用）
+    ///
+    /// 在创建新窗口时调用，这些终端会在 setTerminalPool 时被附加到新池
+    func setPendingDetachedTerminals(_ terminals: [UUID: DetachedTerminalHandle]) {
+        self.pendingDetachedTerminals = terminals
+    }
+
+    /// 附加所有待处理的分离终端
+    private func attachPendingDetachedTerminals() {
+        for panel in terminalWindow.allPanels {
+            for tab in panel.tabs {
+                // 查找并附加分离的终端
+                if let detached = pendingDetachedTerminals[tab.tabId] {
+                    let newTerminalId = terminalPool.attachTerminal(detached)
+                    if newTerminalId >= 0 {
+                        tab.setRustTerminalId(newTerminalId)
+                    }
+                } else {
+                    // 如果没有找到分离的终端，创建新的
+                    let cwd = tab.takePendingCwd()
+                    let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: cwd)
+                    if terminalId >= 0 {
+                        tab.setRustTerminalId(terminalId)
+                    }
+                }
+            }
+        }
+        // 清空待附加列表
+        pendingDetachedTerminals.removeAll()
     }
 
 
@@ -1648,8 +1690,8 @@ class TerminalWindowCoordinator: ObservableObject {
             }
         }
 
-        // 从 TerminalWindow 移除 Page
-        guard terminalWindow.closePage(pageId) else {
+        // 从 TerminalWindow 移除 Page（使用 forceRemovePage 允许移除最后一个 Page）
+        guard let removedPage = terminalWindow.forceRemovePage(pageId) else {
             return nil
         }
 
@@ -1661,7 +1703,7 @@ class TerminalWindowCoordinator: ObservableObject {
         updateTrigger = UUID()
         scheduleRender()
 
-        return page
+        return removedPage
     }
 
     /// 添加已有的 Page（用于跨窗口移动）
@@ -1669,13 +1711,23 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameters:
     ///   - page: 要添加的 Page
     ///   - insertBefore: 插入到指定 Page 之前（nil 表示插入到末尾）
-    func addPage(_ page: Page, insertBefore targetPageId: UUID? = nil) {
+    ///   - tabCwds: Tab ID 到 CWD 的映射（用于跨窗口移动时重建终端，已废弃）
+    ///   - detachedTerminals: Tab ID 到分离终端的映射（用于真正的终端迁移）
+    func addPage(_ page: Page, insertBefore targetPageId: UUID? = nil, tabCwds: [UUID: String]? = nil, detachedTerminals: [UUID: DetachedTerminalHandle]? = nil) {
         if let targetId = targetPageId {
             // 插入到指定位置
             terminalWindow.addExistingPage(page, insertBefore: targetId)
         } else {
             // 添加到末尾
             terminalWindow.addExistingPage(page)
+        }
+
+        // 优先使用终端迁移（保留 PTY 连接和历史）
+        if let terminals = detachedTerminals {
+            attachTerminalsForPage(page, detachedTerminals: terminals)
+        } else if let cwds = tabCwds {
+            // 回退到重建终端（会丢失历史）
+            recreateTerminalsForPage(page, tabCwds: cwds)
         }
 
         // 切换到新添加的 Page
@@ -1688,6 +1740,64 @@ class TerminalWindowCoordinator: ObservableObject {
         objectWillChange.send()
         updateTrigger = UUID()
         scheduleRender()
+    }
+
+    // MARK: - 终端迁移（跨窗口移动）
+
+    /// 分离终端（用于跨窗口迁移）
+    ///
+    /// - Parameter terminalId: 要分离的终端 ID
+    /// - Returns: DetachedTerminalHandle，失败返回 nil
+    func detachTerminal(_ terminalId: Int) -> DetachedTerminalHandle? {
+        return terminalPool.detachTerminal(terminalId)
+    }
+
+    /// 附加分离的终端到 Page（用于跨窗口迁移）
+    ///
+    /// - Parameters:
+    ///   - page: 目标 Page
+    ///   - detachedTerminals: Tab ID 到分离终端的映射
+    private func attachTerminalsForPage(_ page: Page, detachedTerminals: [UUID: DetachedTerminalHandle]) {
+        for panel in page.allPanels {
+            for tab in panel.tabs {
+                // 清除旧的终端 ID（它属于源窗口的 Pool）
+                tab.setRustTerminalId(nil)
+
+                // 查找并附加分离的终端
+                if let detached = detachedTerminals[tab.tabId] {
+                    let newTerminalId = terminalPool.attachTerminal(detached)
+                    if newTerminalId >= 0 {
+                        tab.setRustTerminalId(newTerminalId)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 重建 Page 中所有 Tab 的终端（已废弃，使用 attachTerminalsForPage）
+    ///
+    /// 当 Page 从另一个窗口移动过来时，旧终端在源窗口的 Pool 中，
+    /// 需要在当前窗口的 Pool 中重建终端。
+    ///
+    /// - Parameters:
+    ///   - page: 要重建终端的 Page
+    ///   - tabCwds: Tab ID 到 CWD 的映射
+    private func recreateTerminalsForPage(_ page: Page, tabCwds: [UUID: String]) {
+        for panel in page.allPanels {
+            for tab in panel.tabs {
+                // 清除旧的终端 ID（它属于源窗口的 Pool）
+                tab.setRustTerminalId(nil)
+
+                // 获取 CWD
+                let cwd = tabCwds[tab.tabId]
+
+                // 使用 Tab 的 stableId 在当前窗口的 Pool 中创建新终端
+                let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: cwd)
+                if terminalId >= 0 {
+                    tab.setRustTerminalId(terminalId)
+                }
+            }
+        }
     }
 
     /// 移除 Tab（用于跨窗口移动）
@@ -1989,14 +2099,13 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameters:
     ///   - pageId: 被拖拽的 Page ID
     ///   - sourceWindowNumber: 源窗口编号
+    ///   - targetWindowNumber: 目标窗口编号
     ///   - insertBefore: 插入到指定 Page 之前（nil 表示插入到末尾）
-    func handlePageReceivedFromOtherWindow(_ pageId: UUID, sourceWindowNumber: Int, insertBefore targetPageId: UUID?) {
-        // 通过 WindowManager 处理跨窗口移动
-        let currentWindowNumber = NSApplication.shared.keyWindow?.windowNumber ?? 0
+    func handlePageReceivedFromOtherWindow(_ pageId: UUID, sourceWindowNumber: Int, targetWindowNumber: Int, insertBefore targetPageId: UUID?) {
         WindowManager.shared.movePage(
             pageId,
             from: sourceWindowNumber,
-            to: currentWindowNumber,
+            to: targetWindowNumber,
             insertBefore: targetPageId
         )
     }
@@ -2020,5 +2129,62 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 在新窗口位置创建窗口
         WindowManager.shared.createWindowWithPage(page, from: self, at: screenPoint)
+    }
+
+    // MARK: - Panel Navigation
+
+    /// 向上导航到相邻 Panel
+    func navigatePanelUp() {
+        navigatePanel(direction: .up)
+    }
+
+    /// 向下导航到相邻 Panel
+    func navigatePanelDown() {
+        navigatePanel(direction: .down)
+    }
+
+    /// 向左导航到相邻 Panel
+    func navigatePanelLeft() {
+        navigatePanel(direction: .left)
+    }
+
+    /// 向右导航到相邻 Panel
+    func navigatePanelRight() {
+        navigatePanel(direction: .right)
+    }
+
+    /// Panel 导航统一入口
+    ///
+    /// - Parameter direction: 导航方向
+    private func navigatePanel(direction: NavigationDirection) {
+        guard let currentPanelId = activePanelId,
+              let currentPage = terminalWindow.activePage else {
+            return
+        }
+
+        // 获取容器尺寸（从 renderView 转换为 NSView）
+        guard let renderViewAsNSView = renderView as? NSView else {
+            return
+        }
+
+        let containerBounds = renderViewAsNSView.bounds
+
+        // 使用导航服务查找目标 Panel
+        guard let targetPanelId = PanelNavigationService.findNearestPanel(
+            from: currentPanelId,
+            direction: direction,
+            in: currentPage,
+            containerBounds: containerBounds
+        ) else {
+            // 没有找到目标 Panel，不执行任何操作
+            return
+        }
+
+        // 切换到目标 Panel
+        setActivePanel(targetPanelId)
+
+        // 触发 UI 更新
+        objectWillChange.send()
+        updateTrigger = UUID()
     }
 }

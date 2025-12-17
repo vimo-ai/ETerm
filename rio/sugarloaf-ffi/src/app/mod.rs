@@ -11,7 +11,7 @@ pub mod terminal_pool;
 pub mod render_scheduler;
 pub mod ffi;
 
-pub use terminal_pool::TerminalPool;
+pub use terminal_pool::{TerminalPool, DetachedTerminal};
 pub use render_scheduler::RenderScheduler;
 pub use ffi::{
     AppConfig, ErrorCode, FontMetrics, GridPoint, TerminalEvent, TerminalEventType,

@@ -785,3 +785,117 @@ pub extern "C" fn terminal_pool_get_scroll_info(
         }
     }
 }
+
+// ============================================================================
+// 终端迁移 API（跨窗口移动）
+// ============================================================================
+
+/// DetachedTerminal 句柄（不透明指针）
+///
+/// 用于在池之间传递分离的终端
+#[repr(C)]
+pub struct DetachedTerminalHandle {
+    _private: [u8; 0],
+}
+
+/// 分离终端（用于跨池迁移）
+///
+/// 将终端从当前池中移除，返回 DetachedTerminal 句柄。
+/// PTY 连接保持活跃，终端状态完整保留。
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 要分离的终端 ID
+///
+/// # 返回
+/// - 成功: DetachedTerminal 句柄（非空）
+/// - 失败: 空指针（终端不存在）
+///
+/// # 注意
+/// - 返回的句柄必须使用 `terminal_pool_attach_terminal` 接收
+/// - 或使用 `detached_terminal_destroy` 销毁
+#[no_mangle]
+pub extern "C" fn terminal_pool_detach_terminal(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> *mut DetachedTerminalHandle {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    match pool.detach_terminal(terminal_id) {
+        Some(detached) => {
+            let boxed = Box::new(detached);
+            Box::into_raw(boxed) as *mut DetachedTerminalHandle
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// 接收分离的终端（用于跨池迁移）
+///
+/// 将 DetachedTerminal 添加到当前池。
+///
+/// # 参数
+/// - handle: TerminalPool 句柄（目标池）
+/// - detached: DetachedTerminal 句柄
+///
+/// # 返回
+/// - 成功: 终端在目标池中的 ID（>= 1）
+/// - 失败: -1（句柄无效）
+///
+/// # 注意
+/// - 调用后，detached 句柄不再有效
+/// - 终端会使用原来的 ID（如果不冲突）或新 ID
+#[no_mangle]
+pub extern "C" fn terminal_pool_attach_terminal(
+    handle: *mut TerminalPoolHandle,
+    detached: *mut DetachedTerminalHandle,
+) -> i64 {
+    if handle.is_null() || detached.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    let detached_terminal = unsafe { Box::from_raw(detached as *mut crate::app::DetachedTerminal) };
+
+    let id = pool.attach_terminal(*detached_terminal);
+    id as i64
+}
+
+/// 销毁分离的终端（不迁移，直接关闭）
+///
+/// 如果分离的终端不需要迁移，使用此函数释放资源。
+///
+/// # 参数
+/// - detached: DetachedTerminal 句柄
+#[no_mangle]
+pub extern "C" fn detached_terminal_destroy(detached: *mut DetachedTerminalHandle) {
+    if detached.is_null() {
+        return;
+    }
+
+    unsafe {
+        let _ = Box::from_raw(detached as *mut crate::app::DetachedTerminal);
+        // DetachedTerminal 会被 drop，PTY 连接关闭
+    }
+}
+
+/// 获取分离终端的原始 ID
+///
+/// # 参数
+/// - detached: DetachedTerminal 句柄
+///
+/// # 返回
+/// - 成功: 终端的原始 ID
+/// - 失败: -1（句柄无效）
+#[no_mangle]
+pub extern "C" fn detached_terminal_get_id(detached: *mut DetachedTerminalHandle) -> i64 {
+    if detached.is_null() {
+        return -1;
+    }
+
+    let detached_terminal = unsafe { &*(detached as *mut crate::app::DetachedTerminal) };
+    detached_terminal.id as i64
+}

@@ -59,12 +59,85 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{OnceLock, Weak};
 use std::thread::JoinHandle;
 use sugarloaf::font::FontLibrary;
 use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, ImageObject, layout::RootStyle};
 use std::ffi::c_void;
 
 use super::ffi::{AppConfig, ErrorCode, TerminalEvent, TerminalEventType, TerminalPoolEventCallback};
+
+// ============================================================================
+// 全局终端事件路由（修复跨 Pool 迁移后事件丢失问题）
+// ============================================================================
+
+/// 终端事件目标
+///
+/// 存储终端的 dirty_flag 和所属 Pool 的 needs_render 引用。
+/// 当终端在 Pool 之间迁移时，更新 needs_render 指向新 Pool。
+struct TerminalEventTarget {
+    /// 终端的脏标记（跟随终端，不变）
+    dirty_flag: Arc<crate::infra::AtomicDirtyFlag>,
+    /// 所属 Pool 的 needs_render（迁移时更新）
+    needs_render: Weak<AtomicBool>,
+}
+
+/// 全局终端注册表
+///
+/// 映射 terminal_id → TerminalEventTarget
+/// 用于 PTY 事件路由：无论终端在哪个 Pool，都能正确标记 dirty 和 needs_render
+static TERMINAL_REGISTRY: OnceLock<RwLock<HashMap<usize, TerminalEventTarget>>> = OnceLock::new();
+
+/// 获取全局终端注册表（懒初始化）
+fn global_terminal_registry() -> &'static RwLock<HashMap<usize, TerminalEventTarget>> {
+    TERMINAL_REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// 注册终端到全局路由
+///
+/// 在 create_terminal 时调用
+pub fn register_terminal_event_target(
+    terminal_id: usize,
+    dirty_flag: Arc<crate::infra::AtomicDirtyFlag>,
+    needs_render: &Arc<AtomicBool>,
+) {
+    let target = TerminalEventTarget {
+        dirty_flag,
+        needs_render: Arc::downgrade(needs_render),
+    };
+    global_terminal_registry().write().insert(terminal_id, target);
+}
+
+/// 更新终端的 needs_render 指向（迁移到新 Pool 时调用）
+///
+/// 在 attach_terminal 时调用
+pub fn update_terminal_needs_render(terminal_id: usize, needs_render: &Arc<AtomicBool>) {
+    if let Some(target) = global_terminal_registry().write().get_mut(&terminal_id) {
+        target.needs_render = Arc::downgrade(needs_render);
+    }
+}
+
+/// 注销终端（终端关闭时调用）
+pub fn unregister_terminal_event_target(terminal_id: usize) {
+    global_terminal_registry().write().remove(&terminal_id);
+}
+
+/// 通过全局路由处理 Wakeup 事件
+///
+/// 返回 true 如果找到终端并处理了事件
+pub fn route_wakeup_event(terminal_id: usize) -> bool {
+    let registry = global_terminal_registry().read();
+    if let Some(target) = registry.get(&terminal_id) {
+        // 标记终端为脏
+        target.dirty_flag.mark_dirty();
+        // 通知所属 Pool 需要渲染
+        if let Some(needs_render) = target.needs_render.upgrade() {
+            needs_render.store(true, Ordering::Release);
+            return true;
+        }
+    }
+    false
+}
 
 /// 单个终端的渲染缓存
 struct TerminalRenderCache {
@@ -143,6 +216,25 @@ struct TerminalEntry {
     /// 独立选区叠加层（不在 Terminal 内）
     selection_overlay: Arc<crate::infra::SelectionOverlay>,
 }
+
+/// 分离的终端（用于跨池迁移）
+///
+/// 当终端从一个池分离时，PTY 连接保持活跃，终端状态完整保留。
+/// 可以被另一个池接收，实现跨窗口终端迁移。
+///
+/// # 注意
+/// - PTY 线程继续运行，事件仍发送到原池的 EventQueue
+/// - 迁移后需要手动触发渲染以更新显示
+/// - 渲染缓存会被清空（目标池需要重新渲染）
+pub struct DetachedTerminal {
+    /// 原始终端 ID
+    pub id: usize,
+    /// 终端条目（包含所有状态）
+    entry: TerminalEntry,
+}
+
+// DetachedTerminal 需要 Send 以支持跨线程传递
+unsafe impl Send for DetachedTerminal {}
 
 /// 终端池
 pub struct TerminalPool {
@@ -395,6 +487,7 @@ impl TerminalPool {
         };
 
         // 3. 存储条目
+        let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
             pty_tx,
@@ -410,7 +503,7 @@ impl TerminalPool {
             selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
-            dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            dirty_flag: dirty_flag.clone(),
             render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
                 cols as usize,
                 rows as usize,
@@ -419,6 +512,9 @@ impl TerminalPool {
         };
 
         self.terminals.write().insert(id, entry);
+
+        // 4. 注册到全局事件路由（支持跨 Pool 迁移）
+        register_terminal_event_target(id, dirty_flag, &self.needs_render);
 
         // eprintln!("✅ [TerminalPool] Terminal {} created", id);
 
@@ -451,6 +547,7 @@ impl TerminalPool {
         };
 
         // 3. 存储条目
+        let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
             pty_tx,
@@ -466,7 +563,7 @@ impl TerminalPool {
             selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
-            dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            dirty_flag: dirty_flag.clone(),
             render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
                 cols as usize,
                 rows as usize,
@@ -475,6 +572,9 @@ impl TerminalPool {
         };
 
         self.terminals.write().insert(id, entry);
+
+        // 4. 注册到全局事件路由（支持跨 Pool 迁移）
+        register_terminal_event_target(id, dirty_flag, &self.needs_render);
 
         id as i32
     }
@@ -509,6 +609,7 @@ impl TerminalPool {
         };
 
         // 3. 存储条目
+        let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
             pty_tx,
@@ -524,7 +625,7 @@ impl TerminalPool {
             selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
-            dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            dirty_flag: dirty_flag.clone(),
             render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
                 cols as usize,
                 rows as usize,
@@ -533,6 +634,9 @@ impl TerminalPool {
         };
 
         self.terminals.write().insert(id, entry);
+
+        // 4. 注册到全局事件路由（支持跨 Pool 迁移）
+        register_terminal_event_target(id, dirty_flag, &self.needs_render);
 
         // 更新 next_id（确保不会冲突）
         if id >= self.next_id {
@@ -572,6 +676,7 @@ impl TerminalPool {
         };
 
         // 3. 存储条目
+        let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
             pty_tx,
@@ -587,7 +692,7 @@ impl TerminalPool {
             selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
-            dirty_flag: Arc::new(crate::infra::AtomicDirtyFlag::new()),
+            dirty_flag: dirty_flag.clone(),
             render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
                 cols as usize,
                 rows as usize,
@@ -596,6 +701,9 @@ impl TerminalPool {
         };
 
         self.terminals.write().insert(id, entry);
+
+        // 4. 注册到全局事件路由（支持跨 Pool 迁移）
+        register_terminal_event_target(id, dirty_flag, &self.needs_render);
 
         // 更新 next_id（确保不会冲突）
         if id >= self.next_id {
@@ -669,12 +777,88 @@ impl TerminalPool {
     pub fn close_terminal(&mut self, id: usize) -> bool {
         if let Some(entry) = self.terminals.write().remove(&id) {
             // eprintln!("🗑️ [TerminalPool] Closing terminal {}", id);
+            // 从全局事件路由注销
+            unregister_terminal_event_target(id);
             // PTY 会在 pty_tx drop 时自动清理
             drop(entry.pty_tx);
             true
         } else {
             false
         }
+    }
+
+    /// 分离终端（用于跨池迁移）
+    ///
+    /// 将终端从当前池中移除，返回 DetachedTerminal。
+    /// PTY 连接保持活跃，终端状态完整保留。
+    ///
+    /// # 参数
+    /// - `id`: 要分离的终端 ID
+    ///
+    /// # 返回
+    /// - `Some(DetachedTerminal)`: 分离成功
+    /// - `None`: 终端不存在
+    ///
+    /// # 注意
+    /// - 分离后，原池不再管理该终端
+    /// - PTY 事件仍会发送到原池的 EventQueue（需要目标池手动触发渲染）
+    /// - 渲染缓存会被清空
+    pub fn detach_terminal(&mut self, id: usize) -> Option<DetachedTerminal> {
+        let mut entry = self.terminals.write().remove(&id)?;
+
+        // 清空渲染缓存（目标池需要重新渲染）
+        entry.render_cache = None;
+        entry.surface_cache = None;
+
+        // 标记为脏，确保目标池会重新渲染
+        entry.dirty_flag.mark_dirty();
+
+        Some(DetachedTerminal { id, entry })
+    }
+
+    /// 接收分离的终端（用于跨池迁移）
+    ///
+    /// 将 DetachedTerminal 添加到当前池。
+    /// 终端会使用原来的 ID（如果不冲突）或新 ID。
+    ///
+    /// # 参数
+    /// - `detached`: 分离的终端
+    ///
+    /// # 返回
+    /// - 终端在当前池中的 ID
+    ///
+    /// # 注意
+    /// - PTY 连接保持活跃
+    /// - 终端历史和状态完整保留
+    /// - 全局事件路由会自动更新，PTY 事件会正确路由到新 Pool
+    pub fn attach_terminal(&mut self, detached: DetachedTerminal) -> usize {
+        let id = detached.id;
+
+        // 检查 ID 是否已存在
+        let final_id = if self.terminals.read().contains_key(&id) {
+            // ID 冲突，使用新 ID
+            let new_id = self.next_id;
+            self.next_id += 1;
+            new_id
+        } else {
+            // 使用原 ID
+            if id >= self.next_id {
+                self.next_id = id + 1;
+            }
+            id
+        };
+
+        // 插入终端
+        self.terminals.write().insert(final_id, detached.entry);
+
+        // 更新全局事件路由，指向新 Pool 的 needs_render
+        // 注意：使用原始 id（route_id），因为 PTY 线程仍使用原始 id 发送事件
+        update_terminal_needs_render(id, &self.needs_render);
+
+        // 标记需要渲染
+        self.needs_render.store(true, Ordering::Release);
+
+        final_id
     }
 
     /// 获取终端的当前工作目录（通过 proc_pidinfo 系统调用）
@@ -1084,7 +1268,13 @@ impl TerminalPool {
 
         // P2 修复：使用 dirty_flag 进行快速检查（无锁）
         // 如果不脏，直接跳过渲染
-        let cache_valid = {
+        //
+        // P1-W1 修复：使用 check_and_clear() 代替 is_dirty()
+        // 原因：之前在渲染结束后调用 check_and_clear()，但渲染期间 PTY 线程
+        //       可能已经 mark_dirty()，导致新数据的脏标记被错误清除。
+        // 修复：在决定渲染时立即 check_and_clear()，后续 mark_dirty() 会重新设置。
+        // 返回 (cache_valid, dirty_cleared, sel_dirty_cleared) 供后续阶段使用
+        let (cache_valid, dirty_cleared, sel_dirty_cleared) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
                 Some(entry) => {
@@ -1094,11 +1284,15 @@ impl TerminalPool {
                         None => false,
                     };
                     // 快速路径：缓存有效且不脏且选区无变化，直接跳过
-                    // 注意：selection_overlay.is_dirty() 是无锁检查
-                    if valid && !entry.dirty_flag.is_dirty() && !entry.selection_overlay.is_dirty() {
+                    // P1-W1 修复：使用 check_and_clear() 原子地检查并清除
+                    // 返回值是之前的状态，如果为 true 则继续渲染
+                    let dirty = entry.dirty_flag.check_and_clear();
+                    let sel_dirty = entry.selection_overlay.check_and_clear_dirty();
+                    if valid && !dirty && !sel_dirty {
                         return true;
                     }
-                    valid
+                    // 传递 dirty 状态供后续阶段使用
+                    (valid, dirty, sel_dirty)
                 },
                 None => return false,
             }
@@ -1112,7 +1306,7 @@ impl TerminalPool {
         // 解决：快速获取 Arc 引用后立即释放读锁，耗时操作在锁外执行
 
         // 阶段 1：快速获取 Arc 引用（读锁只持有几微秒）
-        let (terminal_arc, render_state_arc, dirty_flag, cursor_cache, selection_cache, scroll_cache, selection_overlay) = {
+        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, _selection_overlay) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
                 Some(entry) => {
@@ -1151,8 +1345,9 @@ impl TerminalPool {
                     // 检查是否需要渲染
                     // 如果缓存有效、RenderState 无变化、无 damage、dirty_flag 未标记、且选区无变化，跳过渲染
                     // 注：dirty_flag 用于外部触发（滚动等），is_damaged() 用于内部 PTY 输出
-                    // selection_overlay.is_dirty() 用于选区变化检测
-                    if cache_valid && !state_changed && !terminal.is_damaged() && !dirty_flag.is_dirty() && !selection_overlay.is_dirty() {
+                    // P1-W1 修复：使用阶段 0 中 check_and_clear() 的返回值，而不是再次调用 is_dirty()
+                    // 因为 dirty 标志已经在阶段 0 被清除，此时调用 is_dirty() 会永远返回 false
+                    if cache_valid && !state_changed && !terminal.is_damaged() && !dirty_cleared && !sel_dirty_cleared {
                         return true;
                     }
 
@@ -1335,16 +1530,9 @@ impl TerminalPool {
         }
         // Surface 保留在缓存中，不会 drop（P4 优化目标）
 
-        // P2 修复：清除 dirty_flag（无锁）
-        // reset_damage() 已在锁范围内完成（Line 683），这里只需清除 dirty_flag
-        // 注意：dirty_flag 和 Terminal.damage 是独立的标记：
-        // - dirty_flag: PTY 写入后立即标记（无锁，快速检查）
-        // - Terminal.damage: Crosswords 内部标记（需要锁，精确检查）
-        // 两者配合使用：dirty_flag 用于快速跳过，damage 用于精确判断
-        dirty_flag.check_and_clear();
-
-        // 清除选区叠加层的脏标记（无锁）
-        selection_overlay.check_and_clear_dirty();
+        // P1-W1 修复：dirty_flag 和 selection_overlay 的 check_and_clear()
+        // 已移到函数开头（Line 1193-1194），避免竞态条件。
+        // 原因：渲染期间 PTY 可能 mark_dirty()，在结束时清除会丢失更新。
 
         true
     }
@@ -1365,14 +1553,11 @@ impl TerminalPool {
     ///
     /// 如果顺序不一致会导致死锁！
     pub fn end_frame(&mut self) {
-        let frame_start = std::time::Instant::now();
-
         // 清空 pending_objects（新方案不再使用）
         self.pending_objects.clear();
 
         // ⚠️ 锁顺序：先 sugarloaf，再 render_layout（与主线程一致，防止死锁）
         let mut sugarloaf = self.sugarloaf.lock();
-        let lock_time = frame_start.elapsed().as_micros();
 
         // 获取当前布局（在 sugarloaf 锁内，保持锁顺序）
         let layout = {
@@ -1403,19 +1588,10 @@ impl TerminalPool {
             }
         }
 
-        let object_count = objects.len();
         sugarloaf.set_objects(objects);
-        let set_time = frame_start.elapsed().as_micros() - lock_time;
 
         // 触发 GPU 渲染
         sugarloaf.render();
-        let render_time = frame_start.elapsed().as_micros() - lock_time - set_time;
-
-        // ⚠️ 性能监控日志，请勿删除（需要时取消注释）
-        // let total_time = frame_start.elapsed().as_micros();
-        // eprintln!("🎯FRAME_PERF end_frame() total={}μs ({:.2}ms) | lock={}μs set={}μs render={}μs | terminals={}",
-        //           total_time, total_time as f64 / 1000.0, lock_time, set_time, render_time, object_count);
-        let _ = (lock_time, set_time, render_time, object_count);  // 避免 unused 警告
     }
 
     // ========================================================================
@@ -1534,8 +1710,6 @@ impl TerminalPool {
     /// 完整的渲染循环：apply_pending → begin_frame → render_terminal × N → end_frame
     /// 在 Rust 侧完成，无需 Swift 参与
     pub fn render_all(&mut self) {
-        let frame_start = std::time::Instant::now();
-
         // 先应用主线程排队的待处理更新（避免更新丢失）
         self.apply_pending_updates();
 
@@ -1565,12 +1739,6 @@ impl TerminalPool {
             let mut renderer = self.renderer.lock();
             renderer.print_frame_stats("render_all");
         }
-
-        // ⚠️ 性能监控日志，需要时取消注释
-        // let frame_time = frame_start.elapsed().as_micros();
-        // eprintln!("⚡️ FRAME_PERF render_all() took {}μs ({:.2}ms)",
-        //           frame_time, frame_time as f32 / 1000.0);
-        let _ = frame_start;  // 避免 unused 警告
     }
 
     /// 调整 Sugarloaf 尺寸
@@ -1660,30 +1828,36 @@ impl TerminalPool {
         };
 
         // 收到 Wakeup/Render 事件时：
-        // 检查终端模式，Background 模式完全跳过（不设置 needs_render，不发送到 Swift）
-        // 这样可以节省 CPU/GPU，因为后台终端的输出不需要立即渲染
+        // 使用全局事件路由，支持跨 Pool 迁移后的终端
         if event_type == TerminalEventType::Wakeup || event_type == TerminalEventType::Render {
-            unsafe {
+            let terminal_id = event.route_id;
+
+            // 首先检查本地 Pool 是否有该终端（用于 Background 模式检查）
+            let is_background = unsafe {
                 let pool = &*(context as *const TerminalPool);
-                let terminal_id = event.route_id;
-
-                // 使用 RwLock 读锁保护 HashMap 访问（修复 Data Race UB）
                 let terminals = pool.terminals.read();
-                if let Some(entry) = terminals.get(&terminal_id) {
-                    // 标记该终端为脏（无锁）
-                    entry.dirty_flag.mark_dirty();
+                terminals.get(&terminal_id)
+                    .map(|entry| entry.is_background.load(Ordering::Acquire))
+            };
 
-                    if entry.is_background.load(Ordering::Acquire) {
-                        // Background 模式，完全跳过（不触发渲染，不发送事件到 Swift）
-                        // 这样可以节省 CPU/GPU，后台终端的输出不需要立即渲染
-                        return;
-                    } else {
-                        // Active 模式，正常渲染
-                        pool.needs_render.store(true, Ordering::Release);
+            match is_background {
+                Some(true) => {
+                    // Background 模式，标记脏但不触发渲染
+                    // 使用全局路由标记 dirty（但不设置 needs_render）
+                    let registry = global_terminal_registry().read();
+                    if let Some(target) = registry.get(&terminal_id) {
+                        target.dirty_flag.mark_dirty();
                     }
-                } else {
-                    // 终端不存在（可能已关闭），设置渲染标记以刷新 UI
-                    pool.needs_render.store(true, Ordering::Release);
+                    return;
+                }
+                Some(false) => {
+                    // Active 模式且在本地 Pool，使用全局路由
+                    route_wakeup_event(terminal_id);
+                }
+                None => {
+                    // 终端不在本地 Pool（可能已迁移到其他 Pool）
+                    // 使用全局路由转发到正确的 Pool
+                    route_wakeup_event(terminal_id);
                 }
             }
         }

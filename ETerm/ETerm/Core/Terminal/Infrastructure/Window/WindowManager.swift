@@ -102,7 +102,7 @@ final class WindowManager: NSObject {
 
         // 设置内容视图，传入 Coordinator
         let contentView = ContentView(coordinator: coordinator)
-        let hostingView = NSHostingView(rootView: contentView)
+        let hostingView = NSHostingViewIgnoringSafeArea(rootView: contentView)
         window.contentView = hostingView
 
         // 重新配置圆角（因为替换了 contentView）
@@ -275,7 +275,7 @@ final class WindowManager: NSObject {
 
         // 设置内容视图，传入 Coordinator
         let contentView = ContentView(coordinator: coordinator)
-        let hostingView = NSHostingView(rootView: contentView)
+        let hostingView = NSHostingViewIgnoringSafeArea(rootView: contentView)
         window.contentView = hostingView
 
         // 重新配置圆角（因为替换了 contentView）
@@ -446,22 +446,36 @@ final class WindowManager: NSObject {
 
     /// 创建新窗口（Page 拖出时使用）
     ///
-    /// 第一阶段简化实现：
-    /// - 从源窗口移除 Page（关闭终端）
-    /// - 创建新窗口（新终端）
-    /// - 注：终端会话不保留，后续可优化
+    /// 跨窗口终端迁移：使用 detach/attach 保留 PTY 连接和终端历史
     ///
     /// - Parameters:
-    ///   - page: 要移动的 Page（用于判断是否应该移除）
+    ///   - page: 要移动的 Page
     ///   - sourceCoordinator: 源窗口的 Coordinator
     ///   - screenPoint: 新窗口的位置（屏幕坐标）
     /// - Returns: 新创建的窗口，失败返回 nil
     @discardableResult
     func createWindowWithPage(_ page: Page, from sourceCoordinator: TerminalWindowCoordinator, at screenPoint: NSPoint) -> KeyableWindow? {
-        // 1. 从源窗口移除 Page（关闭终端 - 第一阶段简化）
-        _ = sourceCoordinator.removePage(page.pageId, closeTerminals: true)
+        // 1. 分离所有终端（保持 PTY 连接活跃）
+        var detachedTerminals: [UUID: DetachedTerminalHandle] = [:]
+        for panel in page.allPanels {
+            for tab in panel.tabs {
+                if let terminalId = tab.rustTerminalId,
+                   let detached = sourceCoordinator.detachTerminal(Int(terminalId)) {
+                    detachedTerminals[tab.tabId] = detached
+                }
+            }
+        }
 
-        // 2. 创建新窗口（使用指定位置，调整到合适的位置）
+        // 2. 从源窗口移除 Page（不关闭终端，已经分离）
+        guard let removedPage = sourceCoordinator.removePage(page.pageId, closeTerminals: false) else {
+            // 如果失败，销毁已分离的终端
+            for (_, detached) in detachedTerminals {
+                TerminalPoolWrapper.destroyDetachedTerminal(detached)
+            }
+            return nil
+        }
+
+        // 3. 创建新窗口（使用指定位置，调整到合适的位置）
         let adjustedPoint = NSPoint(
             x: screenPoint.x - defaultSize.width / 2,
             y: screenPoint.y - defaultSize.height / 2
@@ -469,15 +483,16 @@ final class WindowManager: NSObject {
         let frame = NSRect(origin: adjustedPoint, size: defaultSize)
         let window = KeyableWindow.create(contentRect: frame)
 
-        // 🔑 在 WindowManager 中创建 Coordinator
-        let initialTab = TerminalWindow.makeDefaultTab()
-        let initialPanel = EditorPanel(initialTab: initialTab)
-        let terminalWindow = TerminalWindow(initialPanel: initialPanel)
+        // 4. 创建新 Coordinator，使用移除的 Page 作为初始内容
+        let terminalWindow = TerminalWindow(initialPage: removedPage)
         let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
 
-        // 3. 设置内容视图，传入 Coordinator
+        // 5. 设置待附加的终端（会在 setTerminalPool 时自动附加）
+        coordinator.setPendingDetachedTerminals(detachedTerminals)
+
+        // 6. 设置内容视图
         let contentView = ContentView(coordinator: coordinator)
-        let hostingView = NSHostingView(rootView: contentView)
+        let hostingView = NSHostingViewIgnoringSafeArea(rootView: contentView)
         window.contentView = hostingView
 
         // 重新配置圆角
@@ -491,7 +506,7 @@ final class WindowManager: NSObject {
         // 监听窗口关闭
         window.delegate = self
 
-        // 🔑 注册 Coordinator
+        // 注册 Coordinator
         coordinators[window.windowNumber] = coordinator
 
         // 添加到列表
@@ -500,12 +515,15 @@ final class WindowManager: NSObject {
         // 显示窗口
         window.makeKeyAndOrderFront(nil)
 
+        // 保存 Session
+        saveSession()
+
         return window
     }
 
     /// 移动 Page 到另一个窗口
     ///
-    /// 支持跨窗口终端迁移：所有终端会话保留，只更新路由表
+    /// 跨窗口终端迁移：使用 detach/attach 保留 PTY 连接和终端历史
     ///
     /// - Parameters:
     ///   - pageId: 要移动的 Page ID
@@ -520,30 +538,48 @@ final class WindowManager: NSObject {
             return false
         }
 
-        // 1. 收集 Page 中所有终端 ID
-        var terminalIds: [Int] = []
-        if let page = sourceCoordinator.terminalWindow.pages.first(where: { $0.pageId == pageId }) {
-            for panel in page.allPanels {
-                for tab in panel.tabs {
-                    if let terminalId = tab.rustTerminalId {
-                        terminalIds.append(Int(terminalId))
-                    }
+        // 检查 Page 是否存在于源窗口
+        guard let page = sourceCoordinator.terminalWindow.pages.first(where: { $0.pageId == pageId }) else {
+            return false
+        }
+
+        // 1. 分离所有终端（保持 PTY 连接活跃）
+        var detachedTerminals: [UUID: DetachedTerminalHandle] = [:]
+        for panel in page.allPanels {
+            for tab in panel.tabs {
+                if let terminalId = tab.rustTerminalId,
+                   let detached = sourceCoordinator.detachTerminal(Int(terminalId)) {
+                    detachedTerminals[tab.tabId] = detached
                 }
             }
         }
 
-        // 2. 从源窗口移除 Page（不关闭终端）
-        guard let page = sourceCoordinator.removePage(pageId, closeTerminals: false) else {
+        // 2. 从源窗口移除 Page（不关闭终端，已经分离）
+        guard let removedPage = sourceCoordinator.removePage(pageId, closeTerminals: false) else {
+            // 如果失败，销毁已分离的终端
+            for (_, detached) in detachedTerminals {
+                TerminalPoolWrapper.destroyDetachedTerminal(detached)
+            }
             return false
         }
 
-        // 3. 添加到目标窗口（支持指定插入位置）
-        targetCoordinator.addPage(page, insertBefore: targetPageId)
+        // 3. 添加到目标窗口，传入分离的终端以重新附加
+        targetCoordinator.addPage(removedPage, insertBefore: targetPageId, detachedTerminals: detachedTerminals)
+
+        // 4. 如果源窗口没有 Page 了，关闭源窗口
+        if sourceCoordinator.terminalWindow.pages.isEmpty {
+            if let sourceWindow = windows.first(where: { $0.windowNumber == sourceWindowNumber }) {
+                sourceWindow.close()
+            }
+        }
 
         // 5. 激活目标窗口
         if let targetWindow = windows.first(where: { $0.windowNumber == targetWindowNumber }) {
             targetWindow.makeKeyAndOrderFront(nil)
         }
+
+        // 6. 保存 Session
+        saveSession()
 
         return true
     }
@@ -586,7 +622,7 @@ final class WindowManager: NSObject {
 
         // 3. 设置内容视图，传入 Coordinator
         let contentView = ContentView(coordinator: coordinator)
-        let hostingView = NSHostingView(rootView: contentView)
+        let hostingView = NSHostingViewIgnoringSafeArea(rootView: contentView)
         window.contentView = hostingView
 
         // 重新配置圆角
