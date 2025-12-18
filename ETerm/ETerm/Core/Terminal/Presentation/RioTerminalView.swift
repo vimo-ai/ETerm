@@ -789,7 +789,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 当前选择所在的 Panel ID
     private var selectionPanelId: UUID?
     /// 当前选择所在的 Tab
-    private weak var selectionTab: TerminalTab?
+    private weak var selectionTab: Tab?
 
     // MARK: - 超链接悬停状态
 
@@ -1273,37 +1273,12 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     /// 拦截系统快捷键
+    ///
+    /// 注意：大部分快捷键由 KeyableWindow.performKeyEquivalent 在 Window 级别处理
+    /// 这里只处理终端特有的情况（如果有的话）
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // 检查当前焦点是否在文本输入框（如设置页面）
-        if let firstResponder = window?.firstResponder as? NSText {
-            // 如果是 NSText（TextField/SecureField），不拦截，让系统处理
-            return false
-        }
-
-        // 如果 InlineComposer 正在显示，放行事件给文本框
-        if coordinator?.showInlineComposer == true {
-            if let keyboardSystem = coordinator?.keyboardSystem {
-                let keyStroke = KeyStroke.from(event)
-                // Cmd+K 关闭 composer
-                if keyStroke.matches(.cmd("k")) {
-                    coordinator?.showInlineComposer = false
-                    return true
-                }
-            }
-            return false  // 其他事件放行给 composer 文本框
-        }
-
-        // 所有快捷键都通过 KeyboardSystem 处理
-        if let keyboardSystem = coordinator?.keyboardSystem {
-            let result = keyboardSystem.handleKeyDown(event)
-            switch result {
-            case .handled:
-                return true
-            case .passToIME:
-                return false
-            }
-        }
-
+        // 快捷键已经在 Window 级别由 KeyableWindow 处理
+        // 这里直接返回 false，让事件继续传递
         return false
     }
 
@@ -1332,7 +1307,18 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 转换为终端序列并发送到当前激活终端
+        // 1. 首先检查自定义 keybinding（如 Shift+Enter）
+        // 这允许用户配置特定按键组合发送自定义终端序列
+        let keybindingManager = TerminalKeybindingManager.shared
+        if let customSequence = keybindingManager.findSequence(
+            keyCode: keyStroke.keyCode,
+            modifiers: keyStroke.modifiers
+        ) {
+            _ = pool.writeInput(terminalId: Int(terminalId), data: customSequence)
+            return
+        }
+
+        // 2. 转换为终端序列并发送到当前激活终端
         // 不主动触发渲染，依赖 Wakeup 事件（终端有输出时自动触发）
         if shouldHandleDirectly(keyStroke) {
             let sequence = keyStroke.toTerminalSequence()
@@ -1649,7 +1635,7 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 双击选中单词（使用 WordBoundaryDetector 支持中文分词）
     private func selectWordAt(
         gridPos: CursorPosition,
-        activeTab: TerminalTab,
+        activeTab: Tab,
         terminalId: Int,
         panelId: UUID,
         event: NSEvent

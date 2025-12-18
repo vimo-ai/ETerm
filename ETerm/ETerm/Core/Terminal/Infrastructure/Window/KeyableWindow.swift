@@ -24,6 +24,53 @@ final class KeyableWindow: NSWindow {
         set { }
     }
 
+    // MARK: - 快捷键处理
+
+    /// 在 Window 级别拦截快捷键，转发给命令系统
+    ///
+    /// 这样无论焦点在终端还是 View Tab，快捷键都能正常工作
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // 只处理带修饰键的按键（快捷键）
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty == false else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // 如果焦点在文本输入框（如设置页面、搜索框），放行给系统处理
+        if firstResponder is NSText {
+            // 但 Escape 键需要我们处理（关闭搜索框等）
+            if event.keyCode != 53 { // 53 = Escape
+                return super.performKeyEquivalent(with: event)
+            }
+        }
+
+        // 获取对应的 Coordinator
+        guard let coordinator = WindowManager.shared.getCoordinator(for: windowNumber),
+              let keyboardSystem = coordinator.keyboardSystem else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // 如果 InlineComposer 正在显示，只处理 Cmd+K（关闭）
+        if coordinator.showInlineComposer {
+            let keyStroke = KeyStroke.from(event)
+            if keyStroke.matches(.cmd("k")) {
+                coordinator.showInlineComposer = false
+                return true
+            }
+            // 其他快捷键放行给 composer 文本框
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // 转发给命令系统
+        let result = keyboardSystem.handleKeyDown(event)
+
+        switch result {
+        case .handled:
+            return true
+        case .passToIME:
+            return super.performKeyEquivalent(with: event)
+        }
+    }
+
     /// 创建配置好的透明标题栏窗口
     static func create(
         contentRect: NSRect,

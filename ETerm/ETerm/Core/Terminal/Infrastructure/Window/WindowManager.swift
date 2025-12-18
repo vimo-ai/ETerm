@@ -187,14 +187,33 @@ final class WindowManager: NSObject {
         case .leaf(_, let tabStates, let activeTabIndex):
             // 恢复叶子节点（Panel）
             // 创建所有 Tabs（此时还不创建终端，等 Coordinator 初始化后再创建）
-            var tabs: [TerminalTab] = []
+            var tabs: [Tab] = []
             for tabState in tabStates {
-                // 从 Session 恢复 tabId（如果有），否则生成新的
-                let tabId = UUID(uuidString: tabState.tabId) ?? UUID()
-                let tab = TerminalTab(tabId: tabId, title: tabState.title)
-                // 保存 CWD 到 Tab 的临时属性（用于后续创建终端）
-                tab.setPendingCwd(tabState.cwd)
-                tabs.append(tab)
+                // 检查 Tab 内容类型
+                switch tabState.resolvedContentType {
+                case .terminal:
+                    // 终端 Tab：创建 TerminalTab，包装为 Tab
+                    let tabId = UUID(uuidString: tabState.tabId) ?? UUID()
+                    let terminalTab = TerminalTab(tabId: tabId, title: tabState.title)
+                    // 保存 CWD 到 Tab 的临时属性（用于后续创建终端）
+                    terminalTab.setPendingCwd(tabState.cwd)
+                    let tab = Tab(tabId: tabId, title: tabState.title, content: .terminal(terminalTab))
+                    tabs.append(tab)
+
+                case .view:
+                    // View Tab：恢复为 View Tab
+                    guard let viewId = tabState.viewId else {
+                        logWarn("View Tab 缺少 viewId，跳过: \(tabState.title)")
+                        continue
+                    }
+                    let tabId = UUID(uuidString: tabState.tabId) ?? UUID()
+                    let viewContent = ViewTabContent(
+                        viewId: viewId,
+                        pluginId: tabState.pluginId
+                    )
+                    let tab = Tab(tabId: tabId, title: tabState.title, content: .view(viewContent))
+                    tabs.append(tab)
+                }
             }
 
             // 创建 Panel
@@ -600,7 +619,7 @@ final class WindowManager: NSObject {
     ///   - screenPoint: 新窗口的位置（屏幕坐标）
     /// - Returns: 新创建的窗口，失败返回 nil
     @discardableResult
-    func createWindowWithTab(_ tab: TerminalTab, from sourcePanelId: UUID, sourceCoordinator: TerminalWindowCoordinator, at screenPoint: NSPoint) -> KeyableWindow? {
+    func createWindowWithTab(_ tab: Tab, from sourcePanelId: UUID, sourceCoordinator: TerminalWindowCoordinator, at screenPoint: NSPoint) -> KeyableWindow? {
         // 1. 从源 Panel 移除 Tab（关闭终端 - 第一阶段简化）
         guard sourceCoordinator.removeTab(tab.tabId, from: sourcePanelId, closeTerminal: true) else {
             return nil
@@ -792,18 +811,32 @@ final class WindowManager: NSObject {
 
             var tabStates: [TabState] = []
             for tab in panel.tabs {
-                // 获取 CWD
-                var cwd = NSHomeDirectory()  // 默认值
-                if let terminalId = tab.rustTerminalId,
-                   let actualCwd = coordinator.getCwd(terminalId: Int(terminalId)) {
-                    cwd = actualCwd
+                let tabState: TabState
+
+                switch tab.content {
+                case .terminal:
+                    // 终端 Tab：获取 CWD
+                    var cwd = NSHomeDirectory()  // 默认值
+                    if let terminalId = tab.rustTerminalId,
+                       let actualCwd = coordinator.getCwd(terminalId: Int(terminalId)) {
+                        cwd = actualCwd
+                    }
+                    tabState = TabState(
+                        tabId: tab.tabId.uuidString,
+                        title: tab.title,
+                        cwd: cwd
+                    )
+
+                case .view(let viewContent):
+                    // View Tab：保存 viewId 和 pluginId
+                    tabState = TabState(
+                        tabId: tab.tabId.uuidString,
+                        title: tab.title,
+                        viewId: viewContent.viewId,
+                        pluginId: viewContent.pluginId
+                    )
                 }
 
-                let tabState = TabState(
-                    tabId: tab.tabId.uuidString,
-                    title: tab.title,
-                    cwd: cwd
-                )
                 tabStates.append(tabState)
             }
 
