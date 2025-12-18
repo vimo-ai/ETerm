@@ -272,11 +272,15 @@ struct PageTabView: View {
             .onTapGesture {
                 // 自己检测双击，避免 onTapGesture(count: 2) 导致单击延迟
                 let now = Date()
-                if now.timeIntervalSince(lastTapTime) < doubleTapInterval {
+                let interval = now.timeIntervalSince(lastTapTime)
+                logDebug("[PageTap] title=\(title), interval=\(String(format: "%.3f", interval))s, isActive=\(isActive)")
+                if interval < doubleTapInterval {
                     // 双击 -> 重命名
+                    logDebug("[PageTap] -> double tap, entering edit mode")
                     isEditing = true
                 } else {
                     // 单击 -> 切换
+                    logDebug("[PageTap] -> single tap, calling onTap (onTap is \(onTap == nil ? "nil" : "set"))")
                     onTap?()
                 }
                 lastTapTime = now

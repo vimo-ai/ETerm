@@ -334,7 +334,7 @@ class TerminalWindowCoordinator: ObservableObject {
     // ... (中间代码保持不变) ...
 
     /// 创建新的 Tab 并分配终端
-    func createNewTab(in panelId: UUID) -> TerminalTab? {
+    func createNewTab(in panelId: UUID) -> Tab? {
         // 获取当前 Panel 的激活 Tab 的 CWD（用于继承）
         var inheritedCwd: String? = nil
         if let panel = terminalWindow.getPanel(panelId),
@@ -378,7 +378,7 @@ class TerminalWindowCoordinator: ObservableObject {
         cwd: String,
         command: String? = nil,
         commandDelay: TimeInterval = 0.3
-    ) -> (tab: TerminalTab, terminalId: Int)? {
+    ) -> (tab: Tab, terminalId: Int)? {
         let targetPanelId = panelId ?? activePanelId
         guard let targetPanelId = targetPanelId else {
             return nil
@@ -696,7 +696,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 为 Tab 创建终端（使用 Tab 的 stableId）
     ///
     /// 用于确保重启后 Terminal ID 保持一致
-    private func createTerminalForTab(_ tab: TerminalTab, cols: UInt16, rows: UInt16, cwd: String? = nil) -> Int {
+    private func createTerminalForTab(_ tab: Tab, cols: UInt16, rows: UInt16, cwd: String? = nil) -> Int {
         let stableId = tab.tabId.stableId
 
         // 优先使用传入的 CWD
@@ -1227,6 +1227,17 @@ class TerminalWindowCoordinator: ObservableObject {
         return terminalPool.isBracketedPasteEnabled(terminalId: Int(terminalId))
     }
 
+    /// 检查指定终端是否启用了 Kitty 键盘协议
+    ///
+    /// 应用程序通过发送 `CSI > flags u` 启用 Kitty 键盘模式。
+    /// 启用后，终端应使用 Kitty 协议编码按键（如 Shift+Enter → `\x1b[13;2u`）。
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: true 表示使用 Kitty 协议，false 表示使用传统 Xterm 编码
+    func isKittyKeyboardEnabled(terminalId: Int) -> Bool {
+        return terminalPool.isKittyKeyboardEnabled(terminalId: terminalId)
+    }
+
     /// 获取当前激活终端的前台进程名称
     func getActiveTerminalForegroundProcessName() -> String? {
         guard let terminalId = getActiveTerminalId() else {
@@ -1536,6 +1547,10 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Returns: 是否成功切换
     @discardableResult
     func switchToPage(_ pageId: UUID) -> Bool {
+        logDebug("[switchToPage] called, targetPageId=\(pageId.uuidString.prefix(8))")
+        logDebug("[switchToPage] currentActivePageId=\(terminalWindow.activePageId?.uuidString.prefix(8) ?? "nil")")
+        logDebug("[switchToPage] allPages=\(terminalWindow.pages.map { "\($0.title)(\($0.pageId.uuidString.prefix(8)))" })")
+
         // Step 0: 收集旧 Page 的所有终端 ID（用于设置为 Background）
         var oldTerminalIds: [Int] = []
         if let oldPage = terminalWindow.activePage {
@@ -1550,8 +1565,10 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // Step 1: Domain 层切换
         guard terminalWindow.switchToPage(pageId) else {
+            logWarn("[switchToPage] FAILED - pageId not found in pages")
             return false
         }
+        logDebug("[switchToPage] SUCCESS - switched to pageId=\(pageId.uuidString.prefix(8))")
 
         // Step 2: 延迟创建终端（Lazy Loading）
         if let activePage = terminalWindow.activePage {
@@ -1950,7 +1967,7 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameters:
     ///   - tab: 要添加的 Tab
     ///   - panelId: 目标 Panel ID
-    func addTab(_ tab: TerminalTab, to panelId: UUID) {
+    func addTab(_ tab: Tab, to panelId: UUID) {
         guard let panel = terminalWindow.getPanel(panelId) else {
             return
         }
