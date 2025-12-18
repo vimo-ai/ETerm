@@ -149,6 +149,15 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 当未启用时，直接发送原始文本。
     func isBracketedPasteEnabled(terminalId: Int) -> Bool
 
+    /// 检查终端是否启用了 Kitty 键盘协议
+    ///
+    /// 应用程序通过发送 `CSI > flags u` 启用 Kitty 键盘模式。
+    /// 启用后，终端应使用 Kitty 协议编码按键（如 Shift+Enter → `\x1b[13;2u`）。
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: true 表示使用 Kitty 协议，false 表示使用传统 Xterm 编码
+    func isKittyKeyboardEnabled(terminalId: Int) -> Bool
+
     // MARK: - 光标和选区
 
     /// 获取光标位置
@@ -232,6 +241,7 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func getForegroundProcessName(terminalId: Int) -> String? { nil }
     func hasRunningProcess(terminalId: Int) -> Bool { false }
     func isBracketedPasteEnabled(terminalId: Int) -> Bool { false }
+    func isKittyKeyboardEnabled(terminalId: Int) -> Bool { false }
     func getCursorPosition(terminalId: Int) -> CursorPosition? { nil }
     func getWordAt(terminalId: Int, screenRow: Int, screenCol: Int) -> TerminalWordBoundary? { nil }
     func clearSelection(terminalId: Int) -> Bool { false }

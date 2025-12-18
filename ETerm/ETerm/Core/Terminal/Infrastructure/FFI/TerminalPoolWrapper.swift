@@ -299,6 +299,18 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return terminal_pool_is_bracketed_paste_enabled(handle, terminalId)
     }
 
+    /// 检查终端是否启用了 Kitty 键盘协议
+    ///
+    /// 应用程序通过发送 `CSI > flags u` 启用 Kitty 键盘模式。
+    /// 启用后，终端应使用 Kitty 协议编码按键（如 Shift+Enter → `\x1b[13;2u`）。
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: true 表示使用 Kitty 协议，false 表示使用传统 Xterm 编码
+    func isKittyKeyboardEnabled(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_is_kitty_keyboard_enabled(handle, terminalId)
+    }
+
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool {
         guard let handle = handle else { return false }

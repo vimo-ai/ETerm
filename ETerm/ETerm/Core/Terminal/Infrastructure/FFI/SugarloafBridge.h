@@ -174,6 +174,26 @@ bool terminal_pool_is_bracketed_paste_enabled(
     size_t terminal_id
 );
 
+/// Check if terminal has Kitty keyboard protocol enabled
+///
+/// Apps enable Kitty keyboard mode by sending `CSI > flags u`.
+/// When enabled, keyboard input should use Kitty protocol encoding.
+///
+/// Returns:
+/// - true: Kitty keyboard protocol enabled, use key_to_escape_sequence_with_mode(key, mods, 1)
+/// - false: Use traditional Xterm encoding, use key_to_escape_sequence(key, mods)
+///
+/// Example:
+///   if (terminal_pool_is_kitty_keyboard_enabled(pool, tid)) {
+///       const char* seq = key_to_escape_sequence_with_mode(keyCode, mods, 1);  // Kitty
+///   } else {
+///       const char* seq = key_to_escape_sequence(keyCode, mods);  // Xterm
+///   }
+bool terminal_pool_is_kitty_keyboard_enabled(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
 /// Resize terminal
 bool terminal_pool_resize_terminal(
     TerminalPoolHandle handle,
@@ -741,7 +761,17 @@ ScrollInfo terminal_pool_get_scroll_info(
 // Keyboard API (key to escape sequence conversion)
 // =============================================================================
 
-/// Convert keyboard event to terminal escape sequence
+/// Keyboard encoding mode
+typedef enum {
+    /// Xterm traditional mode (default)
+    /// Some key combinations (like Shift+Enter) cannot be distinguished
+    KeyboardMode_Xterm = 0,
+    /// Kitty keyboard protocol
+    /// All key+modifier combinations have unique escape sequences
+    KeyboardMode_Kitty = 1,
+} KeyboardMode;
+
+/// Convert keyboard event to terminal escape sequence (Xterm mode)
 ///
 /// @param key_code macOS keyCode (NSEvent.keyCode)
 /// @param modifiers Modifier key flags:
@@ -760,6 +790,21 @@ ScrollInfo terminal_pool_get_scroll_info(
 ///       free_key_sequence(seq);
 ///   }
 const char* key_to_escape_sequence(uint16_t key_code, uint32_t modifiers);
+
+/// Convert keyboard event to terminal escape sequence (with encoding mode)
+///
+/// @param key_code macOS keyCode (NSEvent.keyCode)
+/// @param modifiers Modifier key flags
+/// @param mode Encoding mode (0 = Xterm, 1 = Kitty)
+///
+/// @return Escape sequence string on success (must be freed with free_key_sequence),
+///         NULL if not a special key
+///
+/// Kitty mode examples:
+///   Shift+Enter -> "\x1b[13;2u"  (CSI 13 ; 2 u)
+///   Ctrl+Enter  -> "\x1b[13;5u"  (CSI 13 ; 5 u)
+///   Shift+Tab   -> "\x1b[9;2u"   (CSI 9 ; 2 u)
+const char* key_to_escape_sequence_with_mode(uint16_t key_code, uint32_t modifiers, uint8_t mode);
 
 /// Free string returned by key_to_escape_sequence
 ///

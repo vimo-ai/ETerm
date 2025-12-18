@@ -8,6 +8,7 @@
 //  - 只处理特殊键（方向键、Delete、Tab、Enter、Escape）
 //  - 只处理 Ctrl 组合键（Ctrl+C 等）
 //  - 普通字符输入交给 IME 系统处理
+//  - 支持自定义按键映射（类似 iTerm2 的 keybinding 功能）
 
 import Foundation
 
@@ -16,6 +17,9 @@ import Foundation
 /// 只处理特殊键和 Ctrl 组合键，普通字符交给 IME
 final class TerminalInputHandler {
     private weak var coordinator: TerminalWindowCoordinator?
+
+    /// Keybinding 管理器
+    private let keybindingManager = TerminalKeybindingManager.shared
 
     /// 需要直接处理的特殊键 keyCode
     private let specialKeyCodes: Set<UInt16> = [
@@ -46,24 +50,48 @@ final class TerminalInputHandler {
             return .unhandled
         }
 
-        // 特殊处理：Option+Delete 分词删除
+        // 1. 首先检查自定义 keybinding（优先级最高）
+        // 这允许用户配置 Shift+Enter 等按键发送自定义序列
+
+        // 调试：显示按键信息
+        if keyStroke.keyCode == 36 {
+            print("[DEBUG] Enter key pressed")
+            print("[DEBUG] keyCode = \(keyStroke.keyCode)")
+            print("[DEBUG] modifiers.rawValue = \(keyStroke.modifiers.rawValue)")
+            print("[DEBUG] hasKeybinding = \(keybindingManager.hasKeybinding(keyCode: keyStroke.keyCode, modifiers: keyStroke.modifiers))")
+        }
+
+        if let customSequence = keybindingManager.findSequence(
+            keyCode: keyStroke.keyCode,
+            modifiers: keyStroke.modifiers
+        ) {
+            let hexSequence = customSequence.unicodeScalars.map { String(format: "%02X", $0.value) }.joined(separator: " ")
+            print("[DEBUG] Custom keybinding found! sequence hex = \(hexSequence)")
+            coordinator.writeInput(terminalId: terminalId, data: customSequence)
+            return .handled
+        }
+
+        // 2. 特殊处理：Option+Delete 分词删除
         // 发送 Ctrl+W (0x17) - Readline/Shell 标准的删除前一个单词
         if keyStroke.keyCode == 51 && keyStroke.modifiers.contains(.option) {
             coordinator.writeInput(terminalId: terminalId, data: "\u{17}")
             return .handled
         }
 
-        // 特殊处理：Cmd+Delete 删除到行首
+        // 3. 特殊处理：Cmd+Delete 删除到行首
         // 发送 Ctrl+U (0x15) - Readline/Shell 标准的删除到行首
         if keyStroke.keyCode == 51 && keyStroke.modifiers.contains(.command) {
             coordinator.writeInput(terminalId: terminalId, data: "\u{15}")
             return .handled
         }
 
-        // 判断是否应该直接处理
+        // 4. 判断是否应该直接处理（特殊键、Ctrl 组合键等）
         if shouldHandleDirectly(keyStroke) {
+            // 检查终端是否启用了 Kitty 键盘协议
+            let kittyMode = coordinator.isKittyKeyboardEnabled(terminalId: terminalId)
             // 特殊键或 Ctrl 组合键：直接发送到终端
-            let sequence = keyStroke.toTerminalSequence()
+            let sequence = keyStroke.toTerminalSequence(kittyMode: kittyMode)
+
             if !sequence.isEmpty {
                 coordinator.writeInput(terminalId: terminalId, data: sequence)
             }

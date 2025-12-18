@@ -130,10 +130,22 @@ struct KeyStroke: Hashable {
 
     // MARK: - 转换为终端序列
 
+    /// 转换为终端序列（使用 Xterm 编码）
     func toTerminalSequence() -> String {
+        return toTerminalSequence(kittyMode: false)
+    }
+
+    /// 转换为终端序列（可选 Kitty 键盘协议）
+    ///
+    /// - Parameter kittyMode: 是否使用 Kitty 键盘协议
+    ///   - true: 使用 Kitty 协议编码（CSI u 格式），支持更多修饰键组合
+    ///   - false: 使用传统 Xterm 编码
+    func toTerminalSequence(kittyMode: Bool) -> String {
         // 尝试使用 Rust FFI 处理特殊键
         let rustModifiers = modifiers.toRustFlags()
-        if let seq = key_to_escape_sequence(keyCode, rustModifiers) {
+        let mode: UInt8 = kittyMode ? 1 : 0  // KeyboardMode_Xterm = 0, KeyboardMode_Kitty = 1
+
+        if let seq = key_to_escape_sequence_with_mode(keyCode, rustModifiers, mode) {
             defer { free_key_sequence(seq) }
             return String(cString: seq)
         }

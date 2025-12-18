@@ -22,6 +22,9 @@ rio-backend = { path = "../rio-backend" }
 parking_lot = "0.12.4"
 libc = "0.2.174"
 
+# 键盘序列编码
+terminput = "0.5"
+
 # 事件驱动 PTY (mio fork)
 corcovado = { path = "../corcovado" }
 

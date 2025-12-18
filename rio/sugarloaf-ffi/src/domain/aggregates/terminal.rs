@@ -985,6 +985,21 @@ impl Terminal {
             crosswords.current_directory.clone()
         })
     }
+
+    /// 检查是否启用了 Kitty 键盘协议
+    ///
+    /// 应用通过发送 `CSI > flags u` 启用 Kitty 键盘模式。
+    /// 启用后，终端应使用 Kitty 协议编码按键（如 Shift+Enter → `\x1b[13;2u`）。
+    ///
+    /// # 返回值
+    /// - `true`: Kitty 键盘协议已启用，使用 Kitty 编码
+    /// - `false`: 使用传统 Xterm 编码
+    pub fn is_kitty_keyboard_enabled(&self) -> bool {
+        use rio_backend::crosswords::Mode;
+        with_crosswords!(self, crosswords, {
+            crosswords.mode().contains(Mode::DISAMBIGUATE_ESC_CODES)
+        })
+    }
 }
 
 #[cfg(test)]

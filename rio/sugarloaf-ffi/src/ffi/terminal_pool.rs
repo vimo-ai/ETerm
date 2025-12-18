@@ -262,6 +262,31 @@ pub extern "C" fn terminal_pool_is_bracketed_paste_enabled(
     pool.is_bracketed_paste_enabled(terminal_id)
 }
 
+/// 检查终端是否启用了 Kitty 键盘协议
+///
+/// 应用程序通过发送 `CSI > flags u` 启用 Kitty 键盘模式。
+/// 启用后，终端应使用 Kitty 协议编码按键。
+///
+/// # 参数
+/// - `handle`: TerminalPool 句柄
+/// - `terminal_id`: 终端 ID
+///
+/// # 返回
+/// - true: 启用了 Kitty 键盘协议，使用 `key_to_escape_sequence_with_mode(key, mods, 1)`
+/// - false: 使用传统 Xterm 编码，使用 `key_to_escape_sequence(key, mods)` 或 mode=0
+#[no_mangle]
+pub extern "C" fn terminal_pool_is_kitty_keyboard_enabled(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.is_kitty_keyboard_enabled(terminal_id)
+}
+
 /// 调整终端大小
 #[no_mangle]
 pub extern "C" fn terminal_pool_resize_terminal(

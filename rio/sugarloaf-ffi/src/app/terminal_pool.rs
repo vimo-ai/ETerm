@@ -943,6 +943,20 @@ impl TerminalPool {
         }
     }
 
+    /// 检查终端是否启用了 Kitty 键盘协议
+    ///
+    /// 应用程序通过发送 `CSI > flags u` 启用 Kitty 键盘模式。
+    /// 启用后，终端应使用 Kitty 协议编码按键（如 Shift+Enter → `\x1b[13;2u`）。
+    pub fn is_kitty_keyboard_enabled(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            terminal.is_kitty_keyboard_enabled()
+        } else {
+            false
+        }
+    }
+
     /// 调整终端大小
     ///
     /// 分两阶段执行以避免死锁：
