@@ -52,11 +52,76 @@ indirect enum PanelLayoutState: Codable {
     case vertical(ratio: CGFloat, first: PanelLayoutState, second: PanelLayoutState)
 }
 
+/// Tab 内容类型
+///
+/// 用于区分不同类型的 Tab 内容
+enum TabContentType: String, Codable {
+    case terminal = "terminal"
+    case view = "view"
+
+    // 扩展点：未来可添加更多类型
+    // case editor = "editor"
+    // case log = "log"
+}
+
 /// Tab 状态
+///
+/// 重构说明（2025/12）：
+/// - 添加 contentType 字段支持多种内容类型
+/// - 旧 session 无此字段时默认为 terminal
+/// - cwd 仅对 terminal 类型有意义
 struct TabState: Codable {
     let tabId: String  // UUID string（用于持久化，确保重启后 ID 一致）
     let title: String
-    let cwd: String  // 工作目录
+    let cwd: String  // 工作目录（仅 terminal 类型使用）
+
+    /// Tab 内容类型
+    ///
+    /// 可选字段，向后兼容：旧 session 无此字段时默认为 terminal
+    let contentType: TabContentType?
+
+    /// View Tab 专用字段（可选）
+    let viewId: String?
+    let pluginId: String?
+
+    // MARK: - 便捷构造器
+
+    /// 创建终端 Tab 状态
+    init(tabId: String, title: String, cwd: String) {
+        self.tabId = tabId
+        self.title = title
+        self.cwd = cwd
+        self.contentType = .terminal
+        self.viewId = nil
+        self.pluginId = nil
+    }
+
+    /// 创建 View Tab 状态
+    init(tabId: String, title: String, viewId: String, pluginId: String? = nil) {
+        self.tabId = tabId
+        self.title = title
+        self.cwd = ""  // View Tab 不需要 cwd
+        self.contentType = .view
+        self.viewId = viewId
+        self.pluginId = pluginId
+    }
+
+    // MARK: - 类型判断
+
+    /// 解析后的内容类型（处理向后兼容）
+    var resolvedContentType: TabContentType {
+        return contentType ?? .terminal
+    }
+
+    /// 是否为终端 Tab
+    var isTerminal: Bool {
+        return resolvedContentType == .terminal
+    }
+
+    /// 是否为 View Tab
+    var isView: Bool {
+        return resolvedContentType == .view
+    }
 }
 
 /// Codable 友好的 CGRect

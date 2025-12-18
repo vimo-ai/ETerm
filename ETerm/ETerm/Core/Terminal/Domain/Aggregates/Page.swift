@@ -315,29 +315,47 @@ final class Page {
 
     // MARK: - Rendering
 
-    /// 获取所有需要渲染的 Tab
+    /// 获取所有需要渲染的 Tab（新架构）
+    ///
+    /// - Parameters:
+    ///   - containerBounds: 容器的尺寸
+    ///   - headerHeight: Tab Bar 的高度
+    /// - Returns: 数组 [TabRenderable]
+    func getActiveTabRenderables(
+        containerBounds: CGRect,
+        headerHeight: CGFloat
+    ) -> [TabRenderable] {
+        // 先更新所有 Panel 的 bounds
+        updatePanelBounds(containerBounds: containerBounds)
+
+        // 收集所有激活的 Tab
+        var result: [TabRenderable] = []
+
+        for panel in allPanels {
+            if let renderable = panel.getActiveTabRenderable(headerHeight: headerHeight) {
+                result.append(renderable)
+            }
+        }
+
+        return result
+    }
+
+    /// 获取所有需要渲染的 Tab（兼容旧 API）
     ///
     /// - Parameters:
     ///   - containerBounds: 容器的尺寸
     ///   - headerHeight: Tab Bar 的高度
     /// - Returns: 数组 [(terminalId, contentBounds)]
+    @available(*, deprecated, message: "Use getActiveTabRenderables instead")
     func getActiveTabsForRendering(
         containerBounds: CGRect,
         headerHeight: CGFloat
     ) -> [(Int, CGRect)] {
-        // 先更新所有 Panel 的 bounds
-        updatePanelBounds(containerBounds: containerBounds)
-
-        // 收集所有激活的 Tab
-        var result: [(Int, CGRect)] = []
-
-        for panel in allPanels {
-            if let (terminalId, contentBounds) = panel.getActiveTabForRendering(headerHeight: headerHeight) {
-                result.append((terminalId, contentBounds))
-            }
-        }
-
-        return result
+        let renderables = getActiveTabRenderables(
+            containerBounds: containerBounds,
+            headerHeight: headerHeight
+        )
+        return TabRenderable.filterTerminals(renderables)
     }
 
     /// 更新所有 Panel 的位置和尺寸

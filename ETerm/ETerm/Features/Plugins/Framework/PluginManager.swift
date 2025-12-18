@@ -208,8 +208,8 @@ final class PluginManager: ObservableObject {
         // 注销侧边栏 Tab
         SidebarRegistry.shared.unregisterTabs(for: pluginId)
 
-        // 注销插件页面
-        PluginPageRegistry.shared.unregister(pluginId: pluginId)
+        // 注销 View Tab 视图定义
+        ViewTabRegistry.shared.unregisterAll(for: pluginId)
 
         // 注销 PageBar 组件
         PageBarItemRegistry.shared.unregisterItems(for: pluginId)
@@ -545,70 +545,187 @@ final class UIServiceImpl: UIService {
         InfoWindowRegistry.shared.registerContent(id: id, title: title, viewProvider: viewProvider)
     }
 
-    func registerPage(for pluginId: String, title: String, icon: String, viewProvider: @escaping () -> AnyView) {
-        // 在当前激活的窗口中添加插件 Page
+    func registerPageBarItem(for pluginId: String, id: String, viewProvider: @escaping () -> AnyView) {
+        PageBarItemRegistry.shared.registerItem(for: pluginId, id: id, viewProvider: viewProvider)
+    }
+
+    @discardableResult
+    func createViewTab(
+        for pluginId: String,
+        viewId: String,
+        title: String,
+        placement: ViewTabPlacement,
+        viewProvider: @escaping () -> AnyView
+    ) -> Tab? {
+        // 1. 注册视图到 ViewTabRegistry
+        let definition = ViewTabRegistry.ViewDefinition(
+            viewId: viewId,
+            pluginId: pluginId,
+            title: title,
+            viewProvider: viewProvider
+        )
+        ViewTabRegistry.shared.register(definition)
+
+        // 2. 检查是否已有相同 viewId 的 Tab，如果有就切换到它
+        if let existingTab = findAndActivateExistingViewTab(viewId: viewId) {
+            return existingTab
+        }
+
+        // 3. 创建 ViewTabContent 和 Tab
+        let viewTabContent = ViewTabContent(
+            viewId: viewId,
+            pluginId: pluginId
+        )
+        let tab = Tab(
+            tabId: UUID(),
+            title: title,
+            content: .view(viewTabContent)
+        )
+
+        // 4. 根据 placement 执行不同逻辑
+        switch placement {
+        case .split(let direction):
+            return createViewTabWithSplit(tab: tab, direction: direction)
+
+        case .tab:
+            // 暂时 fallback 到 split（水平方向）
+            return createViewTabWithSplit(tab: tab, direction: .horizontal)
+
+        case .page:
+            // 创建独立 Page
+            createViewTabAsPage(pluginId: pluginId, title: title, viewProvider: viewProvider)
+            return nil  // Page 模式不返回 Tab
+        }
+    }
+
+    /// 查找并激活已有的 View Tab
+    private func findAndActivateExistingViewTab(viewId: String) -> Tab? {
+        guard Thread.isMainThread else {
+            var result: Tab? = nil
+            DispatchQueue.main.sync {
+                result = findAndActivateExistingViewTab(viewId: viewId)
+            }
+            return result
+        }
+
+        guard let activeWindow = NSApp.keyWindow,
+              let coordinator = WindowManager.shared.getCoordinator(for: activeWindow.windowNumber) else {
+            return nil
+        }
+
+        // 遍历所有 Panel 查找已有的 View Tab
+        for panel in coordinator.terminalWindow.allPanels {
+            for tab in panel.tabs {
+                if case .view(let content) = tab.content, content.viewId == viewId {
+                    // 找到了，激活这个 Tab
+                    panel.setActiveTab(tab.tabId)
+                    coordinator.setActivePanel(panel.panelId)
+                    coordinator.objectWillChange.send()
+                    coordinator.updateTrigger = UUID()
+                    return tab
+                }
+            }
+        }
+
+        return nil
+    }
+
+    func registerViewProvider(
+        for pluginId: String,
+        viewId: String,
+        title: String,
+        viewProvider: @escaping () -> AnyView
+    ) {
+        // 只注册视图到 Registry，不创建 Tab
+        let definition = ViewTabRegistry.ViewDefinition(
+            viewId: viewId,
+            pluginId: pluginId,
+            title: title,
+            viewProvider: viewProvider
+        )
+        ViewTabRegistry.shared.register(definition)
+    }
+
+    /// 创建 View Tab 作为独立 Page
+    private func createViewTabAsPage(pluginId: String, title: String, viewProvider: @escaping () -> AnyView) {
         DispatchQueue.main.async {
-            // 获取当前激活的窗口
             guard let activeWindow = NSApp.keyWindow,
                   let coordinator = WindowManager.shared.getCoordinator(for: activeWindow.windowNumber) else {
                 return
             }
 
-            // 添加插件 Page
-            let newPage = coordinator.terminalWindow.addPluginPage(
+            // 尝试打开或切换到已有的插件页面
+            let page = coordinator.terminalWindow.openOrSwitchToPluginPage(
                 pluginId: pluginId,
                 title: title,
                 viewProvider: viewProvider
             )
 
-            // 切换到新创建的插件 Page
-            _ = coordinator.terminalWindow.switchToPage(newPage.pageId)
+            // 切换到该页面
+            _ = coordinator.terminalWindow.switchToPage(page.pageId)
 
             // 触发 UI 更新
             coordinator.objectWillChange.send()
             coordinator.updateTrigger = UUID()
-
         }
     }
 
-    func registerPluginPageEntry(
-        for pluginId: String,
-        pluginName: String,
-        icon: String,
-        viewProvider: @escaping () -> AnyView
-    ) {
-        // 1. 在 PluginPageRegistry 注册页面定义
-        let definition = PluginPageRegistry.PageDefinition(
-            pluginId: pluginId,
-            title: pluginName,
-            icon: icon,
-            viewProvider: viewProvider
-        )
-        PluginPageRegistry.shared.register(definition)
+    /// 使用分栏方式创建 View Tab
+    private func createViewTabWithSplit(tab: Tab, direction: SplitDirection) -> Tab? {
+        var resultTab: Tab? = nil
 
-        // 2. 在侧边栏注册入口按钮（点击直接打开 PluginPage）
-        let entryTab = SidebarTab(
-            id: "\(pluginId)-page-entry",
-            title: pluginName,
-            icon: icon,
-            viewProvider: {
-                // 占位视图（不会显示，因为 onSelect 会直接打开页面）
-                AnyView(EmptyView())
-            },
-            onSelect: {
-                // 点击时直接打开 PluginPage
-                PluginPageRegistry.shared.openPage(pluginId: pluginId)
+        // 必须在主线程执行 UI 操作
+        if Thread.isMainThread {
+            resultTab = executeCreateViewTabWithSplit(tab: tab, direction: direction)
+        } else {
+            DispatchQueue.main.sync {
+                resultTab = executeCreateViewTabWithSplit(tab: tab, direction: direction)
             }
-        )
+        }
 
-        SidebarRegistry.shared.registerTab(
-            for: pluginId,
-            pluginName: pluginName,
-            tab: entryTab
-        )
+        return resultTab
     }
 
-    func registerPageBarItem(for pluginId: String, id: String, viewProvider: @escaping () -> AnyView) {
-        PageBarItemRegistry.shared.registerItem(for: pluginId, id: id, viewProvider: viewProvider)
+    /// 执行分栏创建 View Tab（内部方法，需在主线程调用）
+    private func executeCreateViewTabWithSplit(tab: Tab, direction: SplitDirection) -> Tab? {
+        // 获取当前激活的窗口和 Coordinator
+        guard let activeWindow = NSApp.keyWindow,
+              let coordinator = WindowManager.shared.getCoordinator(for: activeWindow.windowNumber) else {
+            return nil
+        }
+
+        // 获取当前激活的 Panel
+        guard let activePanelId = coordinator.activePanelId else {
+            return nil
+        }
+
+        // 将 SplitDirection 转换为 EdgeDirection
+        let edge: EdgeDirection = direction == .horizontal ? .right : .bottom
+
+        // 使用 splitPanelWithExistingTab 分栏
+        let layoutCalculator = BinaryTreeLayoutCalculator()
+        guard let newPanelId = coordinator.terminalWindow.splitPanelWithExistingTab(
+            panelId: activePanelId,
+            existingTab: tab,
+            edge: edge,
+            layoutCalculator: layoutCalculator
+        ) else {
+            return nil
+        }
+
+        // 设置新 Panel 为激活状态
+        coordinator.setActivePanel(newPanelId)
+
+        // 同步布局到 Rust
+        coordinator.syncLayoutToRust()
+
+        // 触发 UI 更新
+        coordinator.objectWillChange.send()
+        coordinator.updateTrigger = UUID()
+
+        // 保存 Session
+        WindowManager.shared.saveSession()
+
+        return tab
     }
 }

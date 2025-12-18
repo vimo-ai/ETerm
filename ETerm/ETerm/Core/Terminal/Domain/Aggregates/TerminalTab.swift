@@ -1,8 +1,13 @@
 //
 //  TerminalTab.swift
-//  ETerm - 终端 Tab 聚合根（Aggregate Root）
+//  ETerm - 终端 Tab 内容（Terminal Tab Content）
 //
 //  Created by ETerm Team on 2025/11/20.
+//
+//  重构说明（2025/12）：
+//  - 此类现在作为 TabContent.terminal 的内容实现
+//  - 保留原有属性和方法，确保向后兼容
+//  - 新增 contentId 和生命周期方法以适配 Tab 容器
 //
 
 import Foundation
@@ -16,12 +21,12 @@ enum Direction {
     case right
 }
 
-/// 终端 Tab（聚合根）
+/// 终端 Tab 内容
 ///
 /// 职责：
 /// - 封装光标/选中/输入的所有业务规则
 /// - 保证状态一致性
-/// - 发布领域事件（未来扩展）
+/// - 作为 TabContent.terminal 的内容实现
 ///
 /// 设计原则：
 /// - 不可变状态（通过 private(set) 控制）
@@ -414,6 +419,37 @@ extension TerminalTab: CustomStringConvertible {
 extension TerminalTab: Identifiable {
     var id: UUID { tabId }
 }
+
+// MARK: - TabContent 适配
+
+extension TerminalTab {
+    /// 内容 ID（用于 TabContent 协议）
+    ///
+    /// 复用 tabId，确保唯一性
+    var contentId: UUID { tabId }
+
+    /// Tab 被激活时调用（由 Tab 容器调用）
+    ///
+    /// 内部调用 activate()，保持行为一致
+    func didActivate() {
+        activate()
+    }
+
+    /// Tab 被失活时调用（由 Tab 容器调用）
+    ///
+    /// 内部调用 deactivate()，保持行为一致
+    func didDeactivate() {
+        deactivate()
+    }
+}
+
+// MARK: - 类型别名（向后兼容）
+
+/// TerminalTabContent 是 TerminalTab 的别名
+///
+/// 用于新架构中作为 TabContent.terminal 的内容类型
+/// 保持向后兼容，现有代码无需修改
+typealias TerminalTabContent = TerminalTab
 
 // MARK: - UUID Stable ID Extension
 extension UUID {

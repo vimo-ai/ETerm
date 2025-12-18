@@ -15,15 +15,37 @@ final class DevHelperPlugin: Plugin {
     static let version = "1.0.0"
 
     func activate(context: PluginContext) {
-
-        context.ui.registerPluginPageEntry(
+        // 预注册视图 Provider（用于 Session 恢复）
+        context.ui.registerViewProvider(
             for: Self.id,
-            pluginName: Self.name,
-            icon: "hammer.fill"
+            viewId: Self.id,
+            title: Self.name
         ) {
             AnyView(DevHelperView())
         }
 
+        // 注册侧边栏入口
+        context.ui.registerSidebarTab(
+            for: Self.id,
+            pluginName: Self.name,
+            tab: SidebarTab(
+                id: "\(Self.id)-entry",
+                title: Self.name,
+                icon: "hammer.fill",
+                viewProvider: { AnyView(EmptyView()) },
+                onSelect: {
+                    // 点击时创建或切换到 View Tab
+                    context.ui.createViewTab(
+                        for: Self.id,
+                        viewId: Self.id,
+                        title: Self.name,
+                        placement: .split(.horizontal)
+                    ) {
+                        AnyView(DevHelperView())
+                    }
+                }
+            )
+        )
     }
 
     func deactivate() {

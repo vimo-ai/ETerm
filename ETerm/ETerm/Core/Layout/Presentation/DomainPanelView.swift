@@ -17,6 +17,7 @@
 import AppKit
 import Foundation
 import PanelLayoutKit
+import SwiftUI
 
 /// 基于 Domain AR 的 Panel 视图
 final class DomainPanelView: NSView {
@@ -31,8 +32,14 @@ final class DomainPanelView: NSView {
     /// Header 视图（SwiftUI 桥接）
     private let headerView: PanelHeaderHostingView
 
-    /// Content 视图（渲染区域 - 透明）
+    /// Content 视图（渲染区域 - 透明，用于终端内容）
     let contentView: NSView
+
+    /// View Tab 内容视图（SwiftUI 桥接，用于 View Tab）
+    private var viewTabHostingView: NSHostingView<AnyView>?
+
+    /// 当前显示的 viewId（用于避免重复创建）
+    private var currentViewId: String?
 
     /// 高亮层（显示 Drop Zone）
     private let highlightLayer: CALayer
@@ -70,6 +77,14 @@ final class DomainPanelView: NSView {
             name: .applyTabReorder,
             object: nil
         )
+
+        // 监听 View Tab 视图注册通知（刷新占位符）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleViewTabRegistered(_:)),
+            name: .viewTabRegistered,
+            object: nil
+        )
     }
 
     @objc private func handleApplyTabReorder(_ notification: Notification) {
@@ -84,13 +99,30 @@ final class DomainPanelView: NSView {
         headerView.applyTabReorder(tabIds)
     }
 
+    @objc private func handleViewTabRegistered(_ notification: Notification) {
+        guard let registeredViewId = notification.userInfo?["viewId"] as? String,
+              registeredViewId == currentViewId else {
+            return
+        }
+
+        // 当前显示的是这个 viewId 的占位符，需要刷新为真实视图
+        // 强制重新创建视图
+        currentViewId = nil
+        if let panel = panel,
+           let activeTab = panel.activeTab,
+           case .view(let viewContent) = activeTab.content {
+            showViewTabContent(viewContent)
+        }
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
     // MARK: - Hit Testing
 
-    /// 让 content 区域的鼠标事件穿透到底层 Metal 视图
+    /// 让 content 区域的鼠标事件穿透到底层 Metal 视图（终端 Tab）
+    /// 或路由到 SwiftUI 视图（View Tab）
     override func hitTest(_ point: NSPoint) -> NSView? {
         // 首先检查点是否在自己的 bounds 内
         guard bounds.contains(point) else {
@@ -108,7 +140,20 @@ final class DomainPanelView: NSView {
             return headerView
         }
 
-        // Content 区域：让事件穿透到底层
+        // Content 区域：检查是否有 View Tab 内容
+        if let hostingView = viewTabHostingView, !hostingView.isHidden {
+            // View Tab：让事件路由到 SwiftUI 视图
+            let contentPoint = convert(point, to: contentView)
+            if contentView.bounds.contains(contentPoint) {
+                let hostingPoint = contentView.convert(contentPoint, to: hostingView)
+                if let hitView = hostingView.hitTest(hostingPoint) {
+                    return hitView
+                }
+                return hostingView
+            }
+        }
+
+        // 终端 Tab 或无内容：让事件穿透到底层 Metal 视图
         return nil
     }
 
@@ -207,6 +252,60 @@ final class DomainPanelView: NSView {
                 }
             }
         }
+
+        // 根据 activeTab 类型切换内容显示
+        updateContentView()
+    }
+
+    /// 根据 activeTab 类型更新内容视图
+    private func updateContentView() {
+        guard let panel = panel,
+              let activeTab = panel.activeTab else {
+            // 没有激活的 Tab，隐藏 View Tab 内容
+            hideViewTabContent()
+            return
+        }
+
+        switch activeTab.content {
+        case .terminal:
+            // 终端 Tab：隐藏 View Tab 内容，让 contentView 透明显示 Metal 层
+            hideViewTabContent()
+
+        case .view(let viewContent):
+            // View Tab：显示 SwiftUI 视图
+            showViewTabContent(viewContent)
+        }
+    }
+
+    /// 显示 View Tab 内容
+    private func showViewTabContent(_ viewContent: ViewTabContent) {
+        // 检查是否已经显示了相同的视图
+        if currentViewId == viewContent.viewId, viewTabHostingView != nil {
+            viewTabHostingView?.isHidden = false
+            return
+        }
+
+        // 从 Registry 获取视图，如果没有则显示占位视图
+        let view = ViewTabRegistry.shared.getView(for: viewContent.viewId)
+            ?? AnyView(ViewTabPlaceholderView(viewId: viewContent.viewId))
+
+        // 移除旧的 hosting view
+        viewTabHostingView?.removeFromSuperview()
+
+        // 创建新的 hosting view（使用 autoresizing 而非 AutoLayout，避免约束循环）
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.translatesAutoresizingMaskIntoConstraints = true
+        hostingView.autoresizingMask = [.width, .height]
+        hostingView.frame = contentView.bounds
+        contentView.addSubview(hostingView)
+
+        viewTabHostingView = hostingView
+        currentViewId = viewContent.viewId
+    }
+
+    /// 隐藏 View Tab 内容
+    private func hideViewTabContent() {
+        viewTabHostingView?.isHidden = true
     }
 
     /// 设置所属 Page 的激活状态
@@ -376,4 +475,29 @@ final class DomainPanelView: NSView {
         highlightLayer.isHidden = true
     }
 
+}
+
+// MARK: - View Tab 占位视图
+
+/// View Tab 占位视图（插件未加载时显示）
+private struct ViewTabPlaceholderView: View {
+    let viewId: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary.opacity(0.5))
+
+            Text("插件未加载")
+                .font(.headline)
+                .foregroundColor(.secondary)
+
+            Text("viewId: \(viewId)")
+                .font(.caption)
+                .foregroundColor(.secondary.opacity(0.7))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
 }

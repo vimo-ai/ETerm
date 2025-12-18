@@ -32,6 +32,16 @@ protocol PluginContext: AnyObject {
     var services: ServiceRegistry { get }
 }
 
+/// View Tab 的放置方式
+enum ViewTabPlacement {
+    /// 分栏创建新 Panel（默认，类似 Ctrl+D）
+    case split(SplitDirection)
+    /// 在当前 Panel 新增 Tab（类似 Ctrl+T）
+    case tab
+    /// 创建独立 Page
+    case page
+}
+
 /// UI 服务协议 - 提供 UI 扩展能力
 protocol UIService: AnyObject {
     /// 注册侧边栏 Tab
@@ -53,32 +63,6 @@ protocol UIService: AnyObject {
     ///   - viewProvider: 视图提供者
     func registerInfoContent(for pluginId: String, id: String, title: String, viewProvider: @escaping () -> AnyView)
 
-    /// 注册插件页面（显示在 PageBar 上，与终端 Page 同层级）
-    /// - Parameters:
-    ///   - pluginId: 插件 ID
-    ///   - title: 页面标题
-    ///   - icon: 图标名称（SF Symbols）
-    ///   - viewProvider: 视图提供者
-    func registerPage(for pluginId: String, title: String, icon: String, viewProvider: @escaping () -> AnyView)
-
-    /// 注册插件页面入口（在侧边栏显示按钮，点击后打开 PluginPage）
-    ///
-    /// 与 registerPage 的区别：
-    /// - registerPage：直接创建并打开 Page（一次性）
-    /// - registerPluginPageEntry：注册入口按钮，可多次打开/切换到 Page
-    ///
-    /// - Parameters:
-    ///   - pluginId: 插件 ID
-    ///   - pluginName: 插件名称
-    ///   - icon: 图标名称（SF Symbols）
-    ///   - viewProvider: 视图提供者
-    func registerPluginPageEntry(
-        for pluginId: String,
-        pluginName: String,
-        icon: String,
-        viewProvider: @escaping () -> AnyView
-    )
-
     /// 注册 PageBar 组件（显示在 PageBar 右侧，翻译模式左边）
     /// - Parameters:
     ///   - pluginId: 插件 ID
@@ -87,6 +71,43 @@ protocol UIService: AnyObject {
     func registerPageBarItem(
         for pluginId: String,
         id: String,
+        viewProvider: @escaping () -> AnyView
+    )
+
+    /// 创建 View Tab
+    ///
+    /// 在当前窗口中创建一个显示自定义视图的 Tab。
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - viewId: 视图标识符（用于 Session 恢复）
+    ///   - title: Tab 标题
+    ///   - placement: 放置方式，默认分栏
+    ///   - viewProvider: SwiftUI 视图提供者
+    /// - Returns: 创建的 Tab，失败返回 nil
+    @discardableResult
+    func createViewTab(
+        for pluginId: String,
+        viewId: String,
+        title: String,
+        placement: ViewTabPlacement,
+        viewProvider: @escaping () -> AnyView
+    ) -> Tab?
+
+    /// 预注册视图 Provider（用于 Session 恢复）
+    ///
+    /// 插件应在 activate() 时调用此方法预注册视图，
+    /// 这样 Session 恢复时能正确显示插件视图而非占位符。
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - viewId: 视图标识符
+    ///   - title: Tab 标题
+    ///   - viewProvider: SwiftUI 视图提供者
+    func registerViewProvider(
+        for pluginId: String,
+        viewId: String,
+        title: String,
         viewProvider: @escaping () -> AnyView
     )
 }

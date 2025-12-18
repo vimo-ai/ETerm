@@ -67,13 +67,18 @@ final class TerminalWindow {
     ///   - panelId: 目标 Panel ID
     ///   - rustTerminalId: Rust 终端 ID
     /// - Returns: 创建的 Tab，如果 Panel 不存在返回 nil
-    func createTab(in panelId: UUID, rustTerminalId: Int = 0) -> TerminalTab? {
+    func createTab(in panelId: UUID, rustTerminalId: Int = 0) -> Tab? {
         guard let panel = getPanel(panelId) else { return nil }
 
-        let tab = TerminalTab(
+        let terminalTab = TerminalTab(
             tabId: UUID(),
             title: Self.defaultTabTitle,
             rustTerminalId: rustTerminalId
+        )
+        let tab = Tab(
+            tabId: terminalTab.tabId,
+            title: terminalTab.title,
+            content: .terminal(terminalTab)
         )
         panel.addTab(tab)
         return tab
@@ -358,7 +363,7 @@ final class TerminalWindow {
     /// - Returns: 新创建的 Panel ID，如果失败返回 nil
     func splitPanelWithExistingTab(
         panelId: UUID,
-        existingTab: TerminalTab,
+        existingTab: Tab,
         edge: EdgeDirection,
         layoutCalculator: LayoutCalculator
     ) -> UUID? {
@@ -414,15 +419,28 @@ final class TerminalWindow {
 
     // MARK: - Rendering
 
-    /// 获取所有需要渲染的 Tab
+    /// 获取所有需要渲染的 Tab（新架构）
+    func getActiveTabRenderables(
+        containerBounds: CGRect,
+        headerHeight: CGFloat
+    ) -> [TabRenderable] {
+        return activePage?.getActiveTabRenderables(
+            containerBounds: containerBounds,
+            headerHeight: headerHeight
+        ) ?? []
+    }
+
+    /// 获取所有需要渲染的 Tab（兼容旧 API）
+    @available(*, deprecated, message: "Use getActiveTabRenderables instead")
     func getActiveTabsForRendering(
         containerBounds: CGRect,
         headerHeight: CGFloat
     ) -> [(Int, CGRect)] {
-        return activePage?.getActiveTabsForRendering(
+        let renderables = getActiveTabRenderables(
             containerBounds: containerBounds,
             headerHeight: headerHeight
-        ) ?? []
+        )
+        return TabRenderable.filterTerminals(renderables)
     }
 
     // MARK: - Layout Query
