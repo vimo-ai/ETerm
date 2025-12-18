@@ -9,7 +9,7 @@
 import Foundation
 
 /// 日志级别
-enum LogLevel: String {
+enum LogLevel: String, Comparable {
     case debug = "DEBUG"
     case info = "INFO"
     case warn = "WARN"
@@ -22,6 +22,20 @@ enum LogLevel: String {
         case .warn: return "⚠️"
         case .error: return "❌"
         }
+    }
+
+    /// 级别优先级（用于比较）
+    var priority: Int {
+        switch self {
+        case .debug: return 0
+        case .info: return 1
+        case .warn: return 2
+        case .error: return 3
+        }
+    }
+
+    static func < (lhs: LogLevel, rhs: LogLevel) -> Bool {
+        return lhs.priority < rhs.priority
     }
 }
 
@@ -39,6 +53,13 @@ class LogManager {
 
     /// 是否启用文件日志
     var fileLoggingEnabled: Bool = true
+
+    /// 最小日志级别（低于此级别的日志会被忽略）
+    /// - debug: 记录所有日志
+    /// - info: 忽略 debug
+    /// - warn: 只记录 warn 和 error
+    /// - error: 只记录 error
+    var minimumLevel: LogLevel = .info
 
     /// 当前日志文件路径
     private var currentLogFile: String?
@@ -118,6 +139,9 @@ class LogManager {
         function: String,
         line: Int
     ) {
+        // 级别过滤
+        guard level >= minimumLevel else { return }
+
         queue.async { [weak self] in
             guard let self = self else { return }
 
