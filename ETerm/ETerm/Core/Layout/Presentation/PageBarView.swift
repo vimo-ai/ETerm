@@ -208,6 +208,14 @@ struct PageTabView: View {
     var onClose: (() -> Void)?
     var onRename: ((String) -> Void)?
 
+    // 批量关闭回调
+    var onCloseOthers: (() -> Void)?
+    var onCloseLeft: (() -> Void)?
+    var onCloseRight: (() -> Void)?
+    var canCloseLeft: Bool = true
+    var canCloseRight: Bool = true
+    var canCloseOthers: Bool = true
+
     @State private var isHovered: Bool = false
     @State private var editingText: String = ""
     @FocusState private var isFocused: Bool
@@ -253,7 +261,13 @@ struct PageTabView: View {
                 needsAttention: needsAttention,
                 height: height,
                 isHovered: isHovered,
-                onClose: showCloseButton ? onClose : nil
+                onClose: showCloseButton ? onClose : nil,
+                onCloseOthers: onCloseOthers,
+                onCloseLeft: onCloseLeft,
+                onCloseRight: onCloseRight,
+                canCloseLeft: canCloseLeft,
+                canCloseRight: canCloseRight,
+                canCloseOthers: canCloseOthers
             )
             .onTapGesture {
                 // 自己检测双击，避免 onTapGesture(count: 2) 导致单击延迟
@@ -373,6 +387,11 @@ final class PageBarHostingView: NSView {
     var onPageDragOutOfWindow: ((UUID, NSPoint) -> Void)?
     var onPageReceivedFromOtherWindow: ((UUID, Int) -> Void)?  // pageId, sourceWindowNumber
 
+    // 批量关闭回调
+    var onPageCloseOthers: ((UUID) -> Void)?
+    var onPageCloseLeft: ((UUID) -> Void)?
+    var onPageCloseRight: ((UUID) -> Void)?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHostingView()
@@ -430,11 +449,13 @@ final class PageBarHostingView: NSView {
         pageItemViews.forEach { $0.removeFromSuperview() }
         pageItemViews.removeAll()
 
+        let pageCount = pages.count
+
         // 创建新的 Page 视图
-        for page in pages {
+        for (index, page) in pages.enumerated() {
             let pageView = PageItemView(pageId: page.id, title: page.title)
             pageView.setActive(page.id == activePageId)
-            pageView.setShowCloseButton(pages.count > 1)
+            pageView.setShowCloseButton(pageCount > 1)
 
             // 捕获 pageId 而不是 page，避免闭包捕获问题
             let pageId = page.id
@@ -457,6 +478,22 @@ final class PageBarHostingView: NSView {
             pageView.onDragOutOfWindow = { [weak self] screenPoint in
                 self?.onPageDragOutOfWindow?(pageId, screenPoint)
             }
+
+            // 批量关闭回调
+            pageView.onCloseOthers = { [weak self] in
+                self?.onPageCloseOthers?(pageId)
+            }
+            pageView.onCloseLeft = { [weak self] in
+                self?.onPageCloseLeft?(pageId)
+            }
+            pageView.onCloseRight = { [weak self] in
+                self?.onPageCloseRight?(pageId)
+            }
+
+            // 设置可关闭状态（基于位置）
+            pageView.canCloseLeft = index > 0
+            pageView.canCloseRight = index < pageCount - 1
+            pageView.canCloseOthers = pageCount > 1
 
             pageContainer.addSubview(pageView)
             pageItemViews.append(pageView)
@@ -789,11 +826,12 @@ struct SwiftUIPageBar: View {
 
             // Page 标签列表
             HStack(spacing: 2) {
-                ForEach(coordinator.terminalWindow.pages, id: \.pageId) { page in
+                ForEach(Array(coordinator.terminalWindow.pages.enumerated()), id: \.element.pageId) { index, page in
+                    let pageCount = coordinator.terminalWindow.pages.count
                     PageTabView(
                         title: page.title,
                         isActive: page.pageId == coordinator.terminalWindow.activePageId,
-                        showCloseButton: coordinator.terminalWindow.pages.count > 1,
+                        showCloseButton: pageCount > 1,
                         needsAttention: pagesNeedingAttention.contains(page.pageId),
                         isEditing: Binding(
                             get: { editingPageId == page.pageId },
@@ -803,7 +841,13 @@ struct SwiftUIPageBar: View {
                         onClose: { _ = coordinator.closePage(page.pageId) },
                         onRename: { newTitle in
                             _ = coordinator.renamePage(page.pageId, to: newTitle)
-                        }
+                        },
+                        onCloseOthers: { coordinator.handlePageCloseOthers(keepPageId: page.pageId) },
+                        onCloseLeft: { coordinator.handlePageCloseLeft(fromPageId: page.pageId) },
+                        onCloseRight: { coordinator.handlePageCloseRight(fromPageId: page.pageId) },
+                        canCloseLeft: index > 0,
+                        canCloseRight: index < pageCount - 1,
+                        canCloseOthers: pageCount > 1
                     )
                 }
             }
@@ -909,6 +953,17 @@ struct AppKitPageBar: NSViewRepresentable {
         pageBarView.onPageReceivedFromOtherWindow = { [weak coordinator, weak pageBarView] pageId, sourceWindowNumber in
             let targetWindowNumber = pageBarView?.window?.windowNumber ?? 0
             coordinator?.handlePageReceivedFromOtherWindow(pageId, sourceWindowNumber: sourceWindowNumber, targetWindowNumber: targetWindowNumber, insertBefore: nil)
+        }
+
+        // 批量关闭回调
+        pageBarView.onPageCloseOthers = { [weak coordinator] pageId in
+            coordinator?.handlePageCloseOthers(keepPageId: pageId)
+        }
+        pageBarView.onPageCloseLeft = { [weak coordinator] pageId in
+            coordinator?.handlePageCloseLeft(fromPageId: pageId)
+        }
+        pageBarView.onPageCloseRight = { [weak coordinator] pageId in
+            coordinator?.handlePageCloseRight(fromPageId: pageId)
         }
 
         // 初始设置 Pages

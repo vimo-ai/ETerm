@@ -81,6 +81,24 @@ class DraggableItemView: NSView {
     /// 拖出窗口回调（屏幕坐标）
     var onDragOutOfWindow: ((NSPoint) -> Void)?
 
+    /// 关闭其他回调（用于右键菜单）
+    var onCloseOthers: (() -> Void)?
+
+    /// 关闭左侧回调
+    var onCloseLeft: (() -> Void)?
+
+    /// 关闭右侧回调
+    var onCloseRight: (() -> Void)?
+
+    /// 是否可以关闭左侧
+    var canCloseLeft: Bool = false
+
+    /// 是否可以关闭右侧
+    var canCloseRight: Bool = false
+
+    /// 是否可以关闭其他
+    var canCloseOthers: Bool = false
+
     // MARK: - 编辑相关
 
     /// 编辑框字体大小（子类可覆盖）
@@ -360,6 +378,61 @@ class DraggableItemView: NSView {
         // 点击逻辑已在 mouseDown 的事件追踪循环中处理
         isDragging = false
         didActuallyDrag = false
+    }
+
+    // MARK: - 右键菜单
+
+    override func rightMouseDown(with event: NSEvent) {
+        let menu = NSMenu()
+
+        // 关闭当前
+        if showCloseButton {
+            let closeItem = NSMenuItem(title: "关闭", action: #selector(handleClose), keyEquivalent: "")
+            closeItem.target = self
+            menu.addItem(closeItem)
+        }
+
+        // 关闭其他
+        if canCloseOthers {
+            let closeOthersItem = NSMenuItem(title: "关闭其他", action: #selector(handleCloseOthers), keyEquivalent: "")
+            closeOthersItem.target = self
+            menu.addItem(closeOthersItem)
+        }
+
+        // 关闭左侧
+        if canCloseLeft {
+            let closeLeftItem = NSMenuItem(title: "关闭左侧", action: #selector(handleCloseLeft), keyEquivalent: "")
+            closeLeftItem.target = self
+            menu.addItem(closeLeftItem)
+        }
+
+        // 关闭右侧
+        if canCloseRight {
+            let closeRightItem = NSMenuItem(title: "关闭右侧", action: #selector(handleCloseRight), keyEquivalent: "")
+            closeRightItem.target = self
+            menu.addItem(closeRightItem)
+        }
+
+        // 只有有菜单项时才显示
+        if menu.items.count > 0 {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
+    }
+
+    @objc private func handleClose() {
+        onClose?()
+    }
+
+    @objc private func handleCloseOthers() {
+        onCloseOthers?()
+    }
+
+    @objc private func handleCloseLeft() {
+        onCloseLeft?()
+    }
+
+    @objc private func handleCloseRight() {
+        onCloseRight?()
     }
 
     // MARK: - 点击处理

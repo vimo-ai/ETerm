@@ -94,7 +94,19 @@ final class TabItemView: DraggableItemView {
             isHovered: isHovered,
             onClose: { [weak self] in
                 self?.onClose?()
-            }
+            },
+            onCloseOthers: { [weak self] in
+                self?.onCloseOthers?()
+            },
+            onCloseLeft: { [weak self] in
+                self?.onCloseLeft?()
+            },
+            onCloseRight: { [weak self] in
+                self?.onCloseRight?()
+            },
+            canCloseLeft: canCloseLeft,
+            canCloseRight: canCloseRight,
+            canCloseOthers: canCloseOthers
         )
 
         let hosting = NSHostingView(rootView: simpleTab)

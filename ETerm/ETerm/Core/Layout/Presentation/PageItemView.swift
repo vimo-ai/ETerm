@@ -83,7 +83,19 @@ final class PageItemView: DraggableItemView {
             needsAttention: needsAttention,
             height: Self.tabHeight,
             isHovered: isHovered,
-            onClose: closeAction
+            onClose: closeAction,
+            onCloseOthers: { [weak self] in
+                self?.onCloseOthers?()
+            },
+            onCloseLeft: { [weak self] in
+                self?.onCloseLeft?()
+            },
+            onCloseRight: { [weak self] in
+                self?.onCloseRight?()
+            },
+            canCloseLeft: canCloseLeft,
+            canCloseRight: canCloseRight,
+            canCloseOthers: canCloseOthers
         )
 
         // 使用自定义子类禁止窗口拖动

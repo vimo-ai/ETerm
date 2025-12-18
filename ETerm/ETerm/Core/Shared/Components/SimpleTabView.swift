@@ -15,9 +15,19 @@ struct SimpleTabView: View {
     let isHovered: Bool  // 由外部控制的 hover 状态
     let onClose: (() -> Void)?
 
+    // 批量关闭回调
+    let onCloseOthers: (() -> Void)?
+    let onCloseLeft: (() -> Void)?
+    let onCloseRight: (() -> Void)?
+
+    // 是否可以关闭左侧/右侧（边界情况禁用）
+    let canCloseLeft: Bool
+    let canCloseRight: Bool
+    let canCloseOthers: Bool
+
     @Environment(\.colorScheme) private var colorScheme
 
-    init(_ text: String, emoji: String? = nil, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, isHovered: Bool = false, onClose: (() -> Void)? = nil) {
+    init(_ text: String, emoji: String? = nil, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, isHovered: Bool = false, onClose: (() -> Void)? = nil, onCloseOthers: (() -> Void)? = nil, onCloseLeft: (() -> Void)? = nil, onCloseRight: (() -> Void)? = nil, canCloseLeft: Bool = true, canCloseRight: Bool = true, canCloseOthers: Bool = true) {
         self.text = text
         self.emoji = emoji
         self.isActive = isActive
@@ -25,6 +35,12 @@ struct SimpleTabView: View {
         self.height = height
         self.isHovered = isHovered
         self.onClose = onClose
+        self.onCloseOthers = onCloseOthers
+        self.onCloseLeft = onCloseLeft
+        self.onCloseRight = onCloseRight
+        self.canCloseLeft = canCloseLeft
+        self.canCloseRight = canCloseRight
+        self.canCloseOthers = canCloseOthers
     }
 
     // MARK: - 配色（跟随水墨主题）
@@ -121,6 +137,21 @@ struct SimpleTabView: View {
             RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(backgroundColor)
         )
+        // 右键菜单
+        .contextMenu {
+            if let onClose = onClose {
+                Button("关闭") { onClose() }
+            }
+            if let onCloseOthers = onCloseOthers, canCloseOthers {
+                Button("关闭其他") { onCloseOthers() }
+            }
+            if let onCloseLeft = onCloseLeft, canCloseLeft {
+                Button("关闭左侧") { onCloseLeft() }
+            }
+            if let onCloseRight = onCloseRight, canCloseRight {
+                Button("关闭右侧") { onCloseRight() }
+            }
+        }
         // 点击手势由外层处理（PageTabView），这里只负责显示
         // hover 状态由外部 AppKit 的 NSTrackingArea 控制
     }

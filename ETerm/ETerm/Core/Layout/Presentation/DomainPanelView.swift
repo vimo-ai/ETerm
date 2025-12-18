@@ -169,6 +169,17 @@ final class DomainPanelView: NSView {
             self?.handleTabReceivedFromOtherWindow(tabId, sourcePanelId: sourcePanelId, sourceWindowNumber: sourceWindowNumber)
         }
 
+        // 批量关闭回调
+        headerView.onTabCloseOthers = { [weak self] tabId in
+            self?.handleTabCloseOthers(tabId)
+        }
+        headerView.onTabCloseLeft = { [weak self] tabId in
+            self?.handleTabCloseLeft(tabId)
+        }
+        headerView.onTabCloseRight = { [weak self] tabId in
+            self?.handleTabCloseRight(tabId)
+        }
+
         // 设置 panelId（用于拖拽数据）
         headerView.panelId = panel?.panelId
     }
@@ -297,6 +308,27 @@ final class DomainPanelView: NSView {
         let targetPanelId = panel.panelId
 
         WindowManager.shared.moveTab(tabId, from: sourcePanelId, sourceWindowNumber: sourceWindowNumber, to: targetPanelId, targetWindowNumber: targetWindowNumber)
+    }
+
+    private func handleTabCloseOthers(_ tabId: UUID) {
+        guard let panel = panel,
+              let coordinator = coordinator else { return }
+
+        coordinator.handleTabCloseOthers(panelId: panel.panelId, keepTabId: tabId)
+    }
+
+    private func handleTabCloseLeft(_ tabId: UUID) {
+        guard let panel = panel,
+              let coordinator = coordinator else { return }
+
+        coordinator.handleTabCloseLeft(panelId: panel.panelId, fromTabId: tabId)
+    }
+
+    private func handleTabCloseRight(_ tabId: UUID) {
+        guard let panel = panel,
+              let coordinator = coordinator else { return }
+
+        coordinator.handleTabCloseRight(panelId: panel.panelId, fromTabId: tabId)
     }
 
     // MARK: - Drop Zone Calculation (Public for RioContainerView)

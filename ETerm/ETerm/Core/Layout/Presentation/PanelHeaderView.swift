@@ -139,6 +139,11 @@ final class PanelHeaderHostingView: NSView {
     var onTabDragOutOfWindow: ((UUID, NSPoint) -> Void)?
     var onTabReceivedFromOtherWindow: ((UUID, UUID, Int) -> Void)?  // tabId, sourcePanelId, sourceWindowNumber
 
+    // 批量关闭回调
+    var onTabCloseOthers: ((UUID) -> Void)?  // 关闭除指定 Tab 外的所有 Tab
+    var onTabCloseLeft: ((UUID) -> Void)?    // 关闭指定 Tab 左侧的所有 Tab
+    var onTabCloseRight: ((UUID) -> Void)?   // 关闭指定 Tab 右侧的所有 Tab
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHostingView()
@@ -179,8 +184,10 @@ final class PanelHeaderHostingView: NSView {
         tabItemViews.forEach { $0.removeFromSuperview() }
         tabItemViews.removeAll()
 
+        let tabCount = tabs.count
+
         // 创建新的 Tab 视图
-        for tab in tabs {
+        for (index, tab) in tabs.enumerated() {
             let tabView = TabItemView(tabId: tab.id, title: tab.title)
             // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
             tabView.setActive(tab.id == activeTabId && isPanelActive)
@@ -203,6 +210,22 @@ final class PanelHeaderHostingView: NSView {
             tabView.onDragOutOfWindow = { [weak self] screenPoint in
                 self?.onTabDragOutOfWindow?(tab.id, screenPoint)
             }
+
+            // 批量关闭回调
+            tabView.onCloseOthers = { [weak self] in
+                self?.onTabCloseOthers?(tab.id)
+            }
+            tabView.onCloseLeft = { [weak self] in
+                self?.onTabCloseLeft?(tab.id)
+            }
+            tabView.onCloseRight = { [weak self] in
+                self?.onTabCloseRight?(tab.id)
+            }
+
+            // 设置可关闭状态（基于位置）
+            tabView.canCloseLeft = index > 0
+            tabView.canCloseRight = index < tabCount - 1
+            tabView.canCloseOthers = tabCount > 1
 
             // 设置所属 Panel ID（用于拖拽数据）
             tabView.panelId = panelId

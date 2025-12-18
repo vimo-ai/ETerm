@@ -895,6 +895,65 @@ class TerminalWindowCoordinator: ObservableObject {
         }
     }
 
+    /// 关闭其他 Tab（保留指定的 Tab）
+    func handleTabCloseOthers(panelId: UUID, keepTabId: UUID) {
+        guard let panel = terminalWindow.getPanel(panelId) else {
+            return
+        }
+
+        // 收集要关闭的 Tab ID
+        let tabsToClose = panel.tabs.filter { $0.tabId != keepTabId }.map { $0.tabId }
+
+        // 逐个关闭
+        for tabId in tabsToClose {
+            _ = removeTab(tabId, from: panelId, closeTerminal: true)
+        }
+
+        if !tabsToClose.isEmpty {
+            syncLayoutToRust()
+        }
+    }
+
+    /// 关闭左侧 Tab
+    func handleTabCloseLeft(panelId: UUID, fromTabId: UUID) {
+        guard let panel = terminalWindow.getPanel(panelId),
+              let fromIndex = panel.tabs.firstIndex(where: { $0.tabId == fromTabId }) else {
+            return
+        }
+
+        // 收集左侧要关闭的 Tab ID
+        let tabsToClose = panel.tabs.prefix(fromIndex).map { $0.tabId }
+
+        // 逐个关闭
+        for tabId in tabsToClose {
+            _ = removeTab(tabId, from: panelId, closeTerminal: true)
+        }
+
+        if !tabsToClose.isEmpty {
+            syncLayoutToRust()
+        }
+    }
+
+    /// 关闭右侧 Tab
+    func handleTabCloseRight(panelId: UUID, fromTabId: UUID) {
+        guard let panel = terminalWindow.getPanel(panelId),
+              let fromIndex = panel.tabs.firstIndex(where: { $0.tabId == fromTabId }) else {
+            return
+        }
+
+        // 收集右侧要关闭的 Tab ID
+        let tabsToClose = panel.tabs.suffix(from: fromIndex + 1).map { $0.tabId }
+
+        // 逐个关闭
+        for tabId in tabsToClose {
+            _ = removeTab(tabId, from: panelId, closeTerminal: true)
+        }
+
+        if !tabsToClose.isEmpty {
+            syncLayoutToRust()
+        }
+    }
+
     /// 智能关闭（Cmd+W）
     ///
     /// 关闭逻辑：
@@ -1586,6 +1645,47 @@ class TerminalWindowCoordinator: ObservableObject {
         WindowManager.shared.saveSession()
 
         return true
+    }
+
+    /// 关闭其他 Page（保留指定的 Page）
+    func handlePageCloseOthers(keepPageId: UUID) {
+        // 收集要关闭的 Page ID
+        let pagesToClose = terminalWindow.pages.filter { $0.pageId != keepPageId }.map { $0.pageId }
+
+        // 逐个关闭
+        for pageId in pagesToClose {
+            _ = closePage(pageId)
+        }
+    }
+
+    /// 关闭左侧 Page
+    func handlePageCloseLeft(fromPageId: UUID) {
+        guard let fromIndex = terminalWindow.pages.firstIndex(where: { $0.pageId == fromPageId }) else {
+            return
+        }
+
+        // 收集左侧要关闭的 Page ID
+        let pagesToClose = terminalWindow.pages.prefix(fromIndex).map { $0.pageId }
+
+        // 逐个关闭
+        for pageId in pagesToClose {
+            _ = closePage(pageId)
+        }
+    }
+
+    /// 关闭右侧 Page
+    func handlePageCloseRight(fromPageId: UUID) {
+        guard let fromIndex = terminalWindow.pages.firstIndex(where: { $0.pageId == fromPageId }) else {
+            return
+        }
+
+        // 收集右侧要关闭的 Page ID
+        let pagesToClose = terminalWindow.pages.suffix(from: fromIndex + 1).map { $0.pageId }
+
+        // 逐个关闭
+        for pageId in pagesToClose {
+            _ = closePage(pageId)
+        }
     }
 
     /// 重命名 Page

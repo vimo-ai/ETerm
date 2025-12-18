@@ -60,6 +60,15 @@ final class PanelView: NSView {
     /// Tab 关闭回调
     var onTabClose: ((UUID) -> Void)?
 
+    /// 关闭其他 Tab 回调
+    var onTabCloseOthers: ((UUID) -> Void)?
+
+    /// 关闭左侧 Tab 回调
+    var onTabCloseLeft: ((UUID) -> Void)?
+
+    /// 关闭右侧 Tab 回调
+    var onTabCloseRight: ((UUID) -> Void)?
+
     /// 添加 Tab 回调
     var onAddTab: (() -> Void)?
 
@@ -194,6 +203,15 @@ final class PanelView: NSView {
         }
         headerView.onTabClose = { [weak self] tabId in
             self?.onTabClose?(tabId)
+        }
+        headerView.onTabCloseOthers = { [weak self] tabId in
+            self?.onTabCloseOthers?(tabId)
+        }
+        headerView.onTabCloseLeft = { [weak self] tabId in
+            self?.onTabCloseLeft?(tabId)
+        }
+        headerView.onTabCloseRight = { [weak self] tabId in
+            self?.onTabCloseRight?(tabId)
         }
         headerView.onAddTab = { [weak self] in
             self?.onAddTab?()
