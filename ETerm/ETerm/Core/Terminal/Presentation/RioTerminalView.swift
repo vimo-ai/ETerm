@@ -908,6 +908,22 @@ class RioMetalView: NSView, RenderViewProtocol {
                 object: window
             )
 
+            // 监听系统唤醒（从睡眠/锁屏恢复）
+            NSWorkspace.shared.notificationCenter.addObserver(
+                self,
+                selector: #selector(systemDidWake),
+                name: NSWorkspace.didWakeNotification,
+                object: nil
+            )
+
+            // 监听应用激活（从后台切回前台）
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(applicationDidBecomeActive),
+                name: NSApplication.didBecomeActiveNotification,
+                object: nil
+            )
+
             // 不管 isKeyWindow 状态，都尝试初始化
             // 使用延迟确保视图布局完成
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
@@ -915,6 +931,7 @@ class RioMetalView: NSView, RenderViewProtocol {
             }
         } else {
             NotificationCenter.default.removeObserver(self)
+            NSWorkspace.shared.notificationCenter.removeObserver(self)
         }
     }
 
@@ -957,6 +974,37 @@ class RioMetalView: NSView, RenderViewProtocol {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.initialize()
         }
+    }
+
+    /// 系统从睡眠/锁屏唤醒
+    @objc private func systemDidWake() {
+        logDebug("[RioMetalView] systemDidWake - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
+        resumeRenderingIfNeeded()
+    }
+
+    /// 应用从后台切回前台
+    @objc private func applicationDidBecomeActive() {
+        logDebug("[RioMetalView] applicationDidBecomeActive - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
+        resumeRenderingIfNeeded()
+    }
+
+    /// 恢复渲染（唤醒后）
+    private func resumeRenderingIfNeeded() {
+        guard isInitialized else {
+            logDebug("[RioMetalView] resumeRenderingIfNeeded - not initialized, skip")
+            return
+        }
+
+        // 检查 CVDisplayLink 是否在运行
+        if let scheduler = renderScheduler, !scheduler.isRunning {
+            logWarn("[RioMetalView] CVDisplayLink was stopped, restarting...")
+            _ = scheduler.start()
+        }
+
+        // 强制同步布局并请求渲染（确保画面更新）
+        lastLayoutHash = 0  // 清除缓存，强制同步
+        requestRender()
+        logDebug("[RioMetalView] resumeRenderingIfNeeded - requested render")
     }
 
     private func initialize() {
@@ -1896,6 +1944,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 }
 
