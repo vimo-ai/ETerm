@@ -64,12 +64,37 @@ struct DashScopeAPIError: Decodable {
     let code: String?
 }
 
-enum DashScopeError: Error {
+enum DashScopeError: LocalizedError {
     case missingAPIKey
     case invalidBaseURL
     case requestFailed(status: Int, body: String?)
     case decodingFailed
     case cancelled
+
+    var errorDescription: String? {
+        switch self {
+        case .missingAPIKey:
+            return "请先在设置中配置 API Key"
+        case .invalidBaseURL:
+            return "API 地址格式无效，请检查设置"
+        case .requestFailed(let status, let body):
+            if status == 401 {
+                return "API Key 无效或已过期"
+            } else if status == 429 {
+                return "请求过于频繁，请稍后重试"
+            } else if status >= 500 {
+                return "AI 服务暂时不可用，请稍后重试"
+            } else if let body = body, !body.isEmpty {
+                return "请求失败: \(body)"
+            } else {
+                return "请求失败 (HTTP \(status))"
+            }
+        case .decodingFailed:
+            return "AI 响应格式异常"
+        case .cancelled:
+            return "请求已取消"
+        }
+    }
 }
 
 // MARK: - Client

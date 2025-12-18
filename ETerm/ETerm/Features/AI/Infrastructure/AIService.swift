@@ -66,10 +66,21 @@ struct AnalysisResult: Codable {
     var grammarPoints: [GrammarPoint]?
 }
 
-enum AIServiceError: Error {
+enum AIServiceError: LocalizedError {
     case missingClient
     case emptyResponse
     case invalidJSON
+
+    var errorDescription: String? {
+        switch self {
+        case .missingClient:
+            return "请先在设置中配置 API Key"
+        case .emptyResponse:
+            return "AI 返回了空响应，请稍后重试"
+        case .invalidJSON:
+            return "AI 响应格式异常，请稍后重试"
+        }
+    }
 }
 
 private enum AnalysisTask {
