@@ -56,6 +56,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动 Claude Socket Server（接收 Hook 调用）
         ClaudeSocketServer.shared.start()
 
+        // 启动 MCP Server（HTTP 模式，端口 11218）
+        MCPServerCoordinator.shared.start()
+
         // 注册核心命令（必须在加载插件之前，让插件可以覆盖）
         CoreCommandsBootstrap.registerCoreCommands()
 
@@ -64,6 +67,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 加载内置插件
         PluginManager.shared.loadBuiltinPlugins()
+
+        // 启动会话录制器
+        SessionRecorder.shared.setupIntegration()
 
         // 尝试恢复 Session
         if let session = SessionManager.shared.load(), !session.windows.isEmpty {
@@ -84,7 +90,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 停止 Claude Socket Server
         ClaudeSocketServer.shared.stop()
 
-        
+        // 停止 MCP Server
+        MCPServerCoordinator.shared.stop()
+
+        // 停止会话录制并导出（用于调试）
+        SessionRecorder.shared.stopRecording()
+
         // 保存 Session
         let windowStates = WindowManager.shared.captureAllWindowStates()
         SessionManager.shared.save(windows: windowStates)
@@ -247,6 +258,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         windowMenu.addItem(NSMenuItem(title: "前置全部窗口", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: ""))
 
         mainMenu.addItem(windowMenuItem)
+
+        // 调试菜单
+        let debugMenu = NSMenu(title: "调试")
+        let debugMenuItem = NSMenuItem()
+        debugMenuItem.submenu = debugMenu
+
+        // 添加调试菜单项
+        for item in DebugSessionExporter.shared.createDebugMenuItems() {
+            debugMenu.addItem(item)
+        }
+
+        mainMenu.addItem(debugMenuItem)
 
         NSApplication.shared.mainMenu = mainMenu
         NSApplication.shared.windowsMenu = windowMenu

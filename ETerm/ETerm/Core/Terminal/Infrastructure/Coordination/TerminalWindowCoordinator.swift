@@ -359,6 +359,9 @@ class TerminalWindowCoordinator: ObservableObject {
         // 设置终端 ID
         newTab.setRustTerminalId(terminalId)
 
+        // 录制事件
+        recordTabEvent(.tabCreate(panelId: panelId, tabId: newTab.tabId, contentType: "terminal"))
+
         // 保存 Session
         WindowManager.shared.saveSession()
 
@@ -810,9 +813,12 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 获取旧 Tab 的终端 ID（用于设置为 Background）
         let oldTerminalId = panel.activeTab?.rustTerminalId
+        let oldTabId = panel.activeTabId
 
         // 调用 AR 的方法切换 Tab
         if panel.setActiveTab(tabId) {
+            // 录制事件
+            recordTabEvent(.tabSwitch(panelId: panelId, fromTabId: oldTabId, toTabId: tabId))
             // 核心逻辑：Tab 被激活时自动消费提醒状态
             clearTabAttention(tabId)
 
@@ -844,6 +850,9 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         if activePanelId != panelId {
+            // 录制事件
+            recordPanelEvent(.panelActivate(fromPanelId: activePanelId, toPanelId: panelId))
+
             activePanelId = panelId
             // 触发 UI 更新，让 Tab 高亮状态刷新
             objectWillChange.send()
@@ -861,6 +870,9 @@ class TerminalWindowCoordinator: ObservableObject {
         if panel.tabCount == 1 && terminalWindow.panelCount <= 1 {
             return
         }
+
+        // 录制事件
+        recordTabEvent(.tabClose(panelId: panelId, tabId: tabId))
 
         // 复用统一的 Tab 移除逻辑，确保在最后一个 Tab 关闭时可以移除 Panel
         _ = removeTab(tabId, from: panelId, closeTerminal: true)
@@ -890,6 +902,9 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         if panel.reorderTabs(tabIds) {
+            // 录制事件
+            recordTabEvent(.tabReorder(panelId: panelId, tabIds: tabIds))
+
             objectWillChange.send()
             updateTrigger = UUID()
         }
@@ -1025,6 +1040,9 @@ class TerminalWindowCoordinator: ObservableObject {
             return
         }
 
+        // 录制事件
+        recordPanelEvent(.panelClose(panelId: panelId))
+
         // 关闭 Panel 中的所有终端
         for tab in panel.tabs {
             if let terminalId = tab.rustTerminalId {
@@ -1091,6 +1109,10 @@ class TerminalWindowCoordinator: ObservableObject {
             direction: direction,
             layoutCalculator: layoutCalculator
         ) {
+            // 录制事件
+            let directionStr = direction == .horizontal ? "horizontal" : "vertical"
+            recordPanelEvent(.panelSplit(panelId: panelId, direction: directionStr, newPanelId: newPanelId))
+
             // 为新 Panel 的默认 Tab 创建终端（继承 CWD）
             if let newPanel = terminalWindow.getPanel(newPanelId) {
                 for tab in newPanel.tabs {
@@ -1508,6 +1530,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
         let newPage = terminalWindow.createPage(title: title)
 
+        // 录制事件
+        recordPageEvent(.pageCreate(pageId: newPage.pageId, title: newPage.title))
+
         // 为新 Page 的初始 Tab 创建终端（继承 CWD）
         for panel in newPage.allPanels {
             for tab in panel.tabs {
@@ -1550,6 +1575,10 @@ class TerminalWindowCoordinator: ObservableObject {
         logDebug("[switchToPage] called, targetPageId=\(pageId.uuidString.prefix(8))")
         logDebug("[switchToPage] currentActivePageId=\(terminalWindow.activePageId?.uuidString.prefix(8) ?? "nil")")
         logDebug("[switchToPage] allPages=\(terminalWindow.pages.map { "\($0.title)(\($0.pageId.uuidString.prefix(8)))" })")
+
+        // 录制事件
+        let fromPageId = terminalWindow.activePageId
+        recordPageEvent(.pageSwitch(fromPageId: fromPageId, toPageId: pageId))
 
         // Step 0: 收集旧 Page 的所有终端 ID（用于设置为 Background）
         var oldTerminalIds: [Int] = []
@@ -1632,6 +1661,9 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Returns: 是否成功关闭
     @discardableResult
     func closePage(_ pageId: UUID) -> Bool {
+        // 录制事件
+        recordPageEvent(.pageClose(pageId: pageId))
+
         // 获取要关闭的 Page，关闭其中所有终端
         if let page = terminalWindow.pages.first(where: { $0.pageId == pageId }) {
             for panel in page.allPanels {
@@ -1713,9 +1745,15 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Returns: 是否成功
     @discardableResult
     func renamePage(_ pageId: UUID, to newTitle: String) -> Bool {
+        // 获取旧标题用于录制
+        let oldTitle = terminalWindow.pages.first(where: { $0.pageId == pageId })?.title ?? ""
+
         guard terminalWindow.renamePage(pageId, to: newTitle) else {
             return false
         }
+
+        // 录制事件
+        recordPageEvent(.pageRename(pageId: pageId, oldTitle: oldTitle, newTitle: newTitle))
 
         // 触发 UI 更新
         objectWillChange.send()
@@ -1736,6 +1774,9 @@ class TerminalWindowCoordinator: ObservableObject {
         guard terminalWindow.reorderPages(pageIds) else {
             return false
         }
+
+        // 录制事件
+        recordPageEvent(.pageReorder(pageIds: pageIds))
 
         // 触发 UI 更新
         objectWillChange.send()

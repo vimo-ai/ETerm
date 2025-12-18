@@ -94,6 +94,9 @@ enum ETermPaths {
         return "\(logs)/debug-\(dateString).log"
     }
 
+    /// 调试导出目录: ~/.eterm/logs/exports
+    static let debugExports = logs + "/exports"
+
     // MARK: - 目录创建
 
     /// 创建所有必要的目录
@@ -109,7 +112,8 @@ enum ETermPaths {
             claudeMonitorPlugin,
             englishLearningPlugin,
             clipboard,
-            socket
+            socket,
+            debugExports
         ]
 
         let fileManager = FileManager.default
