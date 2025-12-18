@@ -536,8 +536,9 @@ extension DraggableItemView: NSPasteboardItemDataProvider {
 
 extension DraggableItemView: NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) {
-        guard hasFocused else { return }
-        endEditing(save: true)
+        // 无论是否获得过焦点，都要清除编辑状态，避免"僵尸编辑状态"
+        // 只有获得过焦点才保存编辑结果
+        endEditing(save: hasFocused)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

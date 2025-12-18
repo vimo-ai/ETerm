@@ -11,6 +11,11 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+// MARK: - 常量
+
+/// PageBar 高度
+private let kPageBarHeight: CGFloat = 28
+
 // MARK: - Page 数据模型
 
 struct PageItem: Identifiable, Equatable {
@@ -27,88 +32,6 @@ struct PageDragData: Codable, Transferable {
 
     static var transferRepresentation: some TransferRepresentation {
         CodableRepresentation(contentType: .plainText)
-    }
-}
-
-// MARK: - PageBarView (SwiftUI)
-
-struct PageBarView: View {
-    // MARK: - 数据
-
-    @Binding var pages: [PageItem]
-    @Binding var activePageId: UUID?
-    @ObservedObject private var translationMode = TranslationModeStore.shared
-    @ObservedObject private var pageBarItems = PageBarItemRegistry.shared
-    @State private var editingPageId: UUID?
-
-    // MARK: - 回调
-
-    var onPageClick: ((UUID) -> Void)?
-    var onPageClose: ((UUID) -> Void)?
-    var onPageRename: ((UUID, String) -> Void)?
-    var onAddPage: (() -> Void)?
-
-    // MARK: - 常量
-
-    private static let barHeight: CGFloat = 28
-
-    var body: some View {
-        HStack(spacing: 0) {
-            // 红绿灯按钮
-            TrafficLightButtons()
-                .padding(.leading, 12)
-
-            Spacer().frame(width: 12)
-
-            // Page 标签列表
-            HStack(spacing: 2) {
-                ForEach(pages) { page in
-                    PageTabView(
-                        title: page.title,
-                        isActive: page.id == activePageId,
-                        showCloseButton: pages.count > 1,
-                        isEditing: Binding(
-                            get: { editingPageId == page.id },
-                            set: { if $0 { editingPageId = page.id } else { editingPageId = nil } }
-                        ),
-                        onTap: { onPageClick?(page.id) },
-                        onClose: { onPageClose?(page.id) },
-                        onRename: { newTitle in onPageRename?(page.id, newTitle) }
-                    )
-                }
-            }
-
-            Spacer()
-
-            // 添加按钮
-            Button(action: { onAddPage?() }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 6)
-
-            // 插件注册的 PageBar 组件
-            ForEach(pageBarItems.items) { item in
-                item.viewProvider()
-                    .padding(.trailing, 6)
-            }
-
-            StatusTabView(
-                text: translationMode.statusText,
-                isActive: translationMode.isEnabled,
-                onTap: { translationMode.toggle() }
-            )
-            .padding(.trailing, 12)
-        }
-        .frame(height: Self.barHeight)
-    }
-
-    // MARK: - 推荐高度
-
-    static func recommendedHeight() -> CGFloat {
-        return barHeight
     }
 }
 
@@ -193,110 +116,6 @@ struct TrafficLightButton: View {
         case .minimize: window.miniaturize(nil)
         case .zoom: window.zoom(nil)
         }
-    }
-}
-
-// MARK: - Page 标签（使用简约圆角风格）
-
-struct PageTabView: View {
-    let title: String
-    let isActive: Bool
-    let showCloseButton: Bool
-    var needsAttention: Bool = false
-    @Binding var isEditing: Bool
-    var onTap: (() -> Void)?
-    var onClose: (() -> Void)?
-    var onRename: ((String) -> Void)?
-
-    // 批量关闭回调
-    var onCloseOthers: (() -> Void)?
-    var onCloseLeft: (() -> Void)?
-    var onCloseRight: (() -> Void)?
-    var canCloseLeft: Bool = true
-    var canCloseRight: Bool = true
-    var canCloseOthers: Bool = true
-
-    @State private var isHovered: Bool = false
-    @State private var editingText: String = ""
-    @FocusState private var isFocused: Bool
-    @State private var lastTapTime: Date = .distantPast
-    private let height: CGFloat = 22
-    private let doubleTapInterval: TimeInterval = 0.3
-
-    var body: some View {
-        if isEditing {
-            // 编辑模式：显示 TextField
-            TextField("", text: $editingText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .frame(height: height)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.white.opacity(0.1))
-                )
-                .focused($isFocused)
-                .onAppear {
-                    editingText = title
-                    // 延迟获取焦点
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        isFocused = true
-                    }
-                }
-                .onSubmit {
-                    finishEditing()
-                }
-                .onChange(of: isFocused) { _, focused in
-                    if !focused {
-                        finishEditing()
-                    }
-                }
-        } else {
-            // 正常模式：显示标签
-            // 点击手势在外层处理，Button（关闭按钮）会自动优先响应
-            SimpleTabView(
-                title,
-                isActive: isActive,
-                needsAttention: needsAttention,
-                height: height,
-                isHovered: isHovered,
-                onClose: showCloseButton ? onClose : nil,
-                onCloseOthers: onCloseOthers,
-                onCloseLeft: onCloseLeft,
-                onCloseRight: onCloseRight,
-                canCloseLeft: canCloseLeft,
-                canCloseRight: canCloseRight,
-                canCloseOthers: canCloseOthers
-            )
-            .onTapGesture {
-                // 自己检测双击，避免 onTapGesture(count: 2) 导致单击延迟
-                let now = Date()
-                let interval = now.timeIntervalSince(lastTapTime)
-                logDebug("[PageTap] title=\(title), interval=\(String(format: "%.3f", interval))s, isActive=\(isActive)")
-                if interval < doubleTapInterval {
-                    // 双击 -> 重命名
-                    logDebug("[PageTap] -> double tap, entering edit mode")
-                    isEditing = true
-                } else {
-                    // 单击 -> 切换
-                    logDebug("[PageTap] -> single tap, calling onTap (onTap is \(onTap == nil ? "nil" : "set"))")
-                    onTap?()
-                }
-                lastTapTime = now
-            }
-            .onHover { hovering in
-                isHovered = hovering
-            }
-        }
-    }
-
-    private func finishEditing() {
-        let trimmed = editingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty && trimmed != title {
-            onRename?(trimmed)
-        }
-        isEditing = false
     }
 }
 
@@ -598,7 +417,7 @@ final class PageBarHostingView: NSView {
 
     /// 推荐高度
     static func recommendedHeight() -> CGFloat {
-        return PageBarView.recommendedHeight()
+        return kPageBarHeight
     }
 
     // MARK: - 窗口拖动
@@ -796,126 +615,7 @@ struct PageBarControlsView: View {
             )
             .padding(.trailing, 12)
         }
-        .frame(height: 28)
-    }
-}
-
-// MARK: - SwiftUIPageBar（用于 ContentView）
-
-/// 纯 SwiftUI 实现的 PageBar，用于在 ContentView 层显示
-/// 解决 NSView 嵌套时 safe area 无法正确传递的问题
-///
-/// TODO: Page 拖拽排序功能暂时禁用，需要用 AppKit 方案实现
-struct SwiftUIPageBar: View {
-    @ObservedObject var coordinator: TerminalWindowCoordinator
-    @ObservedObject private var translationMode = TranslationModeStore.shared
-    @ObservedObject private var pageBarItems = PageBarItemRegistry.shared
-    @State private var isFullScreen = false
-    @State private var pagesNeedingAttention: Set<UUID> = []
-    @State private var editingPageId: UUID?
-
-    private let barHeight: CGFloat = 28
-
-    var body: some View {
-        // 读取 updateTrigger 强制刷新
-        let _ = coordinator.updateTrigger
-
-        HStack(spacing: 0) {
-            // 系统红绿灯区域预留空间（全屏时不需要）
-            if !isFullScreen {
-                Spacer().frame(width: 78)
-            } else {
-                Spacer().frame(width: 12)
-            }
-
-            // Page 标签列表
-            HStack(spacing: 2) {
-                ForEach(Array(coordinator.terminalWindow.pages.enumerated()), id: \.element.pageId) { index, page in
-                    let pageCount = coordinator.terminalWindow.pages.count
-                    PageTabView(
-                        title: page.title,
-                        isActive: page.pageId == coordinator.terminalWindow.activePageId,
-                        showCloseButton: pageCount > 1,
-                        needsAttention: pagesNeedingAttention.contains(page.pageId),
-                        isEditing: Binding(
-                            get: { editingPageId == page.pageId },
-                            set: { if $0 { editingPageId = page.pageId } else { editingPageId = nil } }
-                        ),
-                        onTap: { _ = coordinator.switchToPage(page.pageId) },
-                        onClose: { _ = coordinator.closePage(page.pageId) },
-                        onRename: { newTitle in
-                            _ = coordinator.renamePage(page.pageId, to: newTitle)
-                        },
-                        onCloseOthers: { coordinator.handlePageCloseOthers(keepPageId: page.pageId) },
-                        onCloseLeft: { coordinator.handlePageCloseLeft(fromPageId: page.pageId) },
-                        onCloseRight: { coordinator.handlePageCloseRight(fromPageId: page.pageId) },
-                        canCloseLeft: index > 0,
-                        canCloseRight: index < pageCount - 1,
-                        canCloseOthers: pageCount > 1
-                    )
-                }
-            }
-
-            Spacer()
-
-            // 添加按钮
-            Button(action: { _ = coordinator.createPage() }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 6)
-
-            // 侧边栏按钮
-            Button(action: {
-                NotificationCenter.default.post(name: NSNotification.Name("ToggleSidebar"), object: nil)
-            }) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 6)
-
-            // 插件注册的 PageBar 组件
-            ForEach(pageBarItems.items) { item in
-                item.viewProvider()
-                    .padding(.trailing, 6)
-            }
-
-            StatusTabView(
-                text: translationMode.statusText,
-                isActive: translationMode.isEnabled,
-                onTap: { translationMode.toggle() }
-            )
-            .padding(.trailing, 12)
-        }
-        .frame(height: barHeight)
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { _ in
-            isFullScreen = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
-            isFullScreen = false
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("PageNeedsAttention"))) { notification in
-            guard let userInfo = notification.userInfo,
-                  let pageId = userInfo["pageId"] as? UUID,
-                  let attention = userInfo["attention"] as? Bool else {
-                return
-            }
-            if attention {
-                pagesNeedingAttention.insert(pageId)
-            } else {
-                pagesNeedingAttention.remove(pageId)
-            }
-        }
-        // 核心逻辑：Page 被激活时自动消费提醒状态
-        .onChange(of: coordinator.terminalWindow.activePageId) { _, newPageId in
-            if let pageId = newPageId {
-                pagesNeedingAttention.remove(pageId)
-            }
-        }
+        .frame(height: kPageBarHeight)
     }
 }
 
@@ -996,31 +696,8 @@ struct AppKitPageBar: NSViewRepresentable {
 
 // MARK: - Preview
 
-#Preview("PageBarView") {
-    PageBarView(
-        pages: .constant([
-            PageItem(id: UUID(), title: "Page 1"),
-            PageItem(id: UUID(), title: "Page 2"),
-            PageItem(id: UUID(), title: "很长的页面名称")
-        ]),
-        activePageId: .constant(nil)
-    )
-    .frame(width: 1200)
-    .background(Color.black.opacity(0.8))
-}
-
 #Preview("TrafficLightButtons") {
     TrafficLightButtons()
         .padding(20)
         .background(Color.black.opacity(0.8))
-}
-
-#Preview("PageTabView") {
-    VStack(spacing: 10) {
-        PageTabView(title: "Active Tab", isActive: true, showCloseButton: true, isEditing: .constant(false))
-        PageTabView(title: "Inactive Tab", isActive: false, showCloseButton: true, isEditing: .constant(false))
-        PageTabView(title: "No Close", isActive: true, showCloseButton: false, isEditing: .constant(false))
-    }
-    .padding(20)
-    .background(Color.black.opacity(0.8))
 }

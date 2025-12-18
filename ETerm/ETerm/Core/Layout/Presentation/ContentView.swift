@@ -71,7 +71,7 @@ struct ContentView: View {
             // 使用 AppKit 版本实现 Page 拖拽排序
             VStack(spacing: 0) {
                 AppKitPageBar(coordinator: coordinator)
-                    .frame(height: PageBarView.recommendedHeight())
+                    .frame(height: PageBarHostingView.recommendedHeight())
                 Spacer()
             }
 
