@@ -730,6 +730,22 @@ impl<U: EventListener> Crosswords<U> {
 
             // Recreate tabs list.
             self.tabs.resize(num_cols);
+
+            // 重新执行搜索（如果有活跃的搜索）
+            // Resize 后搜索匹配的列坐标可能失效，需要重新计算
+            if let Some(ref state) = self.search_state {
+                if let Some(pattern) = state.history.front() {
+                    if !pattern.is_empty() {
+                        // 保存当前搜索的参数
+                        let pattern_clone = pattern.clone();
+                        let is_regex = state.is_regex;
+                        let case_sensitive = state.case_sensitive;
+
+                        // 重新执行搜索
+                        let _ = self.start_search(&pattern_clone, is_regex, case_sensitive, None);
+                    }
+                }
+            }
         } else if let Some(selection) = self.selection.take() {
             let max_lines = std::cmp::max(num_lines, old_lines) as i32;
             let range = Line(0)..Line(max_lines);
@@ -3207,6 +3223,8 @@ impl<U: EventListener> Crosswords<U> {
             origin: Pos::default(),
             display_offset_delta: 0,
             focused_match: Some(all_matches[0].clone()),
+            is_regex,
+            case_sensitive,
         });
 
         Ok(SearchInfo {

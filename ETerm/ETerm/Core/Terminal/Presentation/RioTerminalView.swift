@@ -1184,10 +1184,6 @@ class RioMetalView: NSView, RenderViewProtocol {
     func requestRender() {
         guard isInitialized else { return }
 
-        if LogManager.shared.debugEnabled {
-            logDebug("[RioTerminalView] 🎯 requestRender")
-        }
-
         // 同步布局（有 hash 缓存优化，无变化时自动跳过）
         syncLayoutToRust()
 
@@ -2086,81 +2082,82 @@ struct TerminalSearchOverlay: View {
     @State private var searchText: String = ""
 
     var body: some View {
-        VStack {
-            HStack {
-                Spacer()
+        // 使用 GeometryReader 获取当前激活 Panel 的位置
+        GeometryReader { geometry in
+            // 计算激活 Panel 的 bounds（用于定位搜索框）
+            let activePanelFrame = getActivePanelFrame(in: geometry)
 
-                // 搜索框
-                HStack(spacing: 8) {
-                    // 搜索图标
-                    Image(systemName: "magnifyingglass")
+            // 搜索框
+            HStack(spacing: 8) {
+                // 搜索图标
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
+
+                // 搜索输入框
+                TextField("搜索...", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .frame(width: 200)
+                    .onSubmit {
+                        if !searchText.isEmpty {
+                            coordinator.startSearch(pattern: searchText)
+                        }
+                    }
+
+                // 匹配数量和导航
+                if let searchInfo = coordinator.currentTabSearchInfo {
+                    HStack(spacing: 4) {
+                        Text("\(searchInfo.currentIndex)/\(searchInfo.totalCount)")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+
+                        // 上一个
+                        Button(action: {
+                            coordinator.searchPrev()
+                        }) {
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(searchInfo.totalCount == 0)
+
+                        // 下一个
+                        Button(action: {
+                            coordinator.searchNext()
+                        }) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(searchInfo.totalCount == 0)
+                    }
+                }
+
+                // 关闭按钮
+                Button(action: {
+                    coordinator.clearSearch()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                         .font(.system(size: 12))
-
-                    // 搜索输入框
-                    TextField("搜索...", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
-                        .frame(width: 200)
-                        .onSubmit {
-                            if !searchText.isEmpty {
-                                coordinator.startSearch(pattern: searchText)
-                            }
-                        }
-
-                    // 匹配数量和导航
-                    if let searchInfo = coordinator.currentTabSearchInfo {
-                        HStack(spacing: 4) {
-                            Text("\(searchInfo.currentIndex)/\(searchInfo.totalCount)")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-
-                            // 上一个
-                            Button(action: {
-                                coordinator.searchPrev()
-                            }) {
-                                Image(systemName: "chevron.up")
-                                    .font(.system(size: 10))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(searchInfo.totalCount == 0)
-
-                            // 下一个
-                            Button(action: {
-                                coordinator.searchNext()
-                            }) {
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 10))
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(searchInfo.totalCount == 0)
-                        }
-                    }
-
-                    // 关闭按钮
-                    Button(action: {
-                        coordinator.clearSearch()
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color(nsColor: .controlBackgroundColor))
-                        .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
-                )
-                .padding(.trailing, 20)
-                .padding(.top, 50)  // 在 PageBar 下方
+                .buttonStyle(.plain)
             }
-            Spacer()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
+            )
+            .position(
+                x: activePanelFrame.maxX - 150,  // 距离右边缘 150pt（搜索框宽度约 300pt）
+                y: activePanelFrame.minY + 40     // 距离顶部 40pt
+            )
         }
-        .onChange(of: coordinator.activePanelId) {
-            // Tab 切换时，更新搜索框内容
+        .onChange(of: coordinator.searchPanelId) {
+            // 搜索目标 Panel 切换时，更新搜索框内容
             if let searchInfo = coordinator.currentTabSearchInfo {
                 searchText = searchInfo.pattern
             } else {
@@ -2173,5 +2170,36 @@ struct TerminalSearchOverlay: View {
                 searchText = searchInfo.pattern
             }
         }
+    }
+
+    /// 获取搜索目标 Panel 的 frame（转换为 SwiftUI 坐标系）
+    private func getActivePanelFrame(in geometry: GeometryProxy) -> CGRect {
+        // 使用 searchPanelId 定位搜索框（搜索绑定到特定 Panel）
+        guard let searchPanelId = coordinator.searchPanelId else {
+            return geometry.frame(in: .local)
+        }
+
+        // 从 coordinator 获取 Panel 的 bounds
+        let panels = coordinator.terminalWindow.allPanels
+        guard let activePanel = panels.first(where: { $0.panelId == searchPanelId }) else {
+            return geometry.frame(in: .local)
+        }
+
+        // Panel bounds 使用 AppKit 坐标系（左下角原点，Y 轴向上）
+        // 需要转换为 SwiftUI 坐标系（左上角原点，Y 轴向下）
+        let appKitBounds = activePanel.bounds
+        let containerHeight = geometry.size.height
+
+        // 坐标转换公式：
+        // SwiftUI.minY = containerHeight - AppKit.maxY
+        // SwiftUI.maxY = containerHeight - AppKit.minY
+        let swiftUIFrame = CGRect(
+            x: appKitBounds.minX,
+            y: containerHeight - appKitBounds.maxY,  // 转换 Y 坐标
+            width: appKitBounds.width,
+            height: appKitBounds.height
+        )
+
+        return swiftUIFrame
     }
 }

@@ -358,6 +358,12 @@ pub struct SearchState {
 
     /// Compiled search automatons.
     pub dfas: Option<RegexSearch>,
+
+    /// Whether the search pattern is a regex.
+    pub is_regex: bool,
+
+    /// Whether the search is case-sensitive.
+    pub case_sensitive: bool,
 }
 
 impl SearchState {
@@ -410,6 +416,8 @@ impl Default for SearchState {
             history: Default::default(),
             origin: Default::default(),
             dfas: Default::default(),
+            is_regex: false,
+            case_sensitive: false,
         }
     }
 }

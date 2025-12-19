@@ -86,10 +86,13 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 是否显示终端搜索框
     @Published var showTerminalSearch: Bool = false
 
-    /// 当前 Tab 的搜索信息（从 TabNode 获取）
+    /// 搜索绑定的 Panel ID（搜索开启时锁定，不随 activePanelId 变化）
+    @Published var searchPanelId: UUID?
+
+    /// 当前搜索 Tab 的搜索信息（从 searchPanelId 对应的 Tab 获取）
     var currentTabSearchInfo: TabSearchInfo? {
-        guard let activePanelId = activePanelId,
-              let panel = terminalWindow.getPanel(activePanelId),
+        guard let searchPanelId = searchPanelId,
+              let panel = terminalWindow.getPanel(searchPanelId),
               let activeTab = panel.activeTab else {
             return nil
         }
@@ -238,6 +241,11 @@ class TerminalWindowCoordinator: ObservableObject {
         if sourcePanel.tabCount > 1 {
             _ = sourcePanel.closeTab(tabId)
         } else {
+            // 如果移除的是搜索绑定的 Panel，清除搜索状态
+            if searchPanelId == sourcePanelId {
+                searchPanelId = nil
+                showTerminalSearch = false
+            }
             _ = terminalWindow.removePanel(sourcePanelId)
         }
 
@@ -1002,6 +1010,12 @@ class TerminalWindowCoordinator: ObservableObject {
 
             // 移除 Panel
             if terminalWindow.removePanel(panelId) {
+                // 如果关闭的是搜索绑定的 Panel，清除搜索状态
+                if searchPanelId == panelId {
+                    searchPanelId = nil
+                    showTerminalSearch = false
+                }
+
                 // 切换到另一个 Panel
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
                     activePanelId = newActivePanelId
@@ -1052,6 +1066,12 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 移除 Panel
         if terminalWindow.removePanel(panelId) {
+            // 如果关闭的是搜索绑定的 Panel，清除搜索状态
+            if searchPanelId == panelId {
+                searchPanelId = nil
+                showTerminalSearch = false
+            }
+
             // 切换到另一个 Panel
             if activePanelId == panelId {
                 activePanelId = terminalWindow.allPanels.first?.panelId
@@ -1981,6 +2001,12 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 如果是最后一个 Tab，移除整个 Panel
         if panel.tabCount == 1 {
+            // 如果移除的是搜索绑定的 Panel，清除搜索状态
+            if searchPanelId == panelId {
+                searchPanelId = nil
+                showTerminalSearch = false
+            }
+
             _ = terminalWindow.removePanel(panelId)
 
             // 更新激活的 Panel
@@ -2034,8 +2060,8 @@ class TerminalWindowCoordinator: ObservableObject {
     ///   - isRegex: 是否为正则表达式（暂不支持）
     ///   - caseSensitive: 是否区分大小写（暂不支持）
     func startSearch(pattern: String, isRegex: Bool = false, caseSensitive: Bool = false) {
-        guard let activePanelId = activePanelId,
-              let panel = terminalWindow.getPanel(activePanelId),
+        guard let searchPanelId = searchPanelId,
+              let panel = terminalWindow.getPanel(searchPanelId),
               let activeTab = panel.activeTab,
               let terminalId = activeTab.rustTerminalId,
               let wrapper = terminalPool as? TerminalPoolWrapper else {
@@ -2058,16 +2084,18 @@ class TerminalWindowCoordinator: ObservableObject {
             activeTab.setSearchInfo(nil)
         }
 
-        // 触发 UI 更新
+        // 触发 UI 更新（搜索框需要显示匹配数量）
         objectWillChange.send()
-        updateTrigger = UUID()
-        scheduleRender()
+
+        // 搜索结果需要立即渲染，直接调用 requestRender() 而不是 scheduleRender()
+        // scheduleRender() 有 16ms 防抖延迟，会导致高亮响应慢
+        renderView?.requestRender()
     }
 
     /// 跳转到下一个匹配
     func searchNext() {
-        guard let activePanelId = activePanelId,
-              let panel = terminalWindow.getPanel(activePanelId),
+        guard let searchPanelId = searchPanelId,
+              let panel = terminalWindow.getPanel(searchPanelId),
               let activeTab = panel.activeTab,
               let terminalId = activeTab.rustTerminalId,
               let searchInfo = activeTab.searchInfo,
@@ -2082,16 +2110,17 @@ class TerminalWindowCoordinator: ObservableObject {
         let newIndex = searchInfo.currentIndex % searchInfo.totalCount + 1
         activeTab.updateSearchIndex(currentIndex: newIndex, totalCount: searchInfo.totalCount)
 
-        // 触发 UI 更新
+        // 触发 UI 更新（搜索框需要更新当前索引）
         objectWillChange.send()
-        updateTrigger = UUID()
-        scheduleRender()
+
+        // 搜索导航需要立即响应，直接渲染
+        renderView?.requestRender()
     }
 
     /// 跳转到上一个匹配
     func searchPrev() {
-        guard let activePanelId = activePanelId,
-              let panel = terminalWindow.getPanel(activePanelId),
+        guard let searchPanelId = searchPanelId,
+              let panel = terminalWindow.getPanel(searchPanelId),
               let activeTab = panel.activeTab,
               let terminalId = activeTab.rustTerminalId,
               let searchInfo = activeTab.searchInfo,
@@ -2106,41 +2135,48 @@ class TerminalWindowCoordinator: ObservableObject {
         let newIndex = searchInfo.currentIndex > 1 ? searchInfo.currentIndex - 1 : searchInfo.totalCount
         activeTab.updateSearchIndex(currentIndex: newIndex, totalCount: searchInfo.totalCount)
 
-        // 触发 UI 更新
+        // 触发 UI 更新（搜索框需要更新当前索引）
         objectWillChange.send()
-        updateTrigger = UUID()
-        scheduleRender()
+
+        // 搜索导航需要立即响应，直接渲染
+        renderView?.requestRender()
     }
 
     /// 清除当前 Tab 的搜索
     func clearSearch() {
-        guard let activePanelId = activePanelId,
-              let panel = terminalWindow.getPanel(activePanelId),
-              let activeTab = panel.activeTab else {
-            return
+        // 使用 searchPanelId 清除搜索（如果存在）
+        if let searchPanelId = searchPanelId,
+           let panel = terminalWindow.getPanel(searchPanelId),
+           let activeTab = panel.activeTab {
+            // 调用 Rust 端清除搜索
+            if let terminalId = activeTab.rustTerminalId,
+               let wrapper = terminalPool as? TerminalPoolWrapper {
+                wrapper.clearSearch(terminalId: Int(terminalId))
+            }
+            // 清除 Tab 的搜索信息
+            activeTab.setSearchInfo(nil)
         }
 
-        // 调用 Rust 端清除搜索
-        if let terminalId = activeTab.rustTerminalId,
-           let wrapper = terminalPool as? TerminalPoolWrapper {
-            wrapper.clearSearch(terminalId: Int(terminalId))
-        }
-
-        // 清除 Tab 的搜索信息
-        activeTab.setSearchInfo(nil)
-
-        // 触发渲染更新
+        // 清除搜索状态
+        self.searchPanelId = nil
         showTerminalSearch = false
         objectWillChange.send()
-        updateTrigger = UUID()
-        scheduleRender()
+
+        // 清除搜索高亮需要立即生效
+        renderView?.requestRender()
     }
 
     /// 切换搜索框显示状态
     func toggleTerminalSearch() {
-        showTerminalSearch.toggle()
-        if !showTerminalSearch {
+        if showTerminalSearch {
+            // 当前是显示状态，关闭它
+            // clearSearch() 内部会设置 showTerminalSearch = false
             clearSearch()
+        } else {
+            // 当前是隐藏状态，显示它
+            // 锁定当前 activePanelId，搜索将绑定到这个 Panel
+            searchPanelId = activePanelId
+            showTerminalSearch = true
         }
     }
 

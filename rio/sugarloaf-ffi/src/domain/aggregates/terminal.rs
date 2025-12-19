@@ -484,12 +484,15 @@ impl Terminal {
 
         // 4. 使用缓存的 SearchView（避免每帧 O(N) 遍历）
         // 缓存在 search()/next_match()/prev_match() 时更新
+        // 注意：搜索和选区可以同时存在
         let mut result = if let Some(ref search_view) = self.cached_search_view {
-            // 如果有搜索且没有选区，添加搜索
-            if base_state.selection.is_none() {
-                TerminalState::with_search(base_state.grid, base_state.cursor, search_view.clone())
-            } else {
-                base_state
+            // 构造带搜索的 state（保留选区）
+            TerminalState {
+                grid: base_state.grid,
+                cursor: base_state.cursor,
+                selection: base_state.selection,
+                search: Some(search_view.clone()),
+                hyperlink_hover: None,
             }
         } else {
             base_state

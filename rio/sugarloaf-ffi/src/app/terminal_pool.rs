@@ -2095,17 +2095,20 @@ impl TerminalPool {
     /// # 返回
     /// - 匹配数量（>= 0），失败返回 -1（终端不存在或锁被占用）
     pub fn search(&self, terminal_id: usize, query: &str) -> i32 {
-        // 使用 try_with_terminal 来避免生命周期问题
-        match self.try_with_terminal(terminal_id, |terminal| {
-            let count = terminal.search(query);
-            count as i32
-        }) {
-            Some(count) => {
-                // 触发渲染更新
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&terminal_id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                let count = terminal.search(query) as i32;
+
+                // 搜索结果变化后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
                 self.needs_render.store(true, Ordering::Release);
                 count
+            } else {
+                -1 // 锁被占用
             }
-            None => -1, // 锁被占用或终端不存在
+        } else {
+            -1 // 终端不存在
         }
     }
 
@@ -2121,7 +2124,8 @@ impl TerminalPool {
             if let Some(mut terminal) = entry.terminal.try_lock() {
                 terminal.next_match();
 
-                // 触发渲染更新
+                // 搜索焦点变化后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
                 self.needs_render.store(true, Ordering::Release);
             }
         }
@@ -2139,7 +2143,8 @@ impl TerminalPool {
             if let Some(mut terminal) = entry.terminal.try_lock() {
                 terminal.prev_match();
 
-                // 触发渲染更新
+                // 搜索焦点变化后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
                 self.needs_render.store(true, Ordering::Release);
             }
         }
@@ -2157,7 +2162,8 @@ impl TerminalPool {
             if let Some(mut terminal) = entry.terminal.try_lock() {
                 terminal.clear_search();
 
-                // 触发渲染更新
+                // 清除搜索后标记脏，触发重新渲染
+                entry.dirty_flag.mark_dirty();
                 self.needs_render.store(true, Ordering::Release);
             }
         }
