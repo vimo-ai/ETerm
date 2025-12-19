@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use lru::LruCache;
 
@@ -9,6 +8,11 @@ use rio_backend::ansi::CursorShape;
 /// 15000 条 × ~150KB ≈ 2.2GB 上限（实际会更小，因为有内层复用）
 const MAX_TEXT_ENTRIES: usize = 15000;
 
+/// 内层缓存最大条目数（state_hash → Image）
+/// 限制每个 text_hash 条目下的 Image 缓存数量，防止内存泄漏
+/// 使用 LRU 淘汰策略，保留最近使用的状态
+const MAX_STATE_ENTRIES_PER_LINE: usize = 8;
+
 /// 两层缓存（带 LRU 淘汰）
 pub struct LineCache {
     cache: LruCache<u64, LineCacheEntry>,
@@ -18,8 +22,8 @@ pub struct LineCache {
 pub struct LineCacheEntry {
     /// 外层：文本布局（字体选择 + 整形结果）
     pub layout: GlyphLayout,
-    /// 内层：不同状态组合的最终渲染
-    pub renders: HashMap<u64, skia_safe::Image>,
+    /// 内层：不同状态组合的最终渲染（LRU 淘汰）
+    pub renders: LruCache<u64, skia_safe::Image>,
 }
 
 /// 字形布局（真实版本）
@@ -101,9 +105,9 @@ impl LineCache {
 
     /// 两层查询（注意：会更新 LRU 顺序）
     pub fn get(&mut self, text_hash: u64, state_hash: u64) -> CacheResult {
-        match self.cache.get(&text_hash) {
+        match self.cache.get_mut(&text_hash) {
             Some(entry) => {
-                // 外层命中，检查内层
+                // 外层命中，检查内层（使用 get 更新 LRU 顺序）
                 match entry.renders.get(&state_hash) {
                     Some(image) => CacheResult::FullHit(image.clone()),
                     None => CacheResult::LayoutHit(entry.layout.clone()),
@@ -114,6 +118,9 @@ impl LineCache {
     }
 
     /// 两层插入（超过容量时自动淘汰最久未使用的条目）
+    ///
+    /// 内层缓存限制：每个 text_hash 条目最多存储 MAX_STATE_ENTRIES_PER_LINE 个 Image
+    /// 使用 LRU 淘汰策略，自动移除最久未使用的 Image
     pub fn insert(
         &mut self,
         text_hash: u64,
@@ -123,13 +130,16 @@ impl LineCache {
     ) {
         // 先检查是否已存在
         if let Some(entry) = self.cache.get_mut(&text_hash) {
-            // 更新布局和内层缓存
+            // 更新布局
             entry.layout = layout;
-            entry.renders.insert(state_hash, image);
+            // 内层 LRU 会自动淘汰最久未使用的
+            entry.renders.put(state_hash, image);
         } else {
-            // 新建条目（LruCache 会自动淘汰最旧的）
-            let mut renders = HashMap::new();
-            renders.insert(state_hash, image);
+            // 新建条目（外层 LruCache 会自动淘汰最旧的）
+            let mut renders = LruCache::new(
+                NonZeroUsize::new(MAX_STATE_ENTRIES_PER_LINE).unwrap()
+            );
+            renders.put(state_hash, image);
             self.cache.put(text_hash, LineCacheEntry {
                 layout,
                 renders,
