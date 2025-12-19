@@ -120,6 +120,30 @@ enum SessionEvent: Codable, Equatable {
     /// 终端输出事件（如命令完成）
     case terminalOutputEvent(terminalId: UUID, eventType: String)
 
+    /// 终端内容快照（关键时刻的完整状态）
+    /// - terminalId: Tab ID（作为终端标识）
+    /// - visibleLines: 可见区域的文本内容（数组，每行一个字符串）
+    /// - cursorRow: 光标行号（相对可见区域）
+    /// - cursorCol: 光标列号
+    /// - scrollbackLines: 回滚缓冲区行数
+    case terminalSnapshot(
+        terminalId: UUID,
+        visibleLines: [String],
+        cursorRow: Int,
+        cursorCol: Int,
+        scrollbackLines: Int
+    )
+
+    /// 终端增量输出（两次快照之间的输出内容）
+    /// - terminalId: Tab ID
+    /// - output: 原始输出内容（包含VT100控制序列）
+    /// - timestamp: 相对时间戳（相对session开始时间，秒）
+    case terminalIncrementalOutput(
+        terminalId: UUID,
+        output: String,
+        relativeTimestamp: Double
+    )
+
     // MARK: - 自定义事件
 
     /// 自定义事件（插件扩展用）

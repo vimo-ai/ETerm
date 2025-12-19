@@ -866,4 +866,59 @@ void detached_terminal_destroy(DetachedTerminalHandle detached);
 /// @return Terminal's original ID on success, -1 on failure
 int64_t detached_terminal_get_id(DetachedTerminalHandle detached);
 
+// =============================================================================
+// Terminal Snapshot APIs (for Session Recording)
+// =============================================================================
+
+/// Get visible lines of terminal (for snapshot recording)
+///
+/// Returns the text content of the visible area, one line per string.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param out_lines Output parameter - array of C strings (caller must free with terminal_pool_free_string_array)
+/// @param out_count Output parameter - number of lines
+/// @return true on success, false on failure
+bool terminal_pool_get_visible_lines(
+    TerminalPoolHandle handle,
+    int64_t terminal_id,
+    const char*** out_lines,
+    size_t* out_count
+);
+
+/// Get cursor position (for snapshot recording)
+///
+/// Returns the cursor position relative to the visible area.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param out_row Output parameter - cursor row (0-based, relative to visible area)
+/// @param out_col Output parameter - cursor column (0-based)
+/// @return true on success, false on failure
+bool terminal_pool_get_cursor_position(
+    TerminalPoolHandle handle,
+    int64_t terminal_id,
+    int32_t* out_row,
+    int32_t* out_col
+);
+
+/// Get scrollback buffer line count (for snapshot recording)
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return Number of scrollback lines on success, -1 on failure
+int64_t terminal_pool_get_scrollback_lines(
+    TerminalPoolHandle handle,
+    int64_t terminal_id
+);
+
+/// Free string array allocated by terminal_pool_get_visible_lines
+///
+/// @param lines String array pointer
+/// @param count Array length
+void terminal_pool_free_string_array(
+    const char** lines,
+    size_t count
+);
+
 #endif /* SugarloafBridge_h */

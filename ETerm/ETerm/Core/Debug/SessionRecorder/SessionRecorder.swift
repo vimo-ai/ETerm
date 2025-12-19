@@ -319,6 +319,49 @@ final class SessionRecorder {
         record(.shortcutTriggered(commandId: commandId, context: context), source: "KeyboardService")
     }
 
+    /// 录制Terminal快照（在关键时刻调用）
+    ///
+    /// - Parameters:
+    ///   - tabId: Tab ID（作为Terminal标识）
+    ///   - terminalPool: Terminal池（用于获取Terminal内容）
+    ///   - rustTerminalId: Rust侧的Terminal ID
+    func recordTerminalSnapshot(
+        tabId: UUID,
+        terminalPool: TerminalPoolProtocol,
+        rustTerminalId: Int
+    ) {
+        // 从TerminalPool获取Terminal内容
+        guard let poolWrapper = terminalPool as? TerminalPoolWrapper else {
+            return
+        }
+
+        // 获取可见行
+        guard let visibleLines = poolWrapper.getVisibleLines(terminalId: rustTerminalId) else {
+            logWarn("[SessionRecorder] Failed to get visible lines for terminal \(rustTerminalId)")
+            return
+        }
+
+        // 获取光标位置
+        let cursor = poolWrapper.getSimpleCursorPosition(terminalId: rustTerminalId) ?? (0, 0)
+
+        // 获取回滚行数
+        let scrollbackLines = poolWrapper.getScrollbackLines(terminalId: rustTerminalId) ?? 0
+
+        // 录制快照事件
+        record(
+            .terminalSnapshot(
+                terminalId: tabId,
+                visibleLines: visibleLines,
+                cursorRow: cursor.row,
+                cursorCol: cursor.col,
+                scrollbackLines: scrollbackLines
+            ),
+            source: "TerminalSnapshot"
+        )
+
+        logDebug("[SessionRecorder] Captured terminal snapshot: \(visibleLines.count) lines, cursor=(\(cursor.row),\(cursor.col))")
+    }
+
     // MARK: - 私有方法
 
     private func startSnapshotTimer() {

@@ -924,3 +924,182 @@ pub extern "C" fn detached_terminal_get_id(detached: *mut DetachedTerminalHandle
     let detached_terminal = unsafe { &*(detached as *mut crate::app::DetachedTerminal) };
     detached_terminal.id as i64
 }
+
+// ==================== Terminal Snapshot APIs ====================
+
+/// 获取Terminal可见区域的文本（用于快照录制）
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+/// - out_lines: 输出参数 - 字符串数组指针（调用者负责释放）
+/// - out_count: 输出参数 - 行数
+///
+/// # 返回
+/// - true: 成功
+/// - false: 失败（终端不存在或参数无效）
+///
+/// # 内存管理
+/// 调用者需要使用 `terminal_pool_free_string_array` 释放返回的字符串数组
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_visible_lines(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: i64,
+    out_lines: *mut *mut *const std::ffi::c_char,
+    out_count: *mut usize,
+) -> bool {
+    if handle.is_null() || out_lines.is_null() || out_count.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    // 使用 with_terminal 替代已弃用的 get_terminal
+    let result = pool.with_terminal(terminal_id as usize, |terminal| {
+        // 获取可见区域的行数
+        let visible_rows = terminal.rows();
+        let mut lines: Vec<*const std::ffi::c_char> = Vec::with_capacity(visible_rows);
+
+        // 遍历可见区域的每一行，提取文本
+        for row in 0..visible_rows {
+            // 使用 text_in_range 获取整行文本
+            let line_text = if let Some(text) = terminal.text_in_range(
+                row as i32,
+                0,
+                row as i32,
+                u32::MAX, // 获取到行尾
+            ) {
+                // 去除尾部空白
+                text.trim_end().to_string()
+            } else {
+                String::new()
+            };
+
+            // 转换为 C 字符串
+            let c_string = match std::ffi::CString::new(line_text) {
+                Ok(s) => s,
+                Err(_) => std::ffi::CString::new("").unwrap(),
+            };
+
+            lines.push(c_string.into_raw());
+        }
+
+        // 返回 (lines, count)
+        (lines, visible_rows)
+    });
+
+    let (mut lines, count) = match result {
+        Some(data) => data,
+        None => return false,
+    };
+
+    // 分配数组并传递给调用者
+    let array_ptr = lines.as_mut_ptr();
+    std::mem::forget(lines); // 防止 Vec 被 drop
+
+    unsafe {
+        *out_lines = array_ptr;
+        *out_count = count;
+    }
+
+    true
+}
+
+/// 获取Terminal光标位置（用于快照录制）
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+/// - out_row: 输出参数 - 光标行号（相对可见区域，0-based）
+/// - out_col: 输出参数 - 光标列号（0-based）
+///
+/// # 返回
+/// - true: 成功
+/// - false: 失败（终端不存在或参数无效）
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_cursor_position(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: i64,
+    out_row: *mut i32,
+    out_col: *mut i32,
+) -> bool {
+    if handle.is_null() || out_row.is_null() || out_col.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    // 使用 with_terminal 替代已弃用的 get_terminal
+    let cursor_pos = pool.with_terminal(terminal_id as usize, |terminal| {
+        let state = terminal.state();
+        // cursor 是字段，使用 line() 和 col() 方法
+        (state.cursor.line() as i32, state.cursor.col() as i32)
+    });
+
+    match cursor_pos {
+        Some((row, col)) => {
+            unsafe {
+                *out_row = row;
+                *out_col = col;
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// 获取Terminal回滚缓冲区行数（用于快照录制）
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+///
+/// # 返回
+/// - >= 0: 回滚行数
+/// - -1: 失败（终端不存在）
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_scrollback_lines(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: i64,
+) -> i64 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    // 使用 with_terminal 替代已弃用的 get_terminal
+    pool.with_terminal(terminal_id as usize, |terminal| {
+        let state = terminal.state();
+        // grid 是字段，不是方法
+        state.grid.history_size() as i64
+    }).unwrap_or(-1)
+}
+
+/// 释放字符串数组（由 terminal_pool_get_visible_lines 分配）
+///
+/// # 参数
+/// - lines: 字符串数组指针
+/// - count: 数组长度
+#[no_mangle]
+pub extern "C" fn terminal_pool_free_string_array(
+    lines: *mut *const std::ffi::c_char,
+    count: usize,
+) {
+    if lines.is_null() {
+        return;
+    }
+
+    unsafe {
+        // 释放每个 CString
+        for i in 0..count {
+            let ptr = *lines.add(i);
+            if !ptr.is_null() {
+                let _ = std::ffi::CString::from_raw(ptr as *mut std::ffi::c_char);
+            }
+        }
+
+        // 释放数组本身
+        let _ = Vec::from_raw_parts(lines, count, count);
+    }
+}

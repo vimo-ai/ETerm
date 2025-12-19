@@ -162,22 +162,19 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
 
         switch event.event_type {
         case TerminalEventType_Wakeup, TerminalEventType_Render:
-            // 调试日志：记录 Event 间隔
+            // 不再调用 Swift renderCallback
+            // 原因：Rust 侧的 route_wakeup_event() 已经设置了 needs_render = true
+            //       CVDisplayLink 每帧会自动检查 needs_render 并渲染
+            //       Swift 侧的 renderCallback 是多余的，会导致大量 DispatchQueue.main.async 调用
+            //
+            // 调试日志（仅在 debug 模式下记录）
             if LogManager.shared.debugEnabled {
                 let now = Date()
                 let interval = lastEventTime.map { now.timeIntervalSince($0) } ?? 0
                 lastEventTime = now
                 eventCounter += 1
-
                 let eventType = event.event_type == TerminalEventType_Wakeup ? "Wakeup" : "Render"
-                logDebug("[TerminalPool] 📥 Event #\(eventCounter): \(eventType), interval=\(String(format: "%.3f", interval))s")
-            }
-
-            DispatchQueue.main.async { [weak self] in
-                if LogManager.shared.debugEnabled {
-                    logDebug("[TerminalPool] 📤 DispatchQueue callback executing")
-                }
-                self?.renderCallback?()
+                logDebug("[TerminalPool] 📥 Event #\(eventCounter): \(eventType) from terminal \(terminalId), interval=\(String(format: "%.3f", interval))s (no Swift callback)")
             }
 
         case TerminalEventType_Bell:
@@ -186,9 +183,9 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
             }
 
         case TerminalEventType_Damaged:
-            DispatchQueue.main.async { [weak self] in
-                self?.renderCallback?()
-            }
+            // Damaged 事件保留用于兼容，Rust 侧实际不会发送
+            // 同样不需要调用 renderCallback，CVDisplayLink 会自动处理
+            break
 
         default:
             break
@@ -902,5 +899,79 @@ extension TerminalPoolWrapper {
         guard let scrollInfo = getScrollInfo(terminalId: terminalId),
               scrollInfo.historySize > 0 else { return 0.0 }
         return Float(scrollInfo.displayOffset) / Float(scrollInfo.historySize)
+    }
+
+    // MARK: - Terminal Snapshot (for Session Recording)
+
+    /// 获取Terminal可见区域的文本内容（用于快照录制）
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 可见区域的文本行数组，失败返回 nil
+    func getVisibleLines(terminalId: Int) -> [String]? {
+        guard let handle = handle else { return nil }
+
+        var linesPtr: UnsafeMutablePointer<UnsafePointer<CChar>?>?
+        var count: Int = 0
+
+        let success = terminal_pool_get_visible_lines(
+            handle,
+            Int64(terminalId),
+            &linesPtr,
+            &count
+        )
+
+        guard success, let lines = linesPtr, count > 0 else {
+            return nil
+        }
+
+        // 转换为Swift字符串数组
+        var result: [String] = []
+        for i in 0..<count {
+            if let cString = lines[i] {
+                result.append(String(cString: cString))
+            } else {
+                result.append("")
+            }
+        }
+
+        // 释放Rust分配的内存
+        terminal_pool_free_string_array(lines, count)
+
+        return result
+    }
+
+    /// 获取Terminal光标位置（用于快照录制，简化版）
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 光标位置 (row, col)，失败返回 nil
+    func getSimpleCursorPosition(terminalId: Int) -> (row: Int, col: Int)? {
+        guard let handle = handle else { return nil }
+
+        var row: Int32 = 0
+        var col: Int32 = 0
+
+        let success = terminal_pool_get_cursor_position(
+            handle,
+            Int64(terminalId),
+            &row,
+            &col
+        )
+
+        return success ? (Int(row), Int(col)) : nil
+    }
+
+    /// 获取Terminal回滚缓冲区行数（用于快照录制）
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 回滚行数，失败返回 nil
+    func getScrollbackLines(terminalId: Int) -> Int? {
+        guard let handle = handle else { return nil }
+
+        let lines = terminal_pool_get_scrollback_lines(
+            handle,
+            Int64(terminalId)
+        )
+
+        return lines >= 0 ? Int(lines) : nil
     }
 }
