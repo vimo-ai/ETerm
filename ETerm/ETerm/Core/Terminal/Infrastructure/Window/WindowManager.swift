@@ -130,8 +130,9 @@ final class WindowManager: NSObject {
 
     /// 从 WindowState 恢复 TerminalWindow
     private func restoreTerminalWindow(from windowState: WindowState) -> TerminalWindow {
-        // 创建所有 Pages
+        // 创建所有 Pages，并记录每个 Page 的 activePanelId
         var pages: [Page] = []
+        var activePanelIdByPage: [UUID: UUID] = [:]
 
         for pageState in windowState.pages {
             // 创建空 Page（用于恢复）
@@ -142,11 +143,10 @@ final class WindowManager: NSObject {
                 // 设置恢复的布局到 Page
                 page.setRootLayout(restoredLayout)
 
-                // 设置激活的 Panel（从 activePanelId 恢复）
-                if let activePanelId = UUID(uuidString: pageState.activePanelId) {
-                    // 激活指定的 Panel（Coordinator 会在创建后设置）
-                    // 这里只需要确保 Panel 存在即可
-                    _ = page.getPanel(activePanelId)
+                // 记录 activePanelId（稍后设置到 TerminalWindow）
+                if let activePanelId = UUID(uuidString: pageState.activePanelId),
+                   page.getPanel(activePanelId) != nil {
+                    activePanelIdByPage[page.pageId] = activePanelId
                 }
 
                 pages.append(page)
@@ -168,9 +168,23 @@ final class WindowManager: NSObject {
             terminalWindow.addExistingPage(page)
         }
 
-        // 切换到激活的 Page
+        // 恢复每个 Page 的 activePanelId 到 TerminalWindow
+        for (pageId, panelId) in activePanelIdByPage {
+            // 临时切换到该 Page 来设置 activePanelId
+            if terminalWindow.switchToPage(pageId) {
+                terminalWindow.setActivePanel(panelId)
+            }
+        }
+
+        // 切换到最终激活的 Page
         let activePageIndex = max(0, min(windowState.activePageIndex, pages.count - 1))
-        _ = terminalWindow.switchToPage(pages[activePageIndex].pageId)
+        let activePageId = pages[activePageIndex].pageId
+        _ = terminalWindow.switchToPage(activePageId)
+
+        // 恢复激活 Page 的 activePanelId
+        if let activePanelId = activePanelIdByPage[activePageId] {
+            terminalWindow.setActivePanel(activePanelId)
+        }
 
         return terminalWindow
     }
@@ -780,8 +794,9 @@ final class WindowManager: NSObject {
             return nil
         }
 
-        // 确定激活的 Panel ID
-        let activePanelId = coordinator.activePanelId?.uuidString ?? page.allPanelIds.first?.uuidString ?? ""
+        // 确定激活的 Panel ID（从 TerminalWindow 获取，支持每个 Page 独立记录）
+        let activePanelId = coordinator.terminalWindow.getActivePanelId(for: page.pageId)?.uuidString
+            ?? page.allPanelIds.first?.uuidString ?? ""
 
         return PageState(
             title: page.title,

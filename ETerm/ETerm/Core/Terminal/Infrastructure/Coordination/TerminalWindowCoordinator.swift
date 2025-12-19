@@ -154,8 +154,8 @@ class TerminalWindowCoordinator: ObservableObject {
         // 不在这里创建终端，等 setTerminalPool 时再创建
         // （因为初始化时可能还在用 MockTerminalPool）
 
-        // 设置初始激活的 Panel 为第一个 Panel
-        activePanelId = initialWindow.allPanels.first?.panelId
+        // 同步初始激活的 Panel（从 TerminalWindow 获取）
+        activePanelId = initialWindow.activePanelId
 
         // 监听 Claude 响应完成通知
         setupClaudeNotifications()
@@ -861,7 +861,10 @@ class TerminalWindowCoordinator: ObservableObject {
             // 录制事件
             recordPanelEvent(.panelActivate(fromPanelId: activePanelId, toPanelId: panelId))
 
+            // 同步到 TerminalWindow（用于 Page 切换时恢复）
+            terminalWindow.setActivePanel(panelId)
             activePanelId = panelId
+
             // 触发 UI 更新，让 Tab 高亮状态刷新
             objectWillChange.send()
             updateTrigger = UUID()
@@ -1016,8 +1019,9 @@ class TerminalWindowCoordinator: ObservableObject {
                     showTerminalSearch = false
                 }
 
-                // 切换到另一个 Panel
+                // 切换到另一个 Panel（同步到 TerminalWindow）
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
+                    terminalWindow.setActivePanel(newActivePanelId)
                     activePanelId = newActivePanelId
                 }
 
@@ -1072,9 +1076,12 @@ class TerminalWindowCoordinator: ObservableObject {
                 showTerminalSearch = false
             }
 
-            // 切换到另一个 Panel
+            // 切换到另一个 Panel（同步到 TerminalWindow）
             if activePanelId == panelId {
-                activePanelId = terminalWindow.allPanels.first?.panelId
+                if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
+                    terminalWindow.setActivePanel(newActivePanelId)
+                    activePanelId = newActivePanelId
+                }
             }
 
             // 同步布局到 Rust（关闭 Panel）
@@ -1569,8 +1576,8 @@ class TerminalWindowCoordinator: ObservableObject {
         // 自动切换到新 Page
         _ = terminalWindow.switchToPage(newPage.pageId)
 
-        // 更新激活的 Panel
-        activePanelId = newPage.allPanels.first?.panelId
+        // 同步激活的 Panel（从 TerminalWindow 获取）
+        activePanelId = terminalWindow.activePanelId
 
         // 同步布局到 Rust（新增 Page）
         syncLayoutToRust()
@@ -1624,8 +1631,8 @@ class TerminalWindowCoordinator: ObservableObject {
             ensureTerminalsForPage(activePage)
         }
 
-        // Step 3: 更新激活的 Panel
-        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+        // Step 3: 同步激活的 Panel（从 TerminalWindow 获取，已包含 Page 切换时的恢复逻辑）
+        activePanelId = terminalWindow.activePanelId
 
         // Step 4: 更新终端模式
         // 旧 Page 的所有终端 -> Background
@@ -1699,8 +1706,8 @@ class TerminalWindowCoordinator: ObservableObject {
             return false
         }
 
-        // 更新激活的 Panel
-        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+        // 同步激活的 Panel（从 TerminalWindow 获取）
+        activePanelId = terminalWindow.activePanelId
 
         // 同步布局到 Rust（关闭 Page）
         syncLayoutToRust()
@@ -1812,7 +1819,8 @@ class TerminalWindowCoordinator: ObservableObject {
             return false
         }
 
-        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+        // 同步激活的 Panel（从 TerminalWindow 获取）
+        activePanelId = terminalWindow.activePanelId
 
         // 同步布局到 Rust（Page 切换）
         syncLayoutToRust()
@@ -1831,7 +1839,8 @@ class TerminalWindowCoordinator: ObservableObject {
             return false
         }
 
-        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+        // 同步激活的 Panel（从 TerminalWindow 获取）
+        activePanelId = terminalWindow.activePanelId
 
         // 同步布局到 Rust（Page 切换）
         syncLayoutToRust()
@@ -1873,8 +1882,8 @@ class TerminalWindowCoordinator: ObservableObject {
             return nil
         }
 
-        // 更新激活的 Panel
-        activePanelId = terminalWindow.activePage?.allPanels.first?.panelId
+        // 同步激活的 Panel（从 TerminalWindow 获取）
+        activePanelId = terminalWindow.activePanelId
 
         // 触发 UI 更新
         objectWillChange.send()
@@ -1911,8 +1920,8 @@ class TerminalWindowCoordinator: ObservableObject {
         // 切换到新添加的 Page
         _ = terminalWindow.switchToPage(page.pageId)
 
-        // 更新激活的 Panel
-        activePanelId = page.allPanels.first?.panelId
+        // 同步激活的 Panel（从 TerminalWindow 获取）
+        activePanelId = terminalWindow.activePanelId
 
         // 触发 UI 更新
         objectWillChange.send()
@@ -2009,9 +2018,12 @@ class TerminalWindowCoordinator: ObservableObject {
 
             _ = terminalWindow.removePanel(panelId)
 
-            // 更新激活的 Panel
+            // 更新激活的 Panel（同步到 TerminalWindow）
             if activePanelId == panelId {
-                activePanelId = terminalWindow.allPanels.first?.panelId
+                if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
+                    terminalWindow.setActivePanel(newActivePanelId)
+                    activePanelId = newActivePanelId
+                }
             }
         } else {
             // 从 Panel 移除 Tab

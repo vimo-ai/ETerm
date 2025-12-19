@@ -8,6 +8,12 @@ import Foundation
 import CoreGraphics
 import SwiftUI
 
+/// 当前激活的焦点（Page + Panel 的组合）
+struct ActiveFocus: Codable, Equatable {
+    var pageId: UUID
+    var panelId: UUID
+}
+
 /// 终端窗口
 ///
 /// 管理整个窗口的 Page
@@ -17,7 +23,16 @@ import SwiftUI
 final class TerminalWindow {
     let windowId: UUID
     private(set) var pages: [Page]
-    private(set) var activePageId: UUID?
+    private(set) var activeFocus: ActiveFocus?
+
+    /// 记录每个 Page 上次激活的 Panel ID（用于切换 Page 时恢复）
+    private var lastPanelIdByPage: [UUID: UUID] = [:]
+
+    /// 便捷访问：当前激活的 Page ID
+    var activePageId: UUID? { activeFocus?.pageId }
+
+    /// 便捷访问：当前激活的 Panel ID
+    var activePanelId: UUID? { activeFocus?.panelId }
 
     // MARK: - Initialization
 
@@ -27,14 +42,49 @@ final class TerminalWindow {
         // 创建初始 Page
         let initialPage = Page(title: "Page 1", initialPanel: initialPanel)
         self.pages = [initialPage]
-        self.activePageId = initialPage.pageId
+        self.activeFocus = ActiveFocus(pageId: initialPage.pageId, panelId: initialPanel.panelId)
     }
 
     /// 使用已有的 Page 初始化（用于恢复 Session）
     init(initialPage: Page) {
         self.windowId = UUID()
         self.pages = [initialPage]
-        self.activePageId = initialPage.pageId
+        // 使用第一个 Panel 作为初始 focus（如果存在）
+        if let initialPanelId = initialPage.allPanels.first?.panelId {
+            self.activeFocus = ActiveFocus(pageId: initialPage.pageId, panelId: initialPanelId)
+        } else {
+            // Plugin Page 没有 Panel，activeFocus 暂时为 nil
+            self.activeFocus = nil
+        }
+    }
+
+    // MARK: - Focus Management
+
+    /// 设置激活的 Panel（在当前 Page 内切换 Panel）
+    func setActivePanel(_ panelId: UUID) {
+        guard let pageId = activeFocus?.pageId,
+              let page = pages.first(where: { $0.pageId == pageId }),
+              page.containsPanel(panelId) else {
+            return
+        }
+        activeFocus = ActiveFocus(pageId: pageId, panelId: panelId)
+        lastPanelIdByPage[pageId] = panelId
+    }
+
+    /// 设置完整的 activeFocus（用于恢复 Session）
+    func setActiveFocus(_ focus: ActiveFocus) {
+        activeFocus = focus
+        lastPanelIdByPage[focus.pageId] = focus.panelId
+    }
+
+    /// 获取指定 Page 的上次激活 Panel ID（用于 Session 保存）
+    func getActivePanelId(for pageId: UUID) -> UUID? {
+        // 如果是当前激活的 Page，返回当前 activePanelId
+        if activeFocus?.pageId == pageId {
+            return activeFocus?.panelId
+        }
+        // 否则返回记录的上次 panelId
+        return lastPanelIdByPage[pageId]
     }
 
     // MARK: - Active Page Access
@@ -164,10 +214,30 @@ final class TerminalWindow {
     /// - Returns: 是否成功切换
     @discardableResult
     func switchToPage(_ pageId: UUID) -> Bool {
-        guard pages.contains(where: { $0.pageId == pageId }) else {
+        guard let newPage = pages.first(where: { $0.pageId == pageId }) else {
             return false
         }
-        activePageId = pageId
+
+        // 保存当前 Page 的 panelId
+        if let currentPageId = activeFocus?.pageId, let currentPanelId = activeFocus?.panelId {
+            lastPanelIdByPage[currentPageId] = currentPanelId
+        }
+
+        // 恢复目标 Page 的 panelId，验证其仍然存在
+        var targetPanelId: UUID?
+        if let lastPanelId = lastPanelIdByPage[pageId], newPage.containsPanel(lastPanelId) {
+            targetPanelId = lastPanelId
+        } else {
+            targetPanelId = newPage.allPanels.first?.panelId
+        }
+
+        // 只有当 panelId 有效时才设置 activeFocus（Plugin Page 可能没有 Panel）
+        if let panelId = targetPanelId {
+            activeFocus = ActiveFocus(pageId: pageId, panelId: panelId)
+        } else {
+            // Plugin Page：只更新 pageId，保持 panelId 为之前的值（或 nil）
+            activeFocus = ActiveFocus(pageId: pageId, panelId: activeFocus?.panelId ?? UUID())
+        }
         return true
     }
 
@@ -183,8 +253,7 @@ final class TerminalWindow {
         }
 
         let nextIndex = (currentIndex + 1) % pages.count
-        activePageId = pages[nextIndex].pageId
-        return true
+        return switchToPage(pages[nextIndex].pageId)
     }
 
     /// 切换到上一个 Page
@@ -199,8 +268,7 @@ final class TerminalWindow {
         }
 
         let previousIndex = (currentIndex - 1 + pages.count) % pages.count
-        activePageId = pages[previousIndex].pageId
-        return true
+        return switchToPage(pages[previousIndex].pageId)
     }
 
     /// 关闭指定 Page
@@ -219,11 +287,12 @@ final class TerminalWindow {
         }
 
         pages.remove(at: index)
+        lastPanelIdByPage.removeValue(forKey: pageId)
 
         // 如果关闭的是当前 Page，切换到相邻 Page
         if activePageId == pageId {
             let newIndex = min(index, pages.count - 1)
-            activePageId = pages[newIndex].pageId
+            _ = switchToPage(pages[newIndex].pageId)
         }
 
         return true
@@ -239,11 +308,12 @@ final class TerminalWindow {
         }
 
         let page = pages.remove(at: index)
+        lastPanelIdByPage.removeValue(forKey: pageId)
 
         // 如果还有其他 Page，更新激活状态
         if !pages.isEmpty && activePageId == pageId {
             let newIndex = min(index, pages.count - 1)
-            activePageId = pages[newIndex].pageId
+            _ = switchToPage(pages[newIndex].pageId)
         }
 
         return page
