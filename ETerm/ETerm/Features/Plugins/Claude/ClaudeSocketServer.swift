@@ -203,7 +203,6 @@ class ClaudeSocketServer {
         case "user_prompt_submit":
             // 用户提交问题，Claude 开始思考
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
-            print("🔵 [ClaudeSocket] user_prompt_submit received, terminal_id: \(event.terminal_id)")
 
             // 发送用户提交通知（用于显示"思考中"动画）
             NotificationCenter.default.post(
@@ -229,7 +228,6 @@ class ClaudeSocketServer {
         case "stop":
             // 建立/更新映射关系
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
-            print("🟠 [ClaudeSocket] stop received, terminal_id: \(event.terminal_id)")
 
             // 发送响应完成通知
             NotificationCenter.default.post(
