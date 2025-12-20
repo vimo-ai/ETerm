@@ -331,19 +331,11 @@ final class PanelHeaderHostingView: NSView {
     }
 
     /// 设置所属 Page 的激活状态
+    /// 注意：切换 Page 不会自动清除 Tab 装饰，只有用户点击 Tab 时才清除
     func setPageActive(_ active: Bool) {
-        let wasActive = isPageActive
         isPageActive = active
         for tabView in tabItemViews {
             tabView.setPageActive(active)
-        }
-
-        // 只有当 Page 从非激活变为激活时，才清除装饰（用户切换回来时）
-        if active && !wasActive, let activeTabId = activeTabId {
-            for tabView in tabItemViews where tabView.tabId == activeTabId {
-                tabView.clearDecoration()
-                break
-            }
         }
     }
 

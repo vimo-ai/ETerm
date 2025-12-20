@@ -234,11 +234,16 @@ final class PageBarHostingView: NSView {
 
     @objc private func handlePageNeedsAttention(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
-              let pageId = userInfo["pageId"] as? UUID,
-              let attention = userInfo["attention"] as? Bool else {
+              let pageId = userInfo["pageId"] as? UUID else {
             return
         }
-        setPageNeedsAttention(pageId, attention: attention)
+
+        // 优先使用 decoration（新机制），否则使用 attention（兼容旧机制）
+        if let decoration = userInfo["decoration"] as? TabDecoration {
+            setPageDecoration(pageId, decoration: decoration)
+        } else if let attention = userInfo["attention"] as? Bool {
+            setPageNeedsAttention(pageId, attention: attention)
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -283,6 +288,8 @@ final class PageBarHostingView: NSView {
             // 捕获 pageId 而不是 page，避免闭包捕获问题
             let pageId = page.id
             pageView.onTap = { [weak self] in
+                // 用户点击 Page 时清除该 Page 的装饰
+                pageView.clearDecoration()
                 self?.onPageClick?(pageId)
             }
 
@@ -407,7 +414,19 @@ final class PageBarHostingView: NSView {
         }
     }
 
-    /// 设置指定 Page 的提醒状态
+    /// 设置指定 Page 的装饰（新机制，支持完整的 TabDecoration）
+    func setPageDecoration(_ pageId: UUID, decoration: TabDecoration?) {
+        for pageView in pageItemViews where pageView.pageId == pageId {
+            if let decoration = decoration {
+                pageView.setDecoration(decoration)
+            } else {
+                pageView.clearDecoration()
+            }
+            break
+        }
+    }
+
+    /// 设置指定 Page 的提醒状态（兼容旧机制）
     func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
         for pageView in pageItemViews where pageView.pageId == pageId {
             if attention {
