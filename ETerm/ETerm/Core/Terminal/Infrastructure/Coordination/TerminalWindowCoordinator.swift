@@ -774,8 +774,6 @@ class TerminalWindowCoordinator: ObservableObject {
         if panel.setActiveTab(tabId) {
             // 录制事件
             recordTabEvent(.tabSwitch(panelId: panelId, fromTabId: oldTabId, toTabId: tabId))
-            // 核心逻辑：Tab 被激活时自动消费提醒状态
-            clearTabAttention(tabId)
 
             // 更新终端模式：旧 Tab -> Background，新 Tab -> Active
             if let oldId = oldTerminalId {
