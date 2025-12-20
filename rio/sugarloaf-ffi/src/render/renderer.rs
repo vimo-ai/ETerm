@@ -553,6 +553,8 @@ impl Renderer {
             None
         };
 
+        // 注意：IME 渲染已移到独立的 overlay 层（draw_ime_overlay）
+
         // 🔧 获取当前行的 URL 范围（用于绘制下划线）
         let url_ranges: Vec<_> = state.grid.row(line)
             .map(|row| row.urls().to_vec())

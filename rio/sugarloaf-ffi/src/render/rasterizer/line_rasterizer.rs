@@ -55,12 +55,7 @@ impl LineRasterizer {
     /// - background_color: 背景色
     /// - box_drawing_config: Box-drawing 字符渲染配置
     ///
-    /// 复用老代码逻辑：
-    /// 1. 创建 Skia surface（行尺寸）
-    /// 2. 填充背景色
-    /// 3. 遍历所有字形，绘制字符
-    /// 4. 绘制光标（如果有）
-    /// 5. 返回 Image
+    /// 注意：IME 渲染已移到独立的 overlay 层（draw_ime_overlay）
     pub fn render(
         &self,
         layout: &GlyphLayout,
