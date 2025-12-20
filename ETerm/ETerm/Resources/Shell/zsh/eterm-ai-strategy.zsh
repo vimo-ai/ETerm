@@ -72,12 +72,14 @@ _zsh_autosuggest_strategy_ai() {
     local last_cmd="${history[$((HISTCMD-1))]}"
     local dir_files=$(ls -1 2>/dev/null | head -15 | tr '\n' ' ')
 
-    # Build JSON request
+    # Build JSON request with frequency info
     local escaped_input=$(_eterm_json_escape "$input")
     local json_candidates=""
-    local c
+    local c freq
     for c in "${candidates[@]}"; do
-        json_candidates+="\"$(_eterm_json_escape "$c")\","
+        # Count frequency: how many times this exact command appears in history
+        freq=${#${(M)history:#$c}}
+        json_candidates+="{\"cmd\":\"$(_eterm_json_escape "$c")\",\"freq\":$freq},"
     done
     json_candidates="[${json_candidates%,}]"
 
