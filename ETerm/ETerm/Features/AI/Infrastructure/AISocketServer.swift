@@ -10,11 +10,16 @@ import Foundation
 
 // MARK: - 请求/响应模型
 
+struct CandidateInfo: Decodable, Hashable {
+    let cmd: String
+    let freq: Int
+}
+
 struct AISocketRequest: Decodable {
     let id: String
     let sessionId: String
     let input: String
-    let candidates: [String]
+    let candidates: [CandidateInfo]
     let pwd: String?
     let lastCmd: String?
     let files: String?
