@@ -732,52 +732,61 @@ final class UIServiceImpl: UIService {
     // MARK: - Tab 装饰 API 实现
 
     func setTabDecoration(terminalId: Int, decoration: TabDecoration?) {
-        print("[UIService] 📤 发送装饰通知: terminalId=\(terminalId), decoration=\(String(describing: decoration))")
-        // 发送通用通知，核心层的 TabItemView 会监听并渲染
+        // 1. 找到对应的 Tab 并更新模型
+        var foundTab: Tab?
+        var foundPage: Page?
+        var foundCoordinator: TerminalWindowCoordinator?
+
+        for coordinator in WindowManager.shared.getAllCoordinators() {
+            for page in coordinator.terminalWindow.pages {
+                for panel in page.allPanels {
+                    if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                        foundTab = tab
+                        foundPage = page
+                        foundCoordinator = coordinator
+                        break
+                    }
+                }
+                if foundTab != nil { break }
+            }
+            if foundTab != nil { break }
+        }
+
+        guard let tab = foundTab else {
+            print("[UIService] ⚠️ 未找到 terminalId=\(terminalId) 对应的 Tab")
+            return
+        }
+
+        // 2. 更新 Tab 模型的装饰
+        tab.setDecoration(decoration)
+
+        // 3. 发送通知让视图刷新（视图会从模型读取 effectiveDecoration）
         NotificationCenter.default.post(
             name: .tabDecorationChanged,
             object: nil,
             userInfo: [
                 "terminal_id": terminalId,
-                "decoration": decoration as Any
+                "tab_id": tab.tabId
             ]
         )
 
-        // 自动冒泡到 Page 级别：如果 Tab 所属 Page 不是当前 Page，也设置 Page 装饰
-        bubbleDecorationToPage(terminalId: terminalId, decoration: decoration)
+        // 4. 如果 Tab 所属 Page 不是当前 Page，发送 Page 刷新通知
+        // Page.effectiveDecoration 是计算属性，会自动从 Tab 读取
+        if let page = foundPage, let coordinator = foundCoordinator {
+            let isCurrentPage = (page.pageId == coordinator.terminalWindow.activePageId)
+            if !isCurrentPage {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("PageNeedsAttention"),
+                    object: nil,
+                    userInfo: [
+                        "pageId": page.pageId
+                    ]
+                )
+            }
+        }
     }
 
     func clearTabDecoration(terminalId: Int) {
         setTabDecoration(terminalId: terminalId, decoration: nil)
-    }
-
-    /// 将 Tab 装饰冒泡到 Page 级别
-    /// 如果 Tab 所属 Page 不是当前激活的 Page，则给 Page 也设置相同装饰
-    private func bubbleDecorationToPage(terminalId: Int, decoration: TabDecoration?) {
-        // 遍历所有窗口的 Coordinator 查找 terminalId 对应的 Tab
-        for coordinator in WindowManager.shared.getAllCoordinators() {
-            // 找到 terminalId 对应的 Tab 和 Page
-            for page in coordinator.terminalWindow.pages {
-                for panel in page.allPanels {
-                    if panel.tabs.first(where: { $0.rustTerminalId == terminalId }) != nil {
-                        // 检查是否是当前激活的 Page
-                        let isCurrentPage = (page.pageId == coordinator.terminalWindow.activePageId)
-
-                        if !isCurrentPage {
-                            // 不是当前 Page，发送 Page 装饰通知（传递完整的 decoration）
-                            NotificationCenter.default.post(
-                                name: NSNotification.Name("PageNeedsAttention"),
-                                object: nil,
-                                userInfo: [
-                                    "pageId": page.pageId,
-                                    "decoration": decoration as Any
-                                ]
-                            )
-                        }
-                        return
-                    }
-                }
-            }
-        }
     }
 }

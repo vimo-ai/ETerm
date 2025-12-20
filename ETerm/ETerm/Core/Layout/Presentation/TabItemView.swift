@@ -26,6 +26,9 @@ final class TabItemView: DraggableItemView {
 
     override var itemId: UUID { tabId }
 
+    /// 关联的 Tab 模型（弱引用，用于读取 effectiveDecoration）
+    weak var tab: Tab?
+
     /// 所属 Panel ID（用于拖拽数据）
     var panelId: UUID?
 
@@ -40,8 +43,9 @@ final class TabItemView: DraggableItemView {
 
     // MARK: - 初始化
 
-    init(tabId: UUID, title: String) {
+    init(tabId: UUID, title: String, tab: Tab? = nil) {
         self.tabId = tabId
+        self.tab = tab
 
         super.init(frame: .zero)
 
@@ -81,8 +85,21 @@ final class TabItemView: DraggableItemView {
     override var dragSessionEndedNotificationName: Notification.Name? { .tabDragSessionEnded }
 
     override func updateItemView() {
-        if decoration != nil {
-            print("[TabItemView] 🎨 渲染有装饰: self=\(Unmanaged.passUnretained(self).toOpaque()) tabId=\(tabId.uuidString.prefix(8))")
+        // 从 Tab 模型读取装饰，计算要显示的装饰
+        // 优先级逻辑：
+        // - 插件装饰 priority > 100（active）：显示插件装饰
+        // - 否则如果 isActive：不传 decoration，让 SimpleTabView 用 active 样式
+        // - 否则如果有插件装饰：显示插件装饰
+        var displayDecoration: TabDecoration? = nil
+        if let pluginDecoration = tab?.decoration {
+            if pluginDecoration.priority > 100 {
+                // 插件装饰优先级高于 active（如思考中 priority=101）
+                displayDecoration = pluginDecoration
+            } else if !isActive {
+                // 插件装饰优先级低于 active，但当前不是 active
+                displayDecoration = pluginDecoration
+            }
+            // 否则 displayDecoration = nil，SimpleTabView 用 active 样式
         }
 
         // 移除旧的 hostingView
@@ -93,7 +110,7 @@ final class TabItemView: DraggableItemView {
             title,
             emoji: emoji,
             isActive: isActive,
-            decoration: decoration,
+            decoration: displayDecoration,
             height: Self.tabHeight,
             isHovered: isHovered,
             onClose: { [weak self] in
@@ -196,7 +213,6 @@ extension TabItemView {
     @objc private func handleDecorationChanged(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let terminalId = userInfo["terminal_id"] as? Int else {
-            print("[TabItemView] ❌ 通知缺少 terminal_id")
             return
         }
 
@@ -205,12 +221,8 @@ extension TabItemView {
             return
         }
 
-        // 获取装饰状态（可能为 nil，表示清除装饰）
-        let newDecoration = userInfo["decoration"] as? TabDecoration
-        print("[TabItemView] ✅ 匹配成功: self=\(Unmanaged.passUnretained(self).toOpaque()) terminalId=\(terminalId)")
-
-        // 更新装饰状态
-        setDecoration(newDecoration)
+        // Tab 模型已更新，刷新视图即可（updateItemView 会从模型读取装饰）
+        updateItemView()
     }
 }
 
