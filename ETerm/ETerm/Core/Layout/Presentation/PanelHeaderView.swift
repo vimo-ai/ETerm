@@ -296,12 +296,13 @@ final class PanelHeaderHostingView: NSView {
         let newIds = newTabItems.map { $0.id }
 
         if oldIds == newIds {
-            // ID 和顺序相同，只更新标题（不重建视图）
+            // ID 和顺序相同，只更新标题和 rustTerminalId（不重建视图）
             for (index, newTab) in newTabItems.enumerated() {
                 tabs[index].title = newTab.title
                 tabs[index].rustTerminalId = newTab.rustTerminalId
                 if index < tabItemViews.count {
                     tabItemViews[index].setTitle(newTab.title)
+                    tabItemViews[index].rustTerminalId = newTab.rustTerminalId
                 }
             }
         } else {
