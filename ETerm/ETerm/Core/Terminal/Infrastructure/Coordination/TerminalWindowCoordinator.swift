@@ -105,7 +105,8 @@ class TerminalWindowCoordinator: ObservableObject {
     private var terminalPool: TerminalPoolProtocol
 
     /// 工作目录注册表（CWD 状态管理 - Single Source of Truth）
-    let workingDirectoryRegistry = TerminalWorkingDirectoryRegistry()
+    /// 通过依赖注入，由 WindowManager 创建并传入
+    let workingDirectoryRegistry: TerminalWorkingDirectoryRegistry
 
     /// 坐标映射器
     private(set) var coordinateMapper: CoordinateMapper?
@@ -144,11 +145,22 @@ class TerminalWindowCoordinator: ObservableObject {
 
     // MARK: - Initialization
 
-    init(initialWindow: TerminalWindow, terminalPool: TerminalPoolProtocol? = nil) {
+    /// 初始化终端窗口协调器
+    ///
+    /// - Parameters:
+    ///   - initialWindow: 初始的 TerminalWindow
+    ///   - workingDirectoryRegistry: CWD 注册表（依赖注入）
+    ///   - terminalPool: 终端池（可选，默认使用 MockTerminalPool）
+    init(
+        initialWindow: TerminalWindow,
+        workingDirectoryRegistry: TerminalWorkingDirectoryRegistry,
+        terminalPool: TerminalPoolProtocol? = nil
+    ) {
         // 获取继承的 CWD（如果有）
         self.initialCwd = WindowCwdManager.shared.takePendingCwd()
 
         self.terminalWindow = initialWindow
+        self.workingDirectoryRegistry = workingDirectoryRegistry
         self.terminalPool = terminalPool ?? MockTerminalPool()
 
         // 不在这里创建终端，等 setTerminalPool 时再创建
@@ -634,14 +646,6 @@ class TerminalWindowCoordinator: ObservableObject {
                     }
                 } else {
                     // 如果没有找到分离的终端，创建新的
-                    // 兼容旧的恢复机制：如果 Tab 有 pendingCwd，先迁移到 Registry
-                    if let legacyPendingCwd = tab.takePendingCwd() {
-                        workingDirectoryRegistry.registerPendingTerminal(
-                            tabId: tab.tabId,
-                            workingDirectory: .restored(path: legacyPendingCwd)
-                        )
-                    }
-
                     // 从 Registry 查询 CWD（非破坏性）
                     let cwd = workingDirectoryRegistry.queryWorkingDirectory(
                         tabId: tab.tabId,
@@ -805,14 +809,6 @@ class TerminalWindowCoordinator: ObservableObject {
             for (_, tab) in panel.tabs.enumerated() {
                 // 如果 Tab 还没有终端，创建一个
                 if tab.rustTerminalId == nil {
-                    // 兼容旧的恢复机制：如果 Tab 有 pendingCwd，先迁移到 Registry
-                    if let legacyPendingCwd = tab.takePendingCwd() {
-                        workingDirectoryRegistry.registerPendingTerminal(
-                            tabId: tab.tabId,
-                            workingDirectory: .restored(path: legacyPendingCwd)
-                        )
-                    }
-
                     // 从 Registry 查询 CWD（非破坏性，支持重试）
                     let cwd = workingDirectoryRegistry.queryWorkingDirectory(
                         tabId: tab.tabId,
