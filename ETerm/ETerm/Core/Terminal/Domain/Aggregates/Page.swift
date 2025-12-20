@@ -101,14 +101,14 @@ final class Page {
         allPanels.flatMap { $0.tabs }
     }
 
-    /// 有效装饰（收敛所有 Tab 的最高优先级装饰）
+    /// 有效装饰（收敛所有 Tab 的最高优先级插件装饰）
     ///
-    /// Page 不存储装饰，只计算其下所有 Tab 的最高优先级装饰。
-    /// 用于在 PageBar 上显示状态提示。
+    /// Page 只聚合插件设置的装饰（tab.decoration），不包含 Tab 的 active 状态。
+    /// 用于在 PageBar 上显示状态提示（如 Claude thinking/completed）。
     var effectiveDecoration: TabDecoration? {
         allTabs
-            .map { $0.effectiveDecoration }
-            .filter { $0.priority > 0 }  // 排除默认状态
+            .compactMap { $0.decoration }  // 只取插件设置的装饰，不含 active 状态
+            .filter { $0.priority > 0 }
             .max { $0.priority < $1.priority }
     }
 
