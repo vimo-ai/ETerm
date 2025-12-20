@@ -968,6 +968,13 @@ class TerminalWindowCoordinator: ObservableObject {
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
                     terminalWindow.setActivePanel(newActivePanelId)
                     activePanelId = newActivePanelId
+
+                    // 关键修复：将新激活 Panel 的终端设置为 Active 模式
+                    if let newPanel = terminalWindow.getPanel(newActivePanelId),
+                       let activeTab = newPanel.activeTab,
+                       let terminalId = activeTab.rustTerminalId {
+                        terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                    }
                 }
 
                 // 同步布局到 Rust（关闭 Panel）
@@ -1026,6 +1033,13 @@ class TerminalWindowCoordinator: ObservableObject {
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
                     terminalWindow.setActivePanel(newActivePanelId)
                     activePanelId = newActivePanelId
+
+                    // 关键修复：将新激活 Panel 的终端设置为 Active 模式
+                    if let newPanel = terminalWindow.getPanel(newActivePanelId),
+                       let activeTab = newPanel.activeTab,
+                       let terminalId = activeTab.rustTerminalId {
+                        terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                    }
                 }
             }
 
@@ -1979,6 +1993,13 @@ class TerminalWindowCoordinator: ObservableObject {
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
                     terminalWindow.setActivePanel(newActivePanelId)
                     activePanelId = newActivePanelId
+
+                    // 关键修复：将新激活 Panel 的终端设置为 Active 模式
+                    if let newPanel = terminalWindow.getPanel(newActivePanelId),
+                       let activeTab = newPanel.activeTab,
+                       let terminalId = activeTab.rustTerminalId {
+                        terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                    }
                 }
             }
         } else {
