@@ -81,6 +81,8 @@ final class TabItemView: DraggableItemView {
     override var dragSessionEndedNotificationName: Notification.Name? { .tabDragSessionEnded }
 
     override func updateItemView() {
+        print("[TabItemView] 🎨 updateItemView: tabId=\(tabId), decoration=\(String(describing: decoration))")
+
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
