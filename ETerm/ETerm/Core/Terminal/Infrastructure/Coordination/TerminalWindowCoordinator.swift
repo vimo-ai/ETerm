@@ -1984,6 +1984,13 @@ class TerminalWindowCoordinator: ObservableObject {
         } else {
             // 从 Panel 移除 Tab
             _ = panel.closeTab(tabId)
+
+            // 关键修复：将新激活 Tab 的终端设置为 Active 模式
+            // panel.closeTab() 内部会切换到另一个 Tab，
+            // 但不会更新终端模式，导致终端仍处于 Background 模式而无法触发渲染
+            if let activeTab = panel.activeTab, let terminalId = activeTab.rustTerminalId {
+                terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+            }
         }
 
         // 触发 UI 更新
