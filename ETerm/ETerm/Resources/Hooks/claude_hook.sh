@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # ETerm Claude Hook
-# 支持 SessionStart, Stop, Notification 事件
-# 通过 Unix Socket 通知 ETerm，建立 session 映射
+# 支持 SessionStart, UserPromptSubmit, Stop, SessionEnd, Notification 事件
+# 通过 Unix Socket 通知 ETerm，建立 session 映射，控制 Tab 装饰
 # 优雅降级：非 ETerm 环境下静默跳过，不影响后续 hooks
 #
 
@@ -62,6 +62,9 @@ fi
 case "$hook_event_name" in
     "SessionStart")
         event_type="session_start"
+        ;;
+    "UserPromptSubmit")
+        event_type="user_prompt_submit"
         ;;
     "SessionEnd")
         event_type="session_end"

@@ -35,13 +35,27 @@ final class ClaudePlugin: Plugin {
     }
 
     // MARK: - Tab 装饰控制
+    //
+    // 事件流程：
+    // SessionStart     → 脉冲（启动中）
+    // UserPromptSubmit → 脉冲（思考中）← 每次用户输入都会触发
+    // Stop             → 静态橙色（完成提醒）
+    // SessionEnd       → 清除
 
     private func setupNotifications() {
-        // Claude 会话开始 → 设置"运行中"装饰（橙色脉冲）
+        // Claude 会话开始 → 设置"启动中"装饰（橙色脉冲）
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(handleSessionStart(_:)),
+            selector: #selector(handleThinkingStart(_:)),
             name: .claudeSessionStart,
+            object: nil
+        )
+
+        // 用户提交问题 → 设置"思考中"装饰（橙色脉冲）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleThinkingStart(_:)),
+            name: .claudeUserPromptSubmit,
             object: nil
         )
 
@@ -62,18 +76,20 @@ final class ClaudePlugin: Plugin {
         )
     }
 
-    @objc private func handleSessionStart(_ notification: Notification) {
+    /// 处理思考开始（SessionStart 或 UserPromptSubmit）
+    @objc private func handleThinkingStart(_ notification: Notification) {
         guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
             return
         }
 
-        // 设置"运行中"装饰：橙色脉冲动画
+        // 设置"思考中"装饰：橙色脉冲动画
         context?.ui.setTabDecoration(
             terminalId: terminalId,
             decoration: TabDecoration(color: .systemOrange, style: .pulse)
         )
     }
 
+    /// 处理响应完成
     @objc private func handleResponseComplete(_ notification: Notification) {
         guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
             return
@@ -86,6 +102,7 @@ final class ClaudePlugin: Plugin {
         )
     }
 
+    /// 处理会话结束
     @objc private func handleSessionEnd(_ notification: Notification) {
         guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
             return
