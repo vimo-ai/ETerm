@@ -80,7 +80,7 @@ final class PageItemView: DraggableItemView {
         let simpleTab = SimpleTabView(
             title,
             isActive: isActive,
-            needsAttention: needsAttention,
+            decoration: decoration,
             height: Self.tabHeight,
             isHovered: isHovered,
             onClose: closeAction,

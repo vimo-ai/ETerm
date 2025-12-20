@@ -47,7 +47,7 @@ final class TabItemView: DraggableItemView {
 
         setTitle(title)
         setupUI()
-        setupClaudeNotifications()
+        setupDecorationNotifications()
         setupVlaudeNotifications()
     }
 
@@ -89,7 +89,7 @@ final class TabItemView: DraggableItemView {
             title,
             emoji: emoji,
             isActive: isActive,
-            needsAttention: needsAttention,
+            decoration: decoration,
             height: Self.tabHeight,
             isHovered: isHovered,
             onClose: { [weak self] in
@@ -173,20 +173,23 @@ final class DragLock {
     }
 }
 
-// MARK: - Claude Notification Handling
+// MARK: - Tab 装饰通知处理（通用机制）
 
 extension TabItemView {
-    /// 设置 Claude 通知监听
-    private func setupClaudeNotifications() {
+    /// 设置装饰通知监听
+    ///
+    /// 监听 tabDecorationChanged 通知，由插件通过 PluginContext.ui.setTabDecoration() 发送。
+    /// 核心层不知道具体是哪个插件发送的，只负责渲染。
+    private func setupDecorationNotifications() {
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(handleClaudeResponseComplete(_:)),
-            name: .claudeResponseComplete,
+            selector: #selector(handleDecorationChanged(_:)),
+            name: .tabDecorationChanged,
             object: nil
         )
     }
 
-    @objc private func handleClaudeResponseComplete(_ notification: Notification) {
+    @objc private func handleDecorationChanged(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let terminalId = userInfo["terminal_id"] as? Int else {
             return
@@ -197,13 +200,11 @@ extension TabItemView {
             return
         }
 
-        // 如果 Tab 已激活 且 Page 也激活，不需要提醒
-        if isActive && isPageActive {
-            return
-        }
+        // 获取装饰状态（可能为 nil，表示清除装饰）
+        let newDecoration = userInfo["decoration"] as? TabDecoration
 
-        // 设置需要注意状态（不自动消失，只有用户点击才消失）
-        setNeedsAttention(true)
+        // 更新装饰状态
+        setDecoration(newDecoration)
     }
 }
 

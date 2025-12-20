@@ -314,14 +314,14 @@ final class PanelHeaderHostingView: NSView {
     /// 设置激活的 Tab
     func setActiveTab(_ tabId: UUID) {
         activeTabId = tabId
-        // 更新激活状态，只有当 Page 也激活时才清除提醒
+        // 更新激活状态，只有当 Page 也激活时才清除装饰
         for tabView in tabItemViews {
             let isActive = tabView.tabId == tabId
             // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
             tabView.setActive(isActive && isPanelActive)
-            // 只有 Tab 激活且 Page 也激活且 Panel 也激活时，才清除提醒
+            // 只有 Tab 激活且 Page 也激活且 Panel 也激活时，才清除装饰
             if isActive && isPageActive && isPanelActive {
-                tabView.clearAttention()
+                tabView.clearDecoration()
             }
         }
     }
@@ -333,10 +333,10 @@ final class PanelHeaderHostingView: NSView {
             tabView.setPageActive(active)
         }
 
-        // 如果 Page 变为激活，且当前有激活的 Tab，清除其提醒
+        // 如果 Page 变为激活，且当前有激活的 Tab，清除其装饰
         if active, let activeTabId = activeTabId {
             for tabView in tabItemViews where tabView.tabId == activeTabId {
-                tabView.clearAttention()
+                tabView.clearDecoration()
                 break
             }
         }
@@ -359,9 +359,10 @@ final class PanelHeaderHostingView: NSView {
     func setTabNeedsAttention(_ tabId: UUID, attention: Bool) {
         for tabView in tabItemViews where tabView.tabId == tabId {
             if attention {
-                tabView.setNeedsAttention(true)
+                // 使用默认橙色装饰
+                tabView.setDecoration(TabDecoration(color: .systemOrange, style: .solid))
             } else {
-                tabView.clearAttention()
+                tabView.clearDecoration()
             }
             break
         }

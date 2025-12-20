@@ -397,12 +397,12 @@ final class PageBarHostingView: NSView {
     /// 设置激活的 Page
     func setActivePage(_ pageId: UUID) {
         activePageId = pageId
-        // 更新激活状态，并清除被激活 Page 的提醒状态
+        // 更新激活状态，并清除被激活 Page 的装饰状态
         for pageView in pageItemViews {
             let isActive = pageView.pageId == pageId
             pageView.setActive(isActive)
             if isActive {
-                pageView.clearAttention()
+                pageView.clearDecoration()
             }
         }
     }
@@ -410,7 +410,12 @@ final class PageBarHostingView: NSView {
     /// 设置指定 Page 的提醒状态
     func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
         for pageView in pageItemViews where pageView.pageId == pageId {
-            pageView.setNeedsAttention(attention)
+            if attention {
+                // 使用默认橙色装饰（Page 级别的提醒）
+                pageView.setDecoration(TabDecoration(color: .systemOrange, style: .solid))
+            } else {
+                pageView.clearDecoration()
+            }
             break
         }
     }
