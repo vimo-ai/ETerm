@@ -134,7 +134,12 @@ pub fn route_wakeup_event(terminal_id: usize) -> bool {
         if let Some(needs_render) = target.needs_render.upgrade() {
             needs_render.store(true, Ordering::Release);
             return true;
+        } else {
+            // Weak 引用失效，Pool 可能已被释放
+            eprintln!("[RenderLoop] ⚠️ route_wakeup: needs_render.upgrade() failed for terminal {}", terminal_id);
         }
+    } else {
+        eprintln!("[RenderLoop] ⚠️ route_wakeup: terminal {} not found in registry", terminal_id);
     }
     false
 }
@@ -1834,6 +1839,7 @@ impl TerminalPool {
         };
 
         if layout.is_empty() {
+            eprintln!("[RenderLoop] ⚠️ render_all: layout is empty, skipping");
             return;
         }
 
