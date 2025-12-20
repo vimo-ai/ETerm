@@ -192,16 +192,19 @@ extension TabItemView {
     @objc private func handleDecorationChanged(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let terminalId = userInfo["terminal_id"] as? Int else {
+            print("[TabItemView] ❌ 通知缺少 terminal_id")
             return
         }
 
         // 检查是否是当前 Tab 的 terminal
         guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
+            print("[TabItemView] ⏭️ 跳过: 通知 terminalId=\(terminalId), 我的 rustTerminalId=\(String(describing: rustTerminalId))")
             return
         }
 
         // 获取装饰状态（可能为 nil，表示清除装饰）
         let newDecoration = userInfo["decoration"] as? TabDecoration
+        print("[TabItemView] ✅ 匹配成功: terminalId=\(terminalId), decoration=\(String(describing: newDecoration))")
 
         // 更新装饰状态
         setDecoration(newDecoration)

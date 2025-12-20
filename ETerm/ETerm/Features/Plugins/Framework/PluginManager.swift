@@ -732,6 +732,7 @@ final class UIServiceImpl: UIService {
     // MARK: - Tab 装饰 API 实现
 
     func setTabDecoration(terminalId: Int, decoration: TabDecoration?) {
+        print("[UIService] 📤 发送装饰通知: terminalId=\(terminalId), decoration=\(String(describing: decoration))")
         // 发送通用通知，核心层的 TabItemView 会监听并渲染
         NotificationCenter.default.post(
             name: .tabDecorationChanged,
