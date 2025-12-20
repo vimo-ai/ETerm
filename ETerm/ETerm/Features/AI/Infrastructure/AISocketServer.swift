@@ -15,12 +15,18 @@ struct AISocketRequest: Decodable {
     let sessionId: String
     let input: String
     let candidates: [String]
+    let pwd: String?
+    let lastCmd: String?
+    let files: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case sessionId = "session_id"
         case input
         case candidates
+        case pwd
+        case lastCmd = "last_cmd"
+        case files
     }
 }
 
