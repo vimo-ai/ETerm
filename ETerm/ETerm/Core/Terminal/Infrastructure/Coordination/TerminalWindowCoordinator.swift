@@ -1644,6 +1644,17 @@ class TerminalWindowCoordinator: ObservableObject {
         // 同步激活的 Panel（从 TerminalWindow 获取）
         activePanelId = terminalWindow.activePanelId
 
+        // 关键修复：将新激活 Page 的终端设置为 Active 模式
+        // terminalWindow.closePage() 内部会切换到另一个 Page，
+        // 但不会更新终端模式，导致终端仍处于 Background 模式而无法触发渲染
+        if let newPage = terminalWindow.activePage {
+            for panel in newPage.allPanels {
+                if let activeTab = panel.activeTab, let terminalId = activeTab.rustTerminalId {
+                    terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                }
+            }
+        }
+
         // 同步布局到 Rust（关闭 Page）
         syncLayoutToRust()
 
@@ -1819,6 +1830,16 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 同步激活的 Panel（从 TerminalWindow 获取）
         activePanelId = terminalWindow.activePanelId
+
+        // 如果还有其他 Page，确保新激活 Page 的终端设置为 Active 模式
+        // （与 closePage 相同的修复）
+        if let newPage = terminalWindow.activePage {
+            for panel in newPage.allPanels {
+                if let activeTab = panel.activeTab, let terminalId = activeTab.rustTerminalId {
+                    terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                }
+            }
+        }
 
         // 触发 UI 更新
         objectWillChange.send()
