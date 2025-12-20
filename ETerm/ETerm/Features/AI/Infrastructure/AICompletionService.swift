@@ -162,15 +162,19 @@ final class AICompletionService: AISocketRequestHandler {
             return AISocketResponse(id: request.id, index: 0, status: .skip)
         }
 
-        // 获取上下文
-        let context = getContext(for: request.sessionId)
-        print("[AICompletion] 上下文: lastCmd=\(context.lastCommand), pwd=\(context.pwd)")
+        // 使用请求里的上下文
+        let pwd = request.pwd ?? ""
+        let lastCmd = request.lastCmd ?? ""
+        let files = request.files ?? ""
+        print("[AICompletion] 上下文: pwd=\(pwd), lastCmd=\(lastCmd), files=\(files.prefix(50))")
 
         // 调用 Ollama
         guard let index = await callOllama(
             input: request.input,
-            candidates: request.candidates,
-            context: context
+            candidates: request.candidates,  // 现在是 [CandidateInfo]
+            pwd: pwd,
+            lastCmd: lastCmd,
+            files: files
         ) else {
             print("[AICompletion] callOllama 返回 nil")
             return AISocketResponse(id: request.id, index: 0, status: .skip)
@@ -183,8 +187,8 @@ final class AICompletionService: AISocketRequestHandler {
         return AISocketResponse(id: request.id, index: index, status: .ok)
     }
 
-    private func callOllama(input: String, candidates: [String], context: SessionContext) async -> Int? {
-        let prompt = buildPrompt(input: input, candidates: candidates, context: context)
+    private func callOllama(input: String, candidates: [CandidateInfo], pwd: String, lastCmd: String, files: String) async -> Int? {
+        let prompt = buildPrompt(input: input, candidates: candidates, pwd: pwd, lastCmd: lastCmd, files: files)
         print("[AICompletion] Prompt:\n\(prompt)")
 
         do {
@@ -210,17 +214,20 @@ final class AICompletionService: AISocketRequestHandler {
         }
     }
 
-    private func buildPrompt(input: String, candidates: [String], context: SessionContext) -> String {
-        // 构建候选列表
+    private func buildPrompt(input: String, candidates: [CandidateInfo], pwd: String, lastCmd: String, files: String) -> String {
+        // 构建候选列表，包含频率信息
         let candidateList = candidates.enumerated()
-            .map { "\($0.offset): \($0.element)" }
+            .map { "\($0.offset): \($0.element.cmd) (×\($0.element.freq))" }
             .joined(separator: "\n")
 
-        // 简洁 prompt，让模型直接输出数字
+        // 包含上下文的 prompt
         return """
-        Which is best for "\(input)"? Reply ONLY the number.
+        pwd: \(pwd)
+        files: \(files)
+        last: \(lastCmd)
+        input: \(input)
         \(candidateList)
-        Answer:
+        Best? Reply number only:
         """
     }
 
