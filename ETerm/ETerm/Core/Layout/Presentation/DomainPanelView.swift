@@ -237,6 +237,12 @@ final class DomainPanelView: NSView {
 
         // 更新 Header 显示的 Tab
         let tabs = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
+
+        // Debug: 打印每个 Tab 的 rustTerminalId
+        for tab in tabs {
+            print("🔄 [DomainPanelView] updateUI - tab: \(tab.title), rustTerminalId: \(String(describing: tab.rustTerminalId))")
+        }
+
         headerView.setTabs(tabs)
 
         // 更新激活的 Tab
