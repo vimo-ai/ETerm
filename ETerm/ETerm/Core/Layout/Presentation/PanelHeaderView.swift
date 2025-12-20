@@ -340,7 +340,8 @@ final class PanelHeaderHostingView: NSView {
             tabView.setActive(isActive && isPanelActive)
             // 只有用户主动切换 Tab 时才清除装饰（自动更新不清除）
             if clearDecorationIfActive && isActive && isPageActive && isPanelActive {
-                tabView.clearDecoration()
+                // 清除模型中的装饰，视图会通过通知刷新
+                tabView.tab?.clearDecoration()
             }
         }
     }
@@ -364,21 +365,6 @@ final class PanelHeaderHostingView: NSView {
             let isTabActive = tabView.tabId == activeTabId
             // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
             tabView.setActive(isTabActive && isPanelActive)
-        }
-    }
-
-    /// 设置指定 Tab 的高亮状态
-    ///
-    /// 注意：TabItemView 现在从 Tab 模型读取 effectiveDecoration，此方法保留用于兼容
-    func setTabNeedsAttention(_ tabId: UUID, attention: Bool) {
-        for tabView in tabItemViews where tabView.tabId == tabId {
-            if attention {
-                // 使用 completed 装饰（橙色）
-                tabView.setDecoration(.completed)
-            } else {
-                tabView.clearDecoration()
-            }
-            break
         }
     }
 
