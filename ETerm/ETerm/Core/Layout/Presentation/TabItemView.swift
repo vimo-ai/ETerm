@@ -32,14 +32,8 @@ final class TabItemView: DraggableItemView {
     /// 所属 Page 是否激活
     private var isPageActive: Bool = true
 
-    /// Rust Terminal ID（用于 Claude 响应匹配）
-    var rustTerminalId: Int? {
-        didSet {
-            if rustTerminalId != oldValue {
-                print("🔗 [TabItemView] rustTerminalId updated: \(String(describing: oldValue)) → \(String(describing: rustTerminalId)), tabId: \(tabId)")
-            }
-        }
-    }
+    /// Rust Terminal ID（用于装饰通知匹配）
+    var rustTerminalId: Int?
 
     /// Tab 前缀 emoji（如 📱 表示 Mobile 正在查看）
     private var emoji: String?
@@ -198,11 +192,8 @@ extension TabItemView {
     @objc private func handleDecorationChanged(_ notification: Notification) {
         guard let userInfo = notification.userInfo,
               let terminalId = userInfo["terminal_id"] as? Int else {
-            print("🎨 [TabItemView] handleDecorationChanged: no terminal_id in userInfo")
             return
         }
-
-        print("🎨 [TabItemView] received decoration notification, target: \(terminalId), my rustTerminalId: \(String(describing: rustTerminalId))")
 
         // 检查是否是当前 Tab 的 terminal
         guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
@@ -211,8 +202,6 @@ extension TabItemView {
 
         // 获取装饰状态（可能为 nil，表示清除装饰）
         let newDecoration = userInfo["decoration"] as? TabDecoration
-
-        print("🎨 [TabItemView] decoration matched! terminal_id: \(terminalId), decoration: \(String(describing: newDecoration))")
 
         // 更新装饰状态
         setDecoration(newDecoration)
