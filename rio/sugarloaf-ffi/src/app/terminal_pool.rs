@@ -1963,7 +1963,7 @@ impl TerminalPool {
             match is_background {
                 Some(true) => {
                     // Background 模式，标记脏但不触发渲染
-                    // 使用全局路由标记 dirty（但不设置 needs_render）
+                    eprintln!("[RenderLoop] ⚠️ terminal {} is Background, skip render trigger", terminal_id);
                     let registry = global_terminal_registry().read();
                     if let Some(target) = registry.get(&terminal_id) {
                         target.dirty_flag.mark_dirty();
