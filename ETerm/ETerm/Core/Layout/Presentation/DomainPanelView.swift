@@ -245,9 +245,9 @@ final class DomainPanelView: NSView {
 
         headerView.setTabs(tabs)
 
-        // 更新激活的 Tab
+        // 更新激活的 Tab（自动更新不清除装饰，只有用户点击时才清除）
         if let activeTabId = panel.activeTabId {
-            headerView.setActiveTab(activeTabId)
+            headerView.setActiveTab(activeTabId, clearDecorationIfActive: false)
         }
 
         // 恢复需要高亮的 Tab 状态（从 Coordinator 查询）
