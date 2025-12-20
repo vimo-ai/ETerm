@@ -29,8 +29,9 @@ class DraggableItemView: NSView {
     /// 标题
     private(set) var title: String = ""
 
-    /// 更新标题
+    /// 更新标题（只在真正变化时才刷新视图）
     func setTitle(_ newTitle: String) {
+        guard title != newTitle else { return }
         title = newTitle
         updateItemView()
     }
@@ -142,14 +143,16 @@ class DraggableItemView: NSView {
 
     // MARK: - Public Methods
 
-    /// 设置激活状态
+    /// 设置激活状态（只在真正变化时才刷新视图）
     func setActive(_ active: Bool) {
+        guard isActive != active else { return }
         isActive = active
         updateItemView()
     }
 
-    /// 设置装饰状态
+    /// 设置装饰状态（只在真正变化时才刷新视图）
     func setDecoration(_ newDecoration: TabDecoration?) {
+        guard decoration != newDecoration else { return }
         decoration = newDecoration
         updateItemView()
     }
