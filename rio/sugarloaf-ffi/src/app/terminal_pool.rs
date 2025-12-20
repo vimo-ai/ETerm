@@ -744,8 +744,10 @@ impl TerminalPool {
         let rows = terminal.rows() as u16;
         let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
-        // 注入 ETERM_TERMINAL_ID 环境变量（用于 Claude Hook 调用）
-        env::set_var("ETERM_TERMINAL_ID", terminal.id().0.to_string());
+        // 注入 ETERM 环境变量
+        let terminal_id_str = terminal.id().0.to_string();
+        env::set_var("ETERM_TERMINAL_ID", &terminal_id_str);  // 用于 Claude Hook 调用
+        env::set_var("ETERM_SESSION_ID", &terminal_id_str);   // 用于 AI 自动补全
 
         // 统一使用 spawn 创建 PTY（支持指定工作目录）
         // 如果未指定工作目录，默认使用 $HOME
@@ -1510,6 +1512,27 @@ impl TerminalPool {
                                 rows,
                                 state.grid.history_size(),
                                 state.grid.display_offset(),
+                            );
+                        }
+
+                        // 绘制 IME 预编辑叠加层
+                        if let Some(ime) = &state.ime {
+                            use crate::domain::primitives::PhysicalPixels;
+                            let physical_cell_width = PhysicalPixels::new(logical_cell_size.width.value * scale);
+                            let physical_line_height = PhysicalPixels::new(logical_line_height.value * scale);
+                            let font_metrics = renderer.get_font_metrics();
+                            // 计算光标所在的屏幕行
+                            let cursor_screen_row = state.cursor.line()
+                                .saturating_sub(state.grid.history_size())
+                                .saturating_add(state.grid.display_offset());
+                            self.draw_ime_overlay(
+                                canvas,
+                                ime,
+                                state.cursor.col(),
+                                cursor_screen_row,
+                                physical_cell_width,
+                                physical_line_height,
+                                font_metrics.baseline_offset.value * scale,
                             );
                         }
 
@@ -2310,6 +2333,117 @@ impl TerminalPool {
                 &paint,
             );
         }
+    }
+
+    /// 绘制 IME 预编辑叠加层
+    ///
+    /// 使用逐字符渲染，确保和终端文本等宽对齐
+    fn draw_ime_overlay(
+        &self,
+        canvas: &skia_safe::Canvas,
+        ime: &crate::domain::ImeView,
+        cursor_col: usize,
+        cursor_screen_row: usize,
+        cell_width: crate::domain::primitives::PhysicalPixels,
+        line_height: crate::domain::primitives::PhysicalPixels,
+        baseline_offset: f32,
+    ) {
+        use skia_safe::{Paint, Color4f, Point, Font, FontMgr, FontStyle};
+
+        let ime_x = cursor_col as f32 * cell_width.value;
+        let ime_y = cursor_screen_row as f32 * line_height.value;
+
+        // 计算预编辑文本的显示宽度（按字符宽度）
+        // 简单判断：ASCII 单宽，非 ASCII（如中文）双宽
+        let ime_display_width: f32 = ime.text.chars().map(|c| {
+            let char_width = if c.is_ascii() { 1 } else { 2 };
+            char_width as f32 * cell_width.value
+        }).sum();
+
+        // 1. 绘制半透明背景
+        let mut bg_paint = Paint::default();
+        bg_paint.set_anti_alias(true);
+        bg_paint.set_color4f(Color4f::new(0.2, 0.2, 0.4, 0.85), None);
+        bg_paint.set_style(skia_safe::PaintStyle::Fill);
+        let bg_rect = skia_safe::Rect::from_xywh(ime_x, ime_y, ime_display_width, line_height.value);
+        canvas.draw_rect(bg_rect, &bg_paint);
+
+        // 2. 逐字符绘制预编辑文本
+        let font_mgr = FontMgr::new();
+        let font_size = line_height.value * 0.75;  // 和终端字体大小保持一致
+
+        // 尝试使用 Maple Mono，回退到系统字体
+        let typeface = font_mgr
+            .match_family_style("Maple Mono NF CN", FontStyle::normal())
+            .or_else(|| font_mgr.match_family_style("Menlo", FontStyle::normal()))
+            .unwrap_or_else(|| font_mgr.legacy_make_typeface(None, FontStyle::normal()).unwrap());
+
+        let font = Font::from_typeface(&typeface, font_size);
+
+        let mut text_paint = Paint::default();
+        text_paint.set_anti_alias(true);
+        text_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 1.0), None);
+
+        let mut x_offset = ime_x;
+        for ch in ime.text.chars() {
+            let char_width = if ch.is_ascii() { 1 } else { 2 };
+            let char_cell_width = char_width as f32 * cell_width.value;
+
+            // 查找支持该字符的字体
+            let (draw_font, _is_emoji) = if font.unichar_to_glyph(ch as i32) != 0 {
+                (font.clone(), false)
+            } else {
+                // 回退到系统字体
+                if let Some(fallback_tf) = font_mgr.match_family_style_character(
+                    "",
+                    FontStyle::normal(),
+                    &[],
+                    ch as i32,
+                ) {
+                    (Font::from_typeface(&fallback_tf, font_size), fallback_tf.family_name().to_lowercase().contains("emoji"))
+                } else {
+                    (font.clone(), false)
+                }
+            };
+
+            // 绘制字符
+            let text_y = ime_y + baseline_offset;
+            let char_str = ch.to_string();
+            canvas.draw_str(&char_str, Point::new(x_offset, text_y), &draw_font, &text_paint);
+
+            x_offset += char_cell_width;
+        }
+
+        // 3. 绘制下划线
+        let mut underline_paint = Paint::default();
+        underline_paint.set_anti_alias(true);
+        underline_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.6), None);
+        underline_paint.set_style(skia_safe::PaintStyle::Stroke);
+        underline_paint.set_stroke_width(1.0);
+
+        let underline_y = ime_y + line_height.value - 2.0;
+        canvas.draw_line(
+            Point::new(ime_x, underline_y),
+            Point::new(ime_x + ime_display_width, underline_y),
+            &underline_paint,
+        );
+
+        // 4. 绘制预编辑内光标（竖线）
+        let cursor_x_in_ime: f32 = ime.text.chars()
+            .take(ime.cursor_offset)
+            .map(|c| {
+                let w = if c.is_ascii() { 1 } else { 2 };
+                w as f32 * cell_width.value
+            })
+            .sum();
+        let ime_cursor_x = ime_x + cursor_x_in_ime;
+
+        let mut cursor_paint = Paint::default();
+        cursor_paint.set_anti_alias(true);
+        cursor_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.9), None);
+        cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+        let cursor_rect = skia_safe::Rect::from_xywh(ime_cursor_x, ime_y + 2.0, 2.0, line_height.value - 4.0);
+        canvas.draw_rect(cursor_rect, &cursor_paint);
     }
 }
 
