@@ -65,9 +65,6 @@ final class TerminalTab {
     /// 滚动偏移量（用于选区跟随）
     private(set) var displayOffset: Int = 0
 
-    /// 待恢复的 CWD（用于 Session 恢复）
-    private(set) var pendingCwd: String?
-
     /// 搜索信息（Tab 级别）
     private(set) var searchInfo: TabSearchInfo?
 
@@ -87,18 +84,6 @@ final class TerminalTab {
     /// 设置 Rust 终端 ID
     func setRustTerminalId(_ terminalId: Int?) {
         self.rustTerminalId = terminalId
-    }
-
-    /// 设置待恢复的 CWD（用于 Session 恢复）
-    func setPendingCwd(_ cwd: String) {
-        self.pendingCwd = cwd
-    }
-
-    /// 获取并清除待恢复的 CWD
-    func takePendingCwd() -> String? {
-        let cwd = pendingCwd
-        pendingCwd = nil
-        return cwd
     }
 
     // MARK: - Tab 管理

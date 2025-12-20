@@ -158,16 +158,6 @@ final class Tab {
         terminalContent?.setRustTerminalId(terminalId)
     }
 
-    /// 设置待恢复的 CWD（仅终端 Tab 有效）
-    func setPendingCwd(_ cwd: String) {
-        terminalContent?.setPendingCwd(cwd)
-    }
-
-    /// 获取并清除待恢复的 CWD（仅终端 Tab 有效）
-    func takePendingCwd() -> String? {
-        return terminalContent?.takePendingCwd()
-    }
-
     /// 搜索信息（仅终端 Tab 有效）
     var searchInfo: TabSearchInfo? {
         return terminalContent?.searchInfo
