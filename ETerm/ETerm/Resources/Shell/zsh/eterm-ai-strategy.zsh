@@ -67,6 +67,11 @@ _zsh_autosuggest_strategy_ai() {
     local req_id="req-${RANDOM}-${EPOCHREALTIME}"
     _ETERM_AI_LAST_REQ_IDS[$ETERM_SESSION_ID]="$req_id"
 
+    # Collect context
+    local current_dir="${PWD/#$HOME/~}"
+    local last_cmd="${history[$((HISTCMD-1))]}"
+    local dir_files=$(ls -1 2>/dev/null | head -15 | tr '\n' ' ')
+
     # Build JSON request
     local escaped_input=$(_eterm_json_escape "$input")
     local json_candidates=""
@@ -76,7 +81,7 @@ _zsh_autosuggest_strategy_ai() {
     done
     json_candidates="[${json_candidates%,}]"
 
-    local request="{\"id\":\"$req_id\",\"session_id\":\"$ETERM_SESSION_ID\",\"input\":\"$escaped_input\",\"candidates\":$json_candidates}"
+    local request="{\"id\":\"$req_id\",\"session_id\":\"$ETERM_SESSION_ID\",\"input\":\"$escaped_input\",\"candidates\":$json_candidates,\"pwd\":\"$(_eterm_json_escape "$current_dir")\",\"last_cmd\":\"$(_eterm_json_escape "$last_cmd")\",\"files\":\"$(_eterm_json_escape "$dir_files")\"}"
 
     # Non-blocking socket connection
     local fd
