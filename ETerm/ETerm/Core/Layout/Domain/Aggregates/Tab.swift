@@ -82,7 +82,13 @@ final class Tab {
 
     /// 清除装饰
     func clearDecoration() {
+        guard decoration != nil else { return }
         decoration = nil
+        NotificationCenter.default.post(
+            name: .tabDecorationChanged,
+            object: nil,
+            userInfo: ["tabId": id]
+        )
     }
 
     // MARK: - 状态管理
