@@ -763,12 +763,14 @@ final class UIServiceImpl: UIService {
                         let isCurrentPage = (page.pageId == coordinator.terminalWindow.activePageId)
 
                         if !isCurrentPage {
-                            // 不是当前 Page，发送 Page 装饰通知
-                            let attention = (decoration != nil)
+                            // 不是当前 Page，发送 Page 装饰通知（传递完整的 decoration）
                             NotificationCenter.default.post(
                                 name: NSNotification.Name("PageNeedsAttention"),
                                 object: nil,
-                                userInfo: ["pageId": page.pageId, "attention": attention]
+                                userInfo: [
+                                    "pageId": page.pageId,
+                                    "decoration": decoration as Any
+                                ]
                             )
                         }
                         return
