@@ -698,10 +698,12 @@ struct AppKitPageBar: NSViewRepresentable {
 
     private func updatePages(_ pageBarView: PageBarHostingView) {
         // 从 coordinator 获取 Pages 数据
-        let pages = coordinator.terminalWindow.pages.map { page in
+        let pageModels = coordinator.terminalWindow.pages
+        let pages = pageModels.map { page in
             (id: page.pageId, title: page.title)
         }
-        pageBarView.setPages(pages)
+        // 传递 Page 模型，用于 PageItemView 读取 effectiveDecoration
+        pageBarView.setPages(pages, pageModels: pageModels)
 
         // 设置激活的 Page
         if let activePageId = coordinator.terminalWindow.activePageId {

@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @StateObject private var configManager = AIConfigManager.shared
+    @StateObject private var ollamaService = OllamaService.shared
 
     @State private var apiKey: String = ""
     @State private var baseURL: String = ""
@@ -17,6 +18,14 @@ struct SettingsView: View {
     @State private var testStatus: TestStatus = .idle
     @State private var showTestResult = false
     @State private var testMessage = ""
+
+    // Ollama 配置
+    @State private var ollamaModel: String = ""
+    @State private var ollamaBaseURL: String = ""
+    @State private var ollamaTestStatus: TestStatus = .idle
+    @State private var ollamaTestMessage: String = ""
+    @State private var showOllamaTestResult: Bool = false
+    @State private var availableModels: [String] = []
 
     // 开发者选项
     @State private var debugLogEnabled: Bool = LogManager.shared.debugEnabled
@@ -125,6 +134,125 @@ struct SettingsView: View {
                         }
                     }
 
+                    // 本地 AI (Ollama) 配置
+                    SettingsSectionView(title: "本地 AI (Ollama)") {
+                        VStack(alignment: .leading, spacing: 16) {
+                            // 状态显示
+                            HStack {
+                                Circle()
+                                    .fill(ollamaStatusColor)
+                                    .frame(width: 8, height: 8)
+                                Text(ollamaService.status.displayText)
+                                    .font(.subheadline)
+                                Spacer()
+                                Button("刷新状态") {
+                                    refreshOllamaStatus()
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(ollamaTestStatus == .testing)
+                            }
+
+                            Divider()
+
+                            // Base URL
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Ollama 地址")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+
+                                TextField("http://localhost:11434", text: $ollamaBaseURL)
+                                    .textFieldStyle(.roundedBorder)
+                            }
+
+                            // 模型选择
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("模型")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                    if !availableModels.isEmpty {
+                                        Text("\(availableModels.count) 个可用")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+
+                                HStack {
+                                    if availableModels.isEmpty {
+                                        TextField("qwen3:0.6b", text: $ollamaModel)
+                                            .textFieldStyle(.roundedBorder)
+                                    } else {
+                                        Picker("", selection: $ollamaModel) {
+                                            ForEach(availableModels, id: \.self) { model in
+                                                Text(model).tag(model)
+                                            }
+                                        }
+                                        .labelsHidden()
+                                    }
+
+                                    Button("刷新") {
+                                        refreshModels()
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+
+                            Divider()
+
+                            // 操作按钮
+                            HStack(spacing: 12) {
+                                Button(action: testOllamaConnection) {
+                                    HStack {
+                                        if ollamaTestStatus == .testing {
+                                            ProgressView()
+                                                .scaleEffect(0.7)
+                                                .frame(width: 14, height: 14)
+                                        } else {
+                                            Image(systemName: ollamaTestStatus == .success ? "checkmark.circle" : "antenna.radiowaves.left.and.right")
+                                        }
+                                        Text(ollamaTestStatus == .testing ? "测试中..." : "测试连接")
+                                    }
+                                }
+                                .disabled(ollamaTestStatus == .testing)
+
+                                Spacer()
+
+                                Button("保存", action: saveOllamaConfig)
+                                    .buttonStyle(.borderedProminent)
+                            }
+
+                            // 测试结果
+                            if showOllamaTestResult {
+                                HStack {
+                                    Image(systemName: ollamaTestStatus == .success ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                        .foregroundColor(ollamaTestStatus == .success ? .green : .red)
+                                    Text(ollamaTestMessage)
+                                        .font(.caption)
+                                }
+                                .padding(8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(ollamaTestStatus == .success ? Color.green.opacity(0.1) : Color.red.opacity(0.1))
+                                )
+                            }
+
+                            // 帮助信息
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("命令补全 AI 建议")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                Text("启用后，在终端输入命令时会使用本地 AI 从历史记录中选择最合适的建议。")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("需要安装 Ollama 并下载模型：ollama pull qwen3:0.6b")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
+
                     // 开发者选项
                     SettingsSectionView(title: "开发者选项") {
                         VStack(alignment: .leading, spacing: 12) {
@@ -185,6 +313,7 @@ struct SettingsView: View {
             }
         }
         .onAppear(perform: loadConfig)
+    .onAppear(perform: loadOllamaConfig)
     }
 
     // MARK: - 辅助视图
@@ -289,6 +418,87 @@ struct SettingsView: View {
                         testStatus = .idle
                         showTestResult = false
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - Ollama 配置
+
+    private var ollamaStatusColor: Color {
+        switch ollamaService.status {
+        case .ready: return .green
+        case .notInstalled, .notRunning, .modelNotFound: return .orange
+        case .error: return .red
+        case .unknown: return .gray
+        }
+    }
+
+    private func loadOllamaConfig() {
+        let settings = ollamaService.settings
+        ollamaModel = settings.model
+        ollamaBaseURL = settings.baseURL
+
+        // 自动刷新状态和模型列表
+        refreshOllamaStatus()
+        refreshModels()
+    }
+
+    private func saveOllamaConfig() {
+        var newSettings = ollamaService.settings
+        newSettings.model = ollamaModel
+        newSettings.baseURL = ollamaBaseURL
+        ollamaService.updateSettings(newSettings)
+
+        ollamaTestStatus = .success
+        ollamaTestMessage = "配置已保存"
+        showOllamaTestResult = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            showOllamaTestResult = false
+            ollamaTestStatus = .idle
+        }
+    }
+
+    private func refreshOllamaStatus() {
+        Task {
+            await ollamaService.checkHealth()
+        }
+    }
+
+    private func refreshModels() {
+        Task {
+            let models = await ollamaService.listModels()
+            await MainActor.run {
+                availableModels = models
+                // 如果当前选择的模型不在列表中，保持原值
+                if !models.isEmpty && !models.contains(ollamaModel) && ollamaModel.isEmpty {
+                    ollamaModel = models.first ?? "qwen3:0.6b"
+                }
+            }
+        }
+    }
+
+    private func testOllamaConnection() {
+        ollamaTestStatus = .testing
+        showOllamaTestResult = false
+
+        Task {
+            let healthy = await ollamaService.checkHealth()
+
+            await MainActor.run {
+                if healthy {
+                    ollamaTestStatus = .success
+                    ollamaTestMessage = "连接成功！Ollama 可用"
+                } else {
+                    ollamaTestStatus = .failure
+                    ollamaTestMessage = ollamaService.status.displayText
+                }
+                showOllamaTestResult = true
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    ollamaTestStatus = .idle
+                    showOllamaTestResult = false
                 }
             }
         }

@@ -41,6 +41,12 @@ enum ETermPaths {
     /// AI 配置文件: ~/.eterm/config/ai.json
     static let aiConfig = config + "/ai.json"
 
+    /// Ollama 配置文件: ~/.eterm/config/ollama.json
+    static let ollamaConfig = config + "/ollama.json"
+
+    /// AI Socket 文件: ~/.eterm/tmp/ai.sock
+    static let aiSocket = tmp + "/ai.sock"
+
     /// 会话配置文件: ~/.eterm/config/session.json
     static let sessionConfig = config + "/session.json"
 
