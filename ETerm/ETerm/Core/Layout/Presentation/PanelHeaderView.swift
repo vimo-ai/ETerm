@@ -336,13 +336,14 @@ final class PanelHeaderHostingView: NSView {
         // 更新激活状态
         for tabView in tabItemViews {
             let isActive = tabView.tabId == tabId
-            // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
-            tabView.setActive(isActive && isPanelActive)
+            // 先清除装饰（在 setActive 刷新视图之前）
             // 只有用户主动切换 Tab 时才清除装饰（自动更新不清除）
             if clearDecorationIfActive && isActive && isPageActive && isPanelActive {
-                // 清除模型中的装饰，视图会通过通知刷新
                 tabView.tab?.clearDecoration()
             }
+            // 再更新激活状态（触发视图刷新）
+            // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
+            tabView.setActive(isActive && isPanelActive)
         }
     }
 

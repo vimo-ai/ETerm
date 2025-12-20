@@ -181,7 +181,6 @@ final class AISocketServer {
     }
 
     private func acceptLoop() {
-        print("[AISocket] acceptLoop 开始运行")
         var clientAddr = sockaddr_un()
         var addrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
 
@@ -193,23 +192,18 @@ final class AISocketServer {
             }
 
             if clientSocket >= 0 {
-                print("[AISocket] accept 成功, fd=\(clientSocket)")
                 queue.async { [weak self] in
                     self?.handleClient(socket: clientSocket)
                 }
             } else if errno == EAGAIN || errno == EWOULDBLOCK {
-                // 非阻塞模式，没有连接，短暂休眠
                 Thread.sleep(forTimeInterval: 0.01)
             } else if isRunning {
-                print("[AISocket] accept 失败: errno=\(errno)")
                 Thread.sleep(forTimeInterval: 0.1)
             }
         }
-        print("[AISocket] acceptLoop 结束")
     }
 
     private func handleClient(socket clientSocket: Int32) {
-        print("[AISocket] 新客户端连接")
         defer { close(clientSocket) }
 
         // 设置读取超时
@@ -223,20 +217,13 @@ final class AISocketServer {
         // 读取数据
         var buffer = [CChar](repeating: 0, count: 65536)
         let bytesRead = recv(clientSocket, &buffer, buffer.count - 1, 0)
-
-        print("[AISocket] 读取字节数: \(bytesRead)")
-        guard bytesRead > 0 else {
-            print("[AISocket] 无数据")
-            return
-        }
+        guard bytesRead > 0 else { return }
 
         buffer[bytesRead] = 0
         let text = String(cString: buffer)
-        print("[AISocket] 收到数据: \(text.prefix(200))")
 
         // 按换行符分割（支持多条消息）
         let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
-        print("[AISocket] 行数: \(lines.count)")
 
         for line in lines {
             processLine(line, clientSocket: clientSocket)
@@ -244,22 +231,15 @@ final class AISocketServer {
     }
 
     private func processLine(_ line: String, clientSocket: Int32) {
-        print("[AISocket] processLine: \(line.prefix(100))")
-        guard let lineData = line.data(using: .utf8) else {
-            print("[AISocket] 无法转换为 UTF8")
-            return
-        }
+        guard let lineData = line.data(using: .utf8) else { return }
 
         do {
             let request = try JSONDecoder().decode(AISocketRequest.self, from: lineData)
-            print("[AISocket] 解析成功: id=\(request.id)")
 
             guard let handler = handler else {
-                print("[AISocket] handler 未设置!")
                 sendResponse(AISocketResponse(id: request.id, index: 0, status: .skip), to: clientSocket)
                 return
             }
-            print("[AISocket] 调用 handler")
 
             // 异步处理请求
             let semaphore = DispatchSemaphore(value: 0)
@@ -272,18 +252,14 @@ final class AISocketServer {
 
             // 等待响应（最多 200ms）
             let waitResult = semaphore.wait(timeout: .now() + 0.2)
-            print("[AISocket] 等待结果: \(waitResult == .timedOut ? "超时" : "成功")")
 
             if waitResult == .timedOut {
-                print("[AISocket] 超时，返回 skip")
                 sendResponse(AISocketResponse(id: request.id, index: 0, status: .skip), to: clientSocket)
             } else if let response = response {
-                print("[AISocket] 返回响应: \(response.status)")
                 sendResponse(response, to: clientSocket)
             }
 
         } catch {
-            print("[AISocket] JSON 解析失败: \(error)")
             sendResponse(AISocketResponse(id: "unknown", index: 0, status: .skip), to: clientSocket)
         }
     }

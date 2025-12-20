@@ -185,6 +185,9 @@ func handleConvertToTestCommand(testName: String) {
 
 // MARK: - 应用启动
 
+// 忽略 SIGPIPE 信号，避免 socket 写入时崩溃
+signal(SIGPIPE, SIG_IGN)
+
 // 处理命令行参数
 guard handleCommandLineArguments() else {
     exit(0)
