@@ -46,8 +46,8 @@ class DraggableItemView: NSView {
     /// 是否鼠标悬停
     private(set) var isHovered: Bool = false
 
-    /// Claude 响应完成提醒状态
-    private(set) var needsAttention: Bool = false
+    /// Tab 装饰状态（通用机制，由插件控制）
+    private(set) var decoration: TabDecoration?
 
     /// 是否正在拖拽
     private var isDragging: Bool = false
@@ -148,18 +148,25 @@ class DraggableItemView: NSView {
         updateItemView()
     }
 
-    /// 设置提醒状态
-    func setNeedsAttention(_ attention: Bool) {
-        needsAttention = attention
+    /// 设置装饰状态
+    func setDecoration(_ newDecoration: TabDecoration?) {
+        decoration = newDecoration
         updateItemView()
     }
 
-    /// 清除提醒状态
-    func clearAttention() {
-        if needsAttention {
-            needsAttention = false
+    /// 清除装饰状态
+    func clearDecoration() {
+        if decoration != nil {
+            decoration = nil
             updateItemView()
         }
+    }
+
+    // MARK: - 兼容性（已废弃，保留给其他代码过渡）
+
+    /// 是否需要注意（兼容旧 API）
+    var needsAttention: Bool {
+        decoration != nil
     }
 
     // MARK: - 子类可覆盖的方法

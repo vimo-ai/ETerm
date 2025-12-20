@@ -6,6 +6,50 @@
 
 import Foundation
 import SwiftUI
+import AppKit
+
+// MARK: - Tab 装饰（通用机制，核心层定义）
+
+/// Tab 装饰状态
+///
+/// 插件可以通过 UIService.setTabDecoration() 设置 Tab 的视觉装饰。
+/// 核心层只负责渲染，不知道具体业务含义。
+///
+/// 示例：
+/// - Claude 运行中：橙色脉冲
+/// - AI 助手思考中：蓝色呼吸
+/// - 任务完成：绿色静态
+public struct TabDecoration: Equatable {
+    /// 装饰颜色
+    public let color: NSColor
+
+    /// 动画样式
+    public let style: Style
+
+    /// 动画样式
+    public enum Style: Equatable {
+        /// 静态颜色（无动画）
+        case solid
+        /// 脉冲动画（透明度周期变化）
+        case pulse
+        /// 呼吸动画（颜色渐变）
+        case breathing
+    }
+
+    public init(color: NSColor, style: Style = .solid) {
+        self.color = color
+        self.style = style
+    }
+}
+
+/// Tab 装饰变化通知
+///
+/// userInfo:
+/// - "terminal_id": Int - 目标终端 ID
+/// - "decoration": TabDecoration? - 装饰状态，nil 表示清除
+extension Notification.Name {
+    public static let tabDecorationChanged = Notification.Name("tabDecorationChanged")
+}
 
 /// 插件上下文 - 聚合插件所需的系统能力
 ///
@@ -110,4 +154,23 @@ protocol UIService: AnyObject {
         title: String,
         viewProvider: @escaping () -> AnyView
     )
+
+    // MARK: - Tab 装饰 API
+
+    /// 设置 Tab 装饰
+    ///
+    /// 用于在 Tab 上显示视觉反馈（如运行状态、完成提醒等）。
+    /// 核心层只负责渲染，不知道具体业务含义。
+    ///
+    /// - Parameters:
+    ///   - terminalId: 目标终端 ID
+    ///   - decoration: 装饰状态，nil 表示清除
+    func setTabDecoration(terminalId: Int, decoration: TabDecoration?)
+
+    /// 清除 Tab 装饰
+    ///
+    /// 等同于 setTabDecoration(terminalId:, decoration: nil)
+    ///
+    /// - Parameter terminalId: 目标终端 ID
+    func clearTabDecoration(terminalId: Int)
 }
