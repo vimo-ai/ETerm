@@ -830,16 +830,15 @@ final class WindowManager: NSObject {
 
                 switch tab.content {
                 case .terminal:
-                    // 终端 Tab：获取 CWD
-                    var cwd = NSHomeDirectory()  // 默认值
-                    if let terminalId = tab.rustTerminalId,
-                       let actualCwd = coordinator.getCwd(terminalId: Int(terminalId)) {
-                        cwd = actualCwd
-                    }
+                    // 终端 Tab：通过 Registry 获取 CWD（统一接口，支持所有状态）
+                    let workingDirectory = coordinator.getWorkingDirectory(
+                        tabId: tab.tabId,
+                        terminalId: tab.rustTerminalId.map { Int($0) }
+                    )
                     tabState = TabState(
                         tabId: tab.tabId.uuidString,
                         title: tab.title,
-                        cwd: cwd
+                        cwd: workingDirectory.path
                     )
 
                 case .view(let viewContent):
