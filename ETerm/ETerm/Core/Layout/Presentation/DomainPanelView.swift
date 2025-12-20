@@ -244,15 +244,6 @@ final class DomainPanelView: NSView {
             headerView.setActiveTab(activeTabId, clearDecorationIfActive: false)
         }
 
-        // 恢复需要高亮的 Tab 状态（从 Coordinator 查询）
-        if let coordinator = coordinator {
-            for tab in panel.tabs {
-                if coordinator.isTabNeedingAttention(tab.tabId) {
-                    headerView.setTabNeedsAttention(tab.tabId, attention: true)
-                }
-            }
-        }
-
         // 根据 activeTab 类型切换内容显示
         updateContentView()
     }

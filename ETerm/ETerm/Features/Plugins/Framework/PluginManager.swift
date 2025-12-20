@@ -741,9 +741,39 @@ final class UIServiceImpl: UIService {
                 "decoration": decoration as Any
             ]
         )
+
+        // 自动冒泡到 Page 级别：如果 Tab 所属 Page 不是当前 Page，也设置 Page 装饰
+        bubbleDecorationToPage(terminalId: terminalId, decoration: decoration)
     }
 
     func clearTabDecoration(terminalId: Int) {
         setTabDecoration(terminalId: terminalId, decoration: nil)
+    }
+
+    /// 将 Tab 装饰冒泡到 Page 级别
+    /// 如果 Tab 所属 Page 不是当前激活的 Page，则给 Page 也设置相同装饰
+    private func bubbleDecorationToPage(terminalId: Int, decoration: TabDecoration?) {
+        guard let coordinator = coordinator else { return }
+
+        // 找到 terminalId 对应的 Tab 和 Page
+        for page in coordinator.terminalWindow.pages {
+            for panel in page.allPanels {
+                if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                    // 检查是否是当前激活的 Page
+                    let isCurrentPage = (page.pageId == coordinator.terminalWindow.activePageId)
+
+                    if !isCurrentPage {
+                        // 不是当前 Page，发送 Page 装饰通知
+                        let attention = (decoration != nil)
+                        NotificationCenter.default.post(
+                            name: NSNotification.Name("PageNeedsAttention"),
+                            object: nil,
+                            userInfo: ["pageId": page.pageId, "attention": attention]
+                        )
+                    }
+                    return
+                }
+            }
+        }
     }
 }
