@@ -2299,22 +2299,30 @@ impl TerminalPool {
     /// - Background 模式：完整 VTE 解析但不触发渲染回调
     /// - 切换到 Active 时会自动触发一次渲染刷新
     pub fn set_terminal_mode(&self, terminal_id: usize, mode: crate::domain::aggregates::TerminalMode) {
-        let terminals = self.terminals.read();
-        if let Some(entry) = terminals.get(&terminal_id) {
-            // 先更新原子标记（无锁），让 event_queue_callback 能立即看到
-            let is_background = mode == crate::domain::aggregates::TerminalMode::Background;
-            entry.is_background.store(is_background, Ordering::Release);
+        let should_wakeup = {
+            let terminals = self.terminals.read();
+            if let Some(entry) = terminals.get(&terminal_id) {
+                // 先更新原子标记（无锁），让 event_queue_callback 能立即看到
+                let is_background = mode == crate::domain::aggregates::TerminalMode::Background;
+                entry.is_background.store(is_background, Ordering::Release);
 
-            // 尝试更新 Terminal 内部状态（非阻塞）
-            // 如果锁被占用则跳过，Terminal 状态会在下次渲染时通过原子标记同步
-            if let Some(mut terminal) = entry.terminal.try_lock() {
-                terminal.set_mode(mode);
-            }
+                // 尝试更新 Terminal 内部状态（非阻塞）
+                // 如果锁被占用则跳过，Terminal 状态会在下次渲染时通过原子标记同步
+                if let Some(mut terminal) = entry.terminal.try_lock() {
+                    terminal.set_mode(mode);
+                }
 
-            // 如果切换到 Active 模式，标记需要渲染
-            if mode == crate::domain::aggregates::TerminalMode::Active {
-                self.needs_render.store(true, Ordering::Release);
+                // 返回是否需要唤醒渲染
+                mode == crate::domain::aggregates::TerminalMode::Active
+            } else {
+                false
             }
+        }; // terminals 锁在这里释放
+
+        // 如果切换到 Active 模式，主动触发渲染
+        // 必须在 terminals 锁释放后调用，避免死锁
+        if should_wakeup {
+            route_wakeup_event(terminal_id);
         }
     }
 
