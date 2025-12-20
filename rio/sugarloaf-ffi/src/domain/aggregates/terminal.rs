@@ -493,6 +493,7 @@ impl Terminal {
                 selection: base_state.selection,
                 search: Some(search_view.clone()),
                 hyperlink_hover: None,
+                ime: None,
             }
         } else {
             base_state
@@ -603,6 +604,29 @@ impl Terminal {
             } else {
                 None
             }
+        })
+    }
+
+    /// 获取当前光标的绝对坐标
+    ///
+    /// 用于 IME 预编辑定位。返回值包含历史缓冲区偏移，
+    /// 可以直接用于创建 ImeView。
+    ///
+    /// # 返回
+    /// - `(absolute_row, column)`: 绝对行号（i64，可能为负数）和列号
+    pub fn get_cursor_absolute_position(&self) -> (i64, usize) {
+        with_crosswords!(self, crosswords, {
+            let cursor = &crosswords.grid.cursor;
+            let pos = cursor.pos;
+            let history_size = crosswords.grid.history_size();
+
+            // 转换为绝对坐标
+            // Grid Line 坐标系：Line(0) 是当前可见区域第一行，负数是历史
+            // 绝对坐标：absolute_row = history_size + grid_line
+            let absolute_row = (history_size as i64) + (pos.row.0 as i64);
+            let col = pos.col.0 as usize;
+
+            (absolute_row, col)
         })
     }
 

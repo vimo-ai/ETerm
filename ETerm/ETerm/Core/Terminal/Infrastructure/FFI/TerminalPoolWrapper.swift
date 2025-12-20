@@ -544,6 +544,44 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         )
     }
 
+    // MARK: - IME Preedit
+
+    /// 设置 IME 预编辑状态
+    ///
+    /// 在当前光标位置显示预编辑文本（如拼音 "nihao"）。
+    /// Rust 侧会从 Terminal 获取当前光标的绝对坐标。
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - text: 预编辑文本
+    ///   - cursorOffset: 预编辑内的光标位置（字符索引）
+    /// - Returns: 是否成功
+    @discardableResult
+    func setImePreedit(terminalId: Int, text: String, cursorOffset: UInt32 = 0) -> Bool {
+        guard let handle = handle else { return false }
+        return text.withCString { cString in
+            terminal_pool_set_ime_preedit(handle, Int32(terminalId), cString, cursorOffset)
+        }
+    }
+
+    /// 清除 IME 预编辑状态
+    ///
+    /// 应在以下情况调用：
+    /// - 用户确认输入（commitText）
+    /// - 用户取消输入（cancelComposition）
+    /// - 终端切换
+    /// - 终端失去焦点
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: 是否成功
+    @discardableResult
+    func clearImePreedit(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_clear_ime_preedit(handle, Int32(terminalId))
+    }
+
+    // MARK: - Selection
+
     @discardableResult
     func clearSelection(terminalId: Int) -> Bool {
         guard let handle = handle else { return false }

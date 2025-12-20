@@ -9,7 +9,7 @@
 //! Phase 1 Step 3: 添加 Selection 支持
 //! Phase 1 Step 4: 添加 Search 支持
 
-use super::views::{CursorView, GridView, SelectionView, SearchView, HyperlinkHoverView};
+use super::views::{CursorView, GridView, SelectionView, SearchView, HyperlinkHoverView, ImeView};
 
 /// Terminal State - Read-only Snapshot
 ///
@@ -38,6 +38,9 @@ pub struct TerminalState {
 
     /// Hyperlink hover view - 超链接悬停视图（可选）
     pub hyperlink_hover: Option<HyperlinkHoverView>,
+
+    /// IME preedit view - 输入法预编辑视图（可选）
+    pub ime: Option<ImeView>,
 }
 
 impl TerminalState {
@@ -59,6 +62,7 @@ impl TerminalState {
             selection: None,
             search: None,
             hyperlink_hover: None,
+            ime: None,
         }
     }
 
@@ -75,6 +79,7 @@ impl TerminalState {
             selection: Some(selection),
             search: None,
             hyperlink_hover: None,
+            ime: None,
         }
     }
 
@@ -91,12 +96,19 @@ impl TerminalState {
             selection: None,
             search: Some(search),
             hyperlink_hover: None,
+            ime: None,
         }
     }
 
     /// 设置超链接悬停状态
     pub fn with_hyperlink_hover(mut self, hover: HyperlinkHoverView) -> Self {
         self.hyperlink_hover = Some(hover);
+        self
+    }
+
+    /// 设置 IME 预编辑状态
+    pub fn with_ime(mut self, ime: ImeView) -> Self {
+        self.ime = Some(ime);
         self
     }
 }

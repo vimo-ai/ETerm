@@ -472,7 +472,11 @@ impl Renderer {
             .saturating_sub(state.grid.history_size())
             .saturating_add(state.grid.display_offset());
 
-        let cursor_info = if state.cursor.is_visible() && cursor_screen_line == line {
+        // 光标是否在本行（用于 IME 渲染，不依赖光标可见性）
+        let cursor_on_this_line = cursor_screen_line == line;
+
+        // cursor_info 用于渲染光标本身（需要可见）
+        let cursor_info = if state.cursor.is_visible() && cursor_on_this_line {
             Some(CursorInfo {
                 col: state.cursor.col(),
                 shape: state.cursor.shape,
@@ -711,6 +715,7 @@ mod tests {
             selection: None,
             search: None,
             hyperlink_hover: None,
+            ime: None,
         }
     }
 
@@ -893,6 +898,7 @@ mod tests {
             selection: None,
             search: None,
             hyperlink_hover: None,
+            ime: None,
         }
     }
 
@@ -1225,6 +1231,7 @@ mod tests {
             )),
             search: None,
             hyperlink_hover: None,
+            ime: None,
         };
 
         // === 第一帧：渲染所有 100 行（全部 cache miss）===
