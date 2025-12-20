@@ -51,10 +51,12 @@ _zsh_autosuggest_strategy_ai() {
 
     # Get candidates from history (same logic as history strategy)
     local prefix="${input//(#m)[\\*?[\]<>()|^~#]/\\$MATCH}"
+    local pattern="$prefix*"
     local -a candidates
 
-    # Get unique matches, max 5
-    candidates=(${(u)${(M)${(v)history}:#${prefix}*}[1,5]})
+    # Use (R) subscript flag to get ALL matching values (like history strategy's (r))
+    # Then dedupe and take first 5
+    candidates=(${(u)history[(R)$pattern]}[1,5])
 
     # Need at least 2 candidates for AI to be useful
     (( ${#candidates} <= 1 )) && return
