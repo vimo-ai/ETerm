@@ -71,8 +71,11 @@ final class ClaudePlugin: Plugin {
     /// 处理思考开始
     @objc private func handleThinkingStart(_ notification: Notification) {
         guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
+            print("🔵 [ClaudePlugin] handleThinkingStart: no terminal_id")
             return
         }
+
+        print("🔵 [ClaudePlugin] handleThinkingStart, terminal_id: \(terminalId), context: \(context != nil)")
 
         // 设置"思考中"装饰：蓝色脉冲动画
         context?.ui.setTabDecoration(
@@ -84,8 +87,11 @@ final class ClaudePlugin: Plugin {
     /// 处理响应完成
     @objc private func handleResponseComplete(_ notification: Notification) {
         guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
+            print("🟠 [ClaudePlugin] handleResponseComplete: no terminal_id")
             return
         }
+
+        print("🟠 [ClaudePlugin] handleResponseComplete, terminal_id: \(terminalId), context: \(context != nil)")
 
         // 设置"完成"装饰：橙色静态（提醒用户查看）
         context?.ui.setTabDecoration(

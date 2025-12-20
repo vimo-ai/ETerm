@@ -203,6 +203,8 @@ extension TabItemView {
         // 获取装饰状态（可能为 nil，表示清除装饰）
         let newDecoration = userInfo["decoration"] as? TabDecoration
 
+        print("🎨 [TabItemView] decoration changed, terminal_id: \(terminalId), decoration: \(String(describing: newDecoration))")
+
         // 更新装饰状态
         setDecoration(newDecoration)
     }
