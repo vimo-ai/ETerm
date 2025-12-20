@@ -73,27 +73,21 @@ final class AICompletionService: AISocketRequestHandler {
     // MARK: - AISocketRequestHandler
 
     func handleRequest(_ request: AISocketRequest) async -> AISocketResponse {
-        print("[AICompletion] 收到请求: \(request.id), input=\(request.input), candidates=\(request.candidates.count)个")
-
         // 1. 检查是否启用
         guard settings.enabled else {
-            print("[AICompletion] 服务未启用")
             return AISocketResponse(id: request.id, index: 0, status: .skip)
         }
 
         // 2. 检查健康状态
         if Date() < unhealthyUntil {
-            print("[AICompletion] 处于不健康期间")
             return AISocketResponse(id: request.id, index: 0, status: .unhealthy)
         }
 
         // 3. 检查 Ollama 状态
         guard ollamaService.status.isReady else {
-            print("[AICompletion] Ollama 未就绪: \(ollamaService.status)")
             markUnhealthy()
             return AISocketResponse(id: request.id, index: 0, status: .unhealthy)
         }
-        print("[AICompletion] Ollama 状态正常")
 
         // 4. 取消该 session 的旧请求
         cancelPendingTask(for: request.sessionId)
@@ -154,11 +148,8 @@ final class AICompletionService: AISocketRequestHandler {
     // MARK: - 私有方法
 
     private func processRequest(_ request: AISocketRequest, cacheKey: CacheKey) async -> AISocketResponse {
-        print("[AICompletion] processRequest 开始")
-
         // 检查是否被取消
         if Task.isCancelled {
-            print("[AICompletion] 请求被取消")
             return AISocketResponse(id: request.id, index: 0, status: .skip)
         }
 
@@ -166,20 +157,17 @@ final class AICompletionService: AISocketRequestHandler {
         let pwd = request.pwd ?? ""
         let lastCmd = request.lastCmd ?? ""
         let files = request.files ?? ""
-        print("[AICompletion] 上下文: pwd=\(pwd), lastCmd=\(lastCmd), files=\(files.prefix(50))")
 
         // 调用 Ollama
         guard let index = await callOllama(
             input: request.input,
-            candidates: request.candidates,  // 现在是 [CandidateInfo]
+            candidates: request.candidates,
             pwd: pwd,
             lastCmd: lastCmd,
             files: files
         ) else {
-            print("[AICompletion] callOllama 返回 nil")
             return AISocketResponse(id: request.id, index: 0, status: .skip)
         }
-        print("[AICompletion] Ollama 返回索引: \(index)")
 
         // 缓存结果
         setCacheEntry(CacheEntry(index: index, timestamp: Date()), for: cacheKey)
@@ -189,27 +177,18 @@ final class AICompletionService: AISocketRequestHandler {
 
     private func callOllama(input: String, candidates: [CandidateInfo], pwd: String, lastCmd: String, files: String) async -> Int? {
         let prompt = buildPrompt(input: input, candidates: candidates, pwd: pwd, lastCmd: lastCmd, files: files)
-        print("[AICompletion] Prompt:\n\(prompt)")
 
         do {
             let response = try await ollamaService.generate(
                 prompt: prompt,
-                options: .fast  // 使用快速模式
+                options: .fast
             )
-            print("[AICompletion] Ollama 响应: \(response)")
-
-            let index = parseIndex(from: response, maxIndex: candidates.count - 1)
-            print("[AICompletion] 解析索引: \(String(describing: index))")
-            return index
+            return parseIndex(from: response, maxIndex: candidates.count - 1)
         } catch {
-            print("[AICompletion] Ollama 调用失败: \(error)")
-
-            if let ollamaError = error as? OllamaError {
-                if case .notReady = ollamaError {
-                    markUnhealthy()
-                }
+            if let ollamaError = error as? OllamaError,
+               case .notReady = ollamaError {
+                markUnhealthy()
             }
-
             return nil
         }
     }
