@@ -978,33 +978,33 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 系统从睡眠/锁屏唤醒
     @objc private func systemDidWake() {
-        logDebug("[RioMetalView] systemDidWake - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
+        logDebug("[RenderLoop] systemDidWake - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
         resumeRenderingIfNeeded()
     }
 
     /// 应用从后台切回前台
     @objc private func applicationDidBecomeActive() {
-        logDebug("[RioMetalView] applicationDidBecomeActive - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
+        logDebug("[RenderLoop] applicationDidBecomeActive - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
         resumeRenderingIfNeeded()
     }
 
     /// 恢复渲染（唤醒后）
     private func resumeRenderingIfNeeded() {
         guard isInitialized else {
-            logDebug("[RioMetalView] resumeRenderingIfNeeded - not initialized, skip")
+            logDebug("[RenderLoop] resumeRenderingIfNeeded - not initialized, skip")
             return
         }
 
         // 检查 CVDisplayLink 是否在运行
         if let scheduler = renderScheduler, !scheduler.isRunning {
-            logWarn("[RioMetalView] CVDisplayLink was stopped, restarting...")
+            logWarn("[RenderLoop] CVDisplayLink was stopped, restarting...")
             _ = scheduler.start()
         }
 
         // 强制同步布局并请求渲染（确保画面更新）
         lastLayoutHash = 0  // 清除缓存，强制同步
         requestRender()
-        logDebug("[RioMetalView] resumeRenderingIfNeeded - requested render")
+        logDebug("[RenderLoop] resumeRenderingIfNeeded - requested render")
     }
 
     private func initialize() {

@@ -111,12 +111,12 @@ impl RenderScheduler {
                     self.display_link = Some(dl);
                     true
                 } else {
-                    eprintln!("❌ [RenderScheduler] Failed to start DisplayLink");
+                    eprintln!("[RenderLoop] ❌ Failed to start DisplayLink");
                     false
                 }
             }
             None => {
-                eprintln!("❌ [RenderScheduler] Failed to create DisplayLink");
+                eprintln!("[RenderLoop] ❌ Failed to create DisplayLink");
                 false
             }
         }
