@@ -79,6 +79,18 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
         }
     }
 
+    // 4. IME 预编辑覆盖本行？（只在光标行显示）
+    if cursor_on_this_line {
+        if let Some(ime) = &state.ime {
+            hasher.write_usize(ime.cursor_offset);
+            // 写入文本内容的哈希，而非完整文本（避免内存分配）
+            for b in ime.text.bytes() {
+                hasher.write_u8(b);
+            }
+            hasher.write_u8(2); // 标记有 IME 预编辑
+        }
+    }
+
     hasher.finish()
 }
 
@@ -115,6 +127,7 @@ mod tests {
             selection: None,
             search: None,
             hyperlink_hover: None,
+            ime: None,
         }
     }
 
@@ -306,6 +319,7 @@ mod tests {
             )),
             search: None,
             hyperlink_hover: None,
+            ime: None,
         };
 
         // 计算所有 100 行的 state_hash

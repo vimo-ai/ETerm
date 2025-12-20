@@ -404,8 +404,8 @@ impl LineRasterizer {
                 }
             }
         }
-
-        // ===== 步骤 5: 获取 Image（626 行）=====
+        // ===== 步骤 5: 获取 Image =====
+        // 注意：IME 渲染已移到独立的 overlay 层（类似 SelectionOverlay）
         surface.image_snapshot().into()
     }
 }
@@ -434,6 +434,7 @@ mod tests {
             None,   // cursor_info
             None,   // search_info
             None,   // hyperlink_hover_info
+            None,   // ime_info
             &[],    // url_ranges
             800.0,  // line_width
             10.0,   // cell_width
@@ -473,6 +474,7 @@ mod tests {
             None,   // cursor_info
             None,   // search_info
             None,   // hyperlink_hover_info
+            None,   // ime_info
             &[],    // url_ranges
             800.0,
             10.0,

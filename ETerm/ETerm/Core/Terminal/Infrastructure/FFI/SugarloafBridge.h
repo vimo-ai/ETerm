@@ -572,6 +572,43 @@ FFIHyperlink terminal_pool_get_url_at(
 );
 
 // =============================================================================
+// IME Preedit API
+// =============================================================================
+
+/// Set IME preedit state
+///
+/// Display preedit text (e.g., pinyin "nihao") at the current cursor position.
+/// Rust side will get the absolute cursor coordinates from Terminal.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param text Preedit text (UTF-8 C string)
+/// @param cursor_offset Cursor position within preedit (character index, not bytes)
+/// @return true if successful
+bool terminal_pool_set_ime_preedit(
+    TerminalPoolHandle handle,
+    int32_t terminal_id,
+    const char* text,
+    uint32_t cursor_offset
+);
+
+/// Clear IME preedit state
+///
+/// Should be called when:
+/// - User confirms input (commitText)
+/// - User cancels input (cancelComposition)
+/// - Terminal switches
+/// - Terminal loses focus
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return true if successful
+bool terminal_pool_clear_ime_preedit(
+    TerminalPoolHandle handle,
+    int32_t terminal_id
+);
+
+// =============================================================================
 // RenderScheduler API (CVDisplayLink in Rust)
 // =============================================================================
 

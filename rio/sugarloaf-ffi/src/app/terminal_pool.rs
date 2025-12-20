@@ -215,6 +215,10 @@ struct TerminalEntry {
 
     /// 独立选区叠加层（不在 Terminal 内）
     selection_overlay: Arc<crate::infra::SelectionOverlay>,
+
+    /// IME 预编辑状态（独立存储，不修改 Terminal 聚合根）
+    /// 使用 RwLock 以支持渲染时无锁读取
+    ime_state: Arc<RwLock<Option<crate::domain::ImeView>>>,
 }
 
 /// 分离的终端（用于跨池迁移）
@@ -509,6 +513,7 @@ impl TerminalPool {
                 rows as usize,
             ))),  // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -569,6 +574,7 @@ impl TerminalPool {
                 rows as usize,
             ))),  // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -631,6 +637,7 @@ impl TerminalPool {
                 rows as usize,
             ))),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -698,6 +705,7 @@ impl TerminalPool {
                 rows as usize,
             ))),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -1218,6 +1226,78 @@ impl TerminalPool {
     }
 
     // ========================================================================
+    // IME 预编辑
+    // ========================================================================
+
+    /// 设置 IME 预编辑状态
+    ///
+    /// 从 Terminal 获取当前光标的绝对坐标，创建 ImeView 存储在 TerminalEntry 中。
+    /// 不修改 Terminal 聚合根，保持领域纯净。
+    ///
+    /// # 参数
+    /// - `id`: 终端 ID
+    /// - `text`: 预编辑文本（如 "nihao"）
+    /// - `cursor_offset`: 预编辑内的光标位置（字符索引）
+    ///
+    /// # 返回
+    /// - `true`: 设置成功
+    /// - `false`: 终端不存在或无法获取锁
+    pub fn set_ime_preedit(&self, id: usize, text: String, cursor_offset: usize) -> bool {
+        // 空文本等同于 clear
+        if text.is_empty() {
+            return self.clear_ime_preedit(id);
+        }
+
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            // 创建 ImeView（不需要坐标，渲染时直接用光标位置）
+            let ime_view = crate::domain::ImeView::new(text, cursor_offset);
+            *entry.ime_state.write() = Some(ime_view);
+
+            // 标记脏，触发重新渲染
+            entry.dirty_flag.mark_dirty();
+            self.needs_render.store(true, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 清除 IME 预编辑状态
+    ///
+    /// # 参数
+    /// - `id`: 终端 ID
+    ///
+    /// # 返回
+    /// - `true`: 清除成功
+    /// - `false`: 终端不存在
+    pub fn clear_ime_preedit(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            // 只有当前有 IME 状态时才需要清除和触发渲染
+            let had_ime = entry.ime_state.read().is_some();
+            if had_ime {
+                *entry.ime_state.write() = None;
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 获取 IME 预编辑状态（用于渲染）
+    ///
+    /// 返回 ImeView 的克隆（如果存在）
+    pub fn get_ime_state(&self, id: usize) -> Option<crate::domain::ImeView> {
+        self.terminals
+            .read()
+            .get(&id)
+            .and_then(|e| e.ime_state.read().clone())
+    }
+
+    // ========================================================================
     // 渲染流程（统一提交）
     // ========================================================================
 
@@ -1322,7 +1402,7 @@ impl TerminalPool {
         // 解决：快速获取 Arc 引用后立即释放读锁，耗时操作在锁外执行
 
         // 阶段 1：快速获取 Arc 引用（读锁只持有几微秒）
-        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, _selection_overlay) = {
+        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, _selection_overlay, ime_state_arc) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
                 Some(entry) => {
@@ -1334,6 +1414,7 @@ impl TerminalPool {
                         entry.selection_cache.clone(),
                         entry.scroll_cache.clone(),
                         entry.selection_overlay.clone(),
+                        entry.ime_state.clone(),
                     )
                 },
                 None => return false,
@@ -1368,11 +1449,16 @@ impl TerminalPool {
                     }
 
                     // 获取状态快照（暂时保留，后续 Step 4 会从 RenderState 读取）
-                    let state = terminal.state();
+                    let mut state = terminal.state();
                     let rows = terminal.rows();
 
                     // 重置 damage（与获取 state 在同一 terminal 锁范围内，避免 TOCTOU）
                     terminal.reset_damage();
+
+                    // 添加 IME 状态（从 TerminalEntry 独立存储中获取，不在 Terminal 聚合根内）
+                    if let Some(ime) = ime_state_arc.read().clone() {
+                        state.ime = Some(ime);
+                    }
 
                     (state, rows)
                 },
