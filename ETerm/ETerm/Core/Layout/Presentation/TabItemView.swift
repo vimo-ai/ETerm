@@ -81,7 +81,9 @@ final class TabItemView: DraggableItemView {
     override var dragSessionEndedNotificationName: Notification.Name? { .tabDragSessionEnded }
 
     override func updateItemView() {
-        print("[TabItemView] 🎨 updateItemView: tabId=\(tabId), decoration=\(String(describing: decoration))")
+        if decoration != nil {
+            print("[TabItemView] 🎨 渲染有装饰: self=\(Unmanaged.passUnretained(self).toOpaque()) tabId=\(tabId.uuidString.prefix(8))")
+        }
 
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
@@ -200,13 +202,12 @@ extension TabItemView {
 
         // 检查是否是当前 Tab 的 terminal
         guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
-            print("[TabItemView] ⏭️ 跳过: 通知 terminalId=\(terminalId), 我的 rustTerminalId=\(String(describing: rustTerminalId))")
             return
         }
 
         // 获取装饰状态（可能为 nil，表示清除装饰）
         let newDecoration = userInfo["decoration"] as? TabDecoration
-        print("[TabItemView] ✅ 匹配成功: terminalId=\(terminalId), decoration=\(String(describing: newDecoration))")
+        print("[TabItemView] ✅ 匹配成功: self=\(Unmanaged.passUnretained(self).toOpaque()) terminalId=\(terminalId)")
 
         // 更新装饰状态
         setDecoration(newDecoration)
