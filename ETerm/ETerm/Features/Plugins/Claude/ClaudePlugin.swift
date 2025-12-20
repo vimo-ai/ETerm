@@ -74,10 +74,10 @@ final class ClaudePlugin: Plugin {
             return
         }
 
-        // 设置"思考中"装饰：蓝色脉冲动画
+        // 设置"思考中"装饰：蓝色脉冲动画（优先级 101，高于 active）
         context?.ui.setTabDecoration(
             terminalId: terminalId,
-            decoration: TabDecoration(color: .systemBlue, style: .pulse)
+            decoration: .thinking
         )
     }
 
@@ -87,10 +87,10 @@ final class ClaudePlugin: Plugin {
             return
         }
 
-        // 设置"完成"装饰：橙色静态（提醒用户查看）
+        // 设置"完成"装饰：橙色静态（优先级 5，低于 active）
         context?.ui.setTabDecoration(
             terminalId: terminalId,
-            decoration: TabDecoration(color: .systemOrange, style: .solid)
+            decoration: .completed
         )
     }
 

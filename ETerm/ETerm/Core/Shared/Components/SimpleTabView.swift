@@ -255,7 +255,7 @@ struct SimpleTabView: View {
             SimpleTabView(
                 "Claude Running",
                 isActive: false,
-                decoration: TabDecoration(color: .systemOrange, style: .pulse),
+                decoration: .completed,
                 height: 26,
                 onClose: { }
             )
@@ -265,14 +265,14 @@ struct SimpleTabView: View {
             SimpleTabView(
                 "AI Thinking",
                 isActive: false,
-                decoration: TabDecoration(color: .systemBlue, style: .breathing),
+                decoration: .thinking,
                 height: 26,
                 onClose: { }
             )
             SimpleTabView(
                 "Completed",
                 isActive: false,
-                decoration: TabDecoration(color: .systemGreen, style: .solid),
+                decoration: .completed,
                 height: 26,
                 onClose: { }
             )
@@ -291,7 +291,7 @@ struct SimpleTabView: View {
             SimpleTabView(
                 "Claude Running",
                 isActive: false,
-                decoration: TabDecoration(color: .systemOrange, style: .pulse),
+                decoration: .completed,
                 height: 26,
                 onClose: { }
             )

@@ -94,6 +94,24 @@ final class Page {
         return false
     }
 
+    // MARK: - 装饰系统
+
+    /// 获取所有 Tab
+    var allTabs: [Tab] {
+        allPanels.flatMap { $0.tabs }
+    }
+
+    /// 有效装饰（收敛所有 Tab 的最高优先级装饰）
+    ///
+    /// Page 不存储装饰，只计算其下所有 Tab 的最高优先级装饰。
+    /// 用于在 PageBar 上显示状态提示。
+    var effectiveDecoration: TabDecoration? {
+        allTabs
+            .map { $0.effectiveDecoration }
+            .filter { $0.priority > 0 }  // 排除默认状态
+            .max { $0.priority < $1.priority }
+    }
+
     // MARK: - Title Management
 
     /// 重命名页面

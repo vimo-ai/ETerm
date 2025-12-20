@@ -194,6 +194,9 @@ final class PageBarHostingView: NSView {
     private var pages: [PageItem] = []
     private var activePageId: UUID?
 
+    /// Page 模型注册表（用于传递给 PageItemView）
+    private var pageRegistry: [UUID: Page] = [:]
+
     // Page 标签容器（使用穿透容器）
     private let pageContainer = PassthroughContainerView()
     private var pageItemViews: [PageItemView] = []
@@ -233,16 +236,17 @@ final class PageBarHostingView: NSView {
     }
 
     @objc private func handlePageNeedsAttention(_ notification: Notification) {
+        // PageItemView 现在从 Page 模型读取 effectiveDecoration，并自己处理通知
+        // 这里仅作为备份刷新机制，确保 PageItemView 在没有收到通知时也能更新
         guard let userInfo = notification.userInfo,
               let pageId = userInfo["pageId"] as? UUID else {
             return
         }
 
-        // 优先使用 decoration（新机制），否则使用 attention（兼容旧机制）
-        if let decoration = userInfo["decoration"] as? TabDecoration {
-            setPageDecoration(pageId, decoration: decoration)
-        } else if let attention = userInfo["attention"] as? Bool {
-            setPageNeedsAttention(pageId, attention: attention)
+        // 找到对应的 PageItemView 并触发刷新
+        for pageView in pageItemViews where pageView.pageId == pageId {
+            pageView.updateItemView()
+            break
         }
     }
 
@@ -281,7 +285,9 @@ final class PageBarHostingView: NSView {
 
         // 创建新的 Page 视图
         for (index, page) in pages.enumerated() {
-            let pageView = PageItemView(pageId: page.id, title: page.title)
+            // 从 registry 获取 Page 模型引用
+            let pageModel = pageRegistry[page.id]
+            let pageView = PageItemView(pageId: page.id, title: page.title, page: pageModel)
             pageView.setActive(page.id == activePageId)
             pageView.setShowCloseButton(pageCount > 1)
 
@@ -388,7 +394,17 @@ final class PageBarHostingView: NSView {
     }
 
     /// 设置 Page 列表（只在数据变化时重建）
-    func setPages(_ newPages: [(id: UUID, title: String)]) {
+    ///
+    /// - Parameters:
+    ///   - newPages: Page 信息元组数组
+    ///   - pageModels: Page 模型数组（可选，用于传递给 PageItemView 以读取 effectiveDecoration）
+    func setPages(_ newPages: [(id: UUID, title: String)], pageModels: [Page] = []) {
+        // 更新 registry
+        pageRegistry.removeAll()
+        for page in pageModels {
+            pageRegistry[page.pageId] = page
+        }
+
         let newPageItems = newPages.map { PageItem(id: $0.id, title: $0.title) }
 
         // 检查是否需要重建（ID 列表或标题变化）
@@ -411,31 +427,6 @@ final class PageBarHostingView: NSView {
             if isActive {
                 pageView.clearDecoration()
             }
-        }
-    }
-
-    /// 设置指定 Page 的装饰（新机制，支持完整的 TabDecoration）
-    func setPageDecoration(_ pageId: UUID, decoration: TabDecoration?) {
-        for pageView in pageItemViews where pageView.pageId == pageId {
-            if let decoration = decoration {
-                pageView.setDecoration(decoration)
-            } else {
-                pageView.clearDecoration()
-            }
-            break
-        }
-    }
-
-    /// 设置指定 Page 的提醒状态（兼容旧机制）
-    func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
-        for pageView in pageItemViews where pageView.pageId == pageId {
-            if attention {
-                // 使用默认橙色装饰（Page 级别的提醒）
-                pageView.setDecoration(TabDecoration(color: .systemOrange, style: .solid))
-            } else {
-                pageView.clearDecoration()
-            }
-            break
         }
     }
 

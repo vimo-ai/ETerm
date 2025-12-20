@@ -12,19 +12,26 @@ import AppKit
 
 /// Tab 装饰状态
 ///
-/// 插件可以通过 UIService.setTabDecoration() 设置 Tab 的视觉装饰。
-/// 核心层只负责渲染，不知道具体业务含义。
+/// 多级优先级系统：
+/// - 0: 默认（灰色）
+/// - 5: 已完成（橙色）
+/// - 100: active（#861717 深红）
+/// - 101: 思考中（蓝色脉冲）
 ///
-/// 示例：
-/// - Claude 运行中：橙色脉冲
-/// - AI 助手思考中：蓝色呼吸
-/// - 任务完成：绿色静态
+/// 插件可以通过 UIService.setTabDecoration() 设置 Tab 的视觉装饰。
+/// 显示时取最高优先级的装饰，Page 收敛所有 Tab 的最高优先级。
 public struct TabDecoration: Equatable {
+    /// 优先级（数值越大越优先显示）
+    public let priority: Int
+
     /// 装饰颜色
     public let color: NSColor
 
     /// 动画样式
     public let style: Style
+
+    /// 是否序列化（插件临时状态设为 false，quit 后消失）
+    public let persistent: Bool
 
     /// 动画样式
     public enum Style: Equatable {
@@ -36,10 +43,26 @@ public struct TabDecoration: Equatable {
         case breathing
     }
 
-    public init(color: NSColor, style: Style = .solid) {
+    public init(priority: Int, color: NSColor, style: Style = .solid, persistent: Bool = false) {
+        self.priority = priority
         self.color = color
         self.style = style
+        self.persistent = persistent
     }
+
+    // MARK: - 预定义装饰
+
+    /// 默认装饰（优先级 0）
+    public static let `default` = TabDecoration(priority: 0, color: .gray, style: .solid)
+
+    /// Active 装饰（优先级 100，深红色）
+    public static let active = TabDecoration(priority: 100, color: NSColor(red: 0x86/255, green: 0x17/255, blue: 0x17/255, alpha: 1.0), style: .solid)
+
+    /// 思考中装饰（优先级 101，蓝色脉冲）
+    public static let thinking = TabDecoration(priority: 101, color: .systemBlue, style: .pulse)
+
+    /// 已完成装饰（优先级 5，橙色静态）
+    public static let completed = TabDecoration(priority: 5, color: .systemOrange, style: .solid)
 }
 
 /// Tab 装饰变化通知

@@ -235,9 +235,9 @@ final class DomainPanelView: NSView {
     func updateUI() {
         guard let panel = panel else { return }
 
-        // 更新 Header 显示的 Tab
-        let tabs = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
-        headerView.setTabs(tabs)
+        // 更新 Header 显示的 Tab（传入 Tab 模型数组用于装饰系统）
+        let tabInfos = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
+        headerView.setTabs(tabInfos, tabModels: panel.tabs)
 
         // 更新激活的 Tab（自动更新不清除装饰，只有用户点击时才清除）
         if let activeTabId = panel.activeTabId {
