@@ -104,6 +104,10 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 终端池（用于渲染）
     private var terminalPool: TerminalPoolProtocol
 
+    /// 工作目录注册表（CWD 状态管理 - Single Source of Truth）
+    /// 通过依赖注入，由 WindowManager 创建并传入
+    let workingDirectoryRegistry: TerminalWorkingDirectoryRegistry
+
     /// 坐标映射器
     private(set) var coordinateMapper: CoordinateMapper?
 
@@ -141,11 +145,22 @@ class TerminalWindowCoordinator: ObservableObject {
 
     // MARK: - Initialization
 
-    init(initialWindow: TerminalWindow, terminalPool: TerminalPoolProtocol? = nil) {
+    /// 初始化终端窗口协调器
+    ///
+    /// - Parameters:
+    ///   - initialWindow: 初始的 TerminalWindow
+    ///   - workingDirectoryRegistry: CWD 注册表（依赖注入）
+    ///   - terminalPool: 终端池（可选，默认使用 MockTerminalPool）
+    init(
+        initialWindow: TerminalWindow,
+        workingDirectoryRegistry: TerminalWorkingDirectoryRegistry,
+        terminalPool: TerminalPoolProtocol? = nil
+    ) {
         // 获取继承的 CWD（如果有）
         self.initialCwd = WindowCwdManager.shared.takePendingCwd()
 
         self.terminalWindow = initialWindow
+        self.workingDirectoryRegistry = workingDirectoryRegistry
         self.terminalPool = terminalPool ?? MockTerminalPool()
 
         // 不在这里创建终端，等 setTerminalPool 时再创建
@@ -314,6 +329,19 @@ class TerminalWindowCoordinator: ObservableObject {
         // 设置终端 ID
         newTab.setRustTerminalId(terminalId)
 
+        // 注册到 CWD Registry
+        let cwdToRegister: WorkingDirectory
+        if let cwd = inheritedCwd {
+            cwdToRegister = .inherited(path: cwd)
+        } else {
+            cwdToRegister = .userHome()
+        }
+        workingDirectoryRegistry.registerActiveTerminal(
+            tabId: newTab.tabId,
+            terminalId: terminalId,
+            workingDirectory: cwdToRegister
+        )
+
         // 录制事件
         recordTabEvent(.tabCreate(panelId: panelId, tabId: newTab.tabId, contentType: "terminal"))
 
@@ -355,6 +383,13 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 设置终端 ID
         newTab.setRustTerminalId(terminalId)
+
+        // 注册到 CWD Registry
+        workingDirectoryRegistry.registerActiveTerminal(
+            tabId: newTab.tabId,
+            terminalId: terminalId,
+            workingDirectory: .inherited(path: cwd)
+        )
 
         // 如果有命令，延迟执行
         if let cmd = command, !cmd.isEmpty {
@@ -513,6 +548,23 @@ class TerminalWindowCoordinator: ObservableObject {
         return terminalPool.getCwd(terminalId: terminalId)
     }
 
+    /// 获取 Tab 的工作目录（统一接口，推荐使用）
+    ///
+    /// 通过 Registry 查询，支持所有状态的 Tab：
+    /// - 已创建终端：查询运行时 CWD（OSC 7 > proc_pidinfo）
+    /// - 分离终端：使用分离时捕获的 CWD
+    /// - 待创建终端：使用注册的 CWD
+    ///
+    /// **重要**: 此方法总能返回有效值，不会返回 nil。
+    ///
+    /// - Parameters:
+    ///   - tabId: Tab ID
+    ///   - terminalId: Rust 终端 ID（可选）
+    /// - Returns: 工作目录（保证有效）
+    func getWorkingDirectory(tabId: UUID, terminalId: Int?) -> WorkingDirectory {
+        return workingDirectoryRegistry.queryWorkingDirectory(tabId: tabId, terminalId: terminalId)
+    }
+
     /// 调整字体大小
     ///
     /// - Parameter operation: 字体大小操作（增大、减小、重置）
@@ -522,7 +574,18 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 设置终端池（由 PanelRenderView 初始化后调用）
     func setTerminalPool(_ pool: TerminalPoolProtocol) {
-        // 关闭旧终端池的所有终端，并清空 rustTerminalId
+        // 1. 捕获所有当前终端的 CWD（Pool 切换前）
+        var tabIdMapping: [Int: UUID] = [:]
+        for panel in terminalWindow.allPanels {
+            for tab in panel.tabs {
+                if let terminalId = tab.rustTerminalId {
+                    tabIdMapping[Int(terminalId)] = tab.tabId
+                }
+            }
+        }
+        workingDirectoryRegistry.captureBeforePoolTransition(tabIdMapping: tabIdMapping)
+
+        // 2. 关闭旧终端池的所有终端，并清空 rustTerminalId
         for panel in terminalWindow.allPanels {
             for tab in panel.tabs {
                 if let terminalId = tab.rustTerminalId {
@@ -532,16 +595,28 @@ class TerminalWindowCoordinator: ObservableObject {
             }
         }
 
-        // 切换到新终端池
+        // 3. 切换到新终端池
         self.terminalPool = pool
+        workingDirectoryRegistry.setTerminalPool(pool)
 
-        // 如果有待附加的分离终端，优先使用它们（跨窗口迁移场景）
+        // 4. 如果有待附加的分离终端，优先使用它们（跨窗口迁移场景）
         if !pendingDetachedTerminals.isEmpty {
             attachPendingDetachedTerminals()
         } else {
             // 否则创建新终端
             createTerminalsForAllTabs()
         }
+
+        // 5. Pool 切换完成，恢复状态
+        var newMapping: [UUID: Int] = [:]
+        for panel in terminalWindow.allPanels {
+            for tab in panel.tabs {
+                if let terminalId = tab.rustTerminalId {
+                    newMapping[tab.tabId] = Int(terminalId)
+                }
+            }
+        }
+        workingDirectoryRegistry.restoreAfterPoolTransition(tabIdMapping: newMapping)
 
         // 初始化键盘系统
         self.keyboardSystem = KeyboardSystem(coordinator: self)
@@ -563,13 +638,30 @@ class TerminalWindowCoordinator: ObservableObject {
                     let newTerminalId = terminalPool.attachTerminal(detached)
                     if newTerminalId >= 0 {
                         tab.setRustTerminalId(newTerminalId)
+                        // 通知注册表重新附加
+                        workingDirectoryRegistry.reattachTerminal(
+                            tabId: tab.tabId,
+                            newTerminalId: newTerminalId
+                        )
                     }
                 } else {
                     // 如果没有找到分离的终端，创建新的
-                    let cwd = tab.takePendingCwd()
-                    let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: cwd)
+                    // 从 Registry 查询 CWD（非破坏性）
+                    let cwd = workingDirectoryRegistry.queryWorkingDirectory(
+                        tabId: tab.tabId,
+                        terminalId: nil
+                    )
+                    let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: cwd.path)
                     if terminalId >= 0 {
                         tab.setRustTerminalId(terminalId)
+                        // 创建成功，迁移状态
+                        workingDirectoryRegistry.promotePendingTerminal(
+                            tabId: tab.tabId,
+                            terminalId: terminalId
+                        )
+                    } else {
+                        // 创建失败，保留状态供重试
+                        workingDirectoryRegistry.retainPendingTerminal(tabId: tab.tabId)
                     }
                 }
             }
@@ -717,13 +809,21 @@ class TerminalWindowCoordinator: ObservableObject {
             for (_, tab) in panel.tabs.enumerated() {
                 // 如果 Tab 还没有终端，创建一个
                 if tab.rustTerminalId == nil {
-                    // 检查是否有待恢复的 CWD（用于 Session 恢复）
-                    let cwdToUse = tab.takePendingCwd()
+                    // 从 Registry 查询 CWD（非破坏性，支持重试）
+                    let cwd = workingDirectoryRegistry.queryWorkingDirectory(
+                        tabId: tab.tabId,
+                        terminalId: nil
+                    )
 
                     // 使用 Tab 的 stableId 创建终端
-                    let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: cwdToUse)
+                    let terminalId = createTerminalForTab(tab, cols: 80, rows: 24, cwd: cwd.path)
                     if terminalId >= 0 {
                         tab.setRustTerminalId(terminalId)
+                        // 创建成功，迁移状态到 active
+                        workingDirectoryRegistry.promotePendingTerminal(
+                            tabId: tab.tabId,
+                            terminalId: terminalId
+                        )
 
                         // 检查是否需要恢复 Claude 会话
                         let tabIdString = tab.tabId.uuidString
@@ -734,6 +834,9 @@ class TerminalWindowCoordinator: ObservableObject {
                                 self?.restoreClaudeSession(terminalId: capturedTerminalId, sessionId: sessionId)
                             }
                         }
+                    } else {
+                        // 创建失败，保留状态供重试
+                        workingDirectoryRegistry.retainPendingTerminal(tabId: tab.tabId)
                     }
                 }
             }

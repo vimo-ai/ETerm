@@ -96,9 +96,13 @@ final class WindowManager: NSObject {
         // macOS 可能会把窗口移到主屏幕，需要显式设置 frame
         window.setFrame(windowFrame, display: false)
 
-        // 创建 TerminalWindow（从 WindowState 恢复完整结构）
-        let terminalWindow = restoreTerminalWindow(from: windowState)
-        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+        // 创建 Registry 和 TerminalWindow（从 WindowState 恢复完整结构）
+        let registry = TerminalWorkingDirectoryRegistry()
+        let terminalWindow = restoreTerminalWindow(from: windowState, registry: registry)
+        let coordinator = TerminalWindowCoordinator(
+            initialWindow: terminalWindow,
+            workingDirectoryRegistry: registry
+        )
 
         // 设置内容视图，传入 Coordinator
         let contentView = ContentView(coordinator: coordinator)
@@ -129,7 +133,11 @@ final class WindowManager: NSObject {
     }
 
     /// 从 WindowState 恢复 TerminalWindow
-    private func restoreTerminalWindow(from windowState: WindowState) -> TerminalWindow {
+    ///
+    /// - Parameters:
+    ///   - windowState: 窗口状态
+    ///   - registry: CWD 注册表，用于注册恢复的 CWD
+    private func restoreTerminalWindow(from windowState: WindowState, registry: TerminalWorkingDirectoryRegistry) -> TerminalWindow {
         // 创建所有 Pages，并记录每个 Page 的 activePanelId
         var pages: [Page] = []
         var activePanelIdByPage: [UUID: UUID] = [:]
@@ -138,8 +146,8 @@ final class WindowManager: NSObject {
             // 创建空 Page（用于恢复）
             let page = Page.createEmptyForRestore(title: pageState.title)
 
-            // 递归恢复 Panel 布局
-            if let restoredLayout = restorePanelLayout(pageState.layout, to: page) {
+            // 递归恢复 Panel 布局（传入 registry 以注册 CWD）
+            if let restoredLayout = restorePanelLayout(pageState.layout, to: page, registry: registry) {
                 // 设置恢复的布局到 Page
                 page.setRootLayout(restoredLayout)
 
@@ -194,9 +202,10 @@ final class WindowManager: NSObject {
     /// - Parameters:
     ///   - layoutState: 布局状态
     ///   - page: 目标 Page
+    ///   - registry: CWD 注册表，用于注册恢复的 CWD
     /// - Returns: 恢复后的 PanelLayout
     @discardableResult
-    private func restorePanelLayout(_ layoutState: PanelLayoutState, to page: Page) -> PanelLayout? {
+    private func restorePanelLayout(_ layoutState: PanelLayoutState, to page: Page, registry: TerminalWorkingDirectoryRegistry) -> PanelLayout? {
         switch layoutState {
         case .leaf(_, let tabStates, let activeTabIndex):
             // 恢复叶子节点（Panel）
@@ -209,8 +218,11 @@ final class WindowManager: NSObject {
                     // 终端 Tab：创建 TerminalTab，包装为 Tab
                     let tabId = UUID(uuidString: tabState.tabId) ?? UUID()
                     let terminalTab = TerminalTab(tabId: tabId, title: tabState.title)
-                    // 保存 CWD 到 Tab 的临时属性（用于后续创建终端）
-                    terminalTab.setPendingCwd(tabState.cwd)
+                    // 将 CWD 注册到 Registry（作为 Single Source of Truth）
+                    registry.registerPendingTerminal(
+                        tabId: tabId,
+                        workingDirectory: .restored(path: tabState.cwd)
+                    )
                     let tab = Tab(tabId: tabId, title: tabState.title, content: .terminal(terminalTab))
                     tabs.append(tab)
 
@@ -254,8 +266,8 @@ final class WindowManager: NSObject {
 
         case .horizontal(let ratio, let first, let second):
             // 恢复水平分割（递归）
-            guard let firstLayout = restorePanelLayout(first, to: page),
-                  let secondLayout = restorePanelLayout(second, to: page) else {
+            guard let firstLayout = restorePanelLayout(first, to: page, registry: registry),
+                  let secondLayout = restorePanelLayout(second, to: page, registry: registry) else {
                 return nil
             }
 
@@ -263,8 +275,8 @@ final class WindowManager: NSObject {
 
         case .vertical(let ratio, let first, let second):
             // 恢复垂直分割（递归）
-            guard let firstLayout = restorePanelLayout(first, to: page),
-                  let secondLayout = restorePanelLayout(second, to: page) else {
+            guard let firstLayout = restorePanelLayout(first, to: page, registry: registry),
+                  let secondLayout = restorePanelLayout(second, to: page, registry: registry) else {
                 return nil
             }
 
@@ -301,10 +313,28 @@ final class WindowManager: NSObject {
         let window = KeyableWindow.create(contentRect: windowFrame)
 
         // 🔑 关键：在 WindowManager 中创建 Coordinator，而不是在 SwiftUI 中
+        let registry = TerminalWorkingDirectoryRegistry()
         let initialTab = TerminalWindow.makeDefaultTab()
         let initialPanel = EditorPanel(initialTab: initialTab)
         let terminalWindow = TerminalWindow(initialPanel: initialPanel)
-        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+
+        // 注册初始 Tab 的 CWD（继承自当前活动终端，如果有的话）
+        if let cwd = inheritCwd {
+            registry.registerPendingTerminal(
+                tabId: initialTab.tabId,
+                workingDirectory: .inherited(path: cwd)
+            )
+        } else {
+            registry.registerPendingTerminal(
+                tabId: initialTab.tabId,
+                workingDirectory: .userHome()
+            )
+        }
+
+        let coordinator = TerminalWindowCoordinator(
+            initialWindow: terminalWindow,
+            workingDirectoryRegistry: registry
+        )
 
         // 设置内容视图，传入 Coordinator
         let contentView = ContentView(coordinator: coordinator)
@@ -517,8 +547,32 @@ final class WindowManager: NSObject {
         let window = KeyableWindow.create(contentRect: frame)
 
         // 4. 创建新 Coordinator，使用移除的 Page 作为初始内容
+        let registry = TerminalWorkingDirectoryRegistry()
         let terminalWindow = TerminalWindow(initialPage: removedPage)
-        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+
+        // 从源 Coordinator 复制 CWD 状态到新 Registry
+        for panel in page.allPanels {
+            for tab in panel.tabs {
+                let cwd = sourceCoordinator.getWorkingDirectory(
+                    tabId: tab.tabId,
+                    terminalId: tab.rustTerminalId.map { Int($0) }
+                )
+                // 注册为 detached 状态，等待 reattach
+                registry.registerActiveTerminal(
+                    tabId: tab.tabId,
+                    terminalId: tab.rustTerminalId.map { Int($0) } ?? -1,
+                    workingDirectory: cwd
+                )
+                if let terminalId = tab.rustTerminalId {
+                    registry.detachTerminal(tabId: tab.tabId, terminalId: Int(terminalId))
+                }
+            }
+        }
+
+        let coordinator = TerminalWindowCoordinator(
+            initialWindow: terminalWindow,
+            workingDirectoryRegistry: registry
+        )
 
         // 5. 设置待附加的终端（会在 setTerminalPool 时自动附加）
         coordinator.setPendingDetachedTerminals(detachedTerminals)
@@ -648,10 +702,21 @@ final class WindowManager: NSObject {
         let window = KeyableWindow.create(contentRect: frame)
 
         // 🔑 在 WindowManager 中创建 Coordinator
+        let registry = TerminalWorkingDirectoryRegistry()
         let initialTab = TerminalWindow.makeDefaultTab()
         let initialPanel = EditorPanel(initialTab: initialTab)
         let terminalWindow = TerminalWindow(initialPanel: initialPanel)
-        let coordinator = TerminalWindowCoordinator(initialWindow: terminalWindow)
+
+        // 注册初始 Tab 的 CWD（默认使用用户主目录）
+        registry.registerPendingTerminal(
+            tabId: initialTab.tabId,
+            workingDirectory: .userHome()
+        )
+
+        let coordinator = TerminalWindowCoordinator(
+            initialWindow: terminalWindow,
+            workingDirectoryRegistry: registry
+        )
 
         // 3. 设置内容视图，传入 Coordinator
         let contentView = ContentView(coordinator: coordinator)
@@ -830,16 +895,15 @@ final class WindowManager: NSObject {
 
                 switch tab.content {
                 case .terminal:
-                    // 终端 Tab：获取 CWD
-                    var cwd = NSHomeDirectory()  // 默认值
-                    if let terminalId = tab.rustTerminalId,
-                       let actualCwd = coordinator.getCwd(terminalId: Int(terminalId)) {
-                        cwd = actualCwd
-                    }
+                    // 终端 Tab：通过 Registry 获取 CWD（统一接口，支持所有状态）
+                    let workingDirectory = coordinator.getWorkingDirectory(
+                        tabId: tab.tabId,
+                        terminalId: tab.rustTerminalId.map { Int($0) }
+                    )
                     tabState = TabState(
                         tabId: tab.tabId.uuidString,
                         title: tab.title,
-                        cwd: cwd
+                        cwd: workingDirectory.path
                     )
 
                 case .view(let viewContent):
