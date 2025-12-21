@@ -194,6 +194,9 @@ final class PageBarHostingView: NSView {
     private var pages: [PageItem] = []
     private var activePageId: UUID?
 
+    /// Page 模型注册表（用于传递给 PageItemView）
+    private var pageRegistry: [UUID: Page] = [:]
+
     // Page 标签容器（使用穿透容器）
     private let pageContainer = PassthroughContainerView()
     private var pageItemViews: [PageItemView] = []
@@ -233,12 +236,18 @@ final class PageBarHostingView: NSView {
     }
 
     @objc private func handlePageNeedsAttention(_ notification: Notification) {
+        // PageItemView 现在从 Page 模型读取 effectiveDecoration，并自己处理通知
+        // 这里仅作为备份刷新机制，确保 PageItemView 在没有收到通知时也能更新
         guard let userInfo = notification.userInfo,
-              let pageId = userInfo["pageId"] as? UUID,
-              let attention = userInfo["attention"] as? Bool else {
+              let pageId = userInfo["pageId"] as? UUID else {
             return
         }
-        setPageNeedsAttention(pageId, attention: attention)
+
+        // 找到对应的 PageItemView 并触发刷新
+        for pageView in pageItemViews where pageView.pageId == pageId {
+            pageView.updateItemView()
+            break
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -276,13 +285,17 @@ final class PageBarHostingView: NSView {
 
         // 创建新的 Page 视图
         for (index, page) in pages.enumerated() {
-            let pageView = PageItemView(pageId: page.id, title: page.title)
+            // 从 registry 获取 Page 模型引用
+            let pageModel = pageRegistry[page.id]
+            let pageView = PageItemView(pageId: page.id, title: page.title, page: pageModel)
             pageView.setActive(page.id == activePageId)
             pageView.setShowCloseButton(pageCount > 1)
 
             // 捕获 pageId 而不是 page，避免闭包捕获问题
             let pageId = page.id
-            pageView.onTap = { [weak self] in
+            pageView.onTap = { [weak self, weak pageModel] in
+                // 用户点击 Page 时清除该 Page 下所有 Tab 的装饰
+                pageModel?.allTabs.forEach { $0.clearDecoration() }
                 self?.onPageClick?(pageId)
             }
 
@@ -381,7 +394,17 @@ final class PageBarHostingView: NSView {
     }
 
     /// 设置 Page 列表（只在数据变化时重建）
-    func setPages(_ newPages: [(id: UUID, title: String)]) {
+    ///
+    /// - Parameters:
+    ///   - newPages: Page 信息元组数组
+    ///   - pageModels: Page 模型数组（可选，用于传递给 PageItemView 以读取 effectiveDecoration）
+    func setPages(_ newPages: [(id: UUID, title: String)], pageModels: [Page] = []) {
+        // 更新 registry
+        pageRegistry.removeAll()
+        for page in pageModels {
+            pageRegistry[page.pageId] = page
+        }
+
         let newPageItems = newPages.map { PageItem(id: $0.id, title: $0.title) }
 
         // 检查是否需要重建（ID 列表或标题变化）
@@ -397,21 +420,14 @@ final class PageBarHostingView: NSView {
     /// 设置激活的 Page
     func setActivePage(_ pageId: UUID) {
         activePageId = pageId
-        // 更新激活状态，并清除被激活 Page 的提醒状态
+        // 更新激活状态，并清除被激活 Page 下所有 Tab 的装饰状态
         for pageView in pageItemViews {
             let isActive = pageView.pageId == pageId
             pageView.setActive(isActive)
             if isActive {
-                pageView.clearAttention()
+                // 清除该 Page 下所有 Tab 的模型装饰
+                pageView.page?.allTabs.forEach { $0.clearDecoration() }
             }
-        }
-    }
-
-    /// 设置指定 Page 的提醒状态
-    func setPageNeedsAttention(_ pageId: UUID, attention: Bool) {
-        for pageView in pageItemViews where pageView.pageId == pageId {
-            pageView.setNeedsAttention(attention)
-            break
         }
     }
 
@@ -682,10 +698,12 @@ struct AppKitPageBar: NSViewRepresentable {
 
     private func updatePages(_ pageBarView: PageBarHostingView) {
         // 从 coordinator 获取 Pages 数据
-        let pages = coordinator.terminalWindow.pages.map { page in
+        let pageModels = coordinator.terminalWindow.pages
+        let pages = pageModels.map { page in
             (id: page.pageId, title: page.title)
         }
-        pageBarView.setPages(pages)
+        // 传递 Page 模型，用于 PageItemView 读取 effectiveDecoration
+        pageBarView.setPages(pages, pageModels: pageModels)
 
         // 设置激活的 Page
         if let activePageId = coordinator.terminalWindow.activePageId {

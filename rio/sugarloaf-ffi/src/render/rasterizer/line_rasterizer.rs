@@ -55,12 +55,7 @@ impl LineRasterizer {
     /// - background_color: 背景色
     /// - box_drawing_config: Box-drawing 字符渲染配置
     ///
-    /// 复用老代码逻辑：
-    /// 1. 创建 Skia surface（行尺寸）
-    /// 2. 填充背景色
-    /// 3. 遍历所有字形，绘制字符
-    /// 4. 绘制光标（如果有）
-    /// 5. 返回 Image
+    /// 注意：IME 渲染已移到独立的 overlay 层（draw_ime_overlay）
     pub fn render(
         &self,
         layout: &GlyphLayout,
@@ -409,8 +404,8 @@ impl LineRasterizer {
                 }
             }
         }
-
-        // ===== 步骤 5: 获取 Image（626 行）=====
+        // ===== 步骤 5: 获取 Image =====
+        // 注意：IME 渲染已移到独立的 overlay 层（类似 SelectionOverlay）
         surface.image_snapshot().into()
     }
 }
@@ -439,6 +434,7 @@ mod tests {
             None,   // cursor_info
             None,   // search_info
             None,   // hyperlink_hover_info
+            None,   // ime_info
             &[],    // url_ranges
             800.0,  // line_width
             10.0,   // cell_width
@@ -478,6 +474,7 @@ mod tests {
             None,   // cursor_info
             None,   // search_info
             None,   // hyperlink_hover_info
+            None,   // ime_info
             &[],    // url_ranges
             800.0,
             10.0,

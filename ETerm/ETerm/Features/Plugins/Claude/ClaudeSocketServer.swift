@@ -185,9 +185,36 @@ class ClaudeSocketServer {
     private func handleResponseComplete(event: ClaudeResponseCompleteEvent) {
         let eventType = event.event_type ?? "stop"
 
-        // session_end 事件：Claude 退出，清理映射
-        if eventType == "session_end" {
+        switch eventType {
+        case "session_start":
+            // 建立映射关系
+            ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
+            // 发送 session 开始通知
+            NotificationCenter.default.post(
+                name: .claudeSessionStart,
+                object: nil,
+                userInfo: [
+                    "session_id": event.session_id,
+                    "terminal_id": event.terminal_id
+                ]
+            )
+
+        case "user_prompt_submit":
+            // 用户提交问题，Claude 开始思考
+            ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
+
+            // 发送用户提交通知（用于显示"思考中"动画）
+            NotificationCenter.default.post(
+                name: .claudeUserPromptSubmit,
+                object: nil,
+                userInfo: [
+                    "session_id": event.session_id,
+                    "terminal_id": event.terminal_id
+                ]
+            )
+
+        case "session_end":
             // 发送 session 结束通知
             NotificationCenter.default.post(
                 name: .claudeSessionEnd,
@@ -197,27 +224,37 @@ class ClaudeSocketServer {
                     "terminal_id": event.terminal_id
                 ]
             )
-            return
+
+        case "stop":
+            // 建立/更新映射关系
+            ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
+
+            // 发送响应完成通知
+            NotificationCenter.default.post(
+                name: .claudeResponseComplete,
+                object: nil,
+                userInfo: [
+                    "session_id": event.session_id,
+                    "terminal_id": event.terminal_id
+                ]
+            )
+
+        default:
+            // notification 或其他事件
+            ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
         }
-
-        // 其他事件：建立/更新映射关系
-        ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
-
-        // 发送通知（跨层级跳转逻辑可以监听这个通知）
-        NotificationCenter.default.post(
-            name: .claudeResponseComplete,
-            object: nil,
-            userInfo: [
-                "session_id": event.session_id,
-                "terminal_id": event.terminal_id
-            ]
-        )
     }
 }
 
 // MARK: - Notification Names
 
 extension Notification.Name {
+    /// Claude 会话开始（用于设置"运行中"装饰）
+    static let claudeSessionStart = Notification.Name("claudeSessionStart")
+    /// 用户提交问题（用于设置"思考中"装饰）
+    static let claudeUserPromptSubmit = Notification.Name("claudeUserPromptSubmit")
+    /// Claude 响应完成（用于设置"完成"装饰）
     static let claudeResponseComplete = Notification.Name("claudeResponseComplete")
+    /// Claude 会话结束（用于清除装饰）
     static let claudeSessionEnd = Notification.Name("claudeSessionEnd")
 }

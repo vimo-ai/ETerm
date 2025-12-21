@@ -10,7 +10,7 @@
 
 use crate::display_link::DisplayLink;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// 渲染回调类型（在 Rust 侧完成整个渲染）
@@ -28,6 +28,13 @@ pub struct RenderScheduler {
 
     /// 渲染回调（调用 pool.render_all()）
     render_callback: Arc<Mutex<Option<RenderAllCallback>>>,
+
+    /// 调试统计：VSync 回调计数
+    callback_count: Arc<AtomicU64>,
+    /// 调试统计：实际渲染计数
+    render_count: Arc<AtomicU64>,
+    /// 调试统计：上次日志输出时间（秒）
+    last_log_time: Arc<AtomicU64>,
 }
 
 impl RenderScheduler {
@@ -37,6 +44,9 @@ impl RenderScheduler {
             display_link: None,
             needs_render: Arc::new(AtomicBool::new(false)),
             render_callback: Arc::new(Mutex::new(None)),
+            callback_count: Arc::new(AtomicU64::new(0)),
+            render_count: Arc::new(AtomicU64::new(0)),
+            last_log_time: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -59,12 +69,33 @@ impl RenderScheduler {
 
         let needs_render = self.needs_render.clone();
         let render_callback = self.render_callback.clone();
+        let callback_count = self.callback_count.clone();
+        let render_count = self.render_count.clone();
+        let last_log_time = self.last_log_time.clone();
 
         let display_link = DisplayLink::new(move || {
+            // 统计 VSync 回调次数
+            let cb_cnt = callback_count.fetch_add(1, Ordering::Relaxed) + 1;
+
             // 检查是否需要渲染
             let should_render = needs_render.swap(false, Ordering::AcqRel);
             if !should_render {
                 return;
+            }
+
+            // 统计实际渲染次数
+            let rnd_cnt = render_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+            // 每 5 秒输出一次统计日志
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let last_secs = last_log_time.load(Ordering::Relaxed);
+            if now_secs >= last_secs + 5 {
+                last_log_time.store(now_secs, Ordering::Relaxed);
+                eprintln!("[RenderLoop] stats: vsync={}, rendered={}, ratio={:.1}%",
+                    cb_cnt, rnd_cnt, (rnd_cnt as f64 / cb_cnt as f64) * 100.0);
             }
 
             // 调用渲染回调（在 Rust 侧完成整个渲染）
@@ -80,12 +111,12 @@ impl RenderScheduler {
                     self.display_link = Some(dl);
                     true
                 } else {
-                    eprintln!("❌ [RenderScheduler] Failed to start DisplayLink");
+                    eprintln!("[RenderLoop] ❌ Failed to start DisplayLink");
                     false
                 }
             }
             None => {
-                eprintln!("❌ [RenderScheduler] Failed to create DisplayLink");
+                eprintln!("[RenderLoop] ❌ Failed to create DisplayLink");
                 false
             }
         }

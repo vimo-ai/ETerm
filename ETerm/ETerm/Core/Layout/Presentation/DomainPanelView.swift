@@ -235,22 +235,13 @@ final class DomainPanelView: NSView {
     func updateUI() {
         guard let panel = panel else { return }
 
-        // 更新 Header 显示的 Tab
-        let tabs = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
-        headerView.setTabs(tabs)
+        // 更新 Header 显示的 Tab（传入 Tab 模型数组用于装饰系统）
+        let tabInfos = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
+        headerView.setTabs(tabInfos, tabModels: panel.tabs)
 
-        // 更新激活的 Tab
+        // 更新激活的 Tab（自动更新不清除装饰，只有用户点击时才清除）
         if let activeTabId = panel.activeTabId {
-            headerView.setActiveTab(activeTabId)
-        }
-
-        // 恢复需要高亮的 Tab 状态（从 Coordinator 查询）
-        if let coordinator = coordinator {
-            for tab in panel.tabs {
-                if coordinator.isTabNeedingAttention(tab.tabId) {
-                    headerView.setTabNeedsAttention(tab.tabId, attention: true)
-                }
-            }
+            headerView.setActiveTab(activeTabId, clearDecorationIfActive: false)
         }
 
         // 根据 activeTab 类型切换内容显示
@@ -347,6 +338,9 @@ final class DomainPanelView: NSView {
     private func handleTabClick(_ tabId: UUID) {
         guard let panel = panel,
               let coordinator = coordinator else { return }
+
+        // 用户点击 Tab 时清除装饰（这是唯一应该清除装饰的时机）
+        headerView.setActiveTab(tabId, clearDecorationIfActive: true)
 
         coordinator.handleTabClick(panelId: panel.panelId, tabId: tabId)
     }

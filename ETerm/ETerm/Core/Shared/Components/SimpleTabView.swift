@@ -10,7 +10,7 @@ struct SimpleTabView: View {
     let text: String
     let emoji: String?
     let isActive: Bool
-    let needsAttention: Bool
+    let decoration: TabDecoration?
     let height: CGFloat
     let isHovered: Bool  // 由外部控制的 hover 状态
     let onClose: (() -> Void)?
@@ -27,11 +27,14 @@ struct SimpleTabView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    init(_ text: String, emoji: String? = nil, isActive: Bool = false, needsAttention: Bool = false, height: CGFloat = 28, isHovered: Bool = false, onClose: (() -> Void)? = nil, onCloseOthers: (() -> Void)? = nil, onCloseLeft: (() -> Void)? = nil, onCloseRight: (() -> Void)? = nil, canCloseLeft: Bool = true, canCloseRight: Bool = true, canCloseOthers: Bool = true) {
+    // 动画状态
+    @State private var animationPhase: CGFloat = 0
+
+    init(_ text: String, emoji: String? = nil, isActive: Bool = false, decoration: TabDecoration? = nil, height: CGFloat = 28, isHovered: Bool = false, onClose: (() -> Void)? = nil, onCloseOthers: (() -> Void)? = nil, onCloseLeft: (() -> Void)? = nil, onCloseRight: (() -> Void)? = nil, canCloseLeft: Bool = true, canCloseRight: Bool = true, canCloseOthers: Bool = true) {
         self.text = text
         self.emoji = emoji
         self.isActive = isActive
-        self.needsAttention = needsAttention
+        self.decoration = decoration
         self.height = height
         self.isHovered = isHovered
         self.onClose = onClose
@@ -43,15 +46,30 @@ struct SimpleTabView: View {
         self.canCloseOthers = canCloseOthers
     }
 
+    // MARK: - 兼容旧 API
+
+    /// 是否有装饰（兼容 needsAttention 的判断逻辑）
+    private var hasDecoration: Bool {
+        decoration != nil
+    }
+
     // MARK: - 配色（跟随水墨主题）
+
+    /// 装饰颜色（从 TabDecoration 获取，转换为 SwiftUI Color）
+    private var decorationColor: Color {
+        guard let decoration = decoration else {
+            return Color.clear
+        }
+        return Color(nsColor: decoration.color)
+    }
 
     /// 激活状态背景色
     private var activeBackground: Color {
-        if needsAttention {
-            // 需要注意 - 橙色调
-            return colorScheme == .dark
-                ? Color.orange.opacity(0.3)
-                : Color.orange.opacity(0.2)
+        if let decoration = decoration {
+            // 有装饰时使用装饰颜色
+            let baseOpacity: CGFloat = colorScheme == .dark ? 0.3 : 0.2
+            let opacity = animatedOpacity(baseOpacity: baseOpacity)
+            return Color(nsColor: decoration.color).opacity(opacity)
         }
         // 激活 - 深红/墨色
         return colorScheme == .dark
@@ -75,8 +93,8 @@ struct SimpleTabView: View {
 
     /// 文字颜色
     private var textColor: Color {
-        if needsAttention {
-            return colorScheme == .dark ? Color.orange : Color.orange.opacity(0.9)
+        if let decoration = decoration {
+            return Color(nsColor: decoration.color)
         }
         if isActive {
             return colorScheme == .dark ? Color.white : Color.white
@@ -88,7 +106,7 @@ struct SimpleTabView: View {
 
     /// 关闭按钮颜色
     private var closeButtonColor: Color {
-        if isActive || needsAttention {
+        if isActive || hasDecoration {
             return Color.white.opacity(0.7)
         }
         return colorScheme == .dark
@@ -101,6 +119,43 @@ struct SimpleTabView: View {
 
     /// 固定宽度
     private var tabWidth: CGFloat { 180 }
+
+    // MARK: - 动画
+
+    /// 根据装饰样式计算动画透明度
+    private func animatedOpacity(baseOpacity: CGFloat) -> CGFloat {
+        guard let decoration = decoration else {
+            return baseOpacity
+        }
+
+        switch decoration.style {
+        case .solid:
+            return baseOpacity
+        case .pulse:
+            // 脉冲动画：透明度在 0.2 ~ 0.5 之间变化
+            let minOpacity = baseOpacity * 0.5
+            let maxOpacity = baseOpacity * 1.5
+            return minOpacity + (maxOpacity - minOpacity) * animationPhase
+        case .breathing:
+            // 呼吸动画：更柔和的透明度变化
+            let minOpacity = baseOpacity * 0.7
+            let maxOpacity = baseOpacity * 1.3
+            return minOpacity + (maxOpacity - minOpacity) * animationPhase
+        }
+    }
+
+    /// 动画时长
+    private var animationDuration: Double {
+        guard let decoration = decoration else { return 0 }
+        switch decoration.style {
+        case .solid:
+            return 0
+        case .pulse:
+            return 0.8  // 快速脉冲
+        case .breathing:
+            return 2.0  // 慢速呼吸
+        }
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -152,15 +207,42 @@ struct SimpleTabView: View {
                 Button("关闭右侧") { onCloseRight() }
             }
         }
-        // 点击手势由外层处理（PageTabView），这里只负责显示
-        // hover 状态由外部 AppKit 的 NSTrackingArea 控制
+        // 动画
+        .onAppear {
+            startAnimationIfNeeded()
+        }
+        .onChange(of: decoration) { _, newValue in
+            if newValue != nil {
+                startAnimationIfNeeded()
+            } else {
+                animationPhase = 0
+            }
+        }
     }
 
     private var backgroundColor: Color {
-        if isActive || needsAttention {
+        if isActive || hasDecoration {
             return activeBackground
         }
         return isHovered ? hoverBackground : inactiveBackground
+    }
+
+    private func startAnimationIfNeeded() {
+        guard let decoration = decoration, decoration.style != .solid else {
+            return
+        }
+
+        // 重置动画
+        animationPhase = 0
+
+        // 使用循环动画
+        withAnimation(
+            Animation
+                .easeInOut(duration: animationDuration)
+                .repeatForever(autoreverses: true)
+        ) {
+            animationPhase = 1.0
+        }
     }
 }
 
@@ -170,13 +252,30 @@ struct SimpleTabView: View {
         HStack(spacing: 8) {
             SimpleTabView("终端 1", isActive: true, height: 26, onClose: { })
             SimpleTabView("终端 2", isActive: false, height: 26, onClose: { })
-            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { })
+            SimpleTabView(
+                "Claude Running",
+                isActive: false,
+                decoration: .completed,
+                height: 26,
+                onClose: { }
+            )
         }
 
         HStack(spacing: 8) {
-            SimpleTabView("Page 1", isActive: true, height: 22, onClose: nil)
-            SimpleTabView("Page 2", isActive: false, height: 22, onClose: nil)
-            SimpleTabView("Settings", isActive: false, height: 22, onClose: { })
+            SimpleTabView(
+                "AI Thinking",
+                isActive: false,
+                decoration: .thinking,
+                height: 26,
+                onClose: { }
+            )
+            SimpleTabView(
+                "Completed",
+                isActive: false,
+                decoration: .completed,
+                height: 26,
+                onClose: { }
+            )
         }
     }
     .padding(40)
@@ -189,7 +288,13 @@ struct SimpleTabView: View {
         HStack(spacing: 8) {
             SimpleTabView("终端 1", isActive: true, height: 26, onClose: { })
             SimpleTabView("终端 2", isActive: false, height: 26, onClose: { })
-            SimpleTabView("Claude", isActive: false, needsAttention: true, height: 26, onClose: { })
+            SimpleTabView(
+                "Claude Running",
+                isActive: false,
+                decoration: .completed,
+                height: 26,
+                onClose: { }
+            )
         }
 
         HStack(spacing: 8) {

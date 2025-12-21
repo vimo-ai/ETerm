@@ -6,6 +6,73 @@
 
 import Foundation
 import SwiftUI
+import AppKit
+
+// MARK: - Tab 装饰（通用机制，核心层定义）
+
+/// Tab 装饰状态
+///
+/// 多级优先级系统：
+/// - 0: 默认（灰色）
+/// - 5: 已完成（橙色）
+/// - 100: active（#861717 深红）
+/// - 101: 思考中（蓝色脉冲）
+///
+/// 插件可以通过 UIService.setTabDecoration() 设置 Tab 的视觉装饰。
+/// 显示时取最高优先级的装饰，Page 收敛所有 Tab 的最高优先级。
+public struct TabDecoration: Equatable {
+    /// 优先级（数值越大越优先显示）
+    public let priority: Int
+
+    /// 装饰颜色
+    public let color: NSColor
+
+    /// 动画样式
+    public let style: Style
+
+    /// 是否序列化（插件临时状态设为 false，quit 后消失）
+    public let persistent: Bool
+
+    /// 动画样式
+    public enum Style: Equatable {
+        /// 静态颜色（无动画）
+        case solid
+        /// 脉冲动画（透明度周期变化）
+        case pulse
+        /// 呼吸动画（颜色渐变）
+        case breathing
+    }
+
+    public init(priority: Int, color: NSColor, style: Style = .solid, persistent: Bool = false) {
+        self.priority = priority
+        self.color = color
+        self.style = style
+        self.persistent = persistent
+    }
+
+    // MARK: - 预定义装饰
+
+    /// 默认装饰（优先级 0）
+    public static let `default` = TabDecoration(priority: 0, color: .gray, style: .solid)
+
+    /// Active 装饰（优先级 100，深红色）
+    public static let active = TabDecoration(priority: 100, color: NSColor(red: 0x86/255, green: 0x17/255, blue: 0x17/255, alpha: 1.0), style: .solid)
+
+    /// 思考中装饰（优先级 101，蓝色脉冲）
+    public static let thinking = TabDecoration(priority: 101, color: .systemBlue, style: .pulse)
+
+    /// 已完成装饰（优先级 5，橙色静态）
+    public static let completed = TabDecoration(priority: 5, color: .systemOrange, style: .solid)
+}
+
+/// Tab 装饰变化通知
+///
+/// userInfo:
+/// - "terminal_id": Int - 目标终端 ID
+/// - "decoration": TabDecoration? - 装饰状态，nil 表示清除
+extension Notification.Name {
+    public static let tabDecorationChanged = Notification.Name("tabDecorationChanged")
+}
 
 /// 插件上下文 - 聚合插件所需的系统能力
 ///
@@ -110,4 +177,23 @@ protocol UIService: AnyObject {
         title: String,
         viewProvider: @escaping () -> AnyView
     )
+
+    // MARK: - Tab 装饰 API
+
+    /// 设置 Tab 装饰
+    ///
+    /// 用于在 Tab 上显示视觉反馈（如运行状态、完成提醒等）。
+    /// 核心层只负责渲染，不知道具体业务含义。
+    ///
+    /// - Parameters:
+    ///   - terminalId: 目标终端 ID
+    ///   - decoration: 装饰状态，nil 表示清除
+    func setTabDecoration(terminalId: Int, decoration: TabDecoration?)
+
+    /// 清除 Tab 装饰
+    ///
+    /// 等同于 setTabDecoration(terminalId:, decoration: nil)
+    ///
+    /// - Parameter terminalId: 目标终端 ID
+    func clearTabDecoration(terminalId: Int)
 }

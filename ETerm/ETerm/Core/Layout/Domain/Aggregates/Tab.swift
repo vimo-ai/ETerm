@@ -34,6 +34,9 @@ final class Tab {
     /// Tab 内容
     private(set) var content: TabContent
 
+    /// 插件设置的装饰（nil 表示无插件装饰）
+    private(set) var decoration: TabDecoration?
+
     // MARK: - 初始化
 
     init(tabId: UUID = UUID(), title: String, content: TabContent) {
@@ -41,6 +44,51 @@ final class Tab {
         self.title = title
         self.isActive = false
         self.content = content
+        self.decoration = nil
+    }
+
+    // MARK: - 装饰系统
+
+    /// 有效装饰（综合 isActive 和插件装饰，取最高优先级）
+    ///
+    /// 优先级规则：
+    /// - 0: 默认（灰色）
+    /// - 5: 已完成（橙色）
+    /// - 100: active（深红）
+    /// - 101: 思考中（蓝色脉冲）
+    var effectiveDecoration: TabDecoration {
+        let activeDecoration = TabDecoration.active
+
+        if let pluginDecoration = decoration {
+            if isActive {
+                // 有插件装饰且 active，取优先级高的
+                return pluginDecoration.priority > activeDecoration.priority
+                    ? pluginDecoration
+                    : activeDecoration
+            } else {
+                // 有插件装饰但不 active
+                return pluginDecoration
+            }
+        }
+
+        // 无插件装饰
+        return isActive ? activeDecoration : .default
+    }
+
+    /// 设置装饰（由插件调用）
+    func setDecoration(_ newDecoration: TabDecoration?) {
+        decoration = newDecoration
+    }
+
+    /// 清除装饰
+    func clearDecoration() {
+        guard decoration != nil else { return }
+        decoration = nil
+        NotificationCenter.default.post(
+            name: .tabDecorationChanged,
+            object: nil,
+            userInfo: ["tabId": id]
+        )
     }
 
     // MARK: - 状态管理

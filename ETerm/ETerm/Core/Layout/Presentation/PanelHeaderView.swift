@@ -122,6 +122,9 @@ final class PanelHeaderHostingView: NSView {
     private var isPageActive: Bool = true
     private var isPanelActive: Bool = false  // Panel 是否接收键盘输入
 
+    /// Tab 模型注册表（弱引用，用于传递给 TabItemView）
+    private var tabRegistry: [UUID: Tab] = [:]
+
     // Tab 标签容器
     private let tabContainer = NSView()
     private var tabItemViews: [TabItemView] = []
@@ -188,7 +191,9 @@ final class PanelHeaderHostingView: NSView {
 
         // 创建新的 Tab 视图
         for (index, tab) in tabs.enumerated() {
-            let tabView = TabItemView(tabId: tab.id, title: tab.title)
+            // 从注册表获取 Tab 模型引用
+            let tabModel = tabRegistry[tab.id]
+            let tabView = TabItemView(tabId: tab.id, title: tab.title, tab: tabModel)
             // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
             tabView.setActive(tab.id == activeTabId && isPanelActive)
 
@@ -288,20 +293,31 @@ final class PanelHeaderHostingView: NSView {
     }
 
     /// 设置 Tab 列表
-    func setTabs(_ newTabs: [(id: UUID, title: String, rustTerminalId: Int?)]) {
+    /// - Parameters:
+    ///   - newTabs: Tab 信息元组数组
+    ///   - tabModels: 对应的 Tab 模型数组（用于装饰系统读取）
+    func setTabs(_ newTabs: [(id: UUID, title: String, rustTerminalId: Int?)], tabModels: [Tab] = []) {
         let newTabItems = newTabs.map { TabItem(id: $0.id, title: $0.title, rustTerminalId: $0.rustTerminalId) }
+
+        // 更新 Tab 模型注册表
+        tabRegistry.removeAll()
+        for tab in tabModels {
+            tabRegistry[tab.tabId] = tab
+        }
 
         // 检查 tabs 是否真的变化了（ID 列表和顺序）
         let oldIds = tabs.map { $0.id }
         let newIds = newTabItems.map { $0.id }
 
         if oldIds == newIds {
-            // ID 和顺序相同，只更新标题（不重建视图）
+            // ID 和顺序相同，只更新标题、rustTerminalId 和 Tab 引用（不重建视图）
             for (index, newTab) in newTabItems.enumerated() {
                 tabs[index].title = newTab.title
                 tabs[index].rustTerminalId = newTab.rustTerminalId
                 if index < tabItemViews.count {
                     tabItemViews[index].setTitle(newTab.title)
+                    tabItemViews[index].rustTerminalId = newTab.rustTerminalId
+                    tabItemViews[index].tab = tabRegistry[newTab.id]
                 }
             }
         } else {
@@ -312,33 +328,31 @@ final class PanelHeaderHostingView: NSView {
     }
 
     /// 设置激活的 Tab
-    func setActiveTab(_ tabId: UUID) {
+    /// - Parameters:
+    ///   - tabId: 要激活的 Tab ID
+    ///   - clearDecorationIfActive: 是否在 Tab 激活时清除装饰（用户点击时为 true，自动更新时为 false）
+    func setActiveTab(_ tabId: UUID, clearDecorationIfActive: Bool = true) {
         activeTabId = tabId
-        // 更新激活状态，只有当 Page 也激活时才清除提醒
+        // 更新激活状态
         for tabView in tabItemViews {
             let isActive = tabView.tabId == tabId
+            // 先清除装饰（在 setActive 刷新视图之前）
+            // 只有用户主动切换 Tab 时才清除装饰（自动更新不清除）
+            if clearDecorationIfActive && isActive && isPageActive && isPanelActive {
+                tabView.tab?.clearDecoration()
+            }
+            // 再更新激活状态（触发视图刷新）
             // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
             tabView.setActive(isActive && isPanelActive)
-            // 只有 Tab 激活且 Page 也激活且 Panel 也激活时，才清除提醒
-            if isActive && isPageActive && isPanelActive {
-                tabView.clearAttention()
-            }
         }
     }
 
     /// 设置所属 Page 的激活状态
+    /// 注意：切换 Page 不会自动清除 Tab 装饰，只有用户点击 Tab 时才清除
     func setPageActive(_ active: Bool) {
         isPageActive = active
         for tabView in tabItemViews {
             tabView.setPageActive(active)
-        }
-
-        // 如果 Page 变为激活，且当前有激活的 Tab，清除其提醒
-        if active, let activeTabId = activeTabId {
-            for tabView in tabItemViews where tabView.tabId == activeTabId {
-                tabView.clearAttention()
-                break
-            }
         }
     }
 
@@ -352,18 +366,6 @@ final class PanelHeaderHostingView: NSView {
             let isTabActive = tabView.tabId == activeTabId
             // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
             tabView.setActive(isTabActive && isPanelActive)
-        }
-    }
-
-    /// 设置指定 Tab 的高亮状态
-    func setTabNeedsAttention(_ tabId: UUID, attention: Bool) {
-        for tabView in tabItemViews where tabView.tabId == tabId {
-            if attention {
-                tabView.setNeedsAttention(true)
-            } else {
-                tabView.clearAttention()
-            }
-            break
         }
     }
 

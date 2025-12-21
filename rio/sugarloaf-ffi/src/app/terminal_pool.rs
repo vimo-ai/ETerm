@@ -134,7 +134,12 @@ pub fn route_wakeup_event(terminal_id: usize) -> bool {
         if let Some(needs_render) = target.needs_render.upgrade() {
             needs_render.store(true, Ordering::Release);
             return true;
+        } else {
+            // Weak 引用失效，Pool 可能已被释放
+            eprintln!("[RenderLoop] ⚠️ route_wakeup: needs_render.upgrade() failed for terminal {}", terminal_id);
         }
+    } else {
+        eprintln!("[RenderLoop] ⚠️ route_wakeup: terminal {} not found in registry", terminal_id);
     }
     false
 }
@@ -215,6 +220,10 @@ struct TerminalEntry {
 
     /// 独立选区叠加层（不在 Terminal 内）
     selection_overlay: Arc<crate::infra::SelectionOverlay>,
+
+    /// IME 预编辑状态（独立存储，不修改 Terminal 聚合根）
+    /// 使用 RwLock 以支持渲染时无锁读取
+    ime_state: Arc<RwLock<Option<crate::domain::ImeView>>>,
 }
 
 /// 分离的终端（用于跨池迁移）
@@ -509,6 +518,7 @@ impl TerminalPool {
                 rows as usize,
             ))),  // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -569,6 +579,7 @@ impl TerminalPool {
                 rows as usize,
             ))),  // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -631,6 +642,7 @@ impl TerminalPool {
                 rows as usize,
             ))),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -698,6 +710,7 @@ impl TerminalPool {
                 rows as usize,
             ))),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
         };
 
         self.terminals.write().insert(id, entry);
@@ -744,8 +757,10 @@ impl TerminalPool {
         let rows = terminal.rows() as u16;
         let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
-        // 注入 ETERM_TERMINAL_ID 环境变量（用于 Claude Hook 调用）
-        env::set_var("ETERM_TERMINAL_ID", terminal.id().0.to_string());
+        // 注入 ETERM 环境变量
+        let terminal_id_str = terminal.id().0.to_string();
+        env::set_var("ETERM_TERMINAL_ID", &terminal_id_str);  // 用于 Claude Hook 调用
+        env::set_var("ETERM_SESSION_ID", &terminal_id_str);   // 用于 AI 自动补全
 
         // 统一使用 spawn 创建 PTY（支持指定工作目录）
         // 如果未指定工作目录，默认使用 $HOME
@@ -1216,6 +1231,78 @@ impl TerminalPool {
     }
 
     // ========================================================================
+    // IME 预编辑
+    // ========================================================================
+
+    /// 设置 IME 预编辑状态
+    ///
+    /// 从 Terminal 获取当前光标的绝对坐标，创建 ImeView 存储在 TerminalEntry 中。
+    /// 不修改 Terminal 聚合根，保持领域纯净。
+    ///
+    /// # 参数
+    /// - `id`: 终端 ID
+    /// - `text`: 预编辑文本（如 "nihao"）
+    /// - `cursor_offset`: 预编辑内的光标位置（字符索引）
+    ///
+    /// # 返回
+    /// - `true`: 设置成功
+    /// - `false`: 终端不存在或无法获取锁
+    pub fn set_ime_preedit(&self, id: usize, text: String, cursor_offset: usize) -> bool {
+        // 空文本等同于 clear
+        if text.is_empty() {
+            return self.clear_ime_preedit(id);
+        }
+
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            // 创建 ImeView（不需要坐标，渲染时直接用光标位置）
+            let ime_view = crate::domain::ImeView::new(text, cursor_offset);
+            *entry.ime_state.write() = Some(ime_view);
+
+            // 标记脏，触发重新渲染
+            entry.dirty_flag.mark_dirty();
+            self.needs_render.store(true, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 清除 IME 预编辑状态
+    ///
+    /// # 参数
+    /// - `id`: 终端 ID
+    ///
+    /// # 返回
+    /// - `true`: 清除成功
+    /// - `false`: 终端不存在
+    pub fn clear_ime_preedit(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            // 只有当前有 IME 状态时才需要清除和触发渲染
+            let had_ime = entry.ime_state.read().is_some();
+            if had_ime {
+                *entry.ime_state.write() = None;
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 获取 IME 预编辑状态（用于渲染）
+    ///
+    /// 返回 ImeView 的克隆（如果存在）
+    pub fn get_ime_state(&self, id: usize) -> Option<crate::domain::ImeView> {
+        self.terminals
+            .read()
+            .get(&id)
+            .and_then(|e| e.ime_state.read().clone())
+    }
+
+    // ========================================================================
     // 渲染流程（统一提交）
     // ========================================================================
 
@@ -1320,7 +1407,7 @@ impl TerminalPool {
         // 解决：快速获取 Arc 引用后立即释放读锁，耗时操作在锁外执行
 
         // 阶段 1：快速获取 Arc 引用（读锁只持有几微秒）
-        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, _selection_overlay) = {
+        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, _selection_overlay, ime_state_arc) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
                 Some(entry) => {
@@ -1332,6 +1419,7 @@ impl TerminalPool {
                         entry.selection_cache.clone(),
                         entry.scroll_cache.clone(),
                         entry.selection_overlay.clone(),
+                        entry.ime_state.clone(),
                     )
                 },
                 None => return false,
@@ -1366,11 +1454,16 @@ impl TerminalPool {
                     }
 
                     // 获取状态快照（暂时保留，后续 Step 4 会从 RenderState 读取）
-                    let state = terminal.state();
+                    let mut state = terminal.state();
                     let rows = terminal.rows();
 
                     // 重置 damage（与获取 state 在同一 terminal 锁范围内，避免 TOCTOU）
                     terminal.reset_damage();
+
+                    // 添加 IME 状态（从 TerminalEntry 独立存储中获取，不在 Terminal 聚合根内）
+                    if let Some(ime) = ime_state_arc.read().clone() {
+                        state.ime = Some(ime);
+                    }
 
                     (state, rows)
                 },
@@ -1510,6 +1603,27 @@ impl TerminalPool {
                                 rows,
                                 state.grid.history_size(),
                                 state.grid.display_offset(),
+                            );
+                        }
+
+                        // 绘制 IME 预编辑叠加层
+                        if let Some(ime) = &state.ime {
+                            use crate::domain::primitives::PhysicalPixels;
+                            let physical_cell_width = PhysicalPixels::new(logical_cell_size.width.value * scale);
+                            let physical_line_height = PhysicalPixels::new(logical_line_height.value * scale);
+                            let font_metrics = renderer.get_font_metrics();
+                            // 计算光标所在的屏幕行
+                            let cursor_screen_row = state.cursor.line()
+                                .saturating_sub(state.grid.history_size())
+                                .saturating_add(state.grid.display_offset());
+                            self.draw_ime_overlay(
+                                canvas,
+                                ime,
+                                state.cursor.col(),
+                                cursor_screen_row,
+                                physical_cell_width,
+                                physical_line_height,
+                                font_metrics.baseline_offset.value * scale,
                             );
                         }
 
@@ -1725,6 +1839,7 @@ impl TerminalPool {
         };
 
         if layout.is_empty() {
+            eprintln!("[RenderLoop] ⚠️ render_all: layout is empty, skipping");
             return;
         }
 
@@ -1848,7 +1963,7 @@ impl TerminalPool {
             match is_background {
                 Some(true) => {
                     // Background 模式，标记脏但不触发渲染
-                    // 使用全局路由标记 dirty（但不设置 needs_render）
+                    eprintln!("[RenderLoop] ⚠️ terminal {} is Background, skip render trigger", terminal_id);
                     let registry = global_terminal_registry().read();
                     if let Some(target) = registry.get(&terminal_id) {
                         target.dirty_flag.mark_dirty();
@@ -2184,22 +2299,30 @@ impl TerminalPool {
     /// - Background 模式：完整 VTE 解析但不触发渲染回调
     /// - 切换到 Active 时会自动触发一次渲染刷新
     pub fn set_terminal_mode(&self, terminal_id: usize, mode: crate::domain::aggregates::TerminalMode) {
-        let terminals = self.terminals.read();
-        if let Some(entry) = terminals.get(&terminal_id) {
-            // 先更新原子标记（无锁），让 event_queue_callback 能立即看到
-            let is_background = mode == crate::domain::aggregates::TerminalMode::Background;
-            entry.is_background.store(is_background, Ordering::Release);
+        let should_wakeup = {
+            let terminals = self.terminals.read();
+            if let Some(entry) = terminals.get(&terminal_id) {
+                // 先更新原子标记（无锁），让 event_queue_callback 能立即看到
+                let is_background = mode == crate::domain::aggregates::TerminalMode::Background;
+                entry.is_background.store(is_background, Ordering::Release);
 
-            // 尝试更新 Terminal 内部状态（非阻塞）
-            // 如果锁被占用则跳过，Terminal 状态会在下次渲染时通过原子标记同步
-            if let Some(mut terminal) = entry.terminal.try_lock() {
-                terminal.set_mode(mode);
-            }
+                // 尝试更新 Terminal 内部状态（非阻塞）
+                // 如果锁被占用则跳过，Terminal 状态会在下次渲染时通过原子标记同步
+                if let Some(mut terminal) = entry.terminal.try_lock() {
+                    terminal.set_mode(mode);
+                }
 
-            // 如果切换到 Active 模式，标记需要渲染
-            if mode == crate::domain::aggregates::TerminalMode::Active {
-                self.needs_render.store(true, Ordering::Release);
+                // 返回是否需要唤醒渲染
+                mode == crate::domain::aggregates::TerminalMode::Active
+            } else {
+                false
             }
+        }; // terminals 锁在这里释放
+
+        // 如果切换到 Active 模式，主动触发渲染
+        // 必须在 terminals 锁释放后调用，避免死锁
+        if should_wakeup {
+            route_wakeup_event(terminal_id);
         }
     }
 
@@ -2310,6 +2433,117 @@ impl TerminalPool {
                 &paint,
             );
         }
+    }
+
+    /// 绘制 IME 预编辑叠加层
+    ///
+    /// 使用逐字符渲染，确保和终端文本等宽对齐
+    fn draw_ime_overlay(
+        &self,
+        canvas: &skia_safe::Canvas,
+        ime: &crate::domain::ImeView,
+        cursor_col: usize,
+        cursor_screen_row: usize,
+        cell_width: crate::domain::primitives::PhysicalPixels,
+        line_height: crate::domain::primitives::PhysicalPixels,
+        baseline_offset: f32,
+    ) {
+        use skia_safe::{Paint, Color4f, Point, Font, FontMgr, FontStyle};
+
+        let ime_x = cursor_col as f32 * cell_width.value;
+        let ime_y = cursor_screen_row as f32 * line_height.value;
+
+        // 计算预编辑文本的显示宽度（按字符宽度）
+        // 简单判断：ASCII 单宽，非 ASCII（如中文）双宽
+        let ime_display_width: f32 = ime.text.chars().map(|c| {
+            let char_width = if c.is_ascii() { 1 } else { 2 };
+            char_width as f32 * cell_width.value
+        }).sum();
+
+        // 1. 绘制半透明背景
+        let mut bg_paint = Paint::default();
+        bg_paint.set_anti_alias(true);
+        bg_paint.set_color4f(Color4f::new(0.2, 0.2, 0.4, 0.85), None);
+        bg_paint.set_style(skia_safe::PaintStyle::Fill);
+        let bg_rect = skia_safe::Rect::from_xywh(ime_x, ime_y, ime_display_width, line_height.value);
+        canvas.draw_rect(bg_rect, &bg_paint);
+
+        // 2. 逐字符绘制预编辑文本
+        let font_mgr = FontMgr::new();
+        let font_size = line_height.value * 0.75;  // 和终端字体大小保持一致
+
+        // 尝试使用 Maple Mono，回退到系统字体
+        let typeface = font_mgr
+            .match_family_style("Maple Mono NF CN", FontStyle::normal())
+            .or_else(|| font_mgr.match_family_style("Menlo", FontStyle::normal()))
+            .unwrap_or_else(|| font_mgr.legacy_make_typeface(None, FontStyle::normal()).unwrap());
+
+        let font = Font::from_typeface(&typeface, font_size);
+
+        let mut text_paint = Paint::default();
+        text_paint.set_anti_alias(true);
+        text_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 1.0), None);
+
+        let mut x_offset = ime_x;
+        for ch in ime.text.chars() {
+            let char_width = if ch.is_ascii() { 1 } else { 2 };
+            let char_cell_width = char_width as f32 * cell_width.value;
+
+            // 查找支持该字符的字体
+            let (draw_font, _is_emoji) = if font.unichar_to_glyph(ch as i32) != 0 {
+                (font.clone(), false)
+            } else {
+                // 回退到系统字体
+                if let Some(fallback_tf) = font_mgr.match_family_style_character(
+                    "",
+                    FontStyle::normal(),
+                    &[],
+                    ch as i32,
+                ) {
+                    (Font::from_typeface(&fallback_tf, font_size), fallback_tf.family_name().to_lowercase().contains("emoji"))
+                } else {
+                    (font.clone(), false)
+                }
+            };
+
+            // 绘制字符
+            let text_y = ime_y + baseline_offset;
+            let char_str = ch.to_string();
+            canvas.draw_str(&char_str, Point::new(x_offset, text_y), &draw_font, &text_paint);
+
+            x_offset += char_cell_width;
+        }
+
+        // 3. 绘制下划线
+        let mut underline_paint = Paint::default();
+        underline_paint.set_anti_alias(true);
+        underline_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.6), None);
+        underline_paint.set_style(skia_safe::PaintStyle::Stroke);
+        underline_paint.set_stroke_width(1.0);
+
+        let underline_y = ime_y + line_height.value - 2.0;
+        canvas.draw_line(
+            Point::new(ime_x, underline_y),
+            Point::new(ime_x + ime_display_width, underline_y),
+            &underline_paint,
+        );
+
+        // 4. 绘制预编辑内光标（竖线）
+        let cursor_x_in_ime: f32 = ime.text.chars()
+            .take(ime.cursor_offset)
+            .map(|c| {
+                let w = if c.is_ascii() { 1 } else { 2 };
+                w as f32 * cell_width.value
+            })
+            .sum();
+        let ime_cursor_x = ime_x + cursor_x_in_ime;
+
+        let mut cursor_paint = Paint::default();
+        cursor_paint.set_anti_alias(true);
+        cursor_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.9), None);
+        cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+        let cursor_rect = skia_safe::Rect::from_xywh(ime_cursor_x, ime_y + 2.0, 2.0, line_height.value - 4.0);
+        canvas.draw_rect(cursor_rect, &cursor_paint);
     }
 }
 
