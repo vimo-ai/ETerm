@@ -52,21 +52,10 @@ final class TerminalInputHandler {
 
         // 1. 首先检查自定义 keybinding（优先级最高）
         // 这允许用户配置 Shift+Enter 等按键发送自定义序列
-
-        // 调试：显示按键信息
-        if keyStroke.keyCode == 36 {
-            print("[DEBUG] Enter key pressed")
-            print("[DEBUG] keyCode = \(keyStroke.keyCode)")
-            print("[DEBUG] modifiers.rawValue = \(keyStroke.modifiers.rawValue)")
-            print("[DEBUG] hasKeybinding = \(keybindingManager.hasKeybinding(keyCode: keyStroke.keyCode, modifiers: keyStroke.modifiers))")
-        }
-
         if let customSequence = keybindingManager.findSequence(
             keyCode: keyStroke.keyCode,
             modifiers: keyStroke.modifiers
         ) {
-            let hexSequence = customSequence.unicodeScalars.map { String(format: "%02X", $0.value) }.joined(separator: " ")
-            print("[DEBUG] Custom keybinding found! sequence hex = \(hexSequence)")
             coordinator.writeInput(terminalId: terminalId, data: customSequence)
             return .handled
         }

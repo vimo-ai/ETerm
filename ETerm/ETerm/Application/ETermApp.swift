@@ -321,24 +321,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func startAISocketServer() {
         // 设置请求处理器
         AISocketServer.shared.handler = AICompletionService.shared
-        print("[ETermApp] AI handler 已设置: \(AISocketServer.shared.handler != nil)")
 
         // 启动服务器
         do {
             try AISocketServer.shared.start()
-            print("[ETermApp] AI Socket Server 启动成功")
         } catch {
-            print("[ETermApp] 启动 AI Socket Server 失败: \(error)")
+            logError("启动 AI Socket Server 失败: \(error)")
         }
 
         // 初始化 Ollama 服务（后台检查健康状态）
         Task {
-            print("[ETermApp] 开始检查 Ollama 状态...")
             let healthy = await OllamaService.shared.checkHealth()
-            print("[ETermApp] Ollama 健康状态: \(healthy), status=\(OllamaService.shared.status)")
             if healthy {
                 await OllamaService.shared.warmUp()
-                print("[ETermApp] Ollama 预热完成")
             }
         }
     }

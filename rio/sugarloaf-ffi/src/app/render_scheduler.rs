@@ -86,17 +86,22 @@ impl RenderScheduler {
             // 统计实际渲染次数
             let rnd_cnt = render_count.fetch_add(1, Ordering::Relaxed) + 1;
 
-            // 每 5 秒输出一次统计日志
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let last_secs = last_log_time.load(Ordering::Relaxed);
-            if now_secs >= last_secs + 5 {
-                last_log_time.store(now_secs, Ordering::Relaxed);
-                eprintln!("[RenderLoop] stats: vsync={}, rendered={}, ratio={:.1}%",
-                    cb_cnt, rnd_cnt, (rnd_cnt as f64 / cb_cnt as f64) * 100.0);
+            // 每 5 秒输出一次统计日志（仅 Debug）
+            #[cfg(debug_assertions)]
+            {
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let last_secs = last_log_time.load(Ordering::Relaxed);
+                if now_secs >= last_secs + 5 {
+                    last_log_time.store(now_secs, Ordering::Relaxed);
+                    eprintln!("[RenderLoop] stats: vsync={}, rendered={}, ratio={:.1}%",
+                        cb_cnt, rnd_cnt, (rnd_cnt as f64 / cb_cnt as f64) * 100.0);
+                }
             }
+            #[cfg(not(debug_assertions))]
+            let _ = (cb_cnt, rnd_cnt, &last_log_time);
 
             // 调用渲染回调（在 Rust 侧完成整个渲染）
             let cb_guard = render_callback.lock();

@@ -300,9 +300,7 @@ enum AISocketError: LocalizedError {
 // MARK: - Logging
 
 private func logInfo(_ message: String) {
-    #if DEBUG
-    print("[AISocketServer] \(message)")
-    #endif
+    // 日志已禁用
 }
 
 private func logError(_ message: String) {

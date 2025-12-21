@@ -466,15 +466,19 @@ final class MCPServerCoordinator: @unchecked Sendable {
     // MARK: - Logging
 
     private func logInfo(_ message: String) {
-        print("[MCP] \(message)")
+        // 日志已禁用
     }
 
     private func logWarning(_ message: String) {
+        #if DEBUG
         print("[MCP][WARN] \(message)")
+        #endif
     }
 
     private func logError(_ message: String) {
+        #if DEBUG
         print("[MCP][ERROR] \(message)")
+        #endif
     }
 }
 
