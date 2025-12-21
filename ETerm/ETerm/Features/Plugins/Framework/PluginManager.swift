@@ -728,4 +728,65 @@ final class UIServiceImpl: UIService {
 
         return tab
     }
+
+    // MARK: - Tab 装饰 API 实现
+
+    func setTabDecoration(terminalId: Int, decoration: TabDecoration?) {
+        // 1. 找到对应的 Tab 并更新模型
+        var foundTab: Tab?
+        var foundPage: Page?
+        var foundCoordinator: TerminalWindowCoordinator?
+
+        for coordinator in WindowManager.shared.getAllCoordinators() {
+            for page in coordinator.terminalWindow.pages {
+                for panel in page.allPanels {
+                    if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                        foundTab = tab
+                        foundPage = page
+                        foundCoordinator = coordinator
+                        break
+                    }
+                }
+                if foundTab != nil { break }
+            }
+            if foundTab != nil { break }
+        }
+
+        guard let tab = foundTab else {
+            print("[UIService] ⚠️ 未找到 terminalId=\(terminalId) 对应的 Tab")
+            return
+        }
+
+        // 2. 更新 Tab 模型的装饰
+        tab.setDecoration(decoration)
+
+        // 3. 发送通知让视图刷新（视图会从模型读取 effectiveDecoration）
+        NotificationCenter.default.post(
+            name: .tabDecorationChanged,
+            object: nil,
+            userInfo: [
+                "terminal_id": terminalId,
+                "tab_id": tab.tabId
+            ]
+        )
+
+        // 4. 如果 Tab 所属 Page 不是当前 Page，发送 Page 刷新通知
+        // Page.effectiveDecoration 是计算属性，会自动从 Tab 读取
+        if let page = foundPage, let coordinator = foundCoordinator {
+            let isCurrentPage = (page.pageId == coordinator.terminalWindow.activePageId)
+            if !isCurrentPage {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("PageNeedsAttention"),
+                    object: nil,
+                    userInfo: [
+                        "pageId": page.pageId
+                    ]
+                )
+            }
+        }
+    }
+
+    func clearTabDecoration(terminalId: Int) {
+        setTabDecoration(terminalId: terminalId, decoration: nil)
+    }
 }

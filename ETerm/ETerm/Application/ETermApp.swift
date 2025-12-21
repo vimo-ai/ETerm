@@ -56,6 +56,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动 Claude Socket Server（接收 Hook 调用）
         ClaudeSocketServer.shared.start()
 
+        // 启动 AI Socket Server（为 Shell 提供 AI 补全服务）
+        startAISocketServer()
+
         // 启动 MCP Server（HTTP 模式，端口 11218）
         MCPServerCoordinator.shared.start()
 
@@ -89,6 +92,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // 停止 Claude Socket Server
         ClaudeSocketServer.shared.stop()
+
+        // 停止 AI Socket Server
+        AISocketServer.shared.stop()
 
         // 停止 MCP Server
         MCPServerCoordinator.shared.stop()
@@ -308,5 +314,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 创建新窗口，继承 CWD
         WindowManager.shared.createWindow(inheritCwd: inheritedCwd)
+    }
+
+    // MARK: - AI Socket Server
+
+    private func startAISocketServer() {
+        // 设置请求处理器
+        AISocketServer.shared.handler = AICompletionService.shared
+        print("[ETermApp] AI handler 已设置: \(AISocketServer.shared.handler != nil)")
+
+        // 启动服务器
+        do {
+            try AISocketServer.shared.start()
+            print("[ETermApp] AI Socket Server 启动成功")
+        } catch {
+            print("[ETermApp] 启动 AI Socket Server 失败: \(error)")
+        }
+
+        // 初始化 Ollama 服务（后台检查健康状态）
+        Task {
+            print("[ETermApp] 开始检查 Ollama 状态...")
+            let healthy = await OllamaService.shared.checkHealth()
+            print("[ETermApp] Ollama 健康状态: \(healthy), status=\(OllamaService.shared.status)")
+            if healthy {
+                await OllamaService.shared.warmUp()
+                print("[ETermApp] Ollama 预热完成")
+            }
+        }
     }
 }

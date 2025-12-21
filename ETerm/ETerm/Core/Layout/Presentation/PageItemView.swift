@@ -36,19 +36,24 @@ final class PageItemView: DraggableItemView {
 
     override var itemId: UUID { pageId }
 
+    /// 关联的 Page 模型（弱引用，用于读取 effectiveDecoration）
+    weak var page: Page?
+
     /// 是否显示关闭按钮
     private var _showCloseButton: Bool = true
     override var showCloseButton: Bool { _showCloseButton }
 
     // MARK: - 初始化
 
-    init(pageId: UUID, title: String) {
+    init(pageId: UUID, title: String, page: Page? = nil) {
         self.pageId = pageId
+        self.page = page
 
         super.init(frame: .zero)
 
         setTitle(title)
         setupUI()
+        setupDecorationNotifications()
     }
 
     required init?(coder: NSCoder) {
@@ -72,6 +77,15 @@ final class PageItemView: DraggableItemView {
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
+        // 从 Page 模型读取 effectiveDecoration（聚合其下所有 Tab 的装饰）
+        // 优先级逻辑：
+        // - 如果 isActive：不传 decoration，让 SimpleTabView 用 active 样式
+        // - 否则如果有 effectiveDecoration 且 priority > 0：显示该装饰
+        var displayDecoration: TabDecoration? = nil
+        if !isActive, let pageDecoration = page?.effectiveDecoration, pageDecoration.priority > 0 {
+            displayDecoration = pageDecoration
+        }
+
         // 创建新的 SwiftUI 视图
         let closeAction: (() -> Void)? = _showCloseButton ? { [weak self] in
             self?.onClose?()
@@ -80,7 +94,7 @@ final class PageItemView: DraggableItemView {
         let simpleTab = SimpleTabView(
             title,
             isActive: isActive,
-            needsAttention: needsAttention,
+            decoration: displayDecoration,
             height: Self.tabHeight,
             isHovered: isHovered,
             onClose: closeAction,
@@ -140,6 +154,48 @@ final class PageItemView: DraggableItemView {
     // MARK: - Private Methods
 
     private func setupUI() {
+        updateItemView()
+    }
+}
+
+// MARK: - Page 装饰通知处理
+
+extension PageItemView {
+    /// 设置装饰通知监听
+    ///
+    /// 监听 tabDecorationChanged 通知，当任意 Tab 装饰变化时重新计算 Page.effectiveDecoration
+    private func setupDecorationNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDecorationChanged(_:)),
+            name: .tabDecorationChanged,
+            object: nil
+        )
+
+        // 也监听 PageNeedsAttention 通知（兼容旧机制）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePageNeedsAttention(_:)),
+            name: NSNotification.Name("PageNeedsAttention"),
+            object: nil
+        )
+    }
+
+    @objc private func handleDecorationChanged(_ notification: Notification) {
+        // 检查是否与当前 Page 相关
+        // Page.effectiveDecoration 是计算属性，会自动聚合所有 Tab
+        // 只需刷新视图即可
+        updateItemView()
+    }
+
+    @objc private func handlePageNeedsAttention(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let notifPageId = userInfo["pageId"] as? UUID,
+              notifPageId == pageId else {
+            return
+        }
+
+        // Page 需要刷新，updateItemView 会从 page.effectiveDecoration 读取
         updateItemView()
     }
 }

@@ -116,9 +116,6 @@ class TerminalWindowCoordinator: ObservableObject {
     /// 键盘系统
     private(set) var keyboardSystem: KeyboardSystem?
 
-    /// 需要高亮的 Tab 集合（即使 Tab 所在的 Page 不可见，也要记住）
-    private var tabsNeedingAttention: Set<UUID> = []
-
     // MARK: - Constants
 
     private let headerHeight: CGFloat = 30.0
@@ -156,9 +153,6 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 同步初始激活的 Panel（从 TerminalWindow 获取）
         activePanelId = initialWindow.activePanelId
-
-        // 监听 Claude 响应完成通知
-        setupClaudeNotifications()
 
         // 监听 Drop 意图执行通知
         setupDropIntentHandler()
@@ -293,53 +287,6 @@ class TerminalWindowCoordinator: ObservableObject {
             setActivePanel(panelId)
         }
     }
-
-    /// 设置 Claude 通知监听
-    private func setupClaudeNotifications() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleClaudeResponseComplete(_:)),
-            name: .claudeResponseComplete,
-            object: nil
-        )
-    }
-
-    @objc private func handleClaudeResponseComplete(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let terminalId = userInfo["terminal_id"] as? Int else {
-            return
-        }
-
-        // 找到包含该终端的 Page 和 Tab
-        for page in terminalWindow.pages {
-            for panel in page.allPanels {
-                if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
-                    // 检查 Tab 是否激活且 Page 也激活
-                    let isTabActive = (panel.activeTabId == tab.tabId)
-                    let isPageActive = (page.pageId == terminalWindow.activePageId)
-
-                    // 如果 Tab 激活且 Page 也激活，不需要提醒
-                    if isTabActive && isPageActive {
-                        return
-                    }
-
-                    // 否则，记录这个 Tab 需要高亮
-                    tabsNeedingAttention.insert(tab.tabId)
-
-                    // 如果 Page 不是当前激活的，则高亮它
-                    if !isPageActive {
-                        DispatchQueue.main.async { [weak self] in
-                            self?.renderView?.setPageNeedsAttention(page.pageId, attention: true)
-                        }
-                    }
-
-                    return
-                }
-            }
-        }
-    }
-    
-    // ... (中间代码保持不变) ...
 
     /// 创建新的 Tab 并分配终端
     func createNewTab(in panelId: UUID) -> Tab? {
@@ -827,8 +774,6 @@ class TerminalWindowCoordinator: ObservableObject {
         if panel.setActiveTab(tabId) {
             // 录制事件
             recordTabEvent(.tabSwitch(panelId: panelId, fromTabId: oldTabId, toTabId: tabId))
-            // 核心逻辑：Tab 被激活时自动消费提醒状态
-            clearTabAttention(tabId)
 
             // 更新终端模式：旧 Tab -> Background，新 Tab -> Active
             if let oldId = oldTerminalId {
@@ -1023,6 +968,13 @@ class TerminalWindowCoordinator: ObservableObject {
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
                     terminalWindow.setActivePanel(newActivePanelId)
                     activePanelId = newActivePanelId
+
+                    // 关键修复：将新激活 Panel 的终端设置为 Active 模式
+                    if let newPanel = terminalWindow.getPanel(newActivePanelId),
+                       let activeTab = newPanel.activeTab,
+                       let terminalId = activeTab.rustTerminalId {
+                        terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                    }
                 }
 
                 // 同步布局到 Rust（关闭 Panel）
@@ -1081,6 +1033,13 @@ class TerminalWindowCoordinator: ObservableObject {
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
                     terminalWindow.setActivePanel(newActivePanelId)
                     activePanelId = newActivePanelId
+
+                    // 关键修复：将新激活 Panel 的终端设置为 Active 模式
+                    if let newPanel = terminalWindow.getPanel(newActivePanelId),
+                       let activeTab = newPanel.activeTab,
+                       let terminalId = activeTab.rustTerminalId {
+                        terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                    }
                 }
             }
 
@@ -1661,16 +1620,6 @@ class TerminalWindowCoordinator: ObservableObject {
         return true
     }
 
-    /// 检查指定 Tab 是否需要高亮
-    func isTabNeedingAttention(_ tabId: UUID) -> Bool {
-        return tabsNeedingAttention.contains(tabId)
-    }
-
-    /// 清除 Tab 的高亮状态（当用户点击 Tab 时调用）
-    func clearTabAttention(_ tabId: UUID) {
-        tabsNeedingAttention.remove(tabId)
-    }
-
     /// 关闭当前 Page（供快捷键调用）
     ///
     /// - Returns: 是否成功关闭
@@ -1708,6 +1657,17 @@ class TerminalWindowCoordinator: ObservableObject {
 
         // 同步激活的 Panel（从 TerminalWindow 获取）
         activePanelId = terminalWindow.activePanelId
+
+        // 关键修复：将新激活 Page 的终端设置为 Active 模式
+        // terminalWindow.closePage() 内部会切换到另一个 Page，
+        // 但不会更新终端模式，导致终端仍处于 Background 模式而无法触发渲染
+        if let newPage = terminalWindow.activePage {
+            for panel in newPage.allPanels {
+                if let activeTab = panel.activeTab, let terminalId = activeTab.rustTerminalId {
+                    terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                }
+            }
+        }
 
         // 同步布局到 Rust（关闭 Page）
         syncLayoutToRust()
@@ -1885,6 +1845,16 @@ class TerminalWindowCoordinator: ObservableObject {
         // 同步激活的 Panel（从 TerminalWindow 获取）
         activePanelId = terminalWindow.activePanelId
 
+        // 如果还有其他 Page，确保新激活 Page 的终端设置为 Active 模式
+        // （与 closePage 相同的修复）
+        if let newPage = terminalWindow.activePage {
+            for panel in newPage.allPanels {
+                if let activeTab = panel.activeTab, let terminalId = activeTab.rustTerminalId {
+                    terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                }
+            }
+        }
+
         // 触发 UI 更新
         objectWillChange.send()
         updateTrigger = UUID()
@@ -2023,11 +1993,25 @@ class TerminalWindowCoordinator: ObservableObject {
                 if let newActivePanelId = terminalWindow.allPanels.first?.panelId {
                     terminalWindow.setActivePanel(newActivePanelId)
                     activePanelId = newActivePanelId
+
+                    // 关键修复：将新激活 Panel 的终端设置为 Active 模式
+                    if let newPanel = terminalWindow.getPanel(newActivePanelId),
+                       let activeTab = newPanel.activeTab,
+                       let terminalId = activeTab.rustTerminalId {
+                        terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+                    }
                 }
             }
         } else {
             // 从 Panel 移除 Tab
             _ = panel.closeTab(tabId)
+
+            // 关键修复：将新激活 Tab 的终端设置为 Active 模式
+            // panel.closeTab() 内部会切换到另一个 Tab，
+            // 但不会更新终端模式，导致终端仍处于 Background 模式而无法触发渲染
+            if let activeTab = panel.activeTab, let terminalId = activeTab.rustTerminalId {
+                terminalPool.setMode(terminalId: Int(terminalId), mode: .active)
+            }
         }
 
         // 触发 UI 更新

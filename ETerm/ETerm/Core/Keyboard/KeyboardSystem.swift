@@ -50,4 +50,18 @@ final class KeyboardSystem {
     func getAllBindings() -> [(KeyStroke, [KeyboardServiceImpl.CommandBinding])] {
         return KeyboardServiceImpl.shared.getAllBindings()
     }
+
+    // MARK: - IME Callbacks
+
+    /// 配置 IME 回调（同步预编辑状态到 Rust 渲染层）
+    /// - Parameters:
+    ///   - onPreeditChange: 预编辑变化回调
+    ///   - onPreeditClear: 预编辑清除回调
+    func configureImeCallbacks(
+        onPreeditChange: @escaping (String, UInt32) -> Void,
+        onPreeditClear: @escaping () -> Void
+    ) {
+        imeCoordinator.onPreeditChange = onPreeditChange
+        imeCoordinator.onPreeditClear = onPreeditClear
+    }
 }

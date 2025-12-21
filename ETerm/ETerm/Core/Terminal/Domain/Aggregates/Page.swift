@@ -94,6 +94,24 @@ final class Page {
         return false
     }
 
+    // MARK: - 装饰系统
+
+    /// 获取所有 Tab
+    var allTabs: [Tab] {
+        allPanels.flatMap { $0.tabs }
+    }
+
+    /// 有效装饰（收敛所有 Tab 的最高优先级插件装饰）
+    ///
+    /// Page 只聚合插件设置的装饰（tab.decoration），不包含 Tab 的 active 状态。
+    /// 用于在 PageBar 上显示状态提示（如 Claude thinking/completed）。
+    var effectiveDecoration: TabDecoration? {
+        allTabs
+            .compactMap { $0.decoration }  // 只取插件设置的装饰，不含 active 状态
+            .filter { $0.priority > 0 }
+            .max { $0.priority < $1.priority }
+    }
+
     // MARK: - Title Management
 
     /// 重命名页面
