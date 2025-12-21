@@ -60,7 +60,7 @@ enum SwitchFocusTool {
         }
 
         // 检查 page 是否存在
-        guard coordinator.terminalWindow.pages.contains(where: { $0.pageId == pageId }) else {
+        guard coordinator.terminalWindow.pages.all.contains(where: { $0.pageId == pageId }) else {
             return .failure(message: MCPFocusError.pageNotFound(pageIdString).localizedDescription ?? "Page not found")
         }
 
@@ -121,7 +121,7 @@ enum SwitchFocusTool {
                 message: "Switched to tab",
                 element: MCPFocusResponse.FocusedElement(
                     windowNumber: window.windowNumber,
-                    pageId: coordinator.terminalWindow.activePageId?.uuidString,
+                    pageId: coordinator.terminalWindow.active.pageId?.uuidString,
                     panelId: panelIdString,
                     tabId: tabIdString
                 )

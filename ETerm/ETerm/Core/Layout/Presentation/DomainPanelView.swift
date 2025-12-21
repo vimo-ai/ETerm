@@ -387,8 +387,40 @@ final class DomainPanelView: NSView {
             return
         }
 
+        // 前置检查：单 Window 单 Page 单 Panel 单 Tab 时禁止拖出
+        // 原因：拖出后源窗口必然关闭，等于移动整个窗口，应该直接拖窗口标题栏
+        guard canDragTabOut(panel: panel, coordinator: coordinator) else {
+            return
+        }
+
         // 创建新窗口
         WindowManager.shared.createWindowWithTab(tab, from: panel.panelId, sourceCoordinator: coordinator, at: screenPoint)
+    }
+
+    /// 检查是否可以将 Tab 拖出到新窗口
+    ///
+    /// 单 Window 单 Page 单 Panel 单 Tab 时禁止拖出，
+    /// 因为拖出后源窗口必然关闭，等于移动整个窗口。
+    private func canDragTabOut(panel: EditorPanel, coordinator: TerminalWindowCoordinator) -> Bool {
+        // 多 Tab：允许（关掉一个 Tab，其他 Tab 还在）
+        if panel.tabCount > 1 {
+            return true
+        }
+
+        // 单 Tab 但有多 Panel：允许（关掉这个 Panel，其他 Panel 还在）
+        if let page = coordinator.terminalWindow.active.page,
+           page.allPanels.count > 1 {
+            return true
+        }
+
+        // 单 Panel 但有多 Page：允许（关掉这个 Page，其他 Page 还在）
+        if coordinator.terminalWindow.pages.count > 1 {
+            return true
+        }
+
+        // 单 Window 单 Page 单 Panel 单 Tab：禁止
+        // 注：Window 数量由 WindowManager 管理，这里只检查当前窗口内部
+        return false
     }
 
     private func handleTabReceivedFromOtherWindow(_ tabId: UUID, sourcePanelId: UUID, sourceWindowNumber: Int) {

@@ -1623,7 +1623,7 @@ impl TerminalPool {
                                 cursor_screen_row,
                                 physical_cell_width,
                                 physical_line_height,
-                                font_metrics.baseline_offset.value * scale,
+                                font_metrics.baseline_offset.value,  // 已经是物理像素，不需要再乘 scale
                             );
                         }
 

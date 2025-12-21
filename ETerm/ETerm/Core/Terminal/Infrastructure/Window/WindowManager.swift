@@ -173,25 +173,25 @@ final class WindowManager: NSObject {
 
         // 添加其他 Pages
         for page in pages.dropFirst() {
-            terminalWindow.addExistingPage(page)
+            terminalWindow.pages.addExisting(page)
         }
 
         // 恢复每个 Page 的 activePanelId 到 TerminalWindow
         for (pageId, panelId) in activePanelIdByPage {
             // 临时切换到该 Page 来设置 activePanelId
-            if terminalWindow.switchToPage(pageId) {
-                terminalWindow.setActivePanel(panelId)
+            if terminalWindow.pages.switchTo(pageId) {
+                terminalWindow.active.setPanel(panelId)
             }
         }
 
         // 切换到最终激活的 Page
         let activePageIndex = max(0, min(windowState.activePageIndex, pages.count - 1))
         let activePageId = pages[activePageIndex].pageId
-        _ = terminalWindow.switchToPage(activePageId)
+        _ = terminalWindow.pages.switchTo(activePageId)
 
         // 恢复激活 Page 的 activePanelId
         if let activePanelId = activePanelIdByPage[activePageId] {
-            terminalWindow.setActivePanel(activePanelId)
+            terminalWindow.active.setPanel(activePanelId)
         }
 
         return terminalWindow
@@ -505,6 +505,95 @@ final class WindowManager: NSObject {
         windows.count
     }
 
+    // MARK: - 跨窗口迁移（统一抽象）
+
+    /// 创建新窗口的内部核心方法
+    ///
+    /// 所有跨窗口迁移（Tab/Panel/Page）最终都调用此方法。
+    /// 调用方负责：分离终端、从源窗口移除实体、归一化为 Page。
+    ///
+    /// - Parameters:
+    ///   - page: 已归一化的 Page（包含要迁移的内容）
+    ///   - detachedTerminals: 已分离的终端映射 [tabId: handle]
+    ///   - sourceCoordinator: 源窗口的 Coordinator（用于复制 CWD 状态）
+    ///   - screenPoint: 新窗口的位置（屏幕坐标）
+    /// - Returns: 新创建的窗口，失败返回 nil
+    private func createWindowWithPageInternal(
+        _ page: Page,
+        detachedTerminals: [UUID: DetachedTerminalHandle],
+        sourceCoordinator: TerminalWindowCoordinator,
+        at screenPoint: NSPoint
+    ) -> KeyableWindow? {
+        // 1. 创建新窗口（使用指定位置，调整到合适的位置）
+        let adjustedPoint = NSPoint(
+            x: screenPoint.x - defaultSize.width / 2,
+            y: screenPoint.y - defaultSize.height / 2
+        )
+        let frame = NSRect(origin: adjustedPoint, size: defaultSize)
+        let window = KeyableWindow.create(contentRect: frame)
+
+        // 2. 创建新 Coordinator，使用 Page 作为初始内容
+        let registry = TerminalWorkingDirectoryRegistry()
+        let terminalWindow = TerminalWindow(initialPage: page)
+
+        // 从源 Coordinator 复制 CWD 状态到新 Registry
+        for panel in page.allPanels {
+            for tab in panel.tabs {
+                let cwd = sourceCoordinator.getWorkingDirectory(
+                    tabId: tab.tabId,
+                    terminalId: tab.rustTerminalId.map { Int($0) }
+                )
+                // 注册为 detached 状态，等待 reattach
+                registry.registerActiveTerminal(
+                    tabId: tab.tabId,
+                    terminalId: tab.rustTerminalId.map { Int($0) } ?? -1,
+                    workingDirectory: cwd
+                )
+                if let terminalId = tab.rustTerminalId {
+                    registry.detachTerminal(tabId: tab.tabId, terminalId: Int(terminalId))
+                }
+            }
+        }
+
+        let coordinator = TerminalWindowCoordinator(
+            initialWindow: terminalWindow,
+            workingDirectoryRegistry: registry
+        )
+
+        // 3. 设置待附加的终端（会在 setTerminalPool 时自动附加）
+        coordinator.setPendingDetachedTerminals(detachedTerminals)
+
+        // 4. 设置内容视图
+        let contentView = ContentView(coordinator: coordinator)
+        let hostingView = NSHostingViewIgnoringSafeArea(rootView: contentView)
+        window.contentView = hostingView
+
+        // 重新配置圆角
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = 10
+        hostingView.layer?.masksToBounds = true
+
+        // 设置最小尺寸
+        window.minSize = NSSize(width: 400, height: 300)
+
+        // 监听窗口关闭
+        window.delegate = self
+
+        // 注册 Coordinator
+        coordinators[window.windowNumber] = coordinator
+
+        // 添加到列表
+        windows.append(window)
+
+        // 显示窗口
+        window.makeKeyAndOrderFront(nil)
+
+        // 保存 Session
+        saveSession()
+
+        return window
+    }
+
     // MARK: - 跨窗口 Page 操作
 
     /// 创建新窗口（Page 拖出时使用）
@@ -538,74 +627,13 @@ final class WindowManager: NSObject {
             return nil
         }
 
-        // 3. 创建新窗口（使用指定位置，调整到合适的位置）
-        let adjustedPoint = NSPoint(
-            x: screenPoint.x - defaultSize.width / 2,
-            y: screenPoint.y - defaultSize.height / 2
+        // 3. 调用内部核心方法创建窗口
+        return createWindowWithPageInternal(
+            removedPage,
+            detachedTerminals: detachedTerminals,
+            sourceCoordinator: sourceCoordinator,
+            at: screenPoint
         )
-        let frame = NSRect(origin: adjustedPoint, size: defaultSize)
-        let window = KeyableWindow.create(contentRect: frame)
-
-        // 4. 创建新 Coordinator，使用移除的 Page 作为初始内容
-        let registry = TerminalWorkingDirectoryRegistry()
-        let terminalWindow = TerminalWindow(initialPage: removedPage)
-
-        // 从源 Coordinator 复制 CWD 状态到新 Registry
-        for panel in page.allPanels {
-            for tab in panel.tabs {
-                let cwd = sourceCoordinator.getWorkingDirectory(
-                    tabId: tab.tabId,
-                    terminalId: tab.rustTerminalId.map { Int($0) }
-                )
-                // 注册为 detached 状态，等待 reattach
-                registry.registerActiveTerminal(
-                    tabId: tab.tabId,
-                    terminalId: tab.rustTerminalId.map { Int($0) } ?? -1,
-                    workingDirectory: cwd
-                )
-                if let terminalId = tab.rustTerminalId {
-                    registry.detachTerminal(tabId: tab.tabId, terminalId: Int(terminalId))
-                }
-            }
-        }
-
-        let coordinator = TerminalWindowCoordinator(
-            initialWindow: terminalWindow,
-            workingDirectoryRegistry: registry
-        )
-
-        // 5. 设置待附加的终端（会在 setTerminalPool 时自动附加）
-        coordinator.setPendingDetachedTerminals(detachedTerminals)
-
-        // 6. 设置内容视图
-        let contentView = ContentView(coordinator: coordinator)
-        let hostingView = NSHostingViewIgnoringSafeArea(rootView: contentView)
-        window.contentView = hostingView
-
-        // 重新配置圆角
-        hostingView.wantsLayer = true
-        hostingView.layer?.cornerRadius = 10
-        hostingView.layer?.masksToBounds = true
-
-        // 设置最小尺寸
-        window.minSize = NSSize(width: 400, height: 300)
-
-        // 监听窗口关闭
-        window.delegate = self
-
-        // 注册 Coordinator
-        coordinators[window.windowNumber] = coordinator
-
-        // 添加到列表
-        windows.append(window)
-
-        // 显示窗口
-        window.makeKeyAndOrderFront(nil)
-
-        // 保存 Session
-        saveSession()
-
-        return window
     }
 
     /// 移动 Page 到另一个窗口
@@ -626,7 +654,7 @@ final class WindowManager: NSObject {
         }
 
         // 检查 Page 是否存在于源窗口
-        guard let page = sourceCoordinator.terminalWindow.pages.first(where: { $0.pageId == pageId }) else {
+        guard let page = sourceCoordinator.terminalWindow.pages.all.first(where: { $0.pageId == pageId }) else {
             return false
         }
 
@@ -654,7 +682,7 @@ final class WindowManager: NSObject {
         targetCoordinator.addPage(removedPage, insertBefore: targetPageId, detachedTerminals: detachedTerminals)
 
         // 4. 如果源窗口没有 Page 了，关闭源窗口
-        if sourceCoordinator.terminalWindow.pages.isEmpty {
+        if sourceCoordinator.terminalWindow.pages.all.isEmpty {
             if let sourceWindow = windows.first(where: { $0.windowNumber == sourceWindowNumber }) {
                 sourceWindow.close()
             }
@@ -675,10 +703,8 @@ final class WindowManager: NSObject {
 
     /// 创建新窗口（Tab 拖出时使用）
     ///
-    /// 第一阶段简化实现：
-    /// - 从源 Panel 移除 Tab（关闭终端）
-    /// - 创建新窗口（新终端）
-    /// - 注：终端会话不保留，后续可优化
+    /// 跨窗口终端迁移：使用 detach/attach 保留 PTY 连接和终端历史。
+    /// 内部归一化为 Page，复用统一的迁移逻辑。
     ///
     /// - Parameters:
     ///   - tab: 要移动的 Tab
@@ -688,62 +714,32 @@ final class WindowManager: NSObject {
     /// - Returns: 新创建的窗口，失败返回 nil
     @discardableResult
     func createWindowWithTab(_ tab: Tab, from sourcePanelId: UUID, sourceCoordinator: TerminalWindowCoordinator, at screenPoint: NSPoint) -> KeyableWindow? {
-        // 1. 从源 Panel 移除 Tab（关闭终端 - 第一阶段简化）
-        guard sourceCoordinator.removeTab(tab.tabId, from: sourcePanelId, closeTerminal: true) else {
+        // 1. 分离终端（保持 PTY 连接活跃）
+        var detachedTerminals: [UUID: DetachedTerminalHandle] = [:]
+        if let terminalId = tab.rustTerminalId,
+           let detached = sourceCoordinator.detachTerminal(Int(terminalId)) {
+            detachedTerminals[tab.tabId] = detached
+        }
+
+        // 2. 从源 Panel 移除 Tab（不关闭终端，已经分离）
+        guard sourceCoordinator.removeTab(tab.tabId, from: sourcePanelId, closeTerminal: false) else {
+            // 如果失败，销毁已分离的终端
+            for (_, detached) in detachedTerminals {
+                TerminalPoolWrapper.destroyDetachedTerminal(detached)
+            }
             return nil
         }
 
-        // 2. 创建新窗口（使用指定位置，调整到合适的位置）
-        let adjustedPoint = NSPoint(
-            x: screenPoint.x - defaultSize.width / 2,
-            y: screenPoint.y - defaultSize.height / 2
+        // 3. 归一化为 Page
+        let page = Page.createFromTab(tab)
+
+        // 4. 调用内部核心方法创建窗口
+        return createWindowWithPageInternal(
+            page,
+            detachedTerminals: detachedTerminals,
+            sourceCoordinator: sourceCoordinator,
+            at: screenPoint
         )
-        let frame = NSRect(origin: adjustedPoint, size: defaultSize)
-        let window = KeyableWindow.create(contentRect: frame)
-
-        // 🔑 在 WindowManager 中创建 Coordinator
-        let registry = TerminalWorkingDirectoryRegistry()
-        let initialTab = TerminalWindow.makeDefaultTab()
-        let initialPanel = EditorPanel(initialTab: initialTab)
-        let terminalWindow = TerminalWindow(initialPanel: initialPanel)
-
-        // 注册初始 Tab 的 CWD（默认使用用户主目录）
-        registry.registerPendingTerminal(
-            tabId: initialTab.tabId,
-            workingDirectory: .userHome()
-        )
-
-        let coordinator = TerminalWindowCoordinator(
-            initialWindow: terminalWindow,
-            workingDirectoryRegistry: registry
-        )
-
-        // 3. 设置内容视图，传入 Coordinator
-        let contentView = ContentView(coordinator: coordinator)
-        let hostingView = NSHostingViewIgnoringSafeArea(rootView: contentView)
-        window.contentView = hostingView
-
-        // 重新配置圆角
-        hostingView.wantsLayer = true
-        hostingView.layer?.cornerRadius = 10
-        hostingView.layer?.masksToBounds = true
-
-        // 设置最小尺寸
-        window.minSize = NSSize(width: 400, height: 300)
-
-        // 监听窗口关闭
-        window.delegate = self
-
-        // 🔑 注册 Coordinator
-        coordinators[window.windowNumber] = coordinator
-
-        // 添加到列表
-        windows.append(window)
-
-        // 显示窗口
-        window.makeKeyAndOrderFront(nil)
-
-        return window
     }
 
     /// 移动 Tab 到另一个窗口的指定 Panel
@@ -819,14 +815,14 @@ final class WindowManager: NSObject {
 
             // 捕获所有 Pages
             var pageStates: [PageState] = []
-            for page in terminalWindow.pages {
+            for page in terminalWindow.pages.all {
                 if let pageState = capturePageState(page: page, coordinator: coordinator) {
                     pageStates.append(pageState)
                 }
             }
 
             // 确定激活的 Page 索引
-            let activePageIndex = terminalWindow.pages.firstIndex { $0.pageId == terminalWindow.activePageId } ?? 0
+            let activePageIndex = terminalWindow.pages.all.firstIndex { $0.pageId == terminalWindow.active.pageId } ?? 0
 
             // 创建窗口状态
             let windowState = WindowState(
@@ -860,7 +856,7 @@ final class WindowManager: NSObject {
         }
 
         // 确定激活的 Panel ID（从 TerminalWindow 获取，支持每个 Page 独立记录）
-        let activePanelId = coordinator.terminalWindow.getActivePanelId(for: page.pageId)?.uuidString
+        let activePanelId = coordinator.terminalWindow.active.panelId(for: page.pageId)?.uuidString
             ?? page.allPanelIds.first?.uuidString ?? ""
 
         return PageState(

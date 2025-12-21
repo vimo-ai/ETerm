@@ -337,7 +337,7 @@ func loadBuiltinPlugins() {
 通过 `CommandContext` 可访问：
 
 - `coordinator: TerminalWindowCoordinator?` - 窗口协调器
-  - `coordinator.showInlineComposer: Bool` - 控制内联编辑器显示
+  - `coordinator.sendUIEvent(_:)` - 发送 UI 事件（控制 Composer/Search 显示）
   - `coordinator.getActiveTerminalId() -> UInt32?` - 获取活跃终端 ID
   - `coordinator.activePanelId: UUID?` - 活跃面板 ID
   - `coordinator.terminalWindow: TerminalWindow` - 终端窗口聚合根

@@ -23,6 +23,25 @@ struct RioTerminalView: View {
     /// Coordinator 由 WindowManager 创建和管理，这里只是观察
     @ObservedObject var coordinator: TerminalWindowCoordinator
 
+    // MARK: - Inline AI Composer State (View-owned)
+
+    /// 是否显示 AI 辅助输入框
+    @State private var showInlineComposer = false
+
+    /// AI 辅助输入框的位置（屏幕坐标）
+    @State private var composerPosition: CGPoint = .zero
+
+    /// AI 辅助输入框的输入区高度（不含结果区）
+    @State private var composerInputHeight: CGFloat = 0
+
+    // MARK: - Terminal Search State (View-owned)
+
+    /// 是否显示终端搜索框
+    @State private var showTerminalSearch = false
+
+    /// 搜索绑定的 Panel ID（搜索开启时锁定，不随 activePanelId 变化）
+    @State private var searchPanelId: UUID?
+
     var body: some View {
         ZStack {
             // 背景层 - 宣纸水墨风格（整体透明度 0.5，可调节）
@@ -32,16 +51,23 @@ struct RioTerminalView: View {
             .allowsHitTesting(false)  // 不拦截事件，让事件穿透到下面的渲染层
 
             // 渲染层（PageBar 已在 SwiftUI 层，这里不需要 ignoresSafeArea）
-            RioRenderView(coordinator: coordinator)
+            RioRenderView(
+                coordinator: coordinator,
+                showInlineComposer: showInlineComposer,
+                composerInputHeight: composerInputHeight
+            )
 
             // Inline Writing Assistant Overlay (Cmd+K)
-            if coordinator.showInlineComposer {
+            if showInlineComposer {
                 VStack {
                     Spacer()
 
                     InlineComposerView(
+                        isShowing: $showInlineComposer,
+                        inputHeight: $composerInputHeight,
                         onCancel: {
-                            coordinator.showInlineComposer = false
+                            showInlineComposer = false
+                            coordinator.isComposerShowing = false
                         },
                         coordinator: coordinator
                     )
@@ -51,8 +77,68 @@ struct RioTerminalView: View {
             }
 
             // Terminal Search Overlay (Cmd+F)
-            if coordinator.showTerminalSearch {
-                TerminalSearchOverlay(coordinator: coordinator)
+            if showTerminalSearch {
+                TerminalSearchOverlay(
+                    coordinator: coordinator,
+                    isShowing: $showTerminalSearch,
+                    searchPanelId: $searchPanelId
+                )
+            }
+        }
+        // 监听 Coordinator 发出的 UI 事件
+        .onReceive(coordinator.uiEventPublisher) { event in
+            handleUIEvent(event)
+        }
+        // 同步 Composer 状态到 Coordinator（用于 KeyableWindow 检查）
+        .onChange(of: showInlineComposer) { _, newValue in
+            coordinator.isComposerShowing = newValue
+        }
+    }
+
+    // MARK: - UI Event Handling
+
+    private func handleUIEvent(_ event: UIEvent) {
+        switch event {
+        case .showComposer(let position):
+            composerPosition = position
+            showInlineComposer = true
+            coordinator.isComposerShowing = true
+
+        case .hideComposer:
+            showInlineComposer = false
+            coordinator.isComposerShowing = false
+
+        case .toggleComposer(let position):
+            if showInlineComposer {
+                showInlineComposer = false
+                coordinator.isComposerShowing = false
+            } else {
+                composerPosition = position
+                showInlineComposer = true
+                coordinator.isComposerShowing = true
+            }
+
+        case .showSearch(let panelId):
+            searchPanelId = panelId
+            showTerminalSearch = true
+
+        case .hideSearch:
+            searchPanelId = nil
+            showTerminalSearch = false
+
+        case .toggleSearch(let panelId):
+            if showTerminalSearch {
+                searchPanelId = nil
+                showTerminalSearch = false
+            } else {
+                searchPanelId = panelId
+                showTerminalSearch = true
+            }
+
+        case .clearSearchIfPanel(let panelId):
+            if searchPanelId == panelId {
+                searchPanelId = nil
+                showTerminalSearch = false
             }
         }
     }
@@ -62,6 +148,12 @@ struct RioTerminalView: View {
 
 struct RioRenderView: NSViewRepresentable {
     @ObservedObject var coordinator: TerminalWindowCoordinator
+
+    /// Composer 显示状态（从 RioTerminalView 传入，用于 layout）
+    var showInlineComposer: Bool
+
+    /// Composer 输入区高度（从 RioTerminalView 传入，用于 layout）
+    var composerInputHeight: CGFloat
 
     func makeNSView(context: Context) -> RioContainerView {
         let containerView = RioContainerView()
@@ -78,9 +170,9 @@ struct RioRenderView: NSViewRepresentable {
         // 读取 updateTrigger 触发更新
         let _ = coordinator.updateTrigger
 
-        // 读取对话框状态，触发 layout 更新
-        let _ = coordinator.showInlineComposer
-        let _ = coordinator.composerInputHeight
+        // 同步 Composer 状态到 RioContainerView（用于 layout 计算）
+        nsView.showInlineComposerState = showInlineComposer
+        nsView.composerInputHeightState = composerInputHeight
 
         // 触发 layout 重新计算（当对话框状态变化时）
         nsView.needsLayout = true
@@ -128,6 +220,14 @@ class RioContainerView: NSView {
 
     /// 当前正在高亮的 Panel（用于清除旧高亮）
     private weak var currentHighlightedPanel: DomainPanelView?
+
+    // MARK: - Composer State (synced from RioRenderView)
+
+    /// Composer 显示状态（由 RioRenderView 在 updateNSView 中同步）
+    var showInlineComposerState = false
+
+    /// Composer 输入区高度（由 RioRenderView 在 updateNSView 中同步）
+    var composerInputHeightState: CGFloat = 0
 
     weak var coordinator: TerminalWindowCoordinator? {
         didSet {
@@ -316,8 +416,8 @@ class RioContainerView: NSView {
 
     /// 计算底部预留空间（为对话框留出空间）
     private var bottomReservedSpace: CGFloat {
-        if let coordinator = coordinator, coordinator.showInlineComposer {
-            return coordinator.composerInputHeight + 30
+        if showInlineComposerState {
+            return composerInputHeightState + 30
         }
         return 0
     }
@@ -339,7 +439,7 @@ class RioContainerView: NSView {
         }
 
         // 插件页面由 ContentView 层处理，这里只处理终端页面
-        if let activePage = coordinator.activePage, activePage.isPluginPage {
+        if let activePage = coordinator.terminalWindow.active.page, activePage.isPluginPage {
             return
         }
 
@@ -1594,8 +1694,8 @@ class RioMetalView: NSView, RenderViewProtocol {
         let centerX = bounds.midX
         let centerY = bounds.midY + 50  // 稍微偏上一点
 
-        coordinator.composerPosition = CGPoint(x: centerX, y: centerY)
-        coordinator.showInlineComposer = true
+        // 通过 UIEvent 通知 View 层显示 Composer
+        coordinator.sendUIEvent(.showComposer(position: CGPoint(x: centerX, y: centerY)))
     }
 
     // MARK: - 鼠标事件
@@ -2128,6 +2228,12 @@ struct TerminalSearchOverlay: View {
     @ObservedObject var coordinator: TerminalWindowCoordinator
     @State private var searchText: String = ""
 
+    /// 搜索框显示状态（双向绑定到 RioTerminalView）
+    @Binding var isShowing: Bool
+
+    /// 搜索绑定的 Panel ID（双向绑定到 RioTerminalView）
+    @Binding var searchPanelId: UUID?
+
     var body: some View {
         // 使用 GeometryReader 获取当前激活 Panel 的位置
         GeometryReader { geometry in
@@ -2148,12 +2254,12 @@ struct TerminalSearchOverlay: View {
                     .frame(width: 200)
                     .onSubmit {
                         if !searchText.isEmpty {
-                            coordinator.startSearch(pattern: searchText)
+                            coordinator.startSearch(pattern: searchText, searchPanelId: searchPanelId)
                         }
                     }
 
                 // 匹配数量和导航
-                if let searchInfo = coordinator.currentTabSearchInfo {
+                if let searchInfo = coordinator.getTabSearchInfo(for: searchPanelId) {
                     HStack(spacing: 4) {
                         Text("\(searchInfo.currentIndex)/\(searchInfo.totalCount)")
                             .font(.system(size: 11))
@@ -2161,7 +2267,7 @@ struct TerminalSearchOverlay: View {
 
                         // 上一个
                         Button(action: {
-                            coordinator.searchPrev()
+                            coordinator.searchPrev(searchPanelId: searchPanelId)
                         }) {
                             Image(systemName: "chevron.up")
                                 .font(.system(size: 10))
@@ -2171,7 +2277,7 @@ struct TerminalSearchOverlay: View {
 
                         // 下一个
                         Button(action: {
-                            coordinator.searchNext()
+                            coordinator.searchNext(searchPanelId: searchPanelId)
                         }) {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 10))
@@ -2183,7 +2289,9 @@ struct TerminalSearchOverlay: View {
 
                 // 关闭按钮
                 Button(action: {
-                    coordinator.clearSearch()
+                    coordinator.clearSearch(searchPanelId: searchPanelId)
+                    searchPanelId = nil
+                    isShowing = false
                 }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
@@ -2203,9 +2311,9 @@ struct TerminalSearchOverlay: View {
                 y: activePanelFrame.minY + 40     // 距离顶部 40pt
             )
         }
-        .onChange(of: coordinator.searchPanelId) {
+        .onChange(of: searchPanelId) {
             // 搜索目标 Panel 切换时，更新搜索框内容
-            if let searchInfo = coordinator.currentTabSearchInfo {
+            if let searchInfo = coordinator.getTabSearchInfo(for: searchPanelId) {
                 searchText = searchInfo.pattern
             } else {
                 searchText = ""
@@ -2213,7 +2321,7 @@ struct TerminalSearchOverlay: View {
         }
         .onAppear {
             // 从当前 Tab 的搜索信息恢复文本
-            if let searchInfo = coordinator.currentTabSearchInfo {
+            if let searchInfo = coordinator.getTabSearchInfo(for: searchPanelId) {
                 searchText = searchInfo.pattern
             }
         }
@@ -2222,13 +2330,13 @@ struct TerminalSearchOverlay: View {
     /// 获取搜索目标 Panel 的 frame（转换为 SwiftUI 坐标系）
     private func getActivePanelFrame(in geometry: GeometryProxy) -> CGRect {
         // 使用 searchPanelId 定位搜索框（搜索绑定到特定 Panel）
-        guard let searchPanelId = coordinator.searchPanelId else {
+        guard let panelId = searchPanelId else {
             return geometry.frame(in: .local)
         }
 
         // 从 coordinator 获取 Panel 的 bounds
         let panels = coordinator.terminalWindow.allPanels
-        guard let activePanel = panels.first(where: { $0.panelId == searchPanelId }) else {
+        guard let activePanel = panels.first(where: { $0.panelId == panelId }) else {
             return geometry.frame(in: .local)
         }
 

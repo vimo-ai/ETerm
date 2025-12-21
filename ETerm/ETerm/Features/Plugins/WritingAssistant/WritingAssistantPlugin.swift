@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CoreGraphics
 
 /// 写作助手插件
 ///
@@ -28,8 +29,8 @@ final class WritingAssistantPlugin: Plugin {
             title: "显示写作助手",
             icon: "sparkles"
         ) { ctx in
-            // 通过 coordinator 显示 composer
-            ctx.coordinator?.showInlineComposer = true
+            // 通过 UIEvent 显示 composer
+            ctx.coordinator?.sendUIEvent(.showComposer(position: .zero))
         })
 
         // 注册隐藏命令
@@ -37,7 +38,7 @@ final class WritingAssistantPlugin: Plugin {
             id: "writing.hideComposer",
             title: "隐藏写作助手"
         ) { ctx in
-            ctx.coordinator?.showInlineComposer = false
+            ctx.coordinator?.sendUIEvent(.hideComposer)
         })
 
         // 注册切换命令
@@ -45,9 +46,8 @@ final class WritingAssistantPlugin: Plugin {
             id: "writing.toggleComposer",
             title: "切换写作助手"
         ) { ctx in
-            if let coordinator = ctx.coordinator {
-                coordinator.showInlineComposer.toggle()
-            }
+            // 通过 UIEvent 切换 composer（位置由 View 层确定）
+            ctx.coordinator?.sendUIEvent(.toggleComposer(position: .zero))
         })
 
         // 绑定快捷键 Cmd+K

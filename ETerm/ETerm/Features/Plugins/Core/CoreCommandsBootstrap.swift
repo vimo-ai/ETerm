@@ -421,10 +421,8 @@ final class CoreCommandsBootstrap {
 extension TerminalWindowCoordinator {
     /// 切换到指定索引的 Page
     func switchToPage(_ index: Int) {
-        let pages = allPages
-        guard index < pages.count else { return }
-        let targetPageId = pages[index].pageId
-        switchToPage(targetPageId)
+        guard let page = terminalWindow.pages[index] else { return }
+        switchToPage(page.pageId)
     }
 
     /// 切换到指定索引的 Tab

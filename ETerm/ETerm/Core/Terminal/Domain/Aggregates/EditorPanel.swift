@@ -121,6 +121,21 @@ final class EditorPanel {
         tabs.count
     }
 
+    /// 重命名指定 Tab
+    ///
+    /// - Parameters:
+    ///   - tabId: Tab ID
+    ///   - newTitle: 新标题
+    /// - Returns: 是否成功
+    @discardableResult
+    func renameTab(_ tabId: UUID, to newTitle: String) -> Bool {
+        guard let tab = tabs.first(where: { $0.tabId == tabId }) else {
+            return false
+        }
+        tab.setTitle(newTitle)
+        return true
+    }
+
     /// 重新排序 Tabs
     ///
     /// - Parameter tabIds: 新的 Tab ID 顺序

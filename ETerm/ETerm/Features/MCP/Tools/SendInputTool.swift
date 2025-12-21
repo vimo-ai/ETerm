@@ -33,7 +33,7 @@ enum SendInputTool {
             }
 
             // Check if this coordinator has the terminal
-            for page in coordinator.terminalWindow.pages {
+            for page in coordinator.terminalWindow.pages.all {
                 for panel in page.allPanels {
                     for tab in panel.tabs {
                         if tab.rustTerminalId == terminalId {
