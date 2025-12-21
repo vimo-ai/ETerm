@@ -453,10 +453,8 @@ final class TerminalWorkingDirectoryRegistry {
         """
     }
 
-    /// 日志辅助方法
+    /// 日志辅助方法（已禁用）
     private func logDebug(_ message: String) {
-        #if DEBUG
-        print(message)
-        #endif
+        // 日志已禁用
     }
 }
