@@ -50,10 +50,11 @@ final class KeyableWindow: NSWindow {
         }
 
         // 如果 InlineComposer 正在显示，只处理 Cmd+K（关闭）
-        if coordinator.showInlineComposer {
+        if coordinator.isComposerShowing {
             let keyStroke = KeyStroke.from(event)
             if keyStroke.matches(.cmd("k")) {
-                coordinator.showInlineComposer = false
+                coordinator.sendUIEvent(.hideComposer)
+                coordinator.isComposerShowing = false
                 return true
             }
             // 其他快捷键放行给 composer 文本框

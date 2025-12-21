@@ -53,7 +53,7 @@ struct ContentView: View {
 
         ZStack(alignment: .topLeading) {
             // 终端视图始终存在，只是根据 Page 类型隐藏/显示
-            let isPluginPage = coordinator.activePage?.isPluginPage ?? false
+            let isPluginPage = coordinator.terminalWindow.active.page?.isPluginPage ?? false
 
             // 终端视图（插件页面时隐藏，但不销毁）
             RioTerminalView(coordinator: coordinator)
@@ -62,7 +62,7 @@ struct ContentView: View {
                 .allowsHitTesting(!isPluginPage)
 
             // 插件页面视图（终端页面时隐藏）
-            if let activePage = coordinator.activePage, isPluginPage {
+            if let activePage = coordinator.terminalWindow.active.page, isPluginPage {
                 pluginPageContent(for: activePage)
                     .frame(minWidth: 400, minHeight: 300)
             }

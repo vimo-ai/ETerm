@@ -114,7 +114,7 @@ extension SessionRecorder {
                 let terminalWindow = coordinator.terminalWindow
 
                 var pageSnapshots: [PageSnapshot] = []
-                for page in terminalWindow.pages {
+                for page in terminalWindow.pages.all {
                     pageSnapshots.append(PageSnapshot(
                         pageId: page.pageId,
                         title: page.title,
@@ -127,8 +127,8 @@ extension SessionRecorder {
                 windowSnapshots.append(WindowSnapshot(
                     windowNumber: 0,  // 简化：无法直接获取
                     frame: .zero,     // 简化：无法直接获取
-                    pageCount: terminalWindow.pageCount,
-                    activePageId: terminalWindow.activePageId,
+                    pageCount: terminalWindow.pages.count,
+                    activePageId: terminalWindow.active.pageId,
                     pages: pageSnapshots
                 ))
             }

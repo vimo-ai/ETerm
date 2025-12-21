@@ -25,7 +25,7 @@ enum ListSessionsTool {
 
             let terminalWindow = coordinator.terminalWindow
 
-            let pageInfos: [MCPSessionInfo.PageInfo] = terminalWindow.pages.map { page in
+            let pageInfos: [MCPSessionInfo.PageInfo] = terminalWindow.pages.all.map { page in
                 let panelInfos: [MCPSessionInfo.PanelInfo] = page.allPanels.map { panel in
                     let tabInfos: [MCPSessionInfo.TabInfo] = panel.tabs.map { tab in
                         MCPSessionInfo.TabInfo(
@@ -57,7 +57,7 @@ enum ListSessionsTool {
                 return MCPSessionInfo.PageInfo(
                     pageId: page.pageId.uuidString,
                     title: page.title,
-                    isActive: page.pageId == terminalWindow.activePageId,
+                    isActive: page.pageId == terminalWindow.active.pageId,
                     panels: panelInfos
                 )
             }
@@ -67,7 +67,7 @@ enum ListSessionsTool {
                 windowId: terminalWindow.windowId.uuidString,
                 isKeyWindow: window.isKeyWindow,
                 pages: pageInfos,
-                activePageId: terminalWindow.activePageId?.uuidString
+                activePageId: terminalWindow.active.pageId?.uuidString
             )
         }
 

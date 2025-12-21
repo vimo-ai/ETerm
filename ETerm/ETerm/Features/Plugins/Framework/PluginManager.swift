@@ -655,14 +655,14 @@ final class UIServiceImpl: UIService {
             }
 
             // 尝试打开或切换到已有的插件页面
-            let page = coordinator.terminalWindow.openOrSwitchToPluginPage(
+            let page = coordinator.terminalWindow.pages.openOrSwitchToPlugin(
                 pluginId: pluginId,
                 title: title,
                 viewProvider: viewProvider
             )
 
             // 切换到该页面
-            _ = coordinator.terminalWindow.switchToPage(page.pageId)
+            _ = coordinator.terminalWindow.pages.switchTo(page.pageId)
 
             // 触发 UI 更新
             coordinator.objectWillChange.send()
@@ -738,7 +738,7 @@ final class UIServiceImpl: UIService {
         var foundCoordinator: TerminalWindowCoordinator?
 
         for coordinator in WindowManager.shared.getAllCoordinators() {
-            for page in coordinator.terminalWindow.pages {
+            for page in coordinator.terminalWindow.pages.all {
                 for panel in page.allPanels {
                     if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
                         foundTab = tab
@@ -773,7 +773,7 @@ final class UIServiceImpl: UIService {
         // 4. 如果 Tab 所属 Page 不是当前 Page，发送 Page 刷新通知
         // Page.effectiveDecoration 是计算属性，会自动从 Tab 读取
         if let page = foundPage, let coordinator = foundCoordinator {
-            let isCurrentPage = (page.pageId == coordinator.terminalWindow.activePageId)
+            let isCurrentPage = (page.pageId == coordinator.terminalWindow.active.pageId)
             if !isCurrentPage {
                 NotificationCenter.default.post(
                     name: NSNotification.Name("PageNeedsAttention"),

@@ -84,6 +84,34 @@ final class Page {
         return Page(title: title)
     }
 
+    // MARK: - Cross-Window Migration Factories
+
+    /// 从单个 Tab 创建 Page（用于跨窗口迁移）
+    ///
+    /// 将 Tab 包装为 Panel，再包装为 Page。
+    /// Tab 的终端引用保持不变，由调用方负责 detach/attach。
+    ///
+    /// - Parameter tab: 要迁移的 Tab
+    /// - Returns: 包含该 Tab 的新 Page
+    static func createFromTab(_ tab: Tab) -> Page {
+        let panel = EditorPanel(initialTab: tab)
+        return Page(title: "Page 1", initialPanel: panel)
+    }
+
+    /// 从单个 Panel 创建 Page（用于跨窗口迁移）
+    ///
+    /// Panel 的所有 Tab 和终端引用保持不变。
+    /// 由调用方负责 detach/attach 所有终端。
+    ///
+    /// - Parameter panel: 要迁移的 Panel
+    /// - Returns: 包含该 Panel 的新 Page
+    static func createFromPanel(_ panel: EditorPanel) -> Page {
+        let page = Page(title: "Page 1")
+        page.panelRegistry[panel.panelId] = panel
+        page.rootLayout = .leaf(panelId: panel.panelId)
+        return page
+    }
+
     // MARK: - Content Type Queries
 
     /// 是否为插件页面
@@ -244,30 +272,33 @@ final class Page {
 
     /// 移除指定 Panel
     ///
-    /// 当 Panel 中的最后一个 Tab 被移走时调用
+    /// 当 Panel 中的最后一个 Tab 被移走时调用。
+    /// 允许移除根节点（最后一个 Panel），此时 Page 变空，
+    /// 由上层（TerminalWindow）负责冒泡处理 Page 的移除。
+    ///
     /// - Returns: 是否成功移除
     func removePanel(_ panelId: UUID) -> Bool {
-
         // 1. 检查 Panel 是否存在
         guard panelRegistry[panelId] != nil else {
             return false
         }
 
-        // 2. 根节点不能移除（至少保留一个 Panel）
-        if case .leaf(let id) = rootLayout, id == panelId {
-            return false
-        }
-
-        // 3. 从布局树中移除
-        guard let newLayout = removePanelFromLayout(layout: rootLayout, panelId: panelId) else {
-            return false
-        }
-
-        // 4. 更新状态
-        rootLayout = newLayout
+        // 2. 从注册表移除
         panelRegistry.removeValue(forKey: panelId)
 
+        // 3. 更新布局树
+        if let newLayout = removePanelFromLayout(layout: rootLayout, panelId: panelId) {
+            rootLayout = newLayout
+        }
+        // 如果 removePanelFromLayout 返回 nil，说明是根节点被移除，Page 变空
+        // panelRegistry 已清空，isEmpty 会返回 true，由上层处理
+
         return true
+    }
+
+    /// Page 是否为空（所有 Panel 都被移除）
+    var isEmpty: Bool {
+        return panelRegistry.isEmpty
     }
 
     /// 在布局树中移动 Panel（复用 Panel，不创建新的）

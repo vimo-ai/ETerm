@@ -518,6 +518,12 @@ struct InlineComposerView: View {
     @State private var lastSubmittedText: String = ""
     @State private var hasChecked: Bool = false  // 是否已完成检查
 
+    /// Composer 显示状态（双向绑定到 RioTerminalView）
+    @Binding var isShowing: Bool
+
+    /// Composer 输入区高度（双向绑定到 RioTerminalView，用于 layout）
+    @Binding var inputHeight: CGFloat
+
     var onCancel: () -> Void
     var coordinator: TerminalWindowCoordinator?
 
@@ -823,7 +829,7 @@ struct InlineComposerView: View {
             }
         )
         .onPreferenceChange(ComposerInputHeightKey.self) { height in
-            coordinator?.composerInputHeight = height
+            inputHeight = height
         }
         .onAppear {
             withAnimation(.easeInOut(duration: 2).repeatForever(autoreverses: true)) {
@@ -1017,7 +1023,12 @@ struct InlineComposerView: View {
 #Preview {
     ZStack {
         Color.black.opacity(0.3)
-        InlineComposerView(onCancel: {}, coordinator: nil)
+        InlineComposerView(
+            isShowing: .constant(true),
+            inputHeight: .constant(0),
+            onCancel: {},
+            coordinator: nil
+        )
     }
     .frame(width: 800, height: 500)
 }
