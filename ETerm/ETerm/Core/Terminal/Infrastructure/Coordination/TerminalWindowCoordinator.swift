@@ -834,6 +834,9 @@ class TerminalWindowCoordinator: ObservableObject {
                                 self?.restoreClaudeSession(terminalId: capturedTerminalId, sessionId: sessionId)
                             }
                         }
+                    } else {
+                        // 创建失败，保留状态供重试
+                        workingDirectoryRegistry.retainPendingTerminal(tabId: tab.tabId)
                     }
                 }
             }
