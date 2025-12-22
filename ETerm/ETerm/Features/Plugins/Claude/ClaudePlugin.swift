@@ -19,8 +19,9 @@ final class ClaudePlugin: Plugin {
 
     /// 装饰状态类型
     private enum DecorationState {
-        case thinking   // 蓝色脉冲，focus 时保持
-        case completed  // 橙色静态，focus 时清除
+        case thinking      // 蓝色脉冲，focus 时保持
+        case waitingInput  // 黄色脉冲，focus 时清除
+        case completed     // 橙色静态，focus 时清除
     }
 
     /// 每个终端的装饰状态（用于 focus 时判断是否清除）
@@ -51,8 +52,9 @@ final class ClaudePlugin: Plugin {
     //
     // 事件流程：
     // UserPromptSubmit → 蓝色脉冲（思考中，focus 时保持）
+    // Notification     → 黄色脉冲（等待用户输入，focus 时清除）
     // Stop             → 橙色静态（完成提醒，focus 时清除）
-    // Focus Tab        → 只清除 completed，保持 thinking
+    // Focus Tab        → 清除 waitingInput 和 completed，保持 thinking
     // SessionEnd       → 清除
 
     private func setupNotifications() {
@@ -61,6 +63,14 @@ final class ClaudePlugin: Plugin {
             self,
             selector: #selector(handleThinkingStart(_:)),
             name: .claudeUserPromptSubmit,
+            object: nil
+        )
+
+        // Claude 等待用户输入 → 设置"等待输入"装饰（黄色脉冲）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWaitingInput(_:)),
+            name: .claudeWaitingInput,
             object: nil
         )
 
@@ -105,6 +115,22 @@ final class ClaudePlugin: Plugin {
         )
     }
 
+    /// 处理等待用户输入
+    @objc private func handleWaitingInput(_ notification: Notification) {
+        guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
+            return
+        }
+
+        // 记录状态：waitingInput（focus 时清除）
+        decorationStates[terminalId] = .waitingInput
+
+        // 设置"等待输入"装饰：黄色脉冲（plugin priority 6，比 completed 稍高）
+        context?.ui.setTabDecoration(
+            terminalId: terminalId,
+            decoration: .waitingInput(pluginId: Self.id)
+        )
+    }
+
     /// 处理响应完成
     @objc private func handleResponseComplete(_ notification: Notification) {
         guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
@@ -140,9 +166,10 @@ final class ClaudePlugin: Plugin {
             return
         }
 
-        // 只有 completed 状态才清除（用户看到了完成提醒）
+        // waitingInput 和 completed 状态在 focus 时清除（用户已经看到了）
         // thinking 状态保持（Claude 还在工作）
-        guard decorationStates[terminalId] == .completed else {
+        guard let state = decorationStates[terminalId],
+              state == .waitingInput || state == .completed else {
             return
         }
 
@@ -157,6 +184,7 @@ final class ClaudePlugin: Plugin {
     ///
     /// 显示逻辑：
     /// - 蓝色圆点 + 数字：思考中的 Tab 数量（priority = 101）
+    /// - 黄色圆点 + 数字：等待输入的 Tab 数量（priority = 6）
     /// - 橙色圆点 + 数字：已完成的 Tab 数量（priority = 5）
     private func registerPageSlot(context: PluginContext) {
         context.ui.registerPageSlot(
@@ -180,6 +208,17 @@ final class ClaudePlugin: Plugin {
                 return false
             }.count
 
+            // 等待输入：plugin(id: "claude", priority: 6)
+            let waitingInputCount = allTabs.filter { tab in
+                guard let decoration = tab.decoration else { return false }
+                // 匹配：plugin 类型且 plugin ID 为 "claude" 且 priority == 6
+                if case .plugin(let id, let priority) = decoration.priority,
+                   id == Self.id, priority == 6 {
+                    return true
+                }
+                return false
+            }.count
+
             // 已完成：plugin(id: "claude", priority: 5)
             let completedCount = allTabs.filter { tab in
                 guard let decoration = tab.decoration else { return false }
@@ -192,7 +231,7 @@ final class ClaudePlugin: Plugin {
             }.count
 
             // 如果都为 0，不显示 slot
-            guard thinkingCount > 0 || completedCount > 0 else {
+            guard thinkingCount > 0 || waitingInputCount > 0 || completedCount > 0 else {
                 return nil
             }
 
@@ -206,6 +245,18 @@ final class ClaudePlugin: Plugin {
                                 .fill(Color.blue)
                                 .frame(width: 6, height: 6)
                             Text("\(thinkingCount)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    // 等待输入（黄色圆点 + 数字）
+                    if waitingInputCount > 0 {
+                        HStack(spacing: 2) {
+                            Circle()
+                                .fill(Color.yellow)
+                                .frame(width: 6, height: 6)
+                            Text("\(waitingInputCount)")
                                 .font(.system(size: 10))
                                 .foregroundColor(.secondary)
                         }
