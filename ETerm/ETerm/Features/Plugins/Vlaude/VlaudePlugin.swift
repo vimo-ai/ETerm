@@ -11,6 +11,7 @@
 
 import AppKit
 import Foundation
+import SwiftUI
 
 final class VlaudePlugin: Plugin {
     static let id = "vlaude"
@@ -24,10 +25,28 @@ final class VlaudePlugin: Plugin {
     /// 当收到创建请求时保存，当 Claude 启动后（claudeResponseComplete）检测并上报
     private var pendingRequests: [Int: (requestId: String, projectPath: String)] = [:]
 
+    /// Mobile 正在查看的 terminal ID 集合
+    private var mobileViewingTerminals: Set<Int> = []
+
     required init() {}
 
     func activate(context: PluginContext) {
         self.context = context
+
+        // 注册 Tab Slot（显示手机图标）
+        context.ui.registerTabSlot(
+            for: Self.id,
+            slotId: "vlaude-mobile-viewing",
+            priority: 50
+        ) { [weak self] terminalId in
+            guard let self = self else { return nil }
+            guard self.mobileViewingTerminals.contains(terminalId) else { return nil }
+            return AnyView(
+                Image(systemName: "iphone")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            )
+        }
 
         // 连接 daemon
         daemonClient = VlaudeDaemonClient()
@@ -217,20 +236,21 @@ extension VlaudePlugin: VlaudeDaemonClientDelegate {
     }
 
     func daemonClient(_ client: VlaudeDaemonClient, didReceiveMobileViewing sessionId: String, isViewing: Bool) {
-        // 更新 Tab emoji
-
         guard let terminalId = ClaudeSessionMapper.shared.getTerminalId(for: sessionId) else {
             return
         }
 
-        // 通过 NotificationCenter 通知 Tab 更新 emoji
+        // 更新 mobile 查看状态
+        if isViewing {
+            mobileViewingTerminals.insert(terminalId)
+        } else {
+            mobileViewingTerminals.remove(terminalId)
+        }
+
+        // 触发 slot 刷新
         NotificationCenter.default.post(
-            name: .vlaudeMobileViewingChanged,
-            object: nil,
-            userInfo: [
-                "terminal_id": terminalId,
-                "is_viewing": isViewing
-            ]
+            name: TabSlotRegistry.slotDidChangeNotification,
+            object: nil
         )
     }
 
@@ -240,8 +260,3 @@ extension VlaudePlugin: VlaudeDaemonClientDelegate {
     }
 }
 
-// MARK: - Notification Names
-
-extension Notification.Name {
-    static let vlaudeMobileViewingChanged = Notification.Name("vlaudeMobileViewingChanged")
-}
