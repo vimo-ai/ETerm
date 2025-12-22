@@ -72,6 +72,12 @@ public struct TabDecoration: Equatable {
 /// - "decoration": TabDecoration? - 装饰状态，nil 表示清除
 extension Notification.Name {
     public static let tabDecorationChanged = Notification.Name("tabDecorationChanged")
+
+    /// Tab 获得焦点通知（用户切换到某个 Tab）
+    /// 由核心层发送，插件可监听此事件决定是否清除装饰
+    /// userInfo:
+    /// - "terminal_id": Int - 获得焦点的终端 ID
+    public static let tabDidFocus = Notification.Name("tabDidFocus")
 }
 
 /// 插件上下文 - 聚合插件所需的系统能力

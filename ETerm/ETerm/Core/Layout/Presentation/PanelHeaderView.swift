@@ -328,27 +328,19 @@ final class PanelHeaderHostingView: NSView {
     }
 
     /// 设置激活的 Tab
-    /// - Parameters:
-    ///   - tabId: 要激活的 Tab ID
-    ///   - clearDecorationIfActive: 是否在 Tab 激活时清除装饰（用户点击时为 true，自动更新时为 false）
-    func setActiveTab(_ tabId: UUID, clearDecorationIfActive: Bool = true) {
+    /// - Parameter tabId: 要激活的 Tab ID
+    /// 注意：装饰清除由插件通过 tabDidFocus 通知处理，核心层不直接清除
+    func setActiveTab(_ tabId: UUID) {
         activeTabId = tabId
         // 更新激活状态
         for tabView in tabItemViews {
             let isActive = tabView.tabId == tabId
-            // 先清除装饰（在 setActive 刷新视图之前）
-            // 只有用户主动切换 Tab 时才清除装饰（自动更新不清除）
-            if clearDecorationIfActive && isActive && isPageActive && isPanelActive {
-                tabView.tab?.clearDecoration()
-            }
-            // 再更新激活状态（触发视图刷新）
             // 只有当前 Tab 激活 且 Panel 也接收键盘输入时，才标记为 active
             tabView.setActive(isActive && isPanelActive)
         }
     }
 
     /// 设置所属 Page 的激活状态
-    /// 注意：切换 Page 不会自动清除 Tab 装饰，只有用户点击 Tab 时才清除
     func setPageActive(_ active: Bool) {
         isPageActive = active
         for tabView in tabItemViews {

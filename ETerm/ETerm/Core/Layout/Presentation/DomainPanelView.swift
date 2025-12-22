@@ -239,9 +239,9 @@ final class DomainPanelView: NSView {
         let tabInfos = panel.tabs.map { (id: $0.tabId, title: $0.title, rustTerminalId: $0.rustTerminalId.map { Int($0) }) }
         headerView.setTabs(tabInfos, tabModels: panel.tabs)
 
-        // 更新激活的 Tab（自动更新不清除装饰，只有用户点击时才清除）
+        // 更新激活的 Tab
         if let activeTabId = panel.activeTabId {
-            headerView.setActiveTab(activeTabId, clearDecorationIfActive: false)
+            headerView.setActiveTab(activeTabId)
         }
 
         // 根据 activeTab 类型切换内容显示
@@ -339,9 +339,8 @@ final class DomainPanelView: NSView {
         guard let panel = panel,
               let coordinator = coordinator else { return }
 
-        // 装饰清除现在由领域层统一处理（TerminalWindow.executeTabSwitch）
-        // 这里只更新 UI 状态，不清除装饰
-        headerView.setActiveTab(tabId, clearDecorationIfActive: false)
+        // 更新 UI 状态（装饰清除由插件通过 tabDidFocus 通知处理）
+        headerView.setActiveTab(tabId)
 
         coordinator.handleTabClick(panelId: panel.panelId, tabId: tabId)
     }
