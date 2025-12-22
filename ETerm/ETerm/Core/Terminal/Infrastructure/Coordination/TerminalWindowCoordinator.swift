@@ -345,6 +345,15 @@ class TerminalWindowCoordinator: ObservableObject {
             // 设置领域层状态（会自动通过 focusPublisher 同步到 Coordinator）
             terminalWindow.active.setPanel(panelId)
 
+            // 发送 Tab Focus 事件，让插件清除 completed 状态的装饰
+            if let terminalId = terminalWindow.active.terminalId {
+                NotificationCenter.default.post(
+                    name: .tabDidFocus,
+                    object: nil,
+                    userInfo: ["terminal_id": terminalId]
+                )
+            }
+
             // 触发 UI 更新，让 Tab 高亮状态刷新
             objectWillChange.send()
             updateTrigger = UUID()
