@@ -334,30 +334,8 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 设置激活的 Panel（用于键盘输入）
     func setActivePanel(_ panelId: UUID) {
-        guard terminalWindow.getPanel(panelId) != nil else {
-            return
-        }
-
-        if activePanelId != panelId {
-            // 录制事件
-            recordPanelEvent(.panelActivate(fromPanelId: activePanelId, toPanelId: panelId))
-
-            // 设置领域层状态（会自动通过 focusPublisher 同步到 Coordinator）
-            terminalWindow.active.setPanel(panelId)
-
-            // 通知终端获得焦点（不走命令管道，需单独发送）
-            if let terminalId = terminalWindow.active.terminalId {
-                NotificationCenter.default.post(
-                    name: .tabDidFocus,
-                    object: nil,
-                    userInfo: ["terminal_id": terminalId]
-                )
-            }
-
-            // 触发 UI 更新，让 Tab 高亮状态刷新
-            objectWillChange.send()
-            updateTrigger = UUID()
-        }
+        guard activePanelId != panelId else { return }
+        perform(.panel(.setActive(panelId: panelId)))
     }
 
     /// 用户关闭 Tab
