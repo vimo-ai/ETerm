@@ -149,6 +149,17 @@ public struct TabDecoration: Equatable {
             style: .solid
         )
     }
+
+    /// 等待用户输入装饰（Claude 插件专用，黄色脉冲）
+    ///
+    /// - Parameter pluginId: 插件 ID（必须传入，确保类型安全）
+    public static func waitingInput(pluginId: String) -> TabDecoration {
+        TabDecoration(
+            priority: .plugin(id: pluginId, priority: 6),
+            color: .systemYellow,
+            style: .pulse
+        )
+    }
 }
 
 /// Tab 装饰变化通知

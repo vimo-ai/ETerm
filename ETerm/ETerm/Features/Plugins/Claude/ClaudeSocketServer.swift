@@ -239,8 +239,22 @@ class ClaudeSocketServer {
                 ]
             )
 
+        case "notification":
+            // 建立/更新映射关系
+            ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
+
+            // 发送等待用户输入通知
+            NotificationCenter.default.post(
+                name: .claudeWaitingInput,
+                object: nil,
+                userInfo: [
+                    "session_id": event.session_id,
+                    "terminal_id": event.terminal_id
+                ]
+            )
+
         default:
-            // notification 或其他事件
+            // 其他未知事件，只建立映射关系
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
         }
     }
@@ -253,6 +267,8 @@ extension Notification.Name {
     static let claudeSessionStart = Notification.Name("claudeSessionStart")
     /// 用户提交问题（用于设置"思考中"装饰）
     static let claudeUserPromptSubmit = Notification.Name("claudeUserPromptSubmit")
+    /// Claude 等待用户输入（用于设置"等待输入"装饰）
+    static let claudeWaitingInput = Notification.Name("claudeWaitingInput")
     /// Claude 响应完成（用于设置"完成"装饰）
     static let claudeResponseComplete = Notification.Name("claudeResponseComplete")
     /// Claude 会话结束（用于清除装饰）
