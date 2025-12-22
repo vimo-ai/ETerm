@@ -33,7 +33,13 @@ class DraggableItemView: NSView {
     func setTitle(_ newTitle: String) {
         guard title != newTitle else { return }
         title = newTitle
+        titleDidChange()
         updateItemView()
+    }
+
+    /// 标题变化时的回调（子类可覆盖）
+    func titleDidChange() {
+        // 默认空实现，子类可覆盖
     }
 
     /// SwiftUI hosting view（子类设置）
@@ -433,6 +439,9 @@ class DraggableItemView: NSView {
     // MARK: - 拖拽会话
 
     private func startDragSession(with event: NSEvent) {
+        // 通知子类拖拽即将开始
+        dragSessionWillStart()
+
         let snapshot = createSnapshot()
 
         let pasteboardItem = NSPasteboardItem()
@@ -444,6 +453,16 @@ class DraggableItemView: NSView {
 
         onDragStart?()
         beginDraggingSession(with: [draggingItem], event: event, source: self)
+    }
+
+    /// 拖拽即将开始时的回调（子类可覆盖）
+    func dragSessionWillStart() {
+        // 默认空实现，子类可覆盖
+    }
+
+    /// 拖拽结束时的回调（子类可覆盖）
+    func dragSessionDidEnd() {
+        // 默认空实现，子类可覆盖
     }
 
     // MARK: - 拖拽预览
@@ -480,6 +499,9 @@ extension DraggableItemView: NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,
                          endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
+        // 通知子类拖拽结束（在 self 可能被销毁前调用）
+        dragSessionDidEnd()
+
         // 捕获需要的值（因为 self 可能在回调后被销毁）
         let capturedItemId = itemId
         let capturedOnDragOutOfWindow = onDragOutOfWindow

@@ -10,6 +10,7 @@ struct SimpleTabView: View {
     let text: String
     let isActive: Bool
     let decoration: TabDecoration?
+    let width: CGFloat?  // 动态宽度，nil 时使用默认值
     let height: CGFloat
     let isHovered: Bool  // 由外部控制的 hover 状态
     let slotViews: [AnyView]  // 插件注入的 slot 视图
@@ -30,10 +31,29 @@ struct SimpleTabView: View {
     // 动画状态
     @State private var animationPhase: CGFloat = 0
 
-    init(_ text: String, emoji: String? = nil, isActive: Bool = false, decoration: TabDecoration? = nil, height: CGFloat = 28, isHovered: Bool = false, onClose: (() -> Void)? = nil, onCloseOthers: (() -> Void)? = nil, onCloseLeft: (() -> Void)? = nil, onCloseRight: (() -> Void)? = nil, canCloseLeft: Bool = true, canCloseRight: Bool = true, canCloseOthers: Bool = true) {
+    /// 默认宽度（兼容旧代码）
+    private static let defaultWidth: CGFloat = 180
+
+    init(
+        _ text: String,
+        emoji: String? = nil,
+        isActive: Bool = false,
+        decoration: TabDecoration? = nil,
+        width: CGFloat? = nil,
+        height: CGFloat = 28,
+        isHovered: Bool = false,
+        onClose: (() -> Void)? = nil,
+        onCloseOthers: (() -> Void)? = nil,
+        onCloseLeft: (() -> Void)? = nil,
+        onCloseRight: (() -> Void)? = nil,
+        canCloseLeft: Bool = true,
+        canCloseRight: Bool = true,
+        canCloseOthers: Bool = true
+    ) {
         self.text = text
         self.isActive = isActive
         self.decoration = decoration
+        self.width = width
         self.height = height
         self.isHovered = isHovered
         self.slotViews = slotViews
@@ -117,8 +137,8 @@ struct SimpleTabView: View {
     /// 圆角大小
     private var cornerRadius: CGFloat { height * 0.25 }
 
-    /// 固定宽度
-    private var tabWidth: CGFloat { 180 }
+    /// 实际宽度（使用传入的宽度或默认值）
+    private var tabWidth: CGFloat { width ?? Self.defaultWidth }
 
     // MARK: - 动画
 
