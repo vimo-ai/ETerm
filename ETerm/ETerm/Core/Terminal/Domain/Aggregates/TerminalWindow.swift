@@ -1107,6 +1107,15 @@ extension TerminalWindow {
         active.setPanel(panelId)
         let newTerminalId = active.terminalId
 
+        // 发送 Tab Focus 事件，让插件决定是否清除装饰
+        if let terminalId = newTerminalId {
+            NotificationCenter.default.post(
+                name: .tabDidFocus,
+                object: nil,
+                userInfo: ["terminal_id": terminalId]
+            )
+        }
+
         var result = CommandResult()
         if let id = newTerminalId {
             result.terminalsToActivate = [id]
@@ -1172,6 +1181,16 @@ extension TerminalWindow {
                     terminalsToActivate.append(terminalId)
                 }
             }
+        }
+
+        // 发送 Tab Focus 事件，让插件决定是否清除装饰
+        // 只发送当前激活 Panel 的激活 Tab（用户实际聚焦的 Tab）
+        if let focusedTerminalId = active.terminalId {
+            NotificationCenter.default.post(
+                name: .tabDidFocus,
+                object: nil,
+                userInfo: ["terminal_id": focusedTerminalId]
+            )
         }
 
         var result = CommandResult()
