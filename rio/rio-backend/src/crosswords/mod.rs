@@ -2102,7 +2102,20 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
     fn set_current_directory(&mut self, path: std::path::PathBuf) {
         trace!("Setting working directory {:?}", path);
-        self.current_directory = Some(path);
+        self.current_directory = Some(path.clone());
+
+        // 发送 CWD 变化事件（实时通知 Swift 侧）
+        self.event_proxy
+            .send_event(RioEvent::CurrentDirectoryChanged(path), self.window_id);
+    }
+
+    fn shell_command_execute(&mut self, command: Option<&str>) {
+        if let Some(cmd) = command {
+            trace!("Shell command execute: {}", cmd);
+            // 发送命令执行事件（实时通知 Swift 侧更新 Tab Title）
+            self.event_proxy
+                .send_event(RioEvent::CommandExecuted(cmd.to_string()), self.window_id);
+        }
     }
 
     #[inline]

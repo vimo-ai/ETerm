@@ -95,6 +95,10 @@ impl EventListener for EventCollector {
             BackendRioEvent::Title(title) => TerminalEvent::Title(title),
             BackendRioEvent::Exit => TerminalEvent::Exit,
             BackendRioEvent::Bell => TerminalEvent::Bell,
+            BackendRioEvent::CurrentDirectoryChanged(path) => {
+                TerminalEvent::CurrentDirectoryChanged(path.to_string_lossy().to_string())
+            }
+            BackendRioEvent::CommandExecuted(cmd) => TerminalEvent::CommandExecuted(cmd),
             _ => return, // 忽略其他事件
         };
 

@@ -254,6 +254,12 @@ pub enum TerminalEvent {
 
     /// 需要渲染（唤醒）
     Wakeup,
+
+    /// 当前工作目录变化（OSC 7）
+    CurrentDirectoryChanged(String),
+
+    /// Shell 命令执行（OSC 133;C）
+    CommandExecuted(String),
 }
 
 #[cfg(test)]

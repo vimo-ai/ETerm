@@ -170,6 +170,19 @@ pub trait Handler {
     /// OSC to set current directory.
     fn set_current_directory(&mut self, _: std::path::PathBuf) {}
 
+    /// OSC 133 - Shell Integration: Prompt start (ready for input).
+    fn shell_prompt_start(&mut self) {}
+
+    /// OSC 133 - Shell Integration: Command start (user typing).
+    fn shell_command_start(&mut self) {}
+
+    /// OSC 133 - Shell Integration: Command execute (user pressed enter).
+    /// The command parameter contains the command that is about to be executed.
+    fn shell_command_execute(&mut self, _command: Option<&str>) {}
+
+    /// OSC 133 - Shell Integration: Command finished with exit code.
+    fn shell_command_finished(&mut self, _exit_code: Option<u8>) {}
+
     /// Set the cursor style.
     fn set_cursor_style(&mut self, _style: Option<CursorShape>, _blinking: bool) {}
 
@@ -850,6 +863,51 @@ impl<U: Handler, T: Timeout> copa::Perform for Performer<'_, U, T> {
                         let path = path[1..].to_string();
 
                         self.handler.set_current_directory(path.into());
+                    }
+                }
+            }
+
+            // Shell Integration (OSC 133) - VS Code / iTerm2 compatible
+            // Format: OSC 133;X[;data] where X is state marker (A/B/C/D)
+            b"133" => {
+                if params.len() >= 2 {
+                    let state = params[1];
+                    match state {
+                        b"A" => {
+                            // Prompt start
+                            self.handler.shell_prompt_start();
+                        }
+                        b"B" => {
+                            // Command start (user typing)
+                            self.handler.shell_command_start();
+                        }
+                        b"C" => {
+                            // Command execute
+                            // params[2] contains the command if present
+                            let command = if params.len() >= 3 {
+                                // 反转义分号（Shell 端转义了 ; 为 \;）
+                                if let Ok(cmd) = simd_utf8::from_utf8_fast(params[2]) {
+                                    Some(cmd.replace("\\;", ";"))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            self.handler.shell_command_execute(command.as_deref());
+                        }
+                        b"D" => {
+                            // Command finished with exit code
+                            let exit_code = if params.len() >= 3 {
+                                parse_number(params[2])
+                            } else {
+                                None
+                            };
+                            self.handler.shell_command_finished(exit_code);
+                        }
+                        _ => {
+                            // Ignore unknown OSC 133 states
+                        }
                     }
                 }
             }

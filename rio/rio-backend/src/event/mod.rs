@@ -125,6 +125,14 @@ pub enum RioEvent {
     /// Reset to the default window title.
     ResetTitle,
 
+    /// Current working directory changed (OSC 7).
+    /// Contains the new directory path.
+    CurrentDirectoryChanged(std::path::PathBuf),
+
+    /// Shell command executed (OSC 133;C).
+    /// Contains the command string that was executed.
+    CommandExecuted(String),
+
     /// Request to store a text string in the clipboard.
     ClipboardStore(ClipboardType, String),
 
@@ -201,6 +209,10 @@ impl Debug for RioEvent {
             }
             RioEvent::MouseCursorDirty => write!(f, "MouseCursorDirty"),
             RioEvent::ResetTitle => write!(f, "ResetTitle"),
+            RioEvent::CurrentDirectoryChanged(path) => {
+                write!(f, "CurrentDirectoryChanged({:?})", path)
+            }
+            RioEvent::CommandExecuted(cmd) => write!(f, "CommandExecuted({cmd})"),
             RioEvent::PrepareUpdateConfig => write!(f, "PrepareUpdateConfig"),
             RioEvent::PrepareRender(millis) => write!(f, "PrepareRender({millis})"),
             RioEvent::PrepareRenderOnRoute(millis, route) => {

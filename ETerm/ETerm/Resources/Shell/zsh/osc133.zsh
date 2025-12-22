@@ -3,7 +3,7 @@
 #
 # OSC 133;A - Prompt start (shell ready for input)
 # OSC 133;B - Command start (user typing)
-# OSC 133;C - Command execute (user pressed enter)
+# OSC 133;C;command - Command execute (user pressed enter) with command content
 # OSC 133;D;exitcode - Command finished
 
 # Don't load if not in ETerm
@@ -30,7 +30,10 @@ _eterm_precmd() {
 # Mark command execution
 _eterm_preexec() {
     _eterm_command_started=1
-    print -Pn "$_eterm_osc133_command_execute"
+    # OSC 133;C;command - 发送命令内容（$1 是即将执行的命令）
+    # 需要转义分号，避免破坏 OSC 参数分隔
+    local cmd="${1//;/\\;}"
+    print -Pn "\e]133;C;${cmd}\a"
 }
 
 # Install hooks

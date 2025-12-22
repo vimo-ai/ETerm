@@ -273,28 +273,36 @@ impl EventQueue {
     ///
     /// 照抄 Rio 的 EventProxy::send_event
     pub fn send_event(&self, event: RioEvent) {
+        // 先获取回调和 context，然后释放锁，再调用回调
+        // 这样避免在持有锁的情况下调用回调，防止死锁
+        let (callback_info, string_callback_info) = {
+            let inner = self.inner.lock().unwrap();
+            let ffi_event = FFIEvent::from(&event);
+
+            // 提取回调信息
+            let cb_info = inner.callback.map(|cb| (cb, inner.context, ffi_event));
+            let str_cb_info = inner.string_callback.map(|scb| (scb, inner.context, ffi_event.event_type));
+
+            (cb_info, str_cb_info)
+            // inner 锁在这里被释放
+        };
+
         // 使用 catch_unwind 保护 FFI 回调，防止 panic 传播
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let inner = self.inner.lock().unwrap();
-
-            // 直接调用回调，不入队列
-            // 这样可以确保事件立即传递给 Swift 侧
-            if let Some(callback) = inner.callback {
-                let ffi_event = FFIEvent::from(&event);
-
-                // 处理带字符串的事件
-                match &event {
-                    RioEvent::Title(s) | RioEvent::PtyWrite(s) | RioEvent::ClipboardStore(s) => {
-                        if let Some(string_cb) = inner.string_callback {
-                            // 安全地创建 CString，处理包含 null 字节的情况
-                            let safe_str = s.replace('\0', "");
-                            if let Ok(c_str) = std::ffi::CString::new(safe_str) {
-                                string_cb(inner.context, ffi_event.event_type, c_str.as_ptr());
-                            }
+            // 处理带字符串的事件
+            match &event {
+                RioEvent::Title(s) | RioEvent::PtyWrite(s) | RioEvent::ClipboardStore(s) => {
+                    if let Some((string_cb, context, event_type)) = string_callback_info {
+                        // 安全地创建 CString，处理包含 null 字节的情况
+                        let safe_str = s.replace('\0', "");
+                        if let Ok(c_str) = std::ffi::CString::new(safe_str) {
+                            string_cb(context, event_type, c_str.as_ptr());
                         }
                     }
-                    _ => {
-                        callback(inner.context, ffi_event);
+                }
+                _ => {
+                    if let Some((callback, context, ffi_event)) = callback_info {
+                        callback(context, ffi_event);
                     }
                 }
             }
