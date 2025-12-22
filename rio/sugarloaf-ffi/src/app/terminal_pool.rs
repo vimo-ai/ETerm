@@ -137,11 +137,11 @@ pub fn route_wakeup_event(terminal_id: usize) -> bool {
         } else {
             // Weak 引用失效，Pool 可能已被释放
             #[cfg(debug_assertions)]
-            eprintln!("[RenderLoop] ⚠️ route_wakeup: needs_render.upgrade() failed for terminal {}", terminal_id);
+            crate::rust_log_warn!("[RenderLoop] ⚠️ route_wakeup: needs_render.upgrade() failed for terminal {}", terminal_id);
         }
     } else {
         #[cfg(debug_assertions)]
-        eprintln!("[RenderLoop] ⚠️ route_wakeup: terminal {} not found in registry", terminal_id);
+        crate::rust_log_warn!("[RenderLoop] ⚠️ route_wakeup: terminal {} not found in registry", terminal_id);
     }
     false
 }
@@ -1842,7 +1842,7 @@ impl TerminalPool {
 
         if layout.is_empty() {
             #[cfg(debug_assertions)]
-            eprintln!("[RenderLoop] ⚠️ render_all: layout is empty, skipping");
+            crate::rust_log_warn!("[RenderLoop] ⚠️ render_all: layout is empty, skipping");
             return;
         }
 
@@ -1967,7 +1967,7 @@ impl TerminalPool {
                 Some(true) => {
                     // Background 模式，标记脏但不触发渲染
                     #[cfg(debug_assertions)]
-                    eprintln!("[RenderLoop] ⚠️ terminal {} is Background, skip render trigger", terminal_id);
+                    crate::rust_log_warn!("[RenderLoop] ⚠️ terminal {} is Background, skip render trigger", terminal_id);
                     let registry = global_terminal_registry().read();
                     if let Some(target) = registry.get(&terminal_id) {
                         target.dirty_flag.mark_dirty();

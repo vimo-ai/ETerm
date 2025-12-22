@@ -26,6 +26,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             logError("创建 ETerm 数据目录失败: \(error)")
         }
 
+        // 设置 Rust 日志桥接（让 Rust 端日志能够被持久化）
+        setupRustLogBridge()
+
         // Initialize SwiftData ModelContainer
         do {
             // 尝试使用自定义路径

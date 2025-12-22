@@ -7,6 +7,7 @@
 //! - render_scheduler: 渲染调度器
 //! - word_boundary: 分词相关
 //! - ime: 输入法预编辑相关
+//! - logging: 日志桥接
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -18,6 +19,7 @@ pub mod word_boundary;
 pub mod hyperlink;
 pub mod keyboard;
 pub mod ime;
+pub mod logging;
 
 /// FFI 边界防护 - 捕获所有 panic，防止跨 FFI 边界传播
 ///
@@ -69,3 +71,4 @@ pub use word_boundary::*;
 pub use hyperlink::*;
 pub use keyboard::*;
 pub use ime::*;
+pub use logging::*;
