@@ -214,6 +214,9 @@ final class PluginManager: ObservableObject {
         // 注销 PageBar 组件
         PageBarItemRegistry.shared.unregisterItems(for: pluginId)
 
+        // 注销 Tab Slot
+        TabSlotRegistry.shared.unregister(for: pluginId)
+
         // 移除插件实例（保留类型，以便重新启用）
         plugins.removeValue(forKey: pluginId)
 
@@ -788,5 +791,25 @@ final class UIServiceImpl: UIService {
 
     func clearTabDecoration(terminalId: Int) {
         setTabDecoration(terminalId: terminalId, decoration: nil)
+    }
+
+    // MARK: - Tab Slot
+
+    func registerTabSlot(
+        for pluginId: String,
+        slotId: String,
+        priority: Int,
+        viewProvider: @escaping (Int) -> AnyView?
+    ) {
+        TabSlotRegistry.shared.register(
+            for: pluginId,
+            slotId: slotId,
+            priority: priority,
+            viewProvider: viewProvider
+        )
+    }
+
+    func unregisterTabSlots(for pluginId: String) {
+        TabSlotRegistry.shared.unregister(for: pluginId)
     }
 }

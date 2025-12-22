@@ -38,9 +38,6 @@ final class TabItemView: DraggableItemView {
     /// Rust Terminal ID（用于装饰通知匹配）
     var rustTerminalId: Int?
 
-    /// Tab 前缀 emoji（如 📱 表示 Mobile 正在查看）
-    private var emoji: String?
-
     // MARK: - 初始化
 
     init(tabId: UUID, title: String, tab: Tab? = nil) {
@@ -70,12 +67,6 @@ final class TabItemView: DraggableItemView {
         // Page 激活状态变化不需要重新渲染视图，只影响通知逻辑
     }
 
-    /// 设置 emoji
-    func setEmoji(_ emoji: String?) {
-        self.emoji = emoji
-        updateItemView()
-    }
-
     // MARK: - 子类实现
 
     override var editFieldFontSize: CGFloat { 26 * 0.4 }
@@ -102,17 +93,31 @@ final class TabItemView: DraggableItemView {
             // 否则 displayDecoration = nil，SimpleTabView 用 active 样式
         }
 
+        // 获取插件注册的 slot 视图
+        let slotViews: [AnyView]
+        if let terminalId = rustTerminalId {
+            slotViews = TabSlotRegistry.shared.getSlotViews(for: terminalId)
+            // 更新 slot 宽度用于宽度计算
+            let newSlotWidth = TabSlotRegistry.shared.estimateSlotWidth(for: terminalId)
+            if slotWidth != newSlotWidth {
+                slotWidth = newSlotWidth
+                recalculateWidth()
+            }
+        } else {
+            slotViews = []
+        }
+
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
         // 创建新的 SwiftUI 视图
         let simpleTab = SimpleTabView(
             title,
-            emoji: emoji,
             isActive: isActive,
             decoration: displayDecoration,
             height: Self.tabHeight,
             isHovered: isHovered,
+            slotViews: slotViews,
             onClose: { [weak self] in
                 self?.onClose?()
             },
@@ -235,31 +240,21 @@ extension TabItemView {
     }
 }
 
-// MARK: - Vlaude Notification Handling
+// MARK: - Tab Slot 通知处理
 
 extension TabItemView {
-    /// 设置 Vlaude 通知监听
-    private func setupVlaudeNotifications() {
+    /// 设置 Slot 通知监听
+    private func setupSlotNotifications() {
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(handleMobileViewingChanged(_:)),
-            name: .vlaudeMobileViewingChanged,
+            selector: #selector(handleSlotChanged(_:)),
+            name: TabSlotRegistry.slotDidChangeNotification,
             object: nil
         )
     }
 
-    @objc private func handleMobileViewingChanged(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let terminalId = userInfo["terminal_id"] as? Int,
-              let isViewing = userInfo["is_viewing"] as? Bool else {
-            return
-        }
-
-        // 检查是否是当前 Tab 的 terminal
-        guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
-            return
-        }
-
-        setEmoji(isViewing ? "📱" : nil)
+    @objc private func handleSlotChanged(_ notification: Notification) {
+        // Slot 注册变化，刷新视图
+        updateItemView()
     }
 }

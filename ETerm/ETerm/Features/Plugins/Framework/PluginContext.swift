@@ -202,4 +202,27 @@ protocol UIService: AnyObject {
     ///
     /// - Parameter terminalId: 目标终端 ID
     func clearTabDecoration(terminalId: Int)
+
+    // MARK: - Tab Slot API
+
+    /// 注册 Tab Slot
+    ///
+    /// 在 Tab 的 title 和 close 按钮之间注入自定义视图。
+    /// 插件可以用这个显示状态图标、徽章等。
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - slotId: Slot ID（唯一标识）
+    ///   - priority: 优先级（数字大 = 靠左/优先显示）
+    ///   - viewProvider: 视图提供者，接收 terminalId，返回 nil 表示该 Tab 不显示此 slot
+    func registerTabSlot(
+        for pluginId: String,
+        slotId: String,
+        priority: Int,
+        viewProvider: @escaping (Int) -> AnyView?
+    )
+
+    /// 注销插件的所有 Tab Slot
+    /// - Parameter pluginId: 插件 ID
+    func unregisterTabSlots(for pluginId: String)
 }

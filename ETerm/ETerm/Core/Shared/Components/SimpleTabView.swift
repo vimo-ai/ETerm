@@ -8,11 +8,11 @@ import AppKit
 // MARK: - 简约 Tab 视图
 struct SimpleTabView: View {
     let text: String
-    let emoji: String?
     let isActive: Bool
     let decoration: TabDecoration?
     let height: CGFloat
     let isHovered: Bool  // 由外部控制的 hover 状态
+    let slotViews: [AnyView]  // 插件注入的 slot 视图
     let onClose: (() -> Void)?
 
     // 批量关闭回调
@@ -32,11 +32,11 @@ struct SimpleTabView: View {
 
     init(_ text: String, emoji: String? = nil, isActive: Bool = false, decoration: TabDecoration? = nil, height: CGFloat = 28, isHovered: Bool = false, onClose: (() -> Void)? = nil, onCloseOthers: (() -> Void)? = nil, onCloseLeft: (() -> Void)? = nil, onCloseRight: (() -> Void)? = nil, canCloseLeft: Bool = true, canCloseRight: Bool = true, canCloseOthers: Bool = true) {
         self.text = text
-        self.emoji = emoji
         self.isActive = isActive
         self.decoration = decoration
         self.height = height
         self.isHovered = isHovered
+        self.slotViews = slotViews
         self.onClose = onClose
         self.onCloseOthers = onCloseOthers
         self.onCloseLeft = onCloseLeft
@@ -159,21 +159,24 @@ struct SimpleTabView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // 左侧：emoji + 文字
-            HStack(spacing: 4) {
-                if let emoji = emoji {
-                    Text(emoji)
-                        .font(.system(size: height * 0.5))
+            // 左侧：标题
+            Text(text)
+                .font(.system(size: height * 0.4))
+                .foregroundColor(textColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: 8)
+
+            // 中间：Slot 区域（插件注入的视图，最大 40px）
+            if !slotViews.isEmpty {
+                HStack(spacing: 2) {
+                    ForEach(slotViews.indices, id: \.self) { index in
+                        slotViews[index]
+                    }
                 }
-
-                Text(text)
-                    .font(.system(size: height * 0.4))
-                    .foregroundColor(textColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                .frame(maxWidth: 40)
             }
-
-            Spacer()
 
             // 右侧：关闭按钮（Button 会自动优先响应，不被外层手势拦截）
             if let onClose = onClose {
