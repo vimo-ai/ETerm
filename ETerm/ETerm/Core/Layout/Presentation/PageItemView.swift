@@ -51,7 +51,7 @@ final class PageItemView: DraggableItemView {
 
         super.init(frame: .zero)
 
-        setTitle(title)
+        self.title = title
         setupUI()
         setupDecorationNotifications()
     }

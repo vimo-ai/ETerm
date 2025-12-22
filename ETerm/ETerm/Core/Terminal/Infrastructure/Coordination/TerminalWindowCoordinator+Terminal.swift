@@ -226,7 +226,7 @@ extension TerminalWindowCoordinator {
         // 找到对应的 Tab 并更新标题
         for panel in terminalWindow.allPanels {
             if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
-                tab.setTitle(title)
+                tab.title = title
                 objectWillChange.send()
                 updateTrigger = UUID()
                 return

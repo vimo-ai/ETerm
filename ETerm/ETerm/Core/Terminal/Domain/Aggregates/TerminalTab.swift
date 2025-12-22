@@ -39,7 +39,7 @@ final class TerminalTab {
     let tabId: UUID
 
     /// Tab 标题
-    private(set) var title: String
+    var title: String
 
     /// Tab 状态（激活/未激活）
     private(set) var isActive: Bool
@@ -104,11 +104,6 @@ final class TerminalTab {
         if let selection = textSelection {
             textSelection = selection.setActive(false)
         }
-    }
-
-    /// 设置标题
-    func setTitle(_ newTitle: String) {
-        title = newTitle
     }
 
     // MARK: - 光标管理

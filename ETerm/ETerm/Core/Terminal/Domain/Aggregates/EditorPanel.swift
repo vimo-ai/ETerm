@@ -147,7 +147,7 @@ final class EditorPanel: PaneContainer {
         guard let tab = tabs.first(where: { $0.tabId == tabId }) else {
             return false
         }
-        tab.setTitle(newTitle)
+        tab.title = newTitle
         return true
     }
 
