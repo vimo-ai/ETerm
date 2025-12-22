@@ -30,6 +30,11 @@ struct CommandResult {
     /// 需要停用的终端 ID 列表
     var terminalsToDeactivate: [Int] = []
 
+    /// 用户实际 focus 的终端 ID（用于通知插件清除装饰）
+    /// 区别于 terminalsToActivate：Page 切换时所有 Panel 的 activeTab 都需要激活渲染，
+    /// 但只有当前激活 Panel 的 Tab 才是用户真正 focus 的
+    var focusedTerminalId: Int?
+
     // MARK: - 终端生命周期
 
     /// 需要创建的终端

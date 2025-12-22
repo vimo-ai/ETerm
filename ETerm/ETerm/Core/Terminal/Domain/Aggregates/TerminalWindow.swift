@@ -950,6 +950,7 @@ extension TerminalWindow {
 
             if let id = tab.rustTerminalId {
                 result.terminalsToActivate = [id]
+                result.focusedTerminalId = id
             }
             result.effects.render = true
             result.effects.saveSession = true
@@ -1076,6 +1077,7 @@ extension TerminalWindow {
         var result = CommandResult()
         if let id = newTerminalId {
             result.terminalsToActivate = [id]
+            result.focusedTerminalId = id
         }
         if let oldId = oldTerminalId, oldId != newTerminalId {
             result.terminalsToDeactivate = [oldId]
