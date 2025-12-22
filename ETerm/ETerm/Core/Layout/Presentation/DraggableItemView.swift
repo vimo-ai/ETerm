@@ -223,8 +223,8 @@ class DraggableItemView: NSView {
         if save {
             let newTitle = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !newTitle.isEmpty && newTitle != title {
-                title = newTitle
-                updateItemView()
+                // 使用 setTitle 确保触发 titleDidChange() 和宽度重新计算
+                setTitle(newTitle)
                 // 通知父视图重新布局
                 superview?.superview?.needsLayout = true
                 onRename?(newTitle)
