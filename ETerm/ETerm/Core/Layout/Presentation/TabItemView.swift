@@ -65,7 +65,10 @@ final class TabItemView: DraggableItemView {
 
         super.init(frame: .zero)
 
-        setTitle(title)  // 会触发 titleDidChange -> recalculateWidth
+        // 先设置 title，再计算宽度
+        // 注意：不能只依赖 setTitle，因为如果 title 是空字符串会 early return
+        setTitle(title)
+        recalculateWidth()  // 强制计算宽度
         setupUI()
         setupDecorationNotifications()
         setupVlaudeNotifications()
