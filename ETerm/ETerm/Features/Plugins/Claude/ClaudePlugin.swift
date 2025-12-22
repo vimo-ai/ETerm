@@ -39,7 +39,7 @@ final class ClaudePlugin: Plugin {
     // 事件流程：
     // UserPromptSubmit → 蓝色脉冲（思考中）
     // Stop             → 橙色静态（完成提醒）
-    // Focus Tab        → 清除（用户看到了，由核心层处理）
+    // Focus Tab        → 清除（用户看到了）
     // SessionEnd       → 清除
 
     private func setupNotifications() {
@@ -64,6 +64,14 @@ final class ClaudePlugin: Plugin {
             self,
             selector: #selector(handleSessionEnd(_:)),
             name: .claudeSessionEnd,
+            object: nil
+        )
+
+        // 用户切换到 Tab → 清除装饰（用户已经看到了）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTabFocus(_:)),
+            name: .tabDidFocus,
             object: nil
         )
     }
@@ -101,6 +109,16 @@ final class ClaudePlugin: Plugin {
         }
 
         // 清除装饰
+        context?.ui.clearTabDecoration(terminalId: terminalId)
+    }
+
+    /// 处理 Tab 获得焦点（用户切换到该 Tab）
+    @objc private func handleTabFocus(_ notification: Notification) {
+        guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
+            return
+        }
+
+        // 用户切换到该 Tab，说明已经"看到"了，清除装饰
         context?.ui.clearTabDecoration(terminalId: terminalId)
     }
 }
