@@ -77,9 +77,28 @@ impl RenderScheduler {
             // 统计 VSync 回调次数
             let cb_cnt = callback_count.fetch_add(1, Ordering::Relaxed) + 1;
 
+            // 获取当前时间（秒）
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
             // 检查是否需要渲染
             let should_render = needs_render.swap(false, Ordering::AcqRel);
             if !should_render {
+                // 检测长时间无渲染（每 5 秒检查一次）
+                let last_secs = last_log_time.load(Ordering::Relaxed);
+                if now_secs >= last_secs + 5 {
+                    last_log_time.store(now_secs, Ordering::Relaxed);
+                    let rnd_cnt = render_count.load(Ordering::Relaxed);
+                    // 如果 5 秒内 rendered=0，输出警告（Release 也输出）
+                    if rnd_cnt == 0 || cb_cnt > 0 && (rnd_cnt as f64 / cb_cnt as f64) < 0.001 {
+                        crate::rust_log_warn!(
+                            "[RenderLoop] ⚠️ Low render rate: vsync={}, rendered={}, ratio={:.3}%",
+                            cb_cnt, rnd_cnt, (rnd_cnt as f64 / cb_cnt.max(1) as f64) * 100.0
+                        );
+                    }
+                }
                 return;
             }
 
@@ -89,10 +108,6 @@ impl RenderScheduler {
             // 每 5 秒输出一次统计日志（仅 Debug）
             #[cfg(debug_assertions)]
             {
-                let now_secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
                 let last_secs = last_log_time.load(Ordering::Relaxed);
                 if now_secs >= last_secs + 5 {
                     last_log_time.store(now_secs, Ordering::Relaxed);
@@ -101,7 +116,7 @@ impl RenderScheduler {
                 }
             }
             #[cfg(not(debug_assertions))]
-            let _ = (cb_cnt, rnd_cnt, &last_log_time);
+            let _ = &last_log_time;
 
             // 调用渲染回调（在 Rust 侧完成整个渲染）
             let cb_guard = render_callback.lock();
