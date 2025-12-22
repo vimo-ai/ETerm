@@ -162,10 +162,10 @@ final class Page: Pane {
     ///
     /// 用于在 PageBar 上显示状态提示（如 Claude thinking/completed）。
     var effectiveDecoration: TabDecoration? {
-        // 收集 Tab 聚合的最高优先级装饰
+        // 收集 Tab 聚合的最高优先级装饰（排除默认装饰）
         let tabDecoration = allTabs
             .compactMap { $0.decoration }
-            .filter { $0.priority > 0 }
+            .filter { !$0.priority.isDefault }
             .max { $0.priority < $1.priority }
 
         // 取 Page 自身装饰和 Tab 聚合装饰中优先级最高的

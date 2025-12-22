@@ -7,6 +7,7 @@
 
 import Foundation
 import AppKit
+import SwiftUI
 
 final class ClaudePlugin: Plugin {
     static let id = "claude"
@@ -36,6 +37,9 @@ final class ClaudePlugin: Plugin {
 
         // 监听 Claude 事件，控制 Tab 装饰
         setupNotifications()
+
+        // 注册 Page Slot（显示该 Page 下 Claude 任务统计）
+        registerPageSlot(context: context)
     }
 
     func deactivate() {
@@ -94,10 +98,10 @@ final class ClaudePlugin: Plugin {
         // 记录状态：thinking（focus 时不清除）
         decorationStates[terminalId] = .thinking
 
-        // 设置"思考中"装饰：蓝色脉冲动画（优先级 101，高于 active）
+        // 设置"思考中"装饰：蓝色脉冲动画（plugin priority 101，高于 system active）
         context?.ui.setTabDecoration(
             terminalId: terminalId,
-            decoration: .thinking
+            decoration: .thinking(pluginId: Self.id)
         )
     }
 
@@ -110,10 +114,10 @@ final class ClaudePlugin: Plugin {
         // 记录状态：completed（focus 时清除）
         decorationStates[terminalId] = .completed
 
-        // 设置"完成"装饰：橙色静态（优先级 5，低于 active）
+        // 设置"完成"装饰：橙色静态（plugin priority 5，低于 system active）
         context?.ui.setTabDecoration(
             terminalId: terminalId,
-            decoration: .completed
+            decoration: .completed(pluginId: Self.id)
         )
     }
 
@@ -145,5 +149,81 @@ final class ClaudePlugin: Plugin {
         // 清除状态和装饰
         decorationStates.removeValue(forKey: terminalId)
         context?.ui.clearTabDecoration(terminalId: terminalId)
+    }
+
+    // MARK: - Page Slot 注册
+
+    /// 注册 Page Slot，显示该 Page 下的 Claude 任务统计
+    ///
+    /// 显示逻辑：
+    /// - 蓝色圆点 + 数字：思考中的 Tab 数量（priority = 101）
+    /// - 橙色圆点 + 数字：已完成的 Tab 数量（priority = 5）
+    private func registerPageSlot(context: PluginContext) {
+        context.ui.registerPageSlot(
+            for: Self.id,
+            slotId: "claude-stats",
+            priority: 50
+        ) { [weak self] page in
+            guard self != nil else { return nil }
+
+            // 统计该 Page 下所有 Tab 的装饰状态
+            let allTabs = page.allPanels.flatMap { $0.tabs }
+
+            // 思考中：plugin(id: "claude", priority: 101)
+            let thinkingCount = allTabs.filter { tab in
+                guard let decoration = tab.decoration else { return false }
+                // 匹配：plugin 类型且 plugin ID 为 "claude" 且 priority == 101
+                if case .plugin(let id, let priority) = decoration.priority,
+                   id == Self.id, priority == 101 {
+                    return true
+                }
+                return false
+            }.count
+
+            // 已完成：plugin(id: "claude", priority: 5)
+            let completedCount = allTabs.filter { tab in
+                guard let decoration = tab.decoration else { return false }
+                // 匹配：plugin 类型且 plugin ID 为 "claude" 且 priority == 5
+                if case .plugin(let id, let priority) = decoration.priority,
+                   id == Self.id, priority == 5 {
+                    return true
+                }
+                return false
+            }.count
+
+            // 如果都为 0，不显示 slot
+            guard thinkingCount > 0 || completedCount > 0 else {
+                return nil
+            }
+
+            // 返回统计视图
+            return AnyView(
+                HStack(spacing: 4) {
+                    // 思考中（蓝色圆点 + 数字）
+                    if thinkingCount > 0 {
+                        HStack(spacing: 2) {
+                            Circle()
+                                .fill(Color.blue)
+                                .frame(width: 6, height: 6)
+                            Text("\(thinkingCount)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    // 已完成（橙色圆点 + 数字）
+                    if completedCount > 0 {
+                        HStack(spacing: 2) {
+                            Circle()
+                                .fill(Color.orange)
+                                .frame(width: 6, height: 6)
+                            Text("\(completedCount)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            )
+        }
     }
 }

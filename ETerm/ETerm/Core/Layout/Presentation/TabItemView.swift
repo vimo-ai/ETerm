@@ -126,16 +126,16 @@ final class TabItemView: DraggableItemView {
 
         // 从 Tab 模型读取装饰，计算要显示的装饰
         // 优先级逻辑：
-        // - 插件装饰 priority > 100（active）：显示插件装饰
+        // - 插件装饰 priority > system(.active)：显示插件装饰（如思考中）
         // - 否则如果 isActive：不传 decoration，让 SimpleTabView 用 active 样式
         // - 否则如果有插件装饰：显示插件装饰
         var displayDecoration: TabDecoration? = nil
         if let pluginDecoration = tab?.decoration {
-            if pluginDecoration.priority > 100 {
+            if pluginDecoration.priority > .system(.active) {
                 // 插件装饰优先级高于 active（如思考中 priority=101）
                 displayDecoration = pluginDecoration
             } else if !isActive {
-                // 插件装饰优先级低于 active，但当前不是 active
+                // 插件装饰优先级低于或等于 active，但当前不是 active
                 displayDecoration = pluginDecoration
             }
             // 否则 displayDecoration = nil，SimpleTabView 用 active 样式
