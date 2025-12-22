@@ -54,6 +54,7 @@ final class PageItemView: DraggableItemView {
         self.title = title
         setupUI()
         setupDecorationNotifications()
+        setupSlotNotifications()
     }
 
     required init?(coder: NSCoder) {
@@ -80,10 +81,18 @@ final class PageItemView: DraggableItemView {
         // 从 Page 模型读取 effectiveDecoration（聚合其下所有 Tab 的装饰）
         // 优先级逻辑：
         // - 如果 isActive：不传 decoration，让 SimpleTabView 用 active 样式
-        // - 否则如果有 effectiveDecoration 且 priority > 0：显示该装饰
+        // - 否则如果有 effectiveDecoration 且不是默认优先级：显示该装饰
         var displayDecoration: TabDecoration? = nil
-        if !isActive, let pageDecoration = page?.effectiveDecoration, pageDecoration.priority > 0 {
+        if !isActive, let pageDecoration = page?.effectiveDecoration, !pageDecoration.priority.isDefault {
             displayDecoration = pageDecoration
+        }
+
+        // 获取插件注册的 slot 视图
+        let slotViews: [AnyView]
+        if let currentPage = page {
+            slotViews = pageSlotRegistry.getSlotViews(for: currentPage)
+        } else {
+            slotViews = []
         }
 
         // 创建新的 SwiftUI 视图
@@ -97,6 +106,7 @@ final class PageItemView: DraggableItemView {
             decoration: displayDecoration,
             height: Self.tabHeight,
             isHovered: isHovered,
+            slotViews: slotViews,
             onClose: closeAction,
             onCloseOthers: { [weak self] in
                 self?.onCloseOthers?()
@@ -196,6 +206,25 @@ extension PageItemView {
         }
 
         // Page 需要刷新，updateItemView 会从 page.effectiveDecoration 读取
+        updateItemView()
+    }
+}
+
+// MARK: - Page Slot 通知处理
+
+extension PageItemView {
+    /// 设置 Slot 通知监听
+    private func setupSlotNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSlotChanged(_:)),
+            name: SlotRegistry<Page>.slotDidChangeNotification,
+            object: nil
+        )
+    }
+
+    @objc private func handleSlotChanged(_ notification: Notification) {
+        // Slot 注册变化，刷新视图
         updateItemView()
     }
 }
