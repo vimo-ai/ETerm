@@ -110,6 +110,9 @@ final class TabItemView: DraggableItemView {
     }
 
     override func updateItemView() {
+        // 编辑期间不重建视图，避免焦点丢失
+        guard !isEditing else { return }
+
         // 从 Tab 模型读取装饰，计算要显示的装饰
         // 优先级逻辑：
         // - 插件装饰 priority > 100（active）：显示插件装饰
