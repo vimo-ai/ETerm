@@ -169,9 +169,9 @@ struct CommandEffects {
 
     // MARK: - 语义化工厂方法
 
-    /// 视图切换（Tab/Panel 激活切换，只渲染不保存）
+    /// 视图切换（Tab/Panel 激活切换，渲染并更新 UI，不保存）
     static var viewChange: CommandEffects {
-        CommandEffects(render: true)
+        CommandEffects(render: true, updateTrigger: true)
     }
 
     /// 状态变更（添加/删除/重排 Tab/Panel/Page）

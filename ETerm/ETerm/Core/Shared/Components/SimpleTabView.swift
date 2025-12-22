@@ -36,12 +36,12 @@ struct SimpleTabView: View {
 
     init(
         _ text: String,
-        emoji: String? = nil,
         isActive: Bool = false,
         decoration: TabDecoration? = nil,
         width: CGFloat? = nil,
         height: CGFloat = 28,
         isHovered: Bool = false,
+        slotViews: [AnyView] = [],
         onClose: (() -> Void)? = nil,
         onCloseOthers: (() -> Void)? = nil,
         onCloseLeft: (() -> Void)? = nil,

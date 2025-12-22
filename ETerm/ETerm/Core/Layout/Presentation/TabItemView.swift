@@ -57,6 +57,9 @@ final class TabItemView: DraggableItemView {
         frozenWidth ?? cachedWidth
     }
 
+    /// 宽度变化回调（用于通知父视图重新布局）
+    var onWidthChanged: (() -> Void)?
+
     // MARK: - 初始化
 
     init(tabId: UUID, title: String, tab: Tab? = nil) {
@@ -66,12 +69,11 @@ final class TabItemView: DraggableItemView {
         super.init(frame: .zero)
 
         // 先设置 title，再计算宽度
-        // 注意：不能只依赖 setTitle，因为如果 title 是空字符串会 early return
-        setTitle(title)
+        self.title = title
         recalculateWidth()  // 强制计算宽度
         setupUI()
         setupDecorationNotifications()
-        setupVlaudeNotifications()
+        setupSlotNotifications()
     }
 
     // 注意：macOS 10.11+ 会自动移除 NotificationCenter 观察者
@@ -141,10 +143,10 @@ final class TabItemView: DraggableItemView {
 
         // 获取插件注册的 slot 视图
         let slotViews: [AnyView]
-        if let terminalId = rustTerminalId {
-            slotViews = TabSlotRegistry.shared.getSlotViews(for: terminalId)
+        if let currentTab = tab {
+            slotViews = tabSlotRegistry.getSlotViews(for: currentTab)
             // 更新 slot 宽度用于宽度计算
-            let newSlotWidth = TabSlotRegistry.shared.estimateSlotWidth(for: terminalId)
+            let newSlotWidth = tabSlotRegistry.estimateSlotWidth(for: currentTab)
             if slotWidth != newSlotWidth {
                 slotWidth = newSlotWidth
                 recalculateWidth()
@@ -217,10 +219,15 @@ final class TabItemView: DraggableItemView {
 
     /// 重新计算宽度（title 变化时调用）
     func recalculateWidth() {
+        let oldWidth = cachedWidth
         cachedWidth = TabWidthCalculator.shared.calculate(
             title: title,
             slotWidth: slotWidth
         )
+        // 宽度变化时通知父视图重新布局
+        if oldWidth != cachedWidth {
+            onWidthChanged?()
+        }
     }
 
     /// 冻结当前宽度（拖拽开始时调用）
@@ -324,7 +331,7 @@ extension TabItemView {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleSlotChanged(_:)),
-            name: TabSlotRegistry.slotDidChangeNotification,
+            name: SlotRegistry<Tab>.slotDidChangeNotification,
             object: nil
         )
     }
