@@ -211,13 +211,22 @@ extension TabItemView {
     }
 
     @objc private func handleDecorationChanged(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let terminalId = userInfo["terminal_id"] as? Int else {
+        guard let userInfo = notification.userInfo else {
             return
         }
 
-        // 检查是否是当前 Tab 的 terminal
-        guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
+        // 支持两种匹配方式：
+        // 1. terminal_id（插件通过 PluginContext.ui.setTabDecoration 设置时）
+        // 2. tabId（Tab.clearDecoration 清除时）
+        if let terminalId = userInfo["terminal_id"] as? Int {
+            guard let myTerminalId = rustTerminalId, myTerminalId == terminalId else {
+                return
+            }
+        } else if let notificationTabId = userInfo["tabId"] as? UUID {
+            guard notificationTabId == tabId else {
+                return
+            }
+        } else {
             return
         }
 
