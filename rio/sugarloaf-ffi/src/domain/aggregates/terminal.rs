@@ -763,6 +763,8 @@ impl Terminal {
 
         with_crosswords!(self, crosswords, {
             let history_size = crosswords.grid.history_size() as i32;
+            let screen_lines = crosswords.grid.screen_lines() as i32;
+            let columns = crosswords.grid.columns();
 
             // 规范化：确保 start <= end
             let (sr, sc, er, ec) = if start_row < end_row || (start_row == end_row && start_col <= end_col) {
@@ -774,6 +776,17 @@ impl Terminal {
             // 转换为 Grid Line 坐标
             let start_line = Line(sr - history_size);
             let end_line = Line(er - history_size);
+
+            // 边界检查：行范围 [-history_size, screen_lines)，列范围 [0, columns)
+            // 选区可能在 history 被清除或 resize 后失效
+            if start_line.0 < -history_size
+                || end_line.0 >= screen_lines
+                || sc as usize >= columns
+                || ec as usize >= columns
+            {
+                return None;
+            }
+
             let start_pos = Pos::new(start_line, Column(sc as usize));
             let end_pos = Pos::new(end_line, Column(ec as usize));
 
