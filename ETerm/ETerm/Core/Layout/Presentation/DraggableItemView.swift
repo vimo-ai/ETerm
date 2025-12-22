@@ -195,9 +195,12 @@ class DraggableItemView: NSView {
             height: editFieldHeight
         )
 
-        // 延迟获取焦点
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.isEditing else { return }
+        // 确保编辑框在最上层（在隐藏 hosting view 后）
+        bringEditFieldToFront()
+
+        // 延迟获取焦点（给视图层级时间稳定，避免 NSHostingView + NSTextField 的焦点冲突）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self = self, self.isEditing, !self.editField.isHidden else { return }
             self.editField.selectText(nil)
             if self.window?.makeFirstResponder(self.editField) == true {
                 self.hasFocused = true
@@ -543,7 +546,14 @@ extension DraggableItemView: NSPasteboardItemDataProvider {
 
 extension DraggableItemView: NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) {
-        // 无论是否获得过焦点，都要清除编辑状态，避免"僵尸编辑状态"
+        // 防护：只在编辑状态且编辑框可见时处理
+        // 避免 async focus 期间的虚假通知导致提前关闭
+        guard isEditing, !editField.isHidden else { return }
+
+        // 防护：确保通知来自我们的编辑框
+        guard let textField = obj.object as? NSTextField,
+              textField === editField else { return }
+
         // 只有获得过焦点才保存编辑结果
         endEditing(save: hasFocused)
     }
