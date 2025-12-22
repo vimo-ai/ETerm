@@ -293,9 +293,8 @@ final class PageBarHostingView: NSView {
 
             // 捕获 pageId 而不是 page，避免闭包捕获问题
             let pageId = page.id
-            pageView.onTap = { [weak self, weak pageModel] in
-                // 用户点击 Page 时清除该 Page 下所有 Tab 的装饰
-                pageModel?.allTabs.forEach { $0.clearDecoration() }
+            pageView.onTap = { [weak self] in
+                // 装饰清除由插件通过 tabDidFocus 通知处理，核心层不直接清除
                 self?.onPageClick?(pageId)
             }
 
@@ -420,14 +419,10 @@ final class PageBarHostingView: NSView {
     /// 设置激活的 Page
     func setActivePage(_ pageId: UUID) {
         activePageId = pageId
-        // 更新激活状态，并清除被激活 Page 下所有 Tab 的装饰状态
+        // 更新激活状态（装饰清除由插件通过 tabDidFocus 通知处理）
         for pageView in pageItemViews {
             let isActive = pageView.pageId == pageId
             pageView.setActive(isActive)
-            if isActive {
-                // 清除该 Page 下所有 Tab 的模型装饰
-                pageView.page?.allTabs.forEach { $0.clearDecoration() }
-            }
         }
     }
 
