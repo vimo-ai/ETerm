@@ -1841,8 +1841,18 @@ impl TerminalPool {
         };
 
         if layout.is_empty() {
-            #[cfg(debug_assertions)]
-            crate::rust_log_warn!("[RenderLoop] ⚠️ render_all: layout is empty, skipping");
+            // 布局为空时输出警告（Release 也输出，但限制频率）
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST_EMPTY_WARN: AtomicU64 = AtomicU64::new(0);
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let last = LAST_EMPTY_WARN.load(Ordering::Relaxed);
+            if now_secs >= last + 5 {
+                LAST_EMPTY_WARN.store(now_secs, Ordering::Relaxed);
+                crate::rust_log_warn!("[RenderLoop] ⚠️ render_all: layout is empty, skipping");
+            }
             return;
         }
 
