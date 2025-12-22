@@ -1451,7 +1451,8 @@ impl TerminalPool {
                     // 注：dirty_flag 用于外部触发（滚动等），is_damaged() 用于内部 PTY 输出
                     // P1-W1 修复：使用阶段 0 中 check_and_clear() 的返回值，而不是再次调用 is_dirty()
                     // 因为 dirty 标志已经在阶段 0 被清除，此时调用 is_dirty() 会永远返回 false
-                    if cache_valid && !state_changed && !terminal.is_damaged() && !dirty_cleared && !sel_dirty_cleared {
+                    let is_damaged = terminal.is_damaged();
+                    if cache_valid && !state_changed && !is_damaged && !dirty_cleared && !sel_dirty_cleared {
                         return true;
                     }
 
@@ -1736,6 +1737,9 @@ impl TerminalPool {
             let mut height = self.container_height.lock();
             *height = container_height;
         }
+
+        // 标记需要渲染
+        self.needs_render.store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// 获取渲染布局的 Arc 引用（供 RenderScheduler 使用）

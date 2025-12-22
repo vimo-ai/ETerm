@@ -73,9 +73,18 @@ impl RenderScheduler {
         let render_count = self.render_count.clone();
         let last_log_time = self.last_log_time.clone();
 
+        // 首次回调标志（用于输出启动日志）
+        let first_callback = Arc::new(AtomicBool::new(true));
+        let first_callback_clone = first_callback.clone();
+
         let display_link = DisplayLink::new(move || {
             // 统计 VSync 回调次数
             let cb_cnt = callback_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+            // 首次回调时输出日志
+            if first_callback_clone.swap(false, Ordering::Relaxed) {
+                crate::rust_log_info!("[RenderLoop] 🎬 First CVDisplayLink callback received");
+            }
 
             // 获取当前时间（秒）
             let now_secs = std::time::SystemTime::now()

@@ -329,6 +329,8 @@ class TerminalWindowCoordinator: ObservableObject {
         // Coordinator 特有：通知 Active 终端变化（用于发光效果）
         if result.success {
             NotificationCenter.default.post(name: .activeTerminalDidChange, object: nil)
+            // 🔥 Tab 切换时触发渲染，否则画面会卡住直到有 PTY 输出
+            scheduleRender()
         }
     }
 
@@ -336,6 +338,8 @@ class TerminalWindowCoordinator: ObservableObject {
     func setActivePanel(_ panelId: UUID) {
         guard activePanelId != panelId else { return }
         perform(.panel(.setActive(panelId: panelId)))
+        // 🔥 Panel 切换时触发渲染，否则画面会卡住直到有 PTY 输出
+        scheduleRender()
     }
 
     /// 用户关闭 Tab
@@ -588,11 +592,23 @@ class TerminalWindowCoordinator: ObservableObject {
         }
 
         // 5. 终端激活管理
-        for terminalId in result.terminalsToDeactivate {
-            terminalPool.setMode(terminalId: terminalId, mode: .background)
-        }
-        for terminalId in result.terminalsToActivate {
+        // 修复：在 split view 中，所有可见 Panel 的 active tab 都应该是 Active
+        // 收集所有当前可见（active Page 中的所有 Panel）的 active tab
+        let visibleTerminalIds = Set(terminalWindow.allPanels.compactMap { panel in
+            panel.activeTab?.rustTerminalId
+        })
+
+        // 获取所有已创建的终端 ID（包括所有 Panel 的所有 Tab）
+        let allTerminalIds = Set(terminalWindow.allPanels.flatMap { panel in
+            panel.tabs.compactMap { $0.rustTerminalId }
+        })
+
+        // 可见的设为 Active，其他设为 Background
+        for terminalId in visibleTerminalIds {
             terminalPool.setMode(terminalId: terminalId, mode: .active)
+        }
+        for terminalId in allTerminalIds.subtracting(visibleTerminalIds) {
+            terminalPool.setMode(terminalId: terminalId, mode: .background)
         }
 
         // 5.1. 通知用户 focus 的终端

@@ -137,7 +137,13 @@ impl DisplayLink {
     /// 启动 DisplayLink
     pub fn start(&self) -> bool {
         let result = unsafe { CVDisplayLinkStart(self.link) };
-        result == kCVReturnSuccess
+        let success = result == kCVReturnSuccess;
+        if success {
+            crate::rust_log_info!("[RenderLoop] ✅ CVDisplayLink started successfully");
+        } else {
+            crate::rust_log_error!("[RenderLoop] ❌ CVDisplayLink start failed: {}", result);
+        }
+        success
     }
 
     /// 停止 DisplayLink
