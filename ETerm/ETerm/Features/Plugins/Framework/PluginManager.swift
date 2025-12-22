@@ -217,6 +217,9 @@ final class PluginManager: ObservableObject {
         // 注销 Tab Slot
         tabSlotRegistry.unregister(pluginId: pluginId)
 
+        // 注销 Page Slot
+        pageSlotRegistry.unregister(pluginId: pluginId)
+
         // 移除插件实例（保留类型，以便重新启用）
         plugins.removeValue(forKey: pluginId)
 
@@ -811,5 +814,25 @@ final class UIServiceImpl: UIService {
 
     func unregisterTabSlots(for pluginId: String) {
         tabSlotRegistry.unregister(pluginId: pluginId)
+    }
+
+    // MARK: - Page Slot
+
+    func registerPageSlot(
+        for pluginId: String,
+        slotId: String,
+        priority: Int,
+        viewProvider: @escaping (Page) -> AnyView?
+    ) {
+        pageSlotRegistry.register(
+            pluginId: pluginId,
+            slotId: slotId,
+            priority: priority,
+            viewProvider: viewProvider
+        )
+    }
+
+    func unregisterPageSlots(for pluginId: String) {
+        pageSlotRegistry.unregister(pluginId: pluginId)
     }
 }
