@@ -322,6 +322,8 @@ final class PanelHeaderHostingView: NSView {
                     tabItemViews[index].tab = tabRegistry[newTab.id]
                 }
             }
+            // 标题变化可能导致宽度变化，需要重新布局
+            layoutTabItems()
         } else {
             // tabs 真的变化了，重建视图
             tabs = newTabItems
