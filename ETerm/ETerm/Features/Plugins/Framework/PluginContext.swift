@@ -214,12 +214,12 @@ protocol UIService: AnyObject {
     ///   - pluginId: 插件 ID
     ///   - slotId: Slot ID（唯一标识）
     ///   - priority: 优先级（数字大 = 靠左/优先显示）
-    ///   - viewProvider: 视图提供者，接收 terminalId，返回 nil 表示该 Tab 不显示此 slot
+    ///   - viewProvider: 视图提供者，接收 Tab，返回 nil 表示该 Tab 不显示此 slot
     func registerTabSlot(
         for pluginId: String,
         slotId: String,
         priority: Int,
-        viewProvider: @escaping (Int) -> AnyView?
+        viewProvider: @escaping (Tab) -> AnyView?
     )
 
     /// 注销插件的所有 Tab Slot

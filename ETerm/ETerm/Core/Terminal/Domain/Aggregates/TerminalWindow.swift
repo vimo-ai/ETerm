@@ -21,8 +21,26 @@ struct ActiveFocus: Codable, Equatable {
 /// 这是窗口层级的聚合根，负责：
 /// - 维护 Page 列表
 /// - 协调 Page 切换
-final class TerminalWindow {
+final class TerminalWindow: PaneContainer, ActionAreaHost {
+    typealias Item = Page
+
     let windowId: UUID
+
+    // MARK: - PaneContainer 协议属性
+
+    /// 容器 ID
+    var id: UUID { windowId }
+
+    /// 所有 Page（PaneContainer.items）
+    var items: [Page] { pages.all }
+
+    /// 当前激活的 Page ID（PaneContainer.activeItemId）
+    var activeItemId: UUID? { active.pageId }
+
+    // MARK: - ActionAreaHost 协议属性
+
+    /// ActionArea 注册表
+    let actionAreaRegistry = ActionAreaRegistry()
 
     // MARK: - Accessors
 
@@ -634,6 +652,46 @@ extension TerminalWindow: Hashable {
     }
 }
 
+// MARK: - PaneContainer 协议方法
+
+extension TerminalWindow {
+    /// 激活指定 Page（PaneContainer.activateItem）
+    @discardableResult
+    func activateItem(_ itemId: UUID) -> Bool {
+        // 失活当前 Page
+        if let currentPage = active.page {
+            currentPage.deactivate()
+        }
+
+        // 切换到新 Page
+        let success = pages.switchTo(itemId)
+
+        // 激活新 Page
+        if success, let newPage = active.page {
+            newPage.activate()
+        }
+
+        return success
+    }
+
+    /// 添加 Page（PaneContainer.addItem）
+    func addItem(_ item: Page) {
+        pages.addExisting(item)
+    }
+
+    /// 移除 Page（PaneContainer.removeItem）
+    @discardableResult
+    func removeItem(_ itemId: UUID) -> Page? {
+        pages.forceRemove(itemId)
+    }
+
+    /// 重新排序 Page（PaneContainer.reorderItems）
+    @discardableResult
+    func reorderItems(_ itemIds: [UUID]) -> Bool {
+        pages.reorder(itemIds)
+    }
+}
+
 // MARK: - Command Execution
 
 extension TerminalWindow {
@@ -690,18 +748,10 @@ extension TerminalWindow {
         }
         let newTerminalId = panel.activeTab?.rustTerminalId
 
-        // 发送 Tab Focus 事件，让插件决定是否清除装饰
-        if let terminalId = newTerminalId {
-            NotificationCenter.default.post(
-                name: .tabDidFocus,
-                object: nil,
-                userInfo: ["terminal_id": terminalId]
-            )
-        }
-
         var result = CommandResult()
         if let id = newTerminalId {
             result.terminalsToActivate = [id]
+            result.focusedTerminalId = id
         }
         if let oldId = oldTerminalId, oldId != newTerminalId {
             result.terminalsToDeactivate = [oldId]
@@ -1098,18 +1148,10 @@ extension TerminalWindow {
         active.setPanel(panelId)
         let newTerminalId = active.terminalId
 
-        // 发送 Tab Focus 事件，让插件决定是否清除装饰
-        if let terminalId = newTerminalId {
-            NotificationCenter.default.post(
-                name: .tabDidFocus,
-                object: nil,
-                userInfo: ["terminal_id": terminalId]
-            )
-        }
-
         var result = CommandResult()
         if let id = newTerminalId {
             result.terminalsToActivate = [id]
+            result.focusedTerminalId = id
         }
         if let oldId = oldTerminalId, oldId != newTerminalId {
             result.terminalsToDeactivate = [oldId]
@@ -1174,19 +1216,11 @@ extension TerminalWindow {
             }
         }
 
-        // 发送 Tab Focus 事件，让插件决定是否清除装饰
-        // 只发送当前激活 Panel 的激活 Tab（用户实际聚焦的 Tab）
-        if let focusedTerminalId = active.terminalId {
-            NotificationCenter.default.post(
-                name: .tabDidFocus,
-                object: nil,
-                userInfo: ["terminal_id": focusedTerminalId]
-            )
-        }
-
         var result = CommandResult()
         result.terminalsToDeactivate = terminalsToDeactivate
         result.terminalsToActivate = terminalsToActivate
+        // 只有当前激活 Panel 的 Tab 是用户真正 focus 的
+        result.focusedTerminalId = active.terminalId
         result.effects = .layoutChange
         return result
     }

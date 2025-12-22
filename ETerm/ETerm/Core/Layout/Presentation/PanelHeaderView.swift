@@ -227,6 +227,11 @@ final class PanelHeaderHostingView: NSView {
                 self?.onTabCloseRight?(tab.id)
             }
 
+            // 宽度变化时重新布局
+            tabView.onWidthChanged = { [weak self] in
+                self?.layoutTabItems()
+            }
+
             // 设置可关闭状态（基于位置）
             tabView.canCloseLeft = index > 0
             tabView.canCloseRight = index < tabCount - 1
@@ -283,9 +288,11 @@ final class PanelHeaderHostingView: NSView {
         }
 
         // 然后检查右侧按钮区域（SwiftUI）
+        // SwiftUI Button 不是 NSControl，需要检查是否命中了 hostingView 内的可交互视图
         if let hosting = hostingView {
             let pointInHosting = convert(point, to: hosting)
-            if let swiftUIHit = hosting.hitTest(pointInHosting), swiftUIHit is NSControl {
+            if let swiftUIHit = hosting.hitTest(pointInHosting), swiftUIHit !== hosting {
+                // 命中了 hostingView 内部的子视图（可能是按钮）
                 return swiftUIHit
             }
         }

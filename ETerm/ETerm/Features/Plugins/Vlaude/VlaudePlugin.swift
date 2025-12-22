@@ -38,8 +38,9 @@ final class VlaudePlugin: Plugin {
             for: Self.id,
             slotId: "vlaude-mobile-viewing",
             priority: 50
-        ) { [weak self] terminalId in
+        ) { [weak self] tab in
             guard let self = self else { return nil }
+            guard let terminalId = tab.rustTerminalId else { return nil }
             guard self.mobileViewingTerminals.contains(terminalId) else { return nil }
             return AnyView(
                 Image(systemName: "iphone")
@@ -249,7 +250,7 @@ extension VlaudePlugin: VlaudeDaemonClientDelegate {
 
         // 触发 slot 刷新
         NotificationCenter.default.post(
-            name: TabSlotRegistry.slotDidChangeNotification,
+            name: SlotRegistry<Tab>.slotDidChangeNotification,
             object: nil
         )
     }

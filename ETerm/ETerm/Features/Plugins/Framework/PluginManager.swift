@@ -215,7 +215,7 @@ final class PluginManager: ObservableObject {
         PageBarItemRegistry.shared.unregisterItems(for: pluginId)
 
         // 注销 Tab Slot
-        TabSlotRegistry.shared.unregister(for: pluginId)
+        tabSlotRegistry.unregister(pluginId: pluginId)
 
         // 移除插件实例（保留类型，以便重新启用）
         plugins.removeValue(forKey: pluginId)
@@ -761,7 +761,7 @@ final class UIServiceImpl: UIService {
         }
 
         // 2. 更新 Tab 模型的装饰
-        tab.setDecoration(decoration)
+        tab.decoration = decoration
 
         // 3. 发送通知让视图刷新（视图会从模型读取 effectiveDecoration）
         NotificationCenter.default.post(
@@ -799,10 +799,10 @@ final class UIServiceImpl: UIService {
         for pluginId: String,
         slotId: String,
         priority: Int,
-        viewProvider: @escaping (Int) -> AnyView?
+        viewProvider: @escaping (Tab) -> AnyView?
     ) {
-        TabSlotRegistry.shared.register(
-            for: pluginId,
+        tabSlotRegistry.register(
+            pluginId: pluginId,
             slotId: slotId,
             priority: priority,
             viewProvider: viewProvider
@@ -810,6 +810,6 @@ final class UIServiceImpl: UIService {
     }
 
     func unregisterTabSlots(for pluginId: String) {
-        TabSlotRegistry.shared.unregister(for: pluginId)
+        tabSlotRegistry.unregister(pluginId: pluginId)
     }
 }

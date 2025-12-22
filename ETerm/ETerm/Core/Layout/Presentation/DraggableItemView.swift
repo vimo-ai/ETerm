@@ -26,15 +26,13 @@ class DraggableItemView: NSView {
     /// 项目 ID（子类实现）
     var itemId: UUID { fatalError("Subclass must override itemId") }
 
-    /// 标题
-    private(set) var title: String = ""
-
-    /// 更新标题（只在真正变化时才刷新视图）
-    func setTitle(_ newTitle: String) {
-        guard title != newTitle else { return }
-        title = newTitle
-        titleDidChange()
-        updateItemView()
+    /// 标题（didSet 保证一致性，直接赋值即可触发回调）
+    var title: String = "" {
+        didSet {
+            guard oldValue != title else { return }
+            titleDidChange()
+            updateItemView()
+        }
     }
 
     /// 标题变化时的回调（子类可覆盖）
@@ -224,8 +222,6 @@ class DraggableItemView: NSView {
             let newTitle = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !newTitle.isEmpty && newTitle != title {
                 title = newTitle  // didSet 自动触发 titleDidChange() 和 updateItemView()
-                // 通知父视图重新布局
-                superview?.superview?.needsLayout = true
                 onRename?(newTitle)
             }
         }
@@ -559,12 +555,14 @@ extension DraggableItemView: NSPasteboardItemDataProvider {
 extension DraggableItemView: NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) {
         // 防护：只在编辑状态且编辑框可见时处理
-        // 避免 async focus 期间的虚假通知导致提前关闭
         guard isEditing, !editField.isHidden else { return }
 
         // 防护：确保通知来自我们的编辑框
         guard let textField = obj.object as? NSTextField,
               textField === editField else { return }
+
+        // 防护：如果正在等待焦点，忽略此通知（异步焦点获取期间的虚假通知）
+        guard !isAwaitingFocus else { return }
 
         // 只有获得过焦点才保存编辑结果
         endEditing(save: hasFocused)

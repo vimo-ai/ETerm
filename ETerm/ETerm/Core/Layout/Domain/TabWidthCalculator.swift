@@ -29,6 +29,9 @@ final class TabWidthCalculator {
     /// 关闭按钮宽度
     private static let closeButtonWidth: CGFloat = 20
 
+    /// 内容间距（SimpleTabView 外层 HStack spacing + Spacer 最小宽度）
+    private static let contentSpacing: CGFloat = 14  // 6(spacing) + 8(Spacer min)
+
     /// Slot 区域最大宽度
     private static let slotMaxWidth: CGFloat = 40
 
@@ -60,6 +63,7 @@ final class TabWidthCalculator {
         let textWidth = measureTextWidth(title)
         let idealWidth = textWidth
             + Self.horizontalPadding
+            + Self.contentSpacing
             + Self.closeButtonWidth
             + slotWidth
 
@@ -125,15 +129,14 @@ final class TabWidthCalculator {
             return cached
         }
 
-        // 计算宽度
+        // 计算宽度（使用 CTLine 更精确）
         let font = NSFont.systemFont(ofSize: Self.fontSize)
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
         let attrString = NSAttributedString(string: text, attributes: attributes)
 
-        let width = attrString.boundingRect(
-            with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
-            options: [.usesDeviceMetrics, .usesFontLeading]
-        ).width
+        // CTLine 提供更准确的排版宽度
+        let line = CTLineCreateWithAttributedString(attrString)
+        let width = ceil(CTLineGetTypographicBounds(line, nil, nil, nil))
 
         // 缓存（超限时清理一半）
         if textWidthCache.count >= maxCacheSize {
