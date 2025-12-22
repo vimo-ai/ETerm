@@ -615,6 +615,12 @@ class TerminalWindowCoordinator: ObservableObject {
         }
         for terminalId in result.terminalsToActivate {
             terminalPool.setMode(terminalId: terminalId, mode: .active)
+            // 发送 Tab Focus 事件，让插件清除 completed 状态的装饰
+            NotificationCenter.default.post(
+                name: .tabDidFocus,
+                object: nil,
+                userInfo: ["terminal_id": terminalId]
+            )
         }
 
         // 5.5. Panel 移除后的 Coordinator 级别清理
