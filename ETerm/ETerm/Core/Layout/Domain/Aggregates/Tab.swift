@@ -57,10 +57,10 @@ final class Tab: Pane {
     /// 有效装饰（综合 isActive 和插件装饰，取最高优先级）
     ///
     /// 优先级规则：
-    /// - 0: 默认（灰色）
-    /// - 5: 已完成（橙色）
-    /// - 100: active（深红）
-    /// - 101: 思考中（蓝色脉冲）
+    /// - system(.default): 默认（灰色）
+    /// - plugin(id, 5): 已完成（橙色）
+    /// - system(.active): active（深红）
+    /// - plugin(id, 101): 思考中（蓝色脉冲）
     var effectiveDecoration: TabDecoration {
         let activeDecoration = TabDecoration.active
 

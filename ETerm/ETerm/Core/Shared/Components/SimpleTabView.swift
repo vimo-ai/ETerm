@@ -278,7 +278,7 @@ struct SimpleTabView: View {
             SimpleTabView(
                 "Claude Running",
                 isActive: false,
-                decoration: .completed,
+                decoration: .completed(pluginId: "preview"),
                 height: 26,
                 onClose: { }
             )
@@ -288,14 +288,14 @@ struct SimpleTabView: View {
             SimpleTabView(
                 "AI Thinking",
                 isActive: false,
-                decoration: .thinking,
+                decoration: .thinking(pluginId: "preview"),
                 height: 26,
                 onClose: { }
             )
             SimpleTabView(
                 "Completed",
                 isActive: false,
-                decoration: .completed,
+                decoration: .completed(pluginId: "preview"),
                 height: 26,
                 onClose: { }
             )
@@ -314,7 +314,7 @@ struct SimpleTabView: View {
             SimpleTabView(
                 "Claude Running",
                 isActive: false,
-                decoration: .completed,
+                decoration: .completed(pluginId: "preview"),
                 height: 26,
                 onClose: { }
             )
