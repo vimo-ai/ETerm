@@ -17,13 +17,28 @@ import CoreGraphics
 ///
 /// 管理多个 Tab，类似于 VSCode 的 Editor Panel
 /// 支持多种 Tab 类型（Terminal、View 等）
-final class EditorPanel {
+///
+/// 实现 PaneContainer 协议，与 Window 共享统一的容器抽象
+final class EditorPanel: PaneContainer {
+    typealias Item = Tab
+
     /// 内容区域内边距
     static let contentPadding: CGFloat = 4.0
 
     let panelId: UUID
     private(set) var tabs: [Tab]
     private(set) var activeTabId: UUID?
+
+    // MARK: - PaneContainer 协议属性
+
+    /// 容器 ID
+    var id: UUID { panelId }
+
+    /// 所有 Tab（PaneContainer.items）
+    var items: [Tab] { tabs }
+
+    /// 当前激活的 Tab ID（PaneContainer.activeItemId）
+    var activeItemId: UUID? { activeTabId }
 
     /// Panel 在窗口中的位置和尺寸（由 TerminalWindow 更新）
     private(set) var bounds: CGRect = .zero
@@ -157,6 +172,42 @@ final class EditorPanel {
 
         tabs = newTabs
         return true
+    }
+
+    // MARK: - PaneContainer 协议方法
+
+    /// 激活指定 Tab（PaneContainer.activateItem）
+    @discardableResult
+    func activateItem(_ itemId: UUID) -> Bool {
+        switchToTab(itemId)
+    }
+
+    /// 添加 Tab（PaneContainer.addItem）
+    func addItem(_ item: Tab) {
+        addTab(item)
+    }
+
+    /// 移除 Tab（PaneContainer.removeItem）
+    @discardableResult
+    func removeItem(_ itemId: UUID) -> Tab? {
+        guard let index = tabs.firstIndex(where: { $0.id == itemId }) else {
+            return nil
+        }
+        let tab = tabs[index]
+        // closeTab 要求至少保留一个 Tab，这里直接移除
+        tabs.remove(at: index)
+
+        // 如果移除的是激活的 Tab，切换到第一个
+        if activeTabId == itemId, let firstTab = tabs.first {
+            switchToTab(firstTab.id)
+        }
+        return tab
+    }
+
+    /// 重新排序 Tab（PaneContainer.reorderItems）
+    @discardableResult
+    func reorderItems(_ itemIds: [UUID]) -> Bool {
+        reorderTabs(itemIds)
     }
 
     // MARK: - Layout Management

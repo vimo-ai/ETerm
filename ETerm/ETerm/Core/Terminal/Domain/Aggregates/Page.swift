@@ -21,14 +21,27 @@ import SwiftUI
 ///
 /// 管理单个页面的布局和 Panel
 /// 每个 Page 维护自己独立的布局树和 Panel 集合
-final class Page {
+///
+/// 实现 Pane 协议，与 Tab 共享统一的标签抽象
+final class Page: Pane {
     let pageId: UUID
-    private(set) var title: String
+    var title: String
     private(set) var rootLayout: PanelLayout
     private var panelRegistry: [UUID: EditorPanel]
 
     /// 页面内容类型（终端或插件）
     private(set) var content: PageContent
+
+    // MARK: - Pane 协议属性
+
+    /// 是否激活（由 Window 管理）
+    private(set) var isActive: Bool = false
+
+    /// 插件设置的装饰
+    var decoration: TabDecoration?
+
+    /// 插件数据存储
+    let pluginData = PluginDataStore()
 
     // MARK: - Initialization
 
@@ -112,6 +125,18 @@ final class Page {
         return page
     }
 
+    // MARK: - Pane 协议方法
+
+    /// 激活 Page
+    func activate() {
+        isActive = true
+    }
+
+    /// 失活 Page
+    func deactivate() {
+        isActive = false
+    }
+
     // MARK: - Content Type Queries
 
     /// 是否为插件页面
@@ -129,15 +154,23 @@ final class Page {
         allPanels.flatMap { $0.tabs }
     }
 
-    /// 有效装饰（收敛所有 Tab 的最高优先级插件装饰）
+    /// 有效装饰（综合 Page 自身装饰和 Tab 聚合装饰，取最高优先级）
     ///
-    /// Page 只聚合插件设置的装饰（tab.decoration），不包含 Tab 的 active 状态。
+    /// 装饰来源：
+    /// 1. Page 自身的 decoration（插件直接设置）
+    /// 2. Tab 聚合的装饰（从子级冒泡）
+    ///
     /// 用于在 PageBar 上显示状态提示（如 Claude thinking/completed）。
     var effectiveDecoration: TabDecoration? {
-        allTabs
-            .compactMap { $0.decoration }  // 只取插件设置的装饰，不含 active 状态
+        // 收集 Tab 聚合的最高优先级装饰
+        let tabDecoration = allTabs
+            .compactMap { $0.decoration }
             .filter { $0.priority > 0 }
             .max { $0.priority < $1.priority }
+
+        // 取 Page 自身装饰和 Tab 聚合装饰中优先级最高的
+        let candidates = [decoration, tabDecoration].compactMap { $0 }
+        return candidates.max { $0.priority < $1.priority }
     }
 
     // MARK: - Title Management

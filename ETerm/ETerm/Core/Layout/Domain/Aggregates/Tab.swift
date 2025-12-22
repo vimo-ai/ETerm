@@ -19,7 +19,9 @@ import PanelLayoutKit
 /// - 管理 Tab 的通用属性（id、title、active 状态）
 /// - 持有内容引用（TabContent）
 /// - 不关心内容的具体类型
-final class Tab {
+///
+/// 实现 Pane 协议，与 Page 共享统一的标签抽象
+final class Tab: Pane {
     // MARK: - 基本属性
 
     /// Tab ID（唯一标识）
@@ -35,7 +37,10 @@ final class Tab {
     private(set) var content: TabContent
 
     /// 插件设置的装饰（nil 表示无插件装饰）
-    private(set) var decoration: TabDecoration?
+    var decoration: TabDecoration?
+
+    /// 插件数据存储
+    let pluginData = PluginDataStore()
 
     // MARK: - 初始化
 
@@ -73,11 +78,6 @@ final class Tab {
 
         // 无插件装饰
         return isActive ? activeDecoration : .default
-    }
-
-    /// 设置装饰（由插件调用）
-    func setDecoration(_ newDecoration: TabDecoration?) {
-        decoration = newDecoration
     }
 
     /// 清除装饰
