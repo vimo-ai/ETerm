@@ -38,6 +38,25 @@ final class TabItemView: DraggableItemView {
     /// Rust Terminal ID（用于装饰通知匹配）
     var rustTerminalId: Int?
 
+    /// Tab 前缀 emoji（如 📱 表示 Mobile 正在查看）
+    private var emoji: String?
+
+    // MARK: - 宽度计算
+
+    /// 缓存的宽度（由 TabWidthCalculator 计算）
+    private var cachedWidth: CGFloat = TabWidthCalculator.minWidth
+
+    /// 冻结的宽度（拖拽期间使用）
+    private var frozenWidth: CGFloat?
+
+    /// 当前 slot 宽度（由插件设置）
+    private var slotWidth: CGFloat = 0
+
+    /// 实际使用的宽度（拖拽时用冻结值，否则用缓存值）
+    private var effectiveWidth: CGFloat {
+        frozenWidth ?? cachedWidth
+    }
+
     // MARK: - 初始化
 
     init(tabId: UUID, title: String, tab: Tab? = nil) {
@@ -47,6 +66,7 @@ final class TabItemView: DraggableItemView {
         super.init(frame: .zero)
 
         setTitle(title)
+        recalculateWidth()
         setupUI()
         setupDecorationNotifications()
         setupVlaudeNotifications()
@@ -74,6 +94,21 @@ final class TabItemView: DraggableItemView {
 
     /// Tab 拖拽结束时发送通知（DropIntentQueue 依赖此通知）
     override var dragSessionEndedNotificationName: Notification.Name? { .tabDragSessionEnded }
+
+    /// 标题变化时重新计算宽度
+    override func titleDidChange() {
+        recalculateWidth()
+    }
+
+    /// 拖拽开始时冻结宽度
+    override func dragSessionWillStart() {
+        freezeWidth()
+    }
+
+    /// 拖拽结束时解冻宽度
+    override func dragSessionDidEnd() {
+        unfreezeWidth()
+    }
 
     override func updateItemView() {
         // 从 Tab 模型读取装饰，计算要显示的装饰
@@ -110,11 +145,12 @@ final class TabItemView: DraggableItemView {
         // 移除旧的 hostingView
         hostingView?.removeFromSuperview()
 
-        // 创建新的 SwiftUI 视图
+        // 创建新的 SwiftUI 视图（使用动态宽度）
         let simpleTab = SimpleTabView(
             title,
             isActive: isActive,
             decoration: displayDecoration,
+            width: effectiveWidth,
             height: Self.tabHeight,
             isHovered: isHovered,
             slotViews: slotViews,
@@ -158,11 +194,40 @@ final class TabItemView: DraggableItemView {
     private static let tabHeight: CGFloat = 26
 
     override var fittingSize: NSSize {
-        return hostingView?.fittingSize ?? .zero
+        // 使用预计算的宽度，不依赖 SwiftUI 的 fittingSize
+        return NSSize(width: effectiveWidth, height: Self.tabHeight)
     }
 
     override var intrinsicContentSize: NSSize {
-        return hostingView?.intrinsicContentSize ?? NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+        return NSSize(width: effectiveWidth, height: Self.tabHeight)
+    }
+
+    // MARK: - 宽度管理
+
+    /// 重新计算宽度（title 变化时调用）
+    func recalculateWidth() {
+        cachedWidth = TabWidthCalculator.shared.calculate(
+            title: title,
+            slotWidth: slotWidth
+        )
+    }
+
+    /// 冻结当前宽度（拖拽开始时调用）
+    func freezeWidth() {
+        frozenWidth = cachedWidth
+    }
+
+    /// 解冻宽度（拖拽结束后调用）
+    func unfreezeWidth() {
+        frozenWidth = nil
+    }
+
+    /// 设置 slot 宽度（插件调用）
+    func setSlotWidth(_ width: CGFloat) {
+        guard slotWidth != width else { return }
+        slotWidth = width
+        recalculateWidth()
+        updateItemView()
     }
 
     // MARK: - Private Methods
