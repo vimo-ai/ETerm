@@ -10,19 +10,81 @@ import AppKit
 
 // MARK: - Tab 装饰（通用机制，核心层定义）
 
-/// Tab 装饰状态
+/// 装饰优先级
 ///
-/// 多级优先级系统：
-/// - 0: 默认（灰色）
-/// - 5: 已完成（橙色）
-/// - 100: active（#861717 深红）
-/// - 101: 思考中（蓝色脉冲）
+/// 类型安全的优先级系统，区分系统级装饰和插件级装饰
+public enum DecorationPriority: Equatable, Comparable {
+    /// 系统级装饰（保留给核心系统使用）
+    case system(SystemLevel)
+
+    /// 插件级装饰（插件使用，包含插件 ID 和优先级）
+    case plugin(id: String, priority: Int)
+
+    /// 系统级优先级
+    public enum SystemLevel: Int, Comparable {
+        /// 默认状态（灰色，最低优先级）
+        case `default` = 0
+
+        /// Active 状态（深红色，系统最高优先级）
+        case active = 100
+
+        public static func < (lhs: SystemLevel, rhs: SystemLevel) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+    }
+
+    /// 获取数值优先级（用于比较）
+    public var numericValue: Int {
+        switch self {
+        case .system(let level):
+            return level.rawValue
+        case .plugin(_, let priority):
+            return priority
+        }
+    }
+
+    /// 比较优先级（数值越大越优先）
+    ///
+    /// 比较规则（按优先级排序）：
+    /// 1. 先按数值比较（高优先级在前）
+    /// 2. 数值相同时，system 优先于 plugin（系统装饰优先）
+    /// 3. 同为 plugin 且数值相同时，按 plugin ID 字典序排序（确保稳定排序）
+    public static func < (lhs: DecorationPriority, rhs: DecorationPriority) -> Bool {
+        // 1. 首先按数值比较
+        if lhs.numericValue != rhs.numericValue {
+            return lhs.numericValue < rhs.numericValue
+        }
+
+        // 2. 数值相同时，按类型比较（system < plugin，使 system 在 max 时胜出）
+        switch (lhs, rhs) {
+        case (.system, .plugin):
+            return true  // system 更优先（在 max 时会被选中）
+        case (.plugin, .system):
+            return false
+        case (.system, .system):
+            return false  // 同类型且数值相同，视为相等
+        case let (.plugin(lhsId, _), .plugin(rhsId, _)):
+            // 3. 同为 plugin 且数值相同时，按 ID 字典序排序（确保稳定性）
+            return lhsId < rhsId
+        }
+    }
+
+    /// 是否为默认优先级（用于过滤）
+    public var isDefault: Bool {
+        if case .system(.default) = self {
+            return true
+        }
+        return false
+    }
+}
+
+/// Tab 装饰状态
 ///
 /// 插件可以通过 UIService.setTabDecoration() 设置 Tab 的视觉装饰。
 /// 显示时取最高优先级的装饰，Page 收敛所有 Tab 的最高优先级。
 public struct TabDecoration: Equatable {
     /// 优先级（数值越大越优先显示）
-    public let priority: Int
+    public let priority: DecorationPriority
 
     /// 装饰颜色
     public let color: NSColor
@@ -43,7 +105,7 @@ public struct TabDecoration: Equatable {
         case breathing
     }
 
-    public init(priority: Int, color: NSColor, style: Style = .solid, persistent: Bool = false) {
+    public init(priority: DecorationPriority, color: NSColor, style: Style = .solid, persistent: Bool = false) {
         self.priority = priority
         self.color = color
         self.style = style
@@ -52,17 +114,41 @@ public struct TabDecoration: Equatable {
 
     // MARK: - 预定义装饰
 
-    /// 默认装饰（优先级 0）
-    public static let `default` = TabDecoration(priority: 0, color: .gray, style: .solid)
+    /// 默认装饰（系统级，最低优先级）
+    public static let `default` = TabDecoration(
+        priority: .system(.default),
+        color: .gray,
+        style: .solid
+    )
 
-    /// Active 装饰（优先级 100，深红色）
-    public static let active = TabDecoration(priority: 100, color: NSColor(red: 0x86/255, green: 0x17/255, blue: 0x17/255, alpha: 1.0), style: .solid)
+    /// Active 装饰（系统级，深红色）
+    public static let active = TabDecoration(
+        priority: .system(.active),
+        color: NSColor(red: 0x86/255, green: 0x17/255, blue: 0x17/255, alpha: 1.0),
+        style: .solid
+    )
 
-    /// 思考中装饰（优先级 101，蓝色脉冲）
-    public static let thinking = TabDecoration(priority: 101, color: .systemBlue, style: .pulse)
+    /// 思考中装饰（Claude 插件专用，蓝色脉冲）
+    ///
+    /// - Parameter pluginId: 插件 ID（必须传入，确保类型安全）
+    public static func thinking(pluginId: String) -> TabDecoration {
+        TabDecoration(
+            priority: .plugin(id: pluginId, priority: 101),
+            color: .systemBlue,
+            style: .pulse
+        )
+    }
 
-    /// 已完成装饰（优先级 5，橙色静态）
-    public static let completed = TabDecoration(priority: 5, color: .systemOrange, style: .solid)
+    /// 已完成装饰（Claude 插件专用，橙色静态）
+    ///
+    /// - Parameter pluginId: 插件 ID（必须传入，确保类型安全）
+    public static func completed(pluginId: String) -> TabDecoration {
+        TabDecoration(
+            priority: .plugin(id: pluginId, priority: 5),
+            color: .systemOrange,
+            style: .solid
+        )
+    }
 }
 
 /// Tab 装饰变化通知
@@ -225,4 +311,27 @@ protocol UIService: AnyObject {
     /// 注销插件的所有 Tab Slot
     /// - Parameter pluginId: 插件 ID
     func unregisterTabSlots(for pluginId: String)
+
+    // MARK: - Page Slot API
+
+    /// 注册 Page Slot
+    ///
+    /// 在 Page 的 title 和 close 按钮之间注入自定义视图。
+    /// 插件可以用这个显示状态统计（如思考中的 tab 数量、已完成的 tab 数量等）。
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - slotId: Slot ID（唯一标识）
+    ///   - priority: 优先级（数字大 = 靠左/优先显示）
+    ///   - viewProvider: 视图提供者，接收 Page，返回 nil 表示该 Page 不显示此 slot
+    func registerPageSlot(
+        for pluginId: String,
+        slotId: String,
+        priority: Int,
+        viewProvider: @escaping (Page) -> AnyView?
+    )
+
+    /// 注销插件的所有 Page Slot
+    /// - Parameter pluginId: 插件 ID
+    func unregisterPageSlots(for pluginId: String)
 }
