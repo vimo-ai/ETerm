@@ -241,6 +241,13 @@ class DraggableItemView: NSView {
 
     override func layout() {
         super.layout()
+
+        // 如果 hostingView 不存在但视图有有效尺寸，延迟创建它
+        // 这处理了 init() 时 bounds 为 zero、updateItemView() 跳过创建的情况
+        if hostingView == nil && bounds.width > 0 && bounds.height > 0 {
+            updateItemView()
+        }
+
         hostingView?.frame = bounds
     }
 

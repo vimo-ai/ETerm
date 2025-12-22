@@ -250,6 +250,8 @@ final class PanelHeaderHostingView: NSView {
         for tabView in tabItemViews {
             let size = tabView.fittingSize
             tabView.frame = CGRect(x: x, y: 3, width: size.width, height: size.height)
+            // 设置 frame 后触发 layout()，确保 hostingView 被创建并设置正确尺寸
+            tabView.layout()
             x += size.width + spacing
         }
     }

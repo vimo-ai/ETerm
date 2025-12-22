@@ -116,6 +116,12 @@ final class TabItemView: DraggableItemView {
         // 编辑期间不重建视图，避免焦点丢失
         guard !isEditing else { return }
 
+        // 延迟创建 hostingView，直到视图有有效尺寸
+        // 避免 init() 时 bounds 为 zero 导致 NSHostingView 无法正确渲染
+        guard bounds.width > 0 && bounds.height > 0 else {
+            return
+        }
+
         // 从 Tab 模型读取装饰，计算要显示的装饰
         // 优先级逻辑：
         // - 插件装饰 priority > 100（active）：显示插件装饰
