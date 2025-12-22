@@ -593,11 +593,14 @@ class TerminalWindowCoordinator: ObservableObject {
         }
         for terminalId in result.terminalsToActivate {
             terminalPool.setMode(terminalId: terminalId, mode: .active)
-            // 通知终端获得焦点
+        }
+
+        // 5.1. 通知用户 focus 的终端
+        if let focusedTerminalId = result.focusedTerminalId {
             NotificationCenter.default.post(
                 name: .tabDidFocus,
                 object: nil,
-                userInfo: ["terminal_id": terminalId]
+                userInfo: ["terminal_id": focusedTerminalId]
             )
         }
 
