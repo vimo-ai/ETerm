@@ -128,6 +128,9 @@ class DraggableItemView: NSView {
     /// 是否已获得焦点
     private var hasFocused: Bool = false
 
+    /// 是否正在等待焦点（用于防止异步焦点获取期间的虚假通知）
+    private var isAwaitingFocus: Bool = false
+
     // MARK: - 初始化
 
     override init(frame frameRect: NSRect) {
@@ -182,6 +185,7 @@ class DraggableItemView: NSView {
     /// 开始编辑标题
     func startEditing() {
         isEditing = true
+        isAwaitingFocus = true
         editField.stringValue = title
         editField.isHidden = false
         hostingView?.isHidden = true
@@ -205,6 +209,7 @@ class DraggableItemView: NSView {
             if self.window?.makeFirstResponder(self.editField) == true {
                 self.hasFocused = true
             }
+            self.isAwaitingFocus = false
         }
     }
 
@@ -213,6 +218,7 @@ class DraggableItemView: NSView {
         guard isEditing else { return }
         isEditing = false
         hasFocused = false
+        isAwaitingFocus = false
 
         if save {
             let newTitle = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)

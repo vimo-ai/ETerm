@@ -706,7 +706,7 @@ extension TerminalWindow {
         if let oldId = oldTerminalId, oldId != newTerminalId {
             result.terminalsToDeactivate = [oldId]
         }
-        result.effects.render = true
+        result.effects = .viewChange
         return result
     }
 
@@ -733,8 +733,7 @@ extension TerminalWindow {
             result.terminalsToDeactivate = [oldId]
         }
         // 新终端激活由 Coordinator 在创建后处理
-        result.effects.render = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 
@@ -785,8 +784,7 @@ extension TerminalWindow {
         if let id = panel.activeTab?.rustTerminalId {
             result.terminalsToActivate = [id]
         }
-        result.effects.render = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 
@@ -800,8 +798,7 @@ extension TerminalWindow {
         }
 
         var result = CommandResult()
-        result.effects.updateTrigger = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 
@@ -834,8 +831,7 @@ extension TerminalWindow {
             result.terminalsToDeactivate = [oldId]
         }
         // 新终端激活由 Coordinator 在创建后处理
-        result.effects.render = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 
@@ -915,9 +911,7 @@ extension TerminalWindow {
             }
         }
 
-        result.effects.render = true
-        result.effects.updateTrigger = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 
@@ -961,8 +955,7 @@ extension TerminalWindow {
                 result.terminalsToActivate = [id]
                 result.focusedTerminalId = id
             }
-            result.effects.render = true
-            result.effects.saveSession = true
+            result.effects = .stateChange
             return result
 
         case .splitNew:
@@ -1014,7 +1007,7 @@ extension TerminalWindow {
         if let oldId = oldTerminalId {
             result.terminalsToDeactivate = [oldId]
         }
-        result.effects = .full  // syncLayout + render + save + updateTrigger
+        result.effects = .layoutChange
         return result
     }
 
@@ -1053,9 +1046,7 @@ extension TerminalWindow {
         if let terminalId = activateNextPanelAfterRemoval(removedPanelId: panelId, page: page) {
             result.terminalsToActivate = [terminalId]
         }
-        result.effects.syncLayout = true
-        result.effects.render = true
-        result.effects.saveSession = true
+        result.effects = .layoutChange
         return result
     }
 
@@ -1091,7 +1082,7 @@ extension TerminalWindow {
         if let oldId = oldTerminalId, oldId != newTerminalId {
             result.terminalsToDeactivate = [oldId]
         }
-        result.effects.render = true
+        result.effects = .viewChange
         return result
     }
 
@@ -1123,7 +1114,7 @@ extension TerminalWindow {
         if let oldId = oldTerminalId, oldId != newTerminalId {
             result.terminalsToDeactivate = [oldId]
         }
-        result.effects.render = true
+        result.effects = .viewChange
         return result
     }
 
@@ -1196,9 +1187,7 @@ extension TerminalWindow {
         var result = CommandResult()
         result.terminalsToDeactivate = terminalsToDeactivate
         result.terminalsToActivate = terminalsToActivate
-        result.effects.syncLayout = true
-        result.effects.render = true
-        result.effects.updateTrigger = true
+        result.effects = .layoutChange
         return result
     }
 
@@ -1221,10 +1210,7 @@ extension TerminalWindow {
         if let oldId = oldTerminalId {
             result.terminalsToDeactivate = [oldId]
         }
-        result.effects.syncLayout = true  // 新增 Page 改变了布局
-        result.effects.render = true
-        result.effects.updateTrigger = true
-        result.effects.saveSession = true
+        result.effects = .layoutChange
         return result
     }
 
@@ -1282,10 +1268,7 @@ extension TerminalWindow {
         var result = CommandResult()
         result.terminalsToClose = terminalsToClose
         result.terminalsToActivate = terminalsToActivate
-        result.effects.syncLayout = true
-        result.effects.render = true
-        result.effects.updateTrigger = true
-        result.effects.saveSession = true
+        result.effects = .layoutChange
         return result
     }
 
@@ -1295,8 +1278,7 @@ extension TerminalWindow {
         }
 
         var result = CommandResult()
-        result.effects.updateTrigger = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 
@@ -1306,8 +1288,7 @@ extension TerminalWindow {
         }
 
         var result = CommandResult()
-        result.effects.updateTrigger = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 
@@ -1317,8 +1298,7 @@ extension TerminalWindow {
         }
 
         var result = CommandResult()
-        result.effects.updateTrigger = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
         return result
     }
 

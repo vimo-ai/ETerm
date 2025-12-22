@@ -67,18 +67,24 @@ struct CommandResult {
         CommandResult(success: false, error: error)
     }
 
-    /// 创建成功结果（仅渲染）
-    static func rendered() -> CommandResult {
+    /// 创建成功结果（视图切换）
+    static func viewChanged() -> CommandResult {
         var result = CommandResult()
-        result.effects.render = true
+        result.effects = .viewChange
         return result
     }
 
-    /// 创建成功结果（渲染 + 保存）
-    static func renderedAndSaved() -> CommandResult {
+    /// 创建成功结果（状态变更）
+    static func stateChanged() -> CommandResult {
         var result = CommandResult()
-        result.effects.render = true
-        result.effects.saveSession = true
+        result.effects = .stateChange
+        return result
+    }
+
+    /// 创建成功结果（布局变更）
+    static func layoutChanged() -> CommandResult {
+        var result = CommandResult()
+        result.effects = .layoutChange
         return result
     }
 }
@@ -143,6 +149,11 @@ enum CommandError {
 /// 副作用声明
 ///
 /// 声明命令执行后需要触发的副作用，由 Coordinator 统一执行
+///
+/// 使用语义化工厂方法，而非手动设置布尔值：
+/// - `.viewChange` - 视图切换（Tab/Panel 激活切换）
+/// - `.stateChange` - 状态变更（添加/删除/重排 Tab/Panel/Page）
+/// - `.layoutChange` - 布局变更（Panel 分割等需要同步到 Rust 的操作）
 struct CommandEffects {
     /// 同步布局到 Rust
     var syncLayout: Bool = false
@@ -156,21 +167,26 @@ struct CommandEffects {
     /// 触发 UI 更新
     var updateTrigger: Bool = false
 
-    // MARK: - 便捷构造
+    // MARK: - 语义化工厂方法
 
-    /// 标准副作用：渲染
-    static var render: CommandEffects {
+    /// 视图切换（Tab/Panel 激活切换，只渲染不保存）
+    static var viewChange: CommandEffects {
         CommandEffects(render: true)
     }
 
-    /// 标准副作用：渲染 + 保存
-    static var renderAndSave: CommandEffects {
-        CommandEffects(render: true, saveSession: true)
+    /// 状态变更（添加/删除/重排 Tab/Panel/Page）
+    static var stateChange: CommandEffects {
+        CommandEffects(render: true, saveSession: true, updateTrigger: true)
     }
 
-    /// 标准副作用：同步布局 + 渲染 + 保存
-    static var full: CommandEffects {
+    /// 布局变更（Panel 分割等需要同步到 Rust 的操作）
+    static var layoutChange: CommandEffects {
         CommandEffects(syncLayout: true, render: true, saveSession: true, updateTrigger: true)
+    }
+
+    /// 无副作用
+    static var none: CommandEffects {
+        CommandEffects()
     }
 }
 
