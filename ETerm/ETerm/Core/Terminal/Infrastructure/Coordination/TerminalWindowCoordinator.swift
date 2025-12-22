@@ -345,7 +345,7 @@ class TerminalWindowCoordinator: ObservableObject {
             // 设置领域层状态（会自动通过 focusPublisher 同步到 Coordinator）
             terminalWindow.active.setPanel(panelId)
 
-            // 发送 Tab Focus 事件，让插件清除 completed 状态的装饰
+            // 通知终端获得焦点（不走命令管道，需单独发送）
             if let terminalId = terminalWindow.active.terminalId {
                 NotificationCenter.default.post(
                     name: .tabDidFocus,
@@ -615,7 +615,7 @@ class TerminalWindowCoordinator: ObservableObject {
         }
         for terminalId in result.terminalsToActivate {
             terminalPool.setMode(terminalId: terminalId, mode: .active)
-            // 发送 Tab Focus 事件，让插件清除 completed 状态的装饰
+            // 通知终端获得焦点
             NotificationCenter.default.post(
                 name: .tabDidFocus,
                 object: nil,
