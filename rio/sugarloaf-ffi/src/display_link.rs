@@ -105,7 +105,7 @@ impl DisplayLink {
         // 创建 CVDisplayLink
         let result = unsafe { CVDisplayLinkCreateWithActiveCGDisplays(&mut link) };
         if result != kCVReturnSuccess || link.is_null() {
-            eprintln!("[RenderLoop] ❌ Failed to create CVDisplayLink: {}", result);
+            crate::rust_log_error!("[RenderLoop] ❌ Failed to create CVDisplayLink: {}", result);
             return None;
         }
 
@@ -120,7 +120,7 @@ impl DisplayLink {
             CVDisplayLinkSetOutputCallback(link, Some(Self::display_link_callback), context_ptr as *mut c_void)
         };
         if result != kCVReturnSuccess {
-            eprintln!("[RenderLoop] ❌ Failed to set callback: {}", result);
+            crate::rust_log_error!("[RenderLoop] ❌ Failed to set callback: {}", result);
             unsafe {
                 drop(Box::from_raw(context_ptr));
                 CVDisplayLinkRelease(link);

@@ -849,6 +849,55 @@ const char* key_to_escape_sequence_with_mode(uint16_t key_code, uint32_t modifie
 void free_key_sequence(const char* ptr);
 
 // =============================================================================
+// Logging API (Rust to Swift log bridging)
+// =============================================================================
+
+/// Rust log level (matches RustLogLevel in logging.rs)
+typedef enum {
+    RustLogLevel_Debug = 0,
+    RustLogLevel_Info = 1,
+    RustLogLevel_Warn = 2,
+    RustLogLevel_Error = 3,
+} RustLogLevel;
+
+/// Log callback type
+///
+/// Swift should implement this callback and set it via set_rust_log_callback
+/// to receive logs from Rust side.
+///
+/// @param level Log level
+/// @param message Log message (UTF-8 C string)
+///
+/// Note: Callback may be called from multiple threads, must be thread-safe
+typedef void (*RustLogCallback)(RustLogLevel level, const char* message);
+
+/// Set log callback
+///
+/// Swift should call this during app startup to receive Rust logs.
+/// Logs will be forwarded to LogManager for persistence.
+///
+/// @param callback Log callback function
+///
+/// Example (Swift):
+///   let callback: RustLogCallback = { level, message in
+///       guard let message = message else { return }
+///       let text = String(cString: message)
+///       switch level {
+///       case RustLogLevel_Warn:
+///           LogManager.shared.warn(text)
+///       case RustLogLevel_Error:
+///           LogManager.shared.error(text)
+///       default:
+///           break
+///       }
+///   }
+///   set_rust_log_callback(callback)
+void set_rust_log_callback(RustLogCallback callback);
+
+/// Clear log callback (usually not needed)
+void clear_rust_log_callback(void);
+
+// =============================================================================
 // Terminal Migration API (Cross-window move)
 // =============================================================================
 

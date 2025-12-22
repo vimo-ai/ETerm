@@ -96,7 +96,7 @@ impl RenderScheduler {
                 let last_secs = last_log_time.load(Ordering::Relaxed);
                 if now_secs >= last_secs + 5 {
                     last_log_time.store(now_secs, Ordering::Relaxed);
-                    eprintln!("[RenderLoop] stats: vsync={}, rendered={}, ratio={:.1}%",
+                    crate::rust_log_info!("[RenderLoop] stats: vsync={}, rendered={}, ratio={:.1}%",
                         cb_cnt, rnd_cnt, (rnd_cnt as f64 / cb_cnt as f64) * 100.0);
                 }
             }
@@ -116,12 +116,12 @@ impl RenderScheduler {
                     self.display_link = Some(dl);
                     true
                 } else {
-                    eprintln!("[RenderLoop] ❌ Failed to start DisplayLink");
+                    crate::rust_log_error!("[RenderLoop] ❌ Failed to start DisplayLink");
                     false
                 }
             }
             None => {
-                eprintln!("[RenderLoop] ❌ Failed to create DisplayLink");
+                crate::rust_log_error!("[RenderLoop] ❌ Failed to create DisplayLink");
                 false
             }
         }
