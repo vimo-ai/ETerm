@@ -28,7 +28,7 @@ final class Tab: Pane {
     let tabId: UUID
 
     /// Tab 标题
-    private(set) var title: String
+    var title: String
 
     /// Tab 状态（激活/未激活）
     private(set) var isActive: Bool
@@ -105,11 +105,6 @@ final class Tab: Pane {
         isActive = false
         // 通知内容失活（如果内容需要响应）
         content.didDeactivate()
-    }
-
-    /// 设置标题
-    func setTitle(_ newTitle: String) {
-        title = newTitle
     }
 
     // MARK: - 内容访问便捷方法

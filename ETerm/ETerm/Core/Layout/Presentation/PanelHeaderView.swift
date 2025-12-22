@@ -317,7 +317,7 @@ final class PanelHeaderHostingView: NSView {
                 tabs[index].title = newTab.title
                 tabs[index].rustTerminalId = newTab.rustTerminalId
                 if index < tabItemViews.count {
-                    tabItemViews[index].setTitle(newTab.title)
+                    tabItemViews[index].title = newTab.title
                     tabItemViews[index].rustTerminalId = newTab.rustTerminalId
                     tabItemViews[index].tab = tabRegistry[newTab.id]
                 }
