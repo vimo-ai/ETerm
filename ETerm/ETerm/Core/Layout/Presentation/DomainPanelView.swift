@@ -339,8 +339,9 @@ final class DomainPanelView: NSView {
         guard let panel = panel,
               let coordinator = coordinator else { return }
 
-        // 用户点击 Tab 时清除装饰（这是唯一应该清除装饰的时机）
-        headerView.setActiveTab(tabId, clearDecorationIfActive: true)
+        // 装饰清除现在由领域层统一处理（TerminalWindow.executeTabSwitch）
+        // 这里只更新 UI 状态，不清除装饰
+        headerView.setActiveTab(tabId, clearDecorationIfActive: false)
 
         coordinator.handleTabClick(panelId: panel.panelId, tabId: tabId)
     }

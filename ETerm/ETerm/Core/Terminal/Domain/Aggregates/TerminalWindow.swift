@@ -690,6 +690,10 @@ extension TerminalWindow {
         }
         let newTerminalId = panel.activeTab?.rustTerminalId
 
+        // 用户切换到该 Tab，说明用户已经"看到"了，清除装饰通知
+        // 这统一了鼠标点击和方向键切换的行为
+        panel.activeTab?.clearDecoration()
+
         var result = CommandResult()
         if let id = newTerminalId {
             result.terminalsToActivate = [id]
