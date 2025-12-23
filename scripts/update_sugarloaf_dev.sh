@@ -26,13 +26,14 @@ echo "   使用 dev-fast profile (thin LTO + 并行编译)"
 cd "$RIO_DIR"
 cargo build --profile dev-fast -p sugarloaf-ffi
 
-echo "📦 复制到 ETerm/ETerm/..."
+echo "📦 复制到 ETerm/ETerm/Libs/Sugarloaf/..."
 # dev-fast profile 的产物在 target/dev-fast/ 目录
-cp "$RIO_DIR/target/dev-fast/libsugarloaf_ffi.a" "$ETERM_DIR/ETerm/libsugarloaf_ffi.a"
-cp "$RIO_DIR/target/dev-fast/libsugarloaf_ffi.dylib" "$ETERM_DIR/ETerm/libsugarloaf_ffi.dylib" 2>/dev/null || true
+mkdir -p "$ETERM_DIR/ETerm/Libs/Sugarloaf"
+cp "$RIO_DIR/target/dev-fast/libsugarloaf_ffi.a" "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.a"
+cp "$RIO_DIR/target/dev-fast/libsugarloaf_ffi.dylib" "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.dylib" 2>/dev/null || true
 
-echo "✅ 库文件已更新到 ETerm/ETerm/"
-ls -lh "$ETERM_DIR/ETerm/libsugarloaf_ffi.a"
+echo "✅ 库文件已更新到 ETerm/ETerm/Libs/Sugarloaf/"
+ls -lh "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.a"
 echo ""
 echo "💡 提示：开发模式编译快 3-5 倍，性能损失 < 5%"
 echo "   正式发布时请使用: ./scripts/build_sugarloaf_release.sh"
