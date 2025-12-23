@@ -152,29 +152,25 @@ public struct TabDecoration: Equatable {
 
     /// 等待用户输入装饰（Claude 插件专用，黄色脉冲）
     ///
+    /// 优先级 102，高于 thinking(101)：当需要用户输入时，黄色提醒优先显示
+    ///
     /// - Parameter pluginId: 插件 ID（必须传入，确保类型安全）
     public static func waitingInput(pluginId: String) -> TabDecoration {
         TabDecoration(
-            priority: .plugin(id: pluginId, priority: 6),
+            priority: .plugin(id: pluginId, priority: 102),
             color: .systemYellow,
             style: .pulse
         )
     }
 }
 
-/// Tab 装饰变化通知
+/// Tab 装饰变化通知（UI 内部事件）
 ///
 /// userInfo:
 /// - "terminal_id": Int - 目标终端 ID
 /// - "decoration": TabDecoration? - 装饰状态，nil 表示清除
 extension Notification.Name {
     public static let tabDecorationChanged = Notification.Name("tabDecorationChanged")
-
-    /// Tab 获得焦点通知（用户切换到某个 Tab）
-    /// 由核心层发送，插件可监听此事件决定是否清除装饰
-    /// userInfo:
-    /// - "terminal_id": Int - 获得焦点的终端 ID
-    public static let tabDidFocus = Notification.Name("tabDidFocus")
 }
 
 /// 插件上下文 - 聚合插件所需的系统能力

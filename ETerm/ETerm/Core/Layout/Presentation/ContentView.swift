@@ -148,6 +148,7 @@ struct ContentView: View {
             case .builtin(.settings):
                 SettingsView()
                     .frame(maxWidth: 700, maxHeight: 600)
+                    .contentShape(Rectangle())  // 阻止点击穿透到背景遮罩
                     .glassEffect(in: RoundedRectangle(cornerRadius: 12))
                     .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                     .padding(40)
@@ -156,6 +157,7 @@ struct ContentView: View {
             case .builtin(.shortcuts):
                 ShortcutsView()
                     .frame(maxWidth: 700, maxHeight: 600)
+                    .contentShape(Rectangle())  // 阻止点击穿透到背景遮罩
                     .glassEffect(in: RoundedRectangle(cornerRadius: 12))
                     .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                     .padding(40)
@@ -163,6 +165,7 @@ struct ContentView: View {
             case .builtin(.plugins):
                 PluginManagerView()
                     .frame(maxWidth: 600, maxHeight: 500)
+                    .contentShape(Rectangle())  // 阻止点击穿透到背景遮罩
                     .glassEffect(in: RoundedRectangle(cornerRadius: 12))
                     .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                     .padding(40)
@@ -172,6 +175,7 @@ struct ContentView: View {
                 if let tab = sidebarRegistry.allTabs.first(where: { $0.id == tabId }) {
                     tab.viewProvider()
                         .frame(maxWidth: 700, maxHeight: 600)
+                        .contentShape(Rectangle())  // 阻止点击穿透到背景遮罩
                         .glassEffect(in: RoundedRectangle(cornerRadius: 12))
                         .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                         .padding(40)

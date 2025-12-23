@@ -206,6 +206,9 @@ class RioContainerView: NSView {
     /// Active 终端内发光视图
     private let activeGlowView: ActiveTerminalGlowView
 
+    /// 事件订阅句柄
+    private var eventSubscriptions: [EventSubscription] = []
+
     /// 发光淡出定时器
     private var glowFadeOutTimer: Timer?
 
@@ -329,20 +332,15 @@ class RioContainerView: NSView {
             object: nil
         )
 
-        // 监听 Active 终端变化（Tab 切换）
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(activeTerminalDidChange),
-            name: .activeTerminalDidChange,
-            object: nil
+        // 监听 Active 终端变化（Tab 切换）- 使用 EventBus
+        eventSubscriptions.append(
+            EventBus.shared.subscribe(CoreEvents.Terminal.DidFocus.self) { [weak self] _ in
+                // Tab 切换时更新 Panel 视图（确保提醒状态等 UI 同步）
+                self?.updatePanelViews()
+                // Tab 切换时显示发光效果
+                self?.showActiveGlow()
+            }
         )
-    }
-
-    @objc private func activeTerminalDidChange(_ notification: Notification) {
-        // Tab 切换时更新 Panel 视图（确保提醒状态等 UI 同步）
-        updatePanelViews()
-        // Tab 切换时显示发光效果
-        showActiveGlow()
     }
 
     @objc private func windowWillClose(_ notification: Notification) {
@@ -1859,12 +1857,11 @@ class RioMetalView: NSView, RenderViewProtocol {
             let mouseLoc = self.convert(event.locationInWindow, from: nil)
             let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
 
-            let payload = SelectionEndPayload(
+            EventBus.shared.emit(CoreEvents.Terminal.DidEndSelection(
                 text: trimmed,
                 screenRect: rect,
                 sourceView: self
-            )
-            EventBus.shared.publish(TerminalEvent.selectionEnd, payload: payload)
+            ))
         }
     }
 
@@ -1929,12 +1926,11 @@ class RioMetalView: NSView, RenderViewProtocol {
                 let mouseLoc = self.convert(event.locationInWindow, from: nil)
                 let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
 
-                let payload = SelectionEndPayload(
+                EventBus.shared.emit(CoreEvents.Terminal.DidEndSelection(
                     text: text,
                     screenRect: rect,
                     sourceView: self
-                )
-                EventBus.shared.publish(TerminalEvent.selectionEnd, payload: payload)
+                ))
             } else {
                 // 选区被清除（全是空白），同步清除 Swift 侧状态
                 activeTab.clearSelection()

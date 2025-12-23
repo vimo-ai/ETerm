@@ -349,12 +349,8 @@ final class DomainPanelView: NSView {
         guard let panel = panel,
               let coordinator = coordinator else { return }
 
-        // 使用 SmartClose 逻辑，与 Cmd+W 行为一致
-        // 先切换到要关闭的 Tab，然后执行 SmartClose
-        if panel.activeTabId != tabId {
-            coordinator.handleTabClick(panelId: panel.panelId, tabId: tabId)
-        }
-        _ = coordinator.handleSmartClose()
+        // 直接关闭指定的 Tab（不使用 SmartClose，避免 activePanelId 不一致的问题）
+        coordinator.handleTabClose(panelId: panel.panelId, tabId: tabId)
     }
 
     private func handleTabRename(_ tabId: UUID, newTitle: String) {
