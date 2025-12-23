@@ -2692,18 +2692,33 @@ impl TerminalPool {
         let render_cache_mb = total_render_cache_bytes / (1024 * 1024);
         let surface_mb = total_surface_bytes / (1024 * 1024);
 
-        // 总计
-        let total_tracked_bytes = line_cache_bytes + total_grid_bytes + total_render_cache_bytes + total_surface_bytes;
+        // 5. Skia GPU 资源缓存
+        let (skia_cache_bytes, skia_cache_limit, skia_purgeable) = {
+            let sugarloaf = self.sugarloaf.lock();
+            let context = sugarloaf.get_context();
+            let mut skia_ctx = context.skia_context.clone();
+            let usage = skia_ctx.resource_cache_usage();
+            let limit = skia_ctx.resource_cache_limit();
+            let purgeable = skia_ctx.resource_cache_purgeable_bytes();
+            (usage.resource_bytes, limit, purgeable)
+        };
+        let skia_cache_mb = skia_cache_bytes / (1024 * 1024);
+        let skia_limit_mb = skia_cache_limit / (1024 * 1024);
+        let skia_purgeable_mb = skia_purgeable / (1024 * 1024);
+
+        // 总计（包括 Skia GPU 缓存）
+        let total_tracked_bytes = line_cache_bytes + total_grid_bytes + total_render_cache_bytes + total_surface_bytes + skia_cache_bytes;
         let total_mb = total_tracked_bytes / (1024 * 1024);
 
         // 输出报告
         crate::rust_log_info!(
-            "[MemDebug] REPORT: total={}MB | LineCache={}MB ({}/{} entries, {} images) | Grid={}MB ({} terminals, {} history, {} total lines) | RenderCache={}MB ({} cached) | Surface={}MB ({} cached)",
+            "[MemDebug] REPORT: total={}MB | LineCache={}MB ({}/{} entries, {} images) | Grid={}MB ({} terminals, {} history, {} total lines) | RenderCache={}MB ({} cached) | Surface={}MB ({} cached) | SkiaGPU={}MB (limit={}MB, purgeable={}MB)",
             total_mb,
             line_cache_mb, line_cache_entries, line_cache_max, line_cache_images,
             grid_mb, terminal_count, total_history_lines, total_grid_lines,
             render_cache_mb, render_cache_count,
-            surface_mb, surface_count
+            surface_mb, surface_count,
+            skia_cache_mb, skia_limit_mb, skia_purgeable_mb
         );
     }
 }
