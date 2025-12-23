@@ -9,5 +9,6 @@
 #define ETerm_Bridging_Header_h
 
 #import "Core/Terminal/Infrastructure/FFI/SugarloafBridge.h"
+#import "Core/Terminal/Infrastructure/FFI/mcp_router_core.h"
 
 #endif /* ETerm_Bridging_Header_h */

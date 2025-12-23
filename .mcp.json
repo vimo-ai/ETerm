@@ -1,0 +1,11 @@
+{
+  "mcpServers" : {
+    "mcp-router" : {
+      "headers" : {
+        "X-Workspace-Token" : "d379f881"
+      },
+      "type" : "http",
+      "url" : "http:\/\/localhost:19104"
+    }
+  }
+}
