@@ -184,6 +184,7 @@ extension Notification.Name {
 /// - 事件服务：发布和订阅事件
 /// - 键盘服务：绑定快捷键
 /// - UI 服务：注册侧边栏 Tab
+/// - 终端服务：与终端交互
 /// - 服务注册表：插件间能力共享
 protocol PluginContext: AnyObject {
     /// 命令服务
@@ -198,8 +199,31 @@ protocol PluginContext: AnyObject {
     /// UI 服务
     var ui: UIService { get }
 
+    /// 终端服务
+    var terminal: TerminalService { get }
+
     /// 服务注册表 - 插件间能力共享
     var services: ServiceRegistry { get }
+}
+
+// MARK: - 终端服务协议
+
+/// 终端服务协议 - 提供终端操作能力
+protocol TerminalService: AnyObject {
+    /// 向终端写入数据
+    ///
+    /// - Parameters:
+    ///   - terminalId: 目标终端 ID
+    ///   - data: 要写入的数据
+    /// - Returns: 是否成功
+    @discardableResult
+    func write(terminalId: Int, data: String) -> Bool
+
+    /// 根据 terminalId 查找 tabId
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: Tab 的 UUID string，找不到返回 nil
+    func getTabId(for terminalId: Int) -> String?
 }
 
 /// View Tab 的放置方式
@@ -291,7 +315,8 @@ protocol UIService: AnyObject {
     /// - Parameters:
     ///   - terminalId: 目标终端 ID
     ///   - decoration: 装饰状态，nil 表示清除
-    func setTabDecoration(terminalId: Int, decoration: TabDecoration?)
+    ///   - skipIfActive: 如果为 true，且该 terminal 是当前 active 的，则不设置装饰
+    func setTabDecoration(terminalId: Int, decoration: TabDecoration?, skipIfActive: Bool)
 
     /// 清除 Tab 装饰
     ///
@@ -299,6 +324,12 @@ protocol UIService: AnyObject {
     ///
     /// - Parameter terminalId: 目标终端 ID
     func clearTabDecoration(terminalId: Int)
+
+    /// 检查指定终端是否是当前 active 的
+    ///
+    /// - Parameter terminalId: 目标终端 ID
+    /// - Returns: 如果是当前 active 的返回 true
+    func isTerminalActive(terminalId: Int) -> Bool
 
     // MARK: - Tab Slot API
 
@@ -345,4 +376,23 @@ protocol UIService: AnyObject {
     /// 注销插件的所有 Page Slot
     /// - Parameter pluginId: 插件 ID
     func unregisterPageSlots(for pluginId: String)
+
+    // MARK: - Tab 标题 API
+
+    /// 设置 Tab 标题（插件覆盖）
+    ///
+    /// 插件可以通过此 API 覆盖 Tab 的系统标题（目录名/进程名）。
+    /// 覆盖后的标题优先显示，直到被清除或进程退出时自动恢复。
+    ///
+    /// - Parameters:
+    ///   - terminalId: 目标终端 ID
+    ///   - title: 插件标题
+    func setTabTitle(terminalId: Int, title: String)
+
+    /// 清除 Tab 标题（恢复系统标题）
+    ///
+    /// 清除插件设置的标题，恢复显示系统标题（目录名/进程名）。
+    ///
+    /// - Parameter terminalId: 目标终端 ID
+    func clearTabTitle(terminalId: Int)
 }

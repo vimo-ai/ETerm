@@ -63,6 +63,7 @@ final class PluginManager: ObservableObject {
             events: EventBus.shared,
             keyboard: KeyboardServiceImpl.shared,
             ui: UIServiceImpl.shared,
+            terminal: TerminalServiceImpl.shared,
             services: ServiceRegistry.shared
         )
 
@@ -422,6 +423,7 @@ private final class PluginContextImpl: PluginContext {
     let events: EventService
     let keyboard: KeyboardService
     let ui: UIService
+    let terminal: TerminalService
     let services: ServiceRegistry
 
     init(
@@ -429,12 +431,14 @@ private final class PluginContextImpl: PluginContext {
         events: EventService,
         keyboard: KeyboardService,
         ui: UIService,
+        terminal: TerminalService,
         services: ServiceRegistry
     ) {
         self.commands = commands
         self.events = events
         self.keyboard = keyboard
         self.ui = ui
+        self.terminal = terminal
         self.services = services
     }
 }
@@ -737,7 +741,7 @@ final class UIServiceImpl: UIService {
 
     // MARK: - Tab 装饰 API 实现
 
-    func setTabDecoration(terminalId: Int, decoration: TabDecoration?) {
+    func setTabDecoration(terminalId: Int, decoration: TabDecoration?, skipIfActive: Bool = false) {
         // 1. 找到对应的 Tab 并更新模型
         var foundTab: Tab?
         var foundPage: Page?
@@ -759,14 +763,21 @@ final class UIServiceImpl: UIService {
         }
 
         guard let tab = foundTab else {
-            print("[UIService] ⚠️ 未找到 terminalId=\(terminalId) 对应的 Tab")
             return
         }
 
-        // 2. 更新 Tab 模型的装饰
+        // 2. 如果 skipIfActive，检查该 terminal 是否是当前 active 的
+        if skipIfActive, let coordinator = foundCoordinator {
+            if coordinator.getActiveTerminalId() == terminalId {
+                // 用户正在看这个 terminal，不需要提醒
+                return
+            }
+        }
+
+        // 3. 更新 Tab 模型的装饰
         tab.decoration = decoration
 
-        // 3. 发送通知让视图刷新（视图会从模型读取 effectiveDecoration）
+        // 4. 发送通知让视图刷新（视图会从模型读取 effectiveDecoration）
         NotificationCenter.default.post(
             name: .tabDecorationChanged,
             object: nil,
@@ -776,7 +787,7 @@ final class UIServiceImpl: UIService {
             ]
         )
 
-        // 4. 如果 Tab 所属 Page 不是当前 Page，发送 Page 刷新通知
+        // 5. 如果 Tab 所属 Page 不是当前 Page，发送 Page 刷新通知
         // Page.effectiveDecoration 是计算属性，会自动从 Tab 读取
         if let page = foundPage, let coordinator = foundCoordinator {
             let isCurrentPage = (page.pageId == coordinator.terminalWindow.active.pageId)
@@ -793,7 +804,16 @@ final class UIServiceImpl: UIService {
     }
 
     func clearTabDecoration(terminalId: Int) {
-        setTabDecoration(terminalId: terminalId, decoration: nil)
+        setTabDecoration(terminalId: terminalId, decoration: nil, skipIfActive: false)
+    }
+
+    func isTerminalActive(terminalId: Int) -> Bool {
+        for coordinator in WindowManager.shared.getAllCoordinators() {
+            if coordinator.getActiveTerminalId() == terminalId {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Tab Slot
@@ -834,5 +854,106 @@ final class UIServiceImpl: UIService {
 
     func unregisterPageSlots(for pluginId: String) {
         pageSlotRegistry.unregister(pluginId: pluginId)
+    }
+
+    // MARK: - Tab 标题 API 实现
+
+    func setTabTitle(terminalId: Int, title: String) {
+        // 找到对应的 Tab 并设置插件标题
+        for coordinator in WindowManager.shared.getAllCoordinators() {
+            for page in coordinator.terminalWindow.pages.all {
+                for panel in page.allPanels {
+                    if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                        tab.setPluginTitle(title)
+
+                        // 通知视图刷新
+                        DispatchQueue.main.async {
+                            coordinator.objectWillChange.send()
+                        }
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    func clearTabTitle(terminalId: Int) {
+        // 找到对应的 Tab 并清除插件标题
+        for coordinator in WindowManager.shared.getAllCoordinators() {
+            for page in coordinator.terminalWindow.pages.all {
+                for panel in page.allPanels {
+                    if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                        tab.clearPluginTitle()
+
+                        // 通知视图刷新
+                        DispatchQueue.main.async {
+                            coordinator.objectWillChange.send()
+                        }
+                        return
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 终端服务实现
+
+/// 终端服务实现
+final class TerminalServiceImpl: TerminalService {
+    static let shared = TerminalServiceImpl()
+
+    private init() {}
+
+    @discardableResult
+    func write(terminalId: Int, data: String) -> Bool {
+        // 确保在主线程执行（访问 UI 状态）
+        if !Thread.isMainThread {
+            var result = false
+            DispatchQueue.main.sync {
+                result = self.writeOnMainThread(terminalId: terminalId, data: data)
+            }
+            return result
+        }
+        return writeOnMainThread(terminalId: terminalId, data: data)
+    }
+
+    private func writeOnMainThread(terminalId: Int, data: String) -> Bool {
+        // 遍历所有 Coordinator 找到对应的 TerminalPool
+        for coordinator in WindowManager.shared.getAllCoordinators() {
+            // 检查该 coordinator 是否拥有这个 terminalId
+            if coordinator.terminalWindow.allPanels.contains(where: { panel in
+                panel.tabs.contains { $0.rustTerminalId == terminalId }
+            }) {
+                coordinator.terminalPool.writeInput(terminalId: terminalId, data: data)
+                return true
+            }
+        }
+        return false
+    }
+
+    func getTabId(for terminalId: Int) -> String? {
+        // 确保在主线程执行（访问 UI 状态）
+        if !Thread.isMainThread {
+            var result: String?
+            DispatchQueue.main.sync {
+                result = self.getTabIdOnMainThread(for: terminalId)
+            }
+            return result
+        }
+        return getTabIdOnMainThread(for: terminalId)
+    }
+
+    private func getTabIdOnMainThread(for terminalId: Int) -> String? {
+        for coordinator in WindowManager.shared.getAllCoordinators() {
+            for page in coordinator.terminalWindow.pages.all {
+                for panel in page.allPanels {
+                    if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                        return tab.tabId.uuidString
+                    }
+                }
+            }
+        }
+        return nil
     }
 }
