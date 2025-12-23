@@ -471,8 +471,8 @@ struct SettingsView: View {
             let models = await ollamaService.listModels()
             await MainActor.run {
                 availableModels = models
-                // 如果当前选择的模型不在列表中，保持原值
-                if !models.isEmpty && !models.contains(ollamaModel) && ollamaModel.isEmpty {
+                // 如果当前选择的模型不在列表中，自动选择第一个可用模型
+                if !models.isEmpty && !models.contains(ollamaModel) {
                     ollamaModel = models.first ?? "qwen3:0.6b"
                 }
             }

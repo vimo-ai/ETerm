@@ -147,7 +147,8 @@ final class EditorPanel: PaneContainer {
         guard let tab = tabs.first(where: { $0.tabId == tabId }) else {
             return false
         }
-        tab.title = newTitle
+        // 用户手动重命名设置 userTitle（最高优先级，会被序列化）
+        tab.setUserTitle(newTitle)
         return true
     }
 

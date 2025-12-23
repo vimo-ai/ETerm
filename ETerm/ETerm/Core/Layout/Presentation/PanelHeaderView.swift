@@ -163,9 +163,10 @@ final class PanelHeaderHostingView: NSView {
 
     private func setupHostingView() {
         // 只使用 SwiftUI 渲染右侧按钮，Tab 标签用 AppKit
+        // 使用 [weak self] 捕获，让回调在调用时读取最新值
         let controlsView = PanelHeaderControlsView(
-            onAddTab: onAddTab,
-            onSplitHorizontal: onSplitHorizontal
+            onAddTab: { [weak self] in self?.onAddTab?() },
+            onSplitHorizontal: { [weak self] in self?.onSplitHorizontal?() }
         )
         let hosting = NSHostingView(rootView: controlsView)
         hosting.translatesAutoresizingMaskIntoConstraints = true
@@ -268,13 +269,16 @@ final class PanelHeaderHostingView: NSView {
         layoutTabItems()
     }
 
+    /// 右侧按钮区域宽度（两个按钮 24x2 + padding 4x2 + 间距）
+    private static let controlsAreaWidth: CGFloat = 60
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         // 检查点击是否在 bounds 内
         guard bounds.contains(point) else {
             return nil
         }
 
-        // 优先检查 tabContainer 中的 TabItemView
+        // 优先检查 tabContainer 中的 TabItemView（Tab 关闭按钮优先级最高）
         let pointInTabContainer = convert(point, to: tabContainer)
         for tabView in tabItemViews {
             let pointInTab = tabContainer.convert(pointInTabContainer, to: tabView)
@@ -287,13 +291,15 @@ final class PanelHeaderHostingView: NSView {
             }
         }
 
-        // 然后检查右侧按钮区域（SwiftUI）
-        // SwiftUI Button 不是 NSControl，需要检查是否命中了 hostingView 内的可交互视图
-        if let hosting = hostingView {
-            let pointInHosting = convert(point, to: hosting)
-            if let swiftUIHit = hosting.hitTest(pointInHosting), swiftUIHit !== hosting {
-                // 命中了 hostingView 内部的子视图（可能是按钮）
-                return swiftUIHit
+        // 然后检查右侧按钮区域（Split/Add 按钮）
+        if point.x > bounds.width - Self.controlsAreaWidth {
+            if let hosting = hostingView {
+                let pointInHosting = convert(point, to: hosting)
+                // 返回 hostingView 内部的视图，让 SwiftUI 处理事件
+                if let swiftUIHit = hosting.hitTest(pointInHosting) {
+                    // 即使是 hosting 本身也返回，让 SwiftUI 决定是否响应
+                    return swiftUIHit
+                }
             }
         }
 
@@ -551,18 +557,20 @@ struct PanelHeaderControlsView: View {
                 Image(systemName: "square.split.2x1")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .frame(width: 24, height: 24)
 
             // 添加按钮
             Button(action: { onAddTab?() }) {
                 Image(systemName: "plus")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .frame(width: 24, height: 24)
         }
         .padding(.horizontal, 4)
         .frame(height: 32)

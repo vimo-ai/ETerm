@@ -70,10 +70,16 @@ enum TabContentType: String, Codable {
 /// - 添加 contentType 字段支持多种内容类型
 /// - 旧 session 无此字段时默认为 terminal
 /// - cwd 仅对 terminal 类型有意义
+/// - userTitle 用于保存用户手动重命名的标题（最高优先级）
 struct TabState: Codable {
     let tabId: String  // UUID string（用于持久化，确保重启后 ID 一致）
     let title: String
     let cwd: String  // 工作目录（仅 terminal 类型使用）
+
+    /// 用户手动设置的标题（最高优先级，可选）
+    ///
+    /// 向后兼容：旧 session 无此字段时为 nil
+    let userTitle: String?
 
     /// Tab 内容类型
     ///
@@ -87,20 +93,22 @@ struct TabState: Codable {
     // MARK: - 便捷构造器
 
     /// 创建终端 Tab 状态
-    init(tabId: String, title: String, cwd: String) {
+    init(tabId: String, title: String, cwd: String, userTitle: String? = nil) {
         self.tabId = tabId
         self.title = title
         self.cwd = cwd
+        self.userTitle = userTitle
         self.contentType = .terminal
         self.viewId = nil
         self.pluginId = nil
     }
 
     /// 创建 View Tab 状态
-    init(tabId: String, title: String, viewId: String, pluginId: String? = nil) {
+    init(tabId: String, title: String, viewId: String, pluginId: String? = nil, userTitle: String? = nil) {
         self.tabId = tabId
         self.title = title
         self.cwd = ""  // View Tab 不需要 cwd
+        self.userTitle = userTitle
         self.contentType = .view
         self.viewId = viewId
         self.pluginId = pluginId
