@@ -125,8 +125,8 @@ final class EnglishLearningPlugin: Plugin {
     // MARK: - 订阅翻译事件
 
     private func subscribeTranslationEvents(context: PluginContext) {
-        selectionSubscription = context.events.subscribe(TerminalEvent.selectionEnd) { [weak self] (payload: SelectionEndPayload) in
-            self?.onSelectionEnd(payload)
+        selectionSubscription = context.events.subscribe(CoreEvents.Terminal.DidEndSelection.self) { [weak self] event in
+            self?.onSelectionEnd(event)
         }
     }
 
@@ -145,10 +145,10 @@ final class EnglishLearningPlugin: Plugin {
     // MARK: - 事件处理
 
     /// 处理选中结束事件
-    private func onSelectionEnd(_ payload: SelectionEndPayload) {
+    private func onSelectionEnd(_ event: CoreEvents.Terminal.DidEndSelection) {
         // 检查文本是否为空
-        let trimmed = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let view = payload.sourceView else {
+        let trimmed = event.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let view = event.sourceView else {
             return
         }
 
@@ -160,13 +160,13 @@ final class EnglishLearningPlugin: Plugin {
             if self.translationMode.isEnabled {
                 controller.translateImmediately(
                     text: trimmed,
-                    at: payload.screenRect,
+                    at: event.screenRect,
                     in: view
                 )
             } else if controller.state.mode != .expanded {
                 controller.show(
                     text: trimmed,
-                    at: payload.screenRect,
+                    at: event.screenRect,
                     in: view
                 )
             }

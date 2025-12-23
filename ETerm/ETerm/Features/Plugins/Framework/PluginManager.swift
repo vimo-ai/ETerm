@@ -98,6 +98,7 @@ final class PluginManager: ObservableObject {
         registerPluginType(VlaudePlugin.self)
         registerPluginType(DevHelperPlugin.self)
         registerPluginType(WorkspacePlugin.self)
+        registerPluginType(MCPRouterPlugin.self)
 
         // 2. 拓扑排序并加载
         loadAllRegisteredPlugins()

@@ -191,91 +191,53 @@ class ClaudeSocketServer {
             // 建立映射关系
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
-            // 发送 session 开始通知
-            NotificationCenter.default.post(
-                name: .claudeSessionStart,
-                object: nil,
-                userInfo: [
-                    "session_id": event.session_id,
-                    "terminal_id": event.terminal_id
-                ]
-            )
+            // 发射 session 开始事件
+            EventBus.shared.emit(ClaudeEvents.SessionStart(
+                terminalId: event.terminal_id,
+                sessionId: event.session_id
+            ))
 
         case "user_prompt_submit":
             // 用户提交问题，Claude 开始思考
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
-            // 发送用户提交通知（用于显示"思考中"动画 + 生成智能标题）
-            var userInfo: [String: Any] = [
-                "session_id": event.session_id,
-                "terminal_id": event.terminal_id
-            ]
-            if let prompt = event.prompt, !prompt.isEmpty {
-                userInfo["prompt"] = prompt
-            }
-            NotificationCenter.default.post(
-                name: .claudeUserPromptSubmit,
-                object: nil,
-                userInfo: userInfo
-            )
+            // 发射用户提交事件
+            EventBus.shared.emit(ClaudeEvents.PromptSubmit(
+                terminalId: event.terminal_id,
+                sessionId: event.session_id,
+                prompt: event.prompt
+            ))
 
         case "session_end":
-            // 发送 session 结束通知
-            NotificationCenter.default.post(
-                name: .claudeSessionEnd,
-                object: nil,
-                userInfo: [
-                    "session_id": event.session_id,
-                    "terminal_id": event.terminal_id
-                ]
-            )
+            // 发射 session 结束事件
+            EventBus.shared.emit(ClaudeEvents.SessionEnd(
+                terminalId: event.terminal_id,
+                sessionId: event.session_id
+            ))
 
         case "stop":
             // 建立/更新映射关系
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
-            // 发送响应完成通知
-            NotificationCenter.default.post(
-                name: .claudeResponseComplete,
-                object: nil,
-                userInfo: [
-                    "session_id": event.session_id,
-                    "terminal_id": event.terminal_id
-                ]
-            )
+            // 发射响应完成事件
+            EventBus.shared.emit(ClaudeEvents.ResponseComplete(
+                terminalId: event.terminal_id,
+                sessionId: event.session_id
+            ))
 
         case "notification":
             // 建立/更新映射关系
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
-            // 发送等待用户输入通知
-            NotificationCenter.default.post(
-                name: .claudeWaitingInput,
-                object: nil,
-                userInfo: [
-                    "session_id": event.session_id,
-                    "terminal_id": event.terminal_id
-                ]
-            )
+            // 发射等待用户输入事件
+            EventBus.shared.emit(ClaudeEvents.WaitingInput(
+                terminalId: event.terminal_id,
+                sessionId: event.session_id
+            ))
 
         default:
             // 其他未知事件，只建立映射关系
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
         }
     }
-}
-
-// MARK: - Notification Names
-
-extension Notification.Name {
-    /// Claude 会话开始（用于设置"运行中"装饰）
-    static let claudeSessionStart = Notification.Name("claudeSessionStart")
-    /// 用户提交问题（用于设置"思考中"装饰）
-    static let claudeUserPromptSubmit = Notification.Name("claudeUserPromptSubmit")
-    /// Claude 等待用户输入（用于设置"等待输入"装饰）
-    static let claudeWaitingInput = Notification.Name("claudeWaitingInput")
-    /// Claude 响应完成（用于设置"完成"装饰）
-    static let claudeResponseComplete = Notification.Name("claudeResponseComplete")
-    /// Claude 会话结束（用于清除装饰）
-    static let claudeSessionEnd = Notification.Name("claudeSessionEnd")
 }

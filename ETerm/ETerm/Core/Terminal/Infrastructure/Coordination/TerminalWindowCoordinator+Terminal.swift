@@ -32,16 +32,11 @@ extension TerminalWindowCoordinator {
             }
         }
 
-        // 发送通知，让插件清理 Claude session 映射
-        var userInfo: [String: Any] = ["terminal_id": terminalId]
-        if let tabId = tabId {
-            userInfo["tab_id"] = tabId
-        }
-        NotificationCenter.default.post(
-            name: .terminalDidClose,
-            object: nil,
-            userInfo: userInfo
-        )
+        // 发射终端关闭事件
+        EventBus.shared.emit(CoreEvents.Terminal.DidClose(
+            terminalId: terminalId,
+            tabId: tabId
+        ))
 
         return terminalPool.closeTerminal(terminalId)
     }
@@ -180,15 +175,11 @@ extension TerminalWindowCoordinator {
                             terminalId: terminalId
                         )
 
-                        // 发送终端创建通知（插件可监听此通知进行恢复等操作）
-                        NotificationCenter.default.post(
-                            name: .terminalDidCreate,
-                            object: nil,
-                            userInfo: [
-                                "terminal_id": terminalId,
-                                "tab_id": tab.tabId.uuidString
-                            ]
-                        )
+                        // 发射终端创建事件
+                        EventBus.shared.emit(CoreEvents.Terminal.DidCreate(
+                            terminalId: terminalId,
+                            tabId: tab.tabId.uuidString
+                        ))
                     } else {
                         // 创建失败，保留状态供重试
                         workingDirectoryRegistry.retainPendingTerminal(tabId: tab.tabId)

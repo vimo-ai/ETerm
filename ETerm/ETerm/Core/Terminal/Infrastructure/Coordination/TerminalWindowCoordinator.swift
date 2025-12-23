@@ -31,17 +31,6 @@ import CoreGraphics
 import Combine
 import PanelLayoutKit
 
-// MARK: - Notification Names
-
-extension Notification.Name {
-    /// Active 终端变化通知（Tab 切换或 Panel 切换）
-    static let activeTerminalDidChange = Notification.Name("activeTerminalDidChange")
-    /// 终端创建通知（用于插件恢复等场景）
-    static let terminalDidCreate = Notification.Name("terminalDidCreate")
-    /// 终端关闭通知
-    static let terminalDidClose = Notification.Name("terminalDidClose")
-}
-
 /// 渲染视图协议 - 统一不同的 RenderView 实现
 protocol RenderViewProtocol: AnyObject {
     func requestRender()
@@ -331,9 +320,17 @@ class TerminalWindowCoordinator: ObservableObject {
 
         let result = perform(.tab(.switch(panelId: panelId, tabId: tabId)))
 
-        // Coordinator 特有：通知 Active 终端变化（用于发光效果）
+        // Coordinator 特有：发射终端焦点事件（用于发光效果）
         if result.success {
-            NotificationCenter.default.post(name: .activeTerminalDidChange, object: nil)
+            // 查找切换后的 terminalId
+            if let panel = terminalWindow.getPanel(panelId),
+               let tab = panel.tabs.first(where: { $0.tabId == tabId }),
+               let terminalId = tab.rustTerminalId {
+                EventBus.shared.emit(CoreEvents.Terminal.DidFocus(
+                    terminalId: terminalId,
+                    tabId: tabId.uuidString
+                ))
+            }
             // 🔥 Tab 切换时触发渲染，否则画面会卡住直到有 PTY 输出
             scheduleRender()
         }
@@ -348,8 +345,12 @@ class TerminalWindowCoordinator: ObservableObject {
     }
 
     /// 用户关闭 Tab
+    ///
+    /// 使用 `.remove` 而非 `.close`，支持级联删除：
+    /// - 关闭最后一个 Tab 时会自动移除 Panel
+    /// - Panel 被移除后会自动检查 Page 是否为空
     func handleTabClose(panelId: UUID, tabId: UUID) {
-        perform(.tab(.close(panelId: panelId, scope: .single(tabId))))
+        perform(.tab(.remove(tabId: tabId, panelId: panelId, closeTerminal: true)))
     }
 
     /// 用户重命名 Tab
@@ -616,13 +617,18 @@ class TerminalWindowCoordinator: ObservableObject {
             terminalPool.setMode(terminalId: terminalId, mode: .background)
         }
 
-        // 5.1. 通知用户 focus 的终端
+        // 5.1. 发射 Tab 激活事件
         if let focusedTerminalId = result.focusedTerminalId {
-            NotificationCenter.default.post(
-                name: .tabDidFocus,
-                object: nil,
-                userInfo: ["terminal_id": focusedTerminalId]
-            )
+            // 查找 tabId（只有找到时才发射事件）
+            for panel in terminalWindow.allPanels {
+                if let tab = panel.tabs.first(where: { $0.rustTerminalId == focusedTerminalId }) {
+                    EventBus.shared.emit(CoreEvents.Tab.DidActivate(
+                        terminalId: focusedTerminalId,
+                        tabId: tab.tabId.uuidString
+                    ))
+                    break
+                }
+            }
         }
 
         // 5.5. Panel 移除后的 Coordinator 级别清理
