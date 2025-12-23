@@ -26,46 +26,85 @@ struct MountainLayer: Identifiable {
     }
 }
 
-// MARK: - 鼠标位置追踪器
-class MouseTracker: ObservableObject {
-    @Published var position: CGPoint = .zero
-    @Published var windowFrame: NSRect = .zero
-    private var monitor: Any?
+// MARK: - 鼠标位置追踪视图（基于 NSTrackingArea，无内存泄漏）
+struct MouseTrackingView: NSViewRepresentable {
+    @Binding var position: CGPoint
 
-    func startTracking() {
-        guard monitor == nil else { return }
-        // 只监听 mouseMoved，不监听拖拽事件，避免拖动选择文本时触发背景重绘导致卡顿
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
-            guard let self = self,
-                  let window = event.window else { return event }
+    func makeNSView(context: Context) -> MouseTrackingNSView {
+        let view = MouseTrackingNSView()
+        view.onMouseMoved = { [self] point in
+            DispatchQueue.main.async {
+                self.position = point
+            }
+        }
+        return view
+    }
 
-            // 获取鼠标在窗口中的位置
-            let locationInWindow = event.locationInWindow
-            // 转换为视图坐标（SwiftUI 坐标系 Y 轴翻转）
-            self.windowFrame = window.frame
-            self.position = CGPoint(
-                x: locationInWindow.x,
-                y: window.frame.height - locationInWindow.y
-            )
-            return event
+    func updateNSView(_ nsView: MouseTrackingNSView, context: Context) {
+        // 无需更新
+    }
+}
+
+class MouseTrackingNSView: NSView {
+    var onMouseMoved: ((CGPoint) -> Void)?
+    private var trackingArea: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupTrackingArea()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupTrackingArea()
+    }
+
+    private func setupTrackingArea() {
+        // 移除旧的 tracking area
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+
+        // 创建新的 tracking area
+        let options: NSTrackingArea.Options = [
+            .mouseMoved,           // 追踪鼠标移动
+            .activeInActiveApp,    // 仅在 app 激活时追踪
+            .inVisibleRect         // 自动跟随可见区域变化
+        ]
+        trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: options,
+            owner: self,
+            userInfo: nil
+        )
+        if let area = trackingArea {
+            addTrackingArea(area)
         }
     }
 
-    func stopTracking() {
-        if let monitor = monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
-        }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        setupTrackingArea()
     }
 
-    deinit {
-        stopTracking()
+    override func mouseMoved(with event: NSEvent) {
+        // 获取鼠标在视图中的位置
+        let locationInView = convert(event.locationInWindow, from: nil)
+        // 转换为 SwiftUI 坐标系（Y 轴翻转）
+        let swiftUIPoint = CGPoint(
+            x: locationInView.x,
+            y: bounds.height - locationInView.y
+        )
+        onMouseMoved?(swiftUIPoint)
     }
+
+    // 确保视图可以接收鼠标事件
+    override var acceptsFirstResponder: Bool { true }
 }
 
 // MARK: - 主视图
 struct RicePaperView<Content: View>: View {
-    @StateObject private var mouseTracker = MouseTracker()
+    @State private var mousePosition: CGPoint = .zero
     @State private var viewSize: CGSize = .zero
     @Environment(\.colorScheme) private var colorScheme
 
@@ -114,6 +153,10 @@ struct RicePaperView<Content: View>: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
+                // 鼠标追踪层（透明，仅用于追踪鼠标位置）
+                MouseTrackingView(position: $mousePosition)
+                    .allowsHitTesting(false)
+
                 // 背景色
                 backgroundColor
                     .ignoresSafeArea()
@@ -137,10 +180,6 @@ struct RicePaperView<Content: View>: View {
             }
             .onAppear {
                 viewSize = geometry.size
-                mouseTracker.startTracking()
-            }
-            .onDisappear {
-                mouseTracker.stopTracking()
             }
             .onChange(of: geometry.size) { _, newSize in
                 viewSize = newSize
@@ -166,8 +205,8 @@ struct RicePaperView<Content: View>: View {
     // MARK: - 山脉视图
     @ViewBuilder
     private func mountainsView(in size: CGSize) -> some View {
-        let xPercent = size.width > 0 ? mouseTracker.position.x / size.width : 0.5
-        let yPercent = size.height > 0 ? mouseTracker.position.y / size.height : 0.5
+        let xPercent = size.width > 0 ? mousePosition.x / size.width : 0.5
+        let yPercent = size.height > 0 ? mousePosition.y / size.height : 0.5
         // 计算 xMove 和 yMove（Y轴是X轴的0.5倍）
         let xMove = xPercent * 10 - 5
         let yMove = (yPercent * 10 - 5) * 0.5
