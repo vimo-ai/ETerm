@@ -29,12 +29,13 @@ echo "   ⏱️  预计耗时: ~1 分钟"
 cd "$RIO_DIR"
 cargo build --release -p sugarloaf-ffi
 
-echo "📦 复制到 ETerm/ETerm/..."
-cp "$RIO_DIR/target/release/libsugarloaf_ffi.a" "$ETERM_DIR/ETerm/libsugarloaf_ffi.a"
-cp "$RIO_DIR/target/release/libsugarloaf_ffi.dylib" "$ETERM_DIR/ETerm/libsugarloaf_ffi.dylib" 2>/dev/null || true
+echo "📦 复制到 ETerm/ETerm/Libs/Sugarloaf/..."
+mkdir -p "$ETERM_DIR/ETerm/Libs/Sugarloaf"
+cp "$RIO_DIR/target/release/libsugarloaf_ffi.a" "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.a"
+cp "$RIO_DIR/target/release/libsugarloaf_ffi.dylib" "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.dylib" 2>/dev/null || true
 
-echo "✅ 库文件已更新到 ETerm/ETerm/"
-ls -lh "$ETERM_DIR/ETerm/libsugarloaf_ffi.a"
+echo "✅ 库文件已更新到 ETerm/ETerm/Libs/Sugarloaf/"
+ls -lh "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.a"
 echo ""
 echo "🎯 发布模式编译完成："
 echo "   - Full LTO 优化"
