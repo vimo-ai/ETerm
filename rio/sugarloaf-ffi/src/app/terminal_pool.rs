@@ -271,6 +271,9 @@ pub struct TerminalPool {
     /// 事件回调
     event_callback: Option<(TerminalPoolEventCallback, *mut c_void)>,
 
+    /// 字符串事件回调（用于 CWD、Command 等）
+    string_event_callback: Option<(super::ffi::TerminalPoolStringEventCallback, *mut c_void)>,
+
     /// 配置
     config: AppConfig,
 
@@ -406,6 +409,7 @@ impl TerminalPool {
             pending_objects: Vec::new(),
             event_queue,
             event_callback: None,
+            string_event_callback: None,
             config,
             needs_render: Arc::new(AtomicBool::new(false)),
             render_layout: Arc::new(Mutex::new(Vec::new())),
@@ -1876,6 +1880,16 @@ impl TerminalPool {
             let mut renderer = self.renderer.lock();
             renderer.print_frame_stats("render_all");
         }
+
+        // [MemDebug] 定期输出内存报告（每 600 帧 = ~10 秒 @ 60fps）
+        {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
+            let frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
+            if frame % 600 == 0 {
+                self.report_memory_stats();
+            }
+        }
     }
 
     /// 调整 Sugarloaf 尺寸
@@ -1938,13 +1952,65 @@ impl TerminalPool {
     pub fn set_event_callback(&mut self, callback: TerminalPoolEventCallback, context: *mut c_void) {
         self.event_callback = Some((callback, context));
 
-        // 设置 EventQueue 回调
+        // 设置 EventQueue 回调（如果已经有字符串回调，一起设置）
+        let pool_ptr = self as *mut TerminalPool as *mut c_void;
+        let string_cb = if self.string_event_callback.is_some() {
+            Some(Self::string_event_queue_callback as crate::rio_event::StringEventCallback)
+        } else {
+            None
+        };
+        self.event_queue.set_callback(
+            Self::event_queue_callback,
+            string_cb,
+            pool_ptr,
+        );
+    }
+
+    /// 设置字符串事件回调（用于 CWD、Command 等事件）
+    pub fn set_string_event_callback(&mut self, callback: super::ffi::TerminalPoolStringEventCallback, context: *mut c_void) {
+        self.string_event_callback = Some((callback, context));
+
+        // 更新 EventQueue 回调（需要重新设置，因为添加了 string_callback）
         let pool_ptr = self as *mut TerminalPool as *mut c_void;
         self.event_queue.set_callback(
             Self::event_queue_callback,
-            None,
+            Some(Self::string_event_queue_callback),
             pool_ptr,
         );
+    }
+
+    /// 字符串事件 EventQueue 回调
+    ///
+    /// 当收到 CurrentDirectoryChanged/CommandExecuted 等事件时，转发给 Swift
+    ///
+    /// 注意：event_type 是 FFIEvent 的事件类型（13=CurrentDirectoryChanged, 14=CommandExecuted）
+    /// 需要转换为 TerminalEventType（6=CurrentDirectoryChanged, 7=CommandExecuted）
+    extern "C" fn string_event_queue_callback(
+        context: *mut c_void,
+        event_type: u32,
+        terminal_id: usize,
+        data: *const std::ffi::c_char,
+    ) {
+        if context.is_null() || data.is_null() {
+            return;
+        }
+
+        // 转换事件类型：FFIEvent.event_type → TerminalEventType
+        // FFIEvent: 13=CurrentDirectoryChanged, 14=CommandExecuted, 4=Title
+        // TerminalEventType: 6=CurrentDirectoryChanged, 7=CommandExecuted, 4=TitleChanged
+        let swift_event_type = match event_type {
+            13 => TerminalEventType::CurrentDirectoryChanged,  // OSC 7
+            14 => TerminalEventType::CommandExecuted,          // OSC 133;C
+            4 => TerminalEventType::TitleChanged,
+            _ => return, // 忽略其他事件类型
+        };
+
+        unsafe {
+            let pool = &*(context as *const TerminalPool);
+            if let Some((callback, swift_context)) = pool.string_event_callback {
+                callback(swift_context, swift_event_type, terminal_id, data);
+            }
+        }
     }
 
     /// EventQueue 回调
@@ -2563,12 +2629,97 @@ impl TerminalPool {
         let cursor_rect = skia_safe::Rect::from_xywh(ime_cursor_x, ime_y + 2.0, 2.0, line_height.value - 4.0);
         canvas.draw_rect(cursor_rect, &cursor_paint);
     }
+
+    /// [MemDebug] 输出全面的内存使用报告
+    ///
+    /// 统计所有主要内存消耗组件：
+    /// 1. LineCache - 行渲染缓存（Images）
+    /// 2. Terminal Grids - 每个终端的 scrollback buffer
+    /// 3. Render Caches - 每个终端的渲染缓存（Images）
+    /// 4. Surface Caches - GPU Surface 缓存
+    pub fn report_memory_stats(&self) {
+        // 1. LineCache 内存
+        let (line_cache_entries, line_cache_images, line_cache_max, line_cache_bytes) = {
+            let renderer = self.renderer.lock();
+            renderer.cache.memory_stats()
+        };
+        let line_cache_mb = line_cache_bytes / (1024 * 1024);
+
+        // 2. 终端 Grid 内存
+        let mut total_grid_bytes: usize = 0;
+        let mut terminal_count = 0;
+        let mut total_history_lines: usize = 0;
+        let mut total_grid_lines: usize = 0;
+
+        // 3. 渲染缓存内存
+        let mut total_render_cache_bytes: usize = 0;
+        let mut render_cache_count = 0;
+
+        // 4. Surface 缓存内存
+        let mut total_surface_bytes: usize = 0;
+        let mut surface_count = 0;
+
+        // 遍历所有终端
+        if let Some(terminals) = self.terminals.try_read() {
+            terminal_count = terminals.len();
+
+            for (_id, entry) in terminals.iter() {
+                // Grid 内存
+                if let Some(terminal) = entry.terminal.try_lock() {
+                    let (history_size, total_lines, _cols, grid_bytes) = terminal.grid_memory_stats();
+                    total_grid_bytes += grid_bytes;
+                    total_history_lines += history_size;
+                    total_grid_lines += total_lines;
+                }
+
+                // 渲染缓存内存
+                if let Some(ref cache) = entry.render_cache {
+                    let cache_bytes = (cache.width * cache.height * 4) as usize;
+                    total_render_cache_bytes += cache_bytes;
+                    render_cache_count += 1;
+                }
+
+                // Surface 缓存内存
+                if let Some(ref surface) = entry.surface_cache {
+                    let surface_bytes = (surface.width * surface.height * 4) as usize;
+                    total_surface_bytes += surface_bytes;
+                    surface_count += 1;
+                }
+            }
+        }
+
+        let grid_mb = total_grid_bytes / (1024 * 1024);
+        let render_cache_mb = total_render_cache_bytes / (1024 * 1024);
+        let surface_mb = total_surface_bytes / (1024 * 1024);
+
+        // 总计
+        let total_tracked_bytes = line_cache_bytes + total_grid_bytes + total_render_cache_bytes + total_surface_bytes;
+        let total_mb = total_tracked_bytes / (1024 * 1024);
+
+        // 输出报告
+        crate::rust_log_info!(
+            "[MemDebug] REPORT: total={}MB | LineCache={}MB ({}/{} entries, {} images) | Grid={}MB ({} terminals, {} history, {} total lines) | RenderCache={}MB ({} cached) | Surface={}MB ({} cached)",
+            total_mb,
+            line_cache_mb, line_cache_entries, line_cache_max, line_cache_images,
+            grid_mb, terminal_count, total_history_lines, total_grid_lines,
+            render_cache_mb, render_cache_count,
+            surface_mb, surface_count
+        );
+    }
 }
 
 impl Drop for TerminalPool {
     fn drop(&mut self) {
-        // eprintln!("🗑️ [TerminalPool] Dropping pool with {} terminals", self.terminals.read().len());
+        // 首先关闭事件队列，防止 PTY 线程在销毁过程中触发回调
+        // 这避免了 use-after-free 问题：
+        // - PTY 线程可能仍在运行
+        // - 回调的 context 指针指向 TerminalPool
+        // - 如果不先 shutdown，回调可能使用已释放的内存
+        self.event_queue.shutdown();
+
         // terminals 会自动 drop，PTY 连接会关闭
+        // #[cfg(debug_assertions)]
+        // eprintln!("🗑️ [TerminalPool] Dropped pool with {} terminals", self.terminals.read().len());
     }
 }
 

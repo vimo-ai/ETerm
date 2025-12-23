@@ -50,6 +50,8 @@ typedef enum {
     TerminalEventType_Bell = 3,
     TerminalEventType_TitleChanged = 4,
     TerminalEventType_Damaged = 5,
+    TerminalEventType_CurrentDirectoryChanged = 6,
+    TerminalEventType_CommandExecuted = 7,
 } TerminalPoolEventType;
 
 /// Terminal event
@@ -60,6 +62,23 @@ typedef struct {
 
 /// Event callback type
 typedef void (*TerminalPoolEventCallback)(void* context, TerminalPoolEvent event);
+
+/// String event callback type (for events with string data)
+///
+/// Used for events that carry string payloads:
+/// - CurrentDirectoryChanged: data contains the new directory path
+/// - CommandExecuted: data contains the executed command
+///
+/// @param context User context pointer
+/// @param event_type Event type
+/// @param terminal_id Terminal ID
+/// @param data UTF-8 encoded string data (null-terminated)
+typedef void (*TerminalPoolStringEventCallback)(
+    void* context,
+    TerminalPoolEventType event_type,
+    size_t terminal_id,
+    const char* data
+);
 
 /// Create TerminalPool
 ///
@@ -266,6 +285,16 @@ void terminal_pool_set_scale(
 void terminal_pool_set_event_callback(
     TerminalPoolHandle handle,
     TerminalPoolEventCallback callback,
+    void* context
+);
+
+/// Set string event callback
+///
+/// Use this callback to receive events with string payloads
+/// (CurrentDirectoryChanged, CommandExecuted)
+void terminal_pool_set_string_event_callback(
+    TerminalPoolHandle handle,
+    TerminalPoolStringEventCallback callback,
     void* context
 );
 

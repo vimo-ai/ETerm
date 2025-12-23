@@ -316,6 +316,36 @@ impl Terminal {
         self.rows
     }
 
+    /// [MemDebug] 获取 Grid 内存统计
+    ///
+    /// # 返回
+    /// (history_size, total_lines, cols, estimated_bytes)
+    /// - history_size: 回滚历史行数
+    /// - total_lines: 总行数（屏幕 + 历史）
+    /// - cols: 列数
+    /// - estimated_bytes: 估算的 Grid 内存（字节）
+    pub fn grid_memory_stats(&self) -> (usize, usize, usize, usize) {
+        // 获取 Crosswords 的 Grid 信息
+        let (history_size, total_lines) = if let Some(ref crosswords_ffi) = self.crosswords_ffi {
+            let crosswords = crosswords_ffi.read();
+            (crosswords.history_size(), crosswords.total_lines())
+        } else if let Some(ref crosswords_test) = self.crosswords_test {
+            let crosswords = crosswords_test.read();
+            (crosswords.history_size(), crosswords.total_lines())
+        } else {
+            (0, self.rows)
+        };
+
+        // 估算 Square 结构体大小（约 40 字节）
+        // Square { c: char(4), fg: AnsiColor(8), bg: AnsiColor(8), extra: Option<Arc>(16), flags: Flags(2) }
+        const SQUARE_SIZE: usize = 40;
+
+        // Grid 内存 = total_lines × cols × SQUARE_SIZE
+        let estimated_bytes = total_lines * self.cols * SQUARE_SIZE;
+
+        (history_size, total_lines, self.cols, estimated_bytes)
+    }
+
     /// 获取当前运行模式
     pub fn mode(&self) -> TerminalMode {
         self.mode

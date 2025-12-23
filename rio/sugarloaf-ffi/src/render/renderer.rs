@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 /// 渲染引擎（管理缓存 + 渲染流程）
 pub struct Renderer {
-    cache: LineCache,
+    /// 行缓存（pub 用于内存统计）
+    pub cache: LineCache,
     /// 统计信息（用于测试验证）
     pub stats: RenderStats,
     /// 字体上下文
