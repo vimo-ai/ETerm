@@ -210,6 +210,7 @@ struct SidebarItemRow: View {
             }
             .padding(.horizontal, isSubItem ? 8 : 12)
             .padding(.vertical, 8)
+            .contentShape(Rectangle())  // 扩展可点击区域到整行
             .background(
                 RoundedRectangle(cornerRadius: 6)
                     .fill(isSelected ? Color.accentColor : Color.clear)

@@ -3,11 +3,16 @@
 //  ETerm
 //
 //  Vlaude 远程控制插件
+//
 //  职责：
 //  - 连接 daemon，上报 session 状态
 //  - 接收注入请求，转发给 Coordinator
 //  - 处理远程创建 Claude 会话请求
 //  - 跟踪 requestId，在会话创建完成后上报
+//
+//  设计原则：
+//  - 只读取 ClaudeSessionMapper，不写入
+//  - Session 映射由 ClaudePlugin 管理
 
 import AppKit
 import Foundation
@@ -96,11 +101,7 @@ final class VlaudePlugin: Plugin {
             return
         }
 
-        // 查找对应的 tabId 用于持久化
-        let tabId = WindowManager.shared.findTabId(for: terminalId)
-
-        // 更新映射（包含持久化）
-        ClaudeSessionMapper.shared.map(terminalId: terminalId, sessionId: sessionId, tabId: tabId)
+        // 注意：Session 映射由 ClaudePlugin 管理，这里只读取和上报
 
         // 上报 session 可用
         daemonClient?.reportSessionAvailable(sessionId: sessionId, terminalId: terminalId)
@@ -126,18 +127,13 @@ final class VlaudePlugin: Plugin {
         // 清理待上报的 requestId（如果有）
         pendingRequests.removeValue(forKey: terminalId)
 
-        // 查找该 terminal 对应的 session
+        // 查找该 terminal 对应的 session（只读取，不清理）
         guard let sessionId = ClaudeSessionMapper.shared.getSessionId(for: terminalId) else {
             // 该 terminal 没有 Claude session，无需处理
             return
         }
 
-        // 查找对应的 tabId 用于清理持久化数据
-        // 注意：terminalDidClose 通知中可能已经包含 tabId
-        let tabId = userInfo["tab_id"] as? String
-
-        // 清理本地映射（包含持久化）
-        ClaudeSessionMapper.shared.remove(terminalId: terminalId, tabId: tabId)
+        // 注意：Session 映射清理由 ClaudePlugin 管理，这里只上报 daemon
 
         // 通知 daemon
         daemonClient?.reportSessionUnavailable(sessionId: sessionId)
@@ -155,11 +151,7 @@ final class VlaudePlugin: Plugin {
         // 清理待上报的 requestId（如果有）
         pendingRequests.removeValue(forKey: terminalId)
 
-        // 查找对应的 tabId 用于清理持久化数据
-        let tabId = WindowManager.shared.findTabId(for: terminalId)
-
-        // 清理本地映射（包含持久化）
-        ClaudeSessionMapper.shared.remove(terminalId: terminalId, tabId: tabId)
+        // 注意：Session 映射清理由 ClaudePlugin 管理，这里只上报 daemon
 
         // 通知 daemon
         daemonClient?.reportSessionUnavailable(sessionId: sessionId)

@@ -223,7 +223,7 @@ final class WindowManager: NSObject {
                         tabId: tabId,
                         workingDirectory: .restored(path: tabState.cwd)
                     )
-                    let tab = Tab(tabId: tabId, title: tabState.title, content: .terminal(terminalTab))
+                    let tab = Tab(tabId: tabId, title: tabState.title, content: .terminal(terminalTab), userTitle: tabState.userTitle)
                     tabs.append(tab)
 
                 case .view:
@@ -237,7 +237,7 @@ final class WindowManager: NSObject {
                         viewId: viewId,
                         pluginId: tabState.pluginId
                     )
-                    let tab = Tab(tabId: tabId, title: tabState.title, content: .view(viewContent))
+                    let tab = Tab(tabId: tabId, title: tabState.title, content: .view(viewContent), userTitle: tabState.userTitle)
                     tabs.append(tab)
                 }
             }
@@ -899,7 +899,8 @@ final class WindowManager: NSObject {
                     tabState = TabState(
                         tabId: tab.tabId.uuidString,
                         title: tab.title,
-                        cwd: workingDirectory.path
+                        cwd: workingDirectory.path,
+                        userTitle: tab.userTitle  // 保存用户手动设置的标题
                     )
 
                 case .view(let viewContent):
@@ -908,7 +909,8 @@ final class WindowManager: NSObject {
                         tabId: tab.tabId.uuidString,
                         title: tab.title,
                         viewId: viewContent.viewId,
-                        pluginId: viewContent.pluginId
+                        pluginId: viewContent.pluginId,
+                        userTitle: tab.userTitle  // 保存用户手动设置的标题
                     )
                 }
 

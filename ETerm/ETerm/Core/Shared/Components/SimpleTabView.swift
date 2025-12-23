@@ -198,14 +198,16 @@ struct SimpleTabView: View {
                 .frame(maxWidth: 40)
             }
 
-            // 右侧：关闭按钮（Button 会自动优先响应，不被外层手势拦截）
+            // 右侧：关闭按钮
             if let onClose = onClose {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: height * 0.28, weight: .medium))
-                        .foregroundColor(isHovered ? textColor : closeButtonColor)
-                }
-                .buttonStyle(.plain)
+                Image(systemName: "xmark")
+                    .font(.system(size: height * 0.28, weight: .medium))
+                    .foregroundColor(isHovered ? textColor : closeButtonColor)
+                    .frame(width: height * 0.6, height: height * 0.6)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onClose()
+                    }
             }
         }
         .padding(.horizontal, 10)
