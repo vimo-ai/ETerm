@@ -27,8 +27,25 @@ final class Tab: Pane {
     /// Tab ID（唯一标识）
     let tabId: UUID
 
-    /// Tab 标题
-    var title: String
+    /// 系统标题（核心层设置：目录名/进程名）
+    private(set) var systemTitle: String
+
+    /// 插件标题（插件覆盖）
+    private(set) var pluginTitle: String?
+
+    /// 用户标题（用户手动重命名，最高优先级，需序列化）
+    private(set) var userTitle: String?
+
+    /// 有效标题（优先级：userTitle > pluginTitle > systemTitle）
+    var title: String {
+        get {
+            userTitle ?? pluginTitle ?? systemTitle
+        }
+        set {
+            // 外部设置 title 时，更新 systemTitle（兼容 Pane 协议和现有代码）
+            systemTitle = newValue
+        }
+    }
 
     /// Tab 状态（激活/未激活）
     private(set) var isActive: Bool
@@ -44,12 +61,51 @@ final class Tab: Pane {
 
     // MARK: - 初始化
 
-    init(tabId: UUID = UUID(), title: String, content: TabContent) {
+    init(tabId: UUID = UUID(), title: String, content: TabContent, userTitle: String? = nil) {
         self.tabId = tabId
-        self.title = title
+        self.systemTitle = title
+        self.pluginTitle = nil
+        self.userTitle = userTitle
         self.isActive = false
         self.content = content
         self.decoration = nil
+    }
+
+    // MARK: - 标题管理
+
+    /// 更新系统标题（核心层调用）
+    ///
+    /// - Parameter title: 新的系统标题（目录名/进程名）
+    func updateSystemTitle(_ title: String) {
+        guard systemTitle != title else { return }
+        systemTitle = title
+    }
+
+    /// 设置插件标题（插件调用，覆盖系统标题）
+    ///
+    /// - Parameter title: 插件标题，nil 表示清除
+    func setPluginTitle(_ title: String?) {
+        guard pluginTitle != title else { return }
+        pluginTitle = title
+    }
+
+    /// 清除插件标题（恢复显示系统标题）
+    func clearPluginTitle() {
+        guard pluginTitle != nil else { return }
+        pluginTitle = nil
+    }
+
+    /// 设置用户标题（用户手动重命名，最高优先级）
+    ///
+    /// - Parameter title: 用户标题
+    func setUserTitle(_ title: String) {
+        userTitle = title
+    }
+
+    /// 清除用户标题（恢复显示插件/系统标题）
+    func clearUserTitle() {
+        guard userTitle != nil else { return }
+        userTitle = nil
     }
 
     // MARK: - 装饰系统
