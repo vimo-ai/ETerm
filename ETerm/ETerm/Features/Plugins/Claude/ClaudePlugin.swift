@@ -3,7 +3,12 @@
 //  ETerm
 //
 //  Claude Code 集成插件
-//  负责：接收 Claude Hook 回调，管理 session 映射，控制 Tab 装饰
+//
+//  职责：
+//  - 接收 Claude Hook 回调（通过 ClaudeSocketServer）
+//  - 管理 Session 映射和持久化（通过 ClaudeSessionMapper）
+//  - 控制 Tab 装饰（思考中、等待输入、完成）
+//  - 处理终端恢复（重启后自动恢复 Claude 会话）
 
 import Foundation
 import AppKit
@@ -36,8 +41,11 @@ final class ClaudePlugin: Plugin {
         socketServer = ClaudeSocketServer.shared
         socketServer?.start()
 
-        // 监听 Claude 事件，控制 Tab 装饰
+        // 监听 Claude 事件
         setupNotifications()
+
+        // 监听终端生命周期（恢复逻辑）
+        setupTerminalLifecycleObservers()
 
         // 注册 Page Slot（显示该 Page 下 Claude 任务统计）
         registerPageSlot(context: context)
@@ -58,6 +66,14 @@ final class ClaudePlugin: Plugin {
     // SessionEnd       → 清除
 
     private func setupNotifications() {
+        // Session 开始 → 建立映射 + 持久化
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSessionStart(_:)),
+            name: .claudeSessionStart,
+            object: nil
+        )
+
         // 用户提交问题 → 设置"思考中"装饰（蓝色脉冲）
         NotificationCenter.default.addObserver(
             self,
@@ -82,7 +98,7 @@ final class ClaudePlugin: Plugin {
             object: nil
         )
 
-        // Claude 会话结束 → 清除装饰
+        // Claude 会话结束 → 清除装饰 + 清理映射
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleSessionEnd(_:)),
@@ -99,6 +115,95 @@ final class ClaudePlugin: Plugin {
         )
     }
 
+    // MARK: - 终端生命周期监听
+
+    private func setupTerminalLifecycleObservers() {
+        // 终端创建 → 检查并恢复 Claude 会话
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTerminalCreated(_:)),
+            name: .terminalDidCreate,
+            object: nil
+        )
+
+        // 终端关闭 → 清理 Session 映射
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTerminalClosed(_:)),
+            name: .terminalDidClose,
+            object: nil
+        )
+    }
+
+    // MARK: - Session 映射管理
+
+    /// 处理 Session 开始 → 建立映射 + 持久化
+    @objc private func handleSessionStart(_ notification: Notification) {
+        guard let terminalId = notification.userInfo?["terminal_id"] as? Int,
+              let sessionId = notification.userInfo?["session_id"] as? String else {
+            return
+        }
+
+        // 获取 tabId 用于持久化
+        guard let tabId = context?.terminal.getTabId(for: terminalId) else {
+            return
+        }
+
+        // 建立映射 + 持久化
+        ClaudeSessionMapper.shared.establish(
+            terminalId: terminalId,
+            sessionId: sessionId,
+            tabId: tabId
+        )
+    }
+
+    /// 处理终端创建 → 检查并恢复 Claude 会话
+    @objc private func handleTerminalCreated(_ notification: Notification) {
+        guard let terminalId = notification.userInfo?["terminal_id"] as? Int,
+              let tabId = notification.userInfo?["tab_id"] as? String else {
+            return
+        }
+
+        // 检查是否需要恢复
+        guard let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId) else {
+            return
+        }
+
+        // 延迟恢复，等待终端完全启动
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+
+            // 重新验证：确保 tab 仍然对应同一个 sessionId
+            // （防止终端在延迟期间关闭或 ID 被复用）
+            guard let currentSessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId),
+                  currentSessionId == sessionId else {
+                return
+            }
+
+            // 重新验证：确保 terminalId 仍然属于这个 tabId
+            guard let currentTabId = self.context?.terminal.getTabId(for: terminalId),
+                  currentTabId == tabId else {
+                return
+            }
+
+            self.context?.terminal.write(
+                terminalId: terminalId,
+                data: "claude --resume \(sessionId)\n"
+            )
+        }
+    }
+
+    /// 处理终端关闭 → 清理 Session 映射
+    @objc private func handleTerminalClosed(_ notification: Notification) {
+        guard let terminalId = notification.userInfo?["terminal_id"] as? Int,
+              let tabId = notification.userInfo?["tab_id"] as? String else {
+            return
+        }
+
+        // 清理映射
+        ClaudeSessionMapper.shared.end(terminalId: terminalId, tabId: tabId)
+    }
+
     /// 处理思考开始
     @objc private func handleThinkingStart(_ notification: Notification) {
         guard let terminalId = notification.userInfo?["terminal_id"] as? Int else {
@@ -109,10 +214,27 @@ final class ClaudePlugin: Plugin {
         decorationStates[terminalId] = .thinking
 
         // 设置"思考中"装饰：蓝色脉冲动画（plugin priority 101，高于 system active）
+        // thinking 状态即使用户在看也要显示（Claude 正在工作）
         context?.ui.setTabDecoration(
             terminalId: terminalId,
-            decoration: .thinking(pluginId: Self.id)
+            decoration: .thinking(pluginId: Self.id),
+            skipIfActive: false
         )
+
+        // 智能标题生成：根据 prompt 生成简短标题
+        // 先设置 "Claude" 作为临时标题，然后异步生成智能标题
+        context?.ui.setTabTitle(terminalId: terminalId, title: "Claude")
+
+        if let prompt = notification.userInfo?["prompt"] as? String, !prompt.isEmpty {
+            // 异步生成智能标题
+            ClaudeTitleGenerator.shared.generateTitle(from: prompt) { [weak self] title in
+                // 检查终端是否还在 thinking 状态（可能已经完成了）
+                guard self?.decorationStates[terminalId] == .thinking else {
+                    return
+                }
+                self?.context?.ui.setTabTitle(terminalId: terminalId, title: title)
+            }
+        }
     }
 
     /// 处理等待用户输入
@@ -121,13 +243,17 @@ final class ClaudePlugin: Plugin {
             return
         }
 
-        // 记录状态：waitingInput（focus 时清除）
-        decorationStates[terminalId] = .waitingInput
+        // 如果用户正在看这个 terminal，不需要提醒
+        if context?.ui.isTerminalActive(terminalId: terminalId) == true {
+            return
+        }
 
-        // 设置"等待输入"装饰：黄色脉冲（plugin priority 6，比 completed 稍高）
+        // 用户不在看，设置"等待输入"装饰提醒
+        decorationStates[terminalId] = .waitingInput
         context?.ui.setTabDecoration(
             terminalId: terminalId,
-            decoration: .waitingInput(pluginId: Self.id)
+            decoration: .waitingInput(pluginId: Self.id),
+            skipIfActive: false
         )
     }
 
@@ -137,13 +263,20 @@ final class ClaudePlugin: Plugin {
             return
         }
 
-        // 记录状态：completed（focus 时清除）
-        decorationStates[terminalId] = .completed
+        // 如果用户正在看这个 terminal，直接清除装饰（不需要提醒）
+        // 这也处理了 ESC 中断的情况：清除 thinking 状态，不设置 completed
+        if context?.ui.isTerminalActive(terminalId: terminalId) == true {
+            decorationStates.removeValue(forKey: terminalId)
+            context?.ui.clearTabDecoration(terminalId: terminalId)
+            return
+        }
 
-        // 设置"完成"装饰：橙色静态（plugin priority 5，低于 system active）
+        // 用户不在看，设置"完成"装饰提醒
+        decorationStates[terminalId] = .completed
         context?.ui.setTabDecoration(
             terminalId: terminalId,
-            decoration: .completed(pluginId: Self.id)
+            decoration: .completed(pluginId: Self.id),
+            skipIfActive: false
         )
     }
 
@@ -153,11 +286,19 @@ final class ClaudePlugin: Plugin {
             return
         }
 
-        // 清除状态
+        // 清除装饰状态
         decorationStates.removeValue(forKey: terminalId)
 
         // 清除装饰
         context?.ui.clearTabDecoration(terminalId: terminalId)
+
+        // 清除 Tab 标题
+        context?.ui.clearTabTitle(terminalId: terminalId)
+
+        // 清理 Session 映射（如果有 tabId）
+        if let tabId = context?.terminal.getTabId(for: terminalId) {
+            ClaudeSessionMapper.shared.end(terminalId: terminalId, tabId: tabId)
+        }
     }
 
     /// 处理 Tab 获得焦点（用户切换到该 Tab）

@@ -10,9 +10,10 @@ import Foundation
 
 /// Claude Hook 调用的事件
 struct ClaudeResponseCompleteEvent: Codable {
-    let event_type: String?  // "stop" 或 "notification"
+    let event_type: String?  // "stop", "notification", "user_prompt_submit" 等
     let session_id: String
     let terminal_id: Int
+    let prompt: String?  // 用户提交的问题（仅 user_prompt_submit 事件）
 }
 
 /// Socket Server - 接收来自 Claude Hook 的调用
@@ -204,14 +205,18 @@ class ClaudeSocketServer {
             // 用户提交问题，Claude 开始思考
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
-            // 发送用户提交通知（用于显示"思考中"动画）
+            // 发送用户提交通知（用于显示"思考中"动画 + 生成智能标题）
+            var userInfo: [String: Any] = [
+                "session_id": event.session_id,
+                "terminal_id": event.terminal_id
+            ]
+            if let prompt = event.prompt, !prompt.isEmpty {
+                userInfo["prompt"] = prompt
+            }
             NotificationCenter.default.post(
                 name: .claudeUserPromptSubmit,
                 object: nil,
-                userInfo: [
-                    "session_id": event.session_id,
-                    "terminal_id": event.terminal_id
-                ]
+                userInfo: userInfo
             )
 
         case "session_end":
