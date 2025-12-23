@@ -162,6 +162,9 @@ struct SettingsView: View {
 
                                 TextField("http://localhost:11434", text: $ollamaBaseURL)
                                     .textFieldStyle(.roundedBorder)
+                                    .onChange(of: ollamaBaseURL) { _, _ in
+                                        saveOllamaConfig()
+                                    }
                             }
 
                             // 模型选择
@@ -182,6 +185,9 @@ struct SettingsView: View {
                                     if availableModels.isEmpty {
                                         TextField("qwen3:0.6b", text: $ollamaModel)
                                             .textFieldStyle(.roundedBorder)
+                                            .onChange(of: ollamaModel) { _, _ in
+                                                saveOllamaConfig()
+                                            }
                                     } else {
                                         Picker("", selection: $ollamaModel) {
                                             ForEach(availableModels, id: \.self) { model in
@@ -189,6 +195,9 @@ struct SettingsView: View {
                                             }
                                         }
                                         .labelsHidden()
+                                        .onChange(of: ollamaModel) { _, _ in
+                                            saveOllamaConfig()
+                                        }
                                     }
 
                                     Button("刷新") {
@@ -200,27 +209,20 @@ struct SettingsView: View {
 
                             Divider()
 
-                            // 操作按钮
-                            HStack(spacing: 12) {
-                                Button(action: testOllamaConnection) {
-                                    HStack {
-                                        if ollamaTestStatus == .testing {
-                                            ProgressView()
-                                                .scaleEffect(0.7)
-                                                .frame(width: 14, height: 14)
-                                        } else {
-                                            Image(systemName: ollamaTestStatus == .success ? "checkmark.circle" : "antenna.radiowaves.left.and.right")
-                                        }
-                                        Text(ollamaTestStatus == .testing ? "测试中..." : "测试连接")
+                            // 测试按钮
+                            Button(action: testOllamaConnection) {
+                                HStack {
+                                    if ollamaTestStatus == .testing {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .frame(width: 14, height: 14)
+                                    } else {
+                                        Image(systemName: ollamaTestStatus == .success ? "checkmark.circle" : "antenna.radiowaves.left.and.right")
                                     }
+                                    Text(ollamaTestStatus == .testing ? "测试中..." : "测试连接")
                                 }
-                                .disabled(ollamaTestStatus == .testing)
-
-                                Spacer()
-
-                                Button("保存", action: saveOllamaConfig)
-                                    .buttonStyle(.borderedProminent)
                             }
+                            .disabled(ollamaTestStatus == .testing)
 
                             // 测试结果
                             if showOllamaTestResult {
@@ -449,15 +451,6 @@ struct SettingsView: View {
         newSettings.model = ollamaModel
         newSettings.baseURL = ollamaBaseURL
         ollamaService.updateSettings(newSettings)
-
-        ollamaTestStatus = .success
-        ollamaTestMessage = "配置已保存"
-        showOllamaTestResult = true
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            showOllamaTestResult = false
-            ollamaTestStatus = .idle
-        }
     }
 
     private func refreshOllamaStatus() {
