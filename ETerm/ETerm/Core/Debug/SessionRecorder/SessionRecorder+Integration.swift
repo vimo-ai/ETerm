@@ -25,34 +25,32 @@ extension SessionRecorder {
         logInfo("[SessionRecorder] 集成已启用")
     }
 
+    /// 事件订阅句柄
+    private static var eventSubscriptions: [EventSubscription] = []
+
     /// 设置通知监听
     private func setupNotificationObservers() {
         let center = NotificationCenter.default
 
-        // 终端关闭通知
-        center.addObserver(
-            forName: .terminalDidClose,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let terminalId = notification.userInfo?["terminal_id"] as? Int else { return }
-            self?.record(.terminalOutputEvent(
-                terminalId: UUID(),  // 无法从 terminalId 获取 UUID，使用占位
-                eventType: "closed"
-            ), source: "TerminalPool")
-        }
+        // 终端关闭事件（使用 EventBus）
+        Self.eventSubscriptions.append(
+            EventBus.shared.subscribe(CoreEvents.Terminal.DidClose.self) { [weak self] event in
+                self?.record(.terminalOutputEvent(
+                    terminalId: UUID(),  // 无法从 terminalId 获取 UUID，使用占位
+                    eventType: "closed"
+                ), source: "TerminalPool")
+            }
+        )
 
-        // 活跃终端变化通知
-        center.addObserver(
-            forName: .activeTerminalDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.record(.custom(
-                name: "activeTerminalChanged",
-                payload: [:]
-            ), source: "UI")
-        }
+        // 终端焦点变化事件（使用 EventBus）
+        Self.eventSubscriptions.append(
+            EventBus.shared.subscribe(CoreEvents.Terminal.DidFocus.self) { [weak self] _ in
+                self?.record(.custom(
+                    name: "activeTerminalChanged",
+                    payload: [:]
+                ), source: "UI")
+            }
+        )
 
         // 窗口激活通知
         center.addObserver(

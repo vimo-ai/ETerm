@@ -75,6 +75,15 @@ enum ETermPaths {
     /// 翻译插件配置: ~/.eterm/plugins/english-learning/translation.json
     static let translationConfig = englishLearningPlugin + "/translation.json"
 
+    /// MCP Router 插件目录: ~/.eterm/plugins/mcp-router
+    static let mcpRouterPlugin = plugins + "/mcp-router"
+
+    /// MCP Router 服务器配置: ~/.eterm/plugins/mcp-router/servers.json
+    static let mcpRouterServers = mcpRouterPlugin + "/servers.json"
+
+    /// MCP Router 工作区配置: ~/.eterm/plugins/mcp-router/workspaces.json
+    static let mcpRouterWorkspaces = mcpRouterPlugin + "/workspaces.json"
+
     // MARK: - 临时文件
 
     /// 剪贴板临时目录: ~/.eterm/tmp/clipboard
@@ -117,6 +126,7 @@ enum ETermPaths {
             cache,
             claudeMonitorPlugin,
             englishLearningPlugin,
+            mcpRouterPlugin,
             clipboard,
             socket,
             debugExports
