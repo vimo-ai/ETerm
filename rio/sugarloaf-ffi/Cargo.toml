@@ -39,6 +39,9 @@ once_cell = "1.19"
 smallvec = "1.13"
 lru = "0.12"
 
+# MCP Router Core (集成到同一个库避免符号冲突)
+mcp-router-core = { path = "/Users/higuaifan/Desktop/vimo/mcp-router/core" }
+
 [dev-dependencies]
 criterion = "0.5"
 

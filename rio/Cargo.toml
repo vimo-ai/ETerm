@@ -91,6 +91,7 @@ split-debuginfo = "unpacked"
 lto = false
 incremental = true
 opt-level = 0
+panic = "abort"        # 避免与其他 Rust 库符号冲突
 
 # 开发时的快速编译 profile（3-5倍速度提升）
 # 使用方式: cargo build --profile dev-fast
@@ -101,3 +102,4 @@ codegen-units = 16     # 允许并行编译，充分利用多核 CPU
 incremental = true     # 启用增量编译
 strip = "symbols"      # 保持符号剥离
 debug = "line-tables-only"  # 减少调试信息以加快编译
+panic = "abort"        # 避免与其他 Rust 库符号冲突
