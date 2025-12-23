@@ -56,6 +56,14 @@ pub enum RioEvent {
     /// 鼠标光标需要更新（grid 内容改变）
     MouseCursorDirty,
 
+    /// 当前工作目录变化（OSC 7）
+    /// 参数：(route_id, path)
+    CurrentDirectoryChanged(usize, String),
+
+    /// Shell 命令执行（OSC 133;C）
+    /// 参数：(route_id, command)
+    CommandExecuted(usize, String),
+
     /// 空操作
     Noop,
 }
@@ -80,6 +88,8 @@ pub struct FFIEvent {
     /// 10 = Scroll
     /// 11 = MouseCursorDirty
     /// 12 = Noop
+    /// 13 = CurrentDirectoryChanged (需要额外的字符串数据)
+    /// 14 = CommandExecuted (需要额外的字符串数据)
     pub event_type: u32,
 
     /// 终端/路由 ID（用于 Wakeup, CloseTerminal, CursorBlinkingChangeOnRoute）
@@ -211,6 +221,16 @@ impl From<&RioEvent> for FFIEvent {
                 route_id: 0,
                 scroll_delta: 0,
             },
+            RioEvent::CurrentDirectoryChanged(route_id, _) => FFIEvent {
+                event_type: 13,
+                route_id: *route_id,
+                scroll_delta: 0,
+            },
+            RioEvent::CommandExecuted(route_id, _) => FFIEvent {
+                event_type: 14,
+                route_id: *route_id,
+                scroll_delta: 0,
+            },
             RioEvent::Noop => FFIEvent::noop(),
         }
     }
@@ -219,8 +239,14 @@ impl From<&RioEvent> for FFIEvent {
 /// 事件回调类型
 pub type EventCallback = extern "C" fn(*mut c_void, FFIEvent);
 
-/// 字符串事件回调类型（用于 Title, PtyWrite, ClipboardStore）
-pub type StringEventCallback = extern "C" fn(*mut c_void, u32, *const std::ffi::c_char);
+/// 字符串事件回调类型（用于 Title, PtyWrite, ClipboardStore, CurrentDirectoryChanged, CommandExecuted）
+///
+/// 参数：
+/// - context: 回调上下文
+/// - event_type: 事件类型（4=Title, 5=PtyWrite, 6=ClipboardStore, 13=CurrentDirectoryChanged, 14=CommandExecuted）
+/// - terminal_id: 终端 ID（route_id）
+/// - data: 字符串数据（UTF-8）
+pub type StringEventCallback = extern "C" fn(*mut c_void, u32, usize, *const std::ffi::c_char);
 
 /// 事件队列 - 用于在 Rust 侧收集事件
 ///
@@ -238,6 +264,8 @@ struct EventQueueInner {
     string_callback: Option<StringEventCallback>,
     /// 回调上下文
     context: *mut c_void,
+    /// shutdown 标志 - 防止 destroy 后回调触发
+    shutdown: bool,
 }
 
 // 手动实现 Send，因为 context 是裸指针
@@ -252,8 +280,22 @@ impl EventQueue {
                 callback: None,
                 string_callback: None,
                 context: std::ptr::null_mut(),
+                shutdown: false,
             })),
         }
+    }
+
+    /// 关闭事件队列
+    ///
+    /// 清除所有回调，防止 destroy 后回调触发导致 use-after-free
+    /// 此方法应在 TerminalPool destroy 前调用
+    pub fn shutdown(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.shutdown = true;
+        inner.callback = None;
+        inner.string_callback = None;
+        inner.context = std::ptr::null_mut();
+        inner.events.clear();
     }
 
     /// 设置事件回调
@@ -277,11 +319,17 @@ impl EventQueue {
         // 这样避免在持有锁的情况下调用回调，防止死锁
         let (callback_info, string_callback_info) = {
             let inner = self.inner.lock().unwrap();
+
+            // 检查 shutdown 标志，防止 destroy 后回调触发
+            if inner.shutdown {
+                return;
+            }
+
             let ffi_event = FFIEvent::from(&event);
 
             // 提取回调信息
             let cb_info = inner.callback.map(|cb| (cb, inner.context, ffi_event));
-            let str_cb_info = inner.string_callback.map(|scb| (scb, inner.context, ffi_event.event_type));
+            let str_cb_info = inner.string_callback.map(|scb| (scb, inner.context, ffi_event.event_type, ffi_event.route_id));
 
             (cb_info, str_cb_info)
             // inner 锁在这里被释放
@@ -291,12 +339,24 @@ impl EventQueue {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // 处理带字符串的事件
             match &event {
-                RioEvent::Title(s) | RioEvent::PtyWrite(s) | RioEvent::ClipboardStore(s) => {
-                    if let Some((string_cb, context, event_type)) = string_callback_info {
+                // 带 route_id 的字符串事件
+                RioEvent::CurrentDirectoryChanged(route_id, s) | RioEvent::CommandExecuted(route_id, s) => {
+                    if let Some((string_cb, context, event_type, _)) = string_callback_info {
                         // 安全地创建 CString，处理包含 null 字节的情况
                         let safe_str = s.replace('\0', "");
                         if let Ok(c_str) = std::ffi::CString::new(safe_str) {
-                            string_cb(context, event_type, c_str.as_ptr());
+                            string_cb(context, event_type, *route_id, c_str.as_ptr());
+                        }
+                    }
+                }
+                // 不带 route_id 的字符串事件（Title, PtyWrite, ClipboardStore）
+                RioEvent::Title(s) | RioEvent::PtyWrite(s) | RioEvent::ClipboardStore(s) => {
+                    if let Some((string_cb, context, event_type, route_id)) = string_callback_info {
+                        // 安全地创建 CString，处理包含 null 字节的情况
+                        let safe_str = s.replace('\0', "");
+                        if let Ok(c_str) = std::ffi::CString::new(safe_str) {
+                            // 这些事件没有 route_id，使用 FFIEvent 中的 route_id（通常是 0）
+                            string_cb(context, event_type, route_id, c_str.as_ptr());
                         }
                     }
                 }
@@ -316,13 +376,25 @@ impl EventQueue {
     /// 入队事件（不立即发送）
     pub fn enqueue(&self, event: RioEvent) {
         let mut inner = self.inner.lock().unwrap();
+        if inner.shutdown {
+            return;
+        }
         inner.events.push_back(event);
     }
 
     /// 取出所有事件
     pub fn drain(&self) -> Vec<RioEvent> {
         let mut inner = self.inner.lock().unwrap();
+        if inner.shutdown {
+            return Vec::new();
+        }
         inner.events.drain(..).collect()
+    }
+
+    /// 检查是否已关闭
+    pub fn is_shutdown(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        inner.shutdown
     }
 }
 
@@ -366,8 +438,8 @@ impl rio_backend::event::EventListener for FFIEventListener {
     }
 
     fn send_event(&self, event: rio_backend::event::RioEvent, _id: rio_backend::event::WindowId) {
-        // 将 rio_backend 的事件转换为我们的事件
-        let our_event = convert_rio_event(event.clone());
+        // 将 rio_backend 的事件转换为我们的事件，注入 route_id
+        let our_event = convert_rio_event(event.clone(), self.route_id);
 
         // 对于 PtyWrite 事件，入队而不是直接发送给 Swift
         // 因为 PtyWrite 需要在 Rust 侧（RioMachine 事件循环）处理，写回 PTY
@@ -384,15 +456,17 @@ impl rio_backend::event::EventListener for FFIEventListener {
 }
 
 /// 将 rio_backend::event::RioEvent 转换为我们的 RioEvent
-fn convert_rio_event(event: rio_backend::event::RioEvent) -> RioEvent {
+///
+/// - route_id: 当前终端的 ID，用于注入到字符串事件中
+fn convert_rio_event(event: rio_backend::event::RioEvent, route_id: usize) -> RioEvent {
     use rio_backend::event::RioEvent as BackendEvent;
 
     match event {
-        BackendEvent::Wakeup(route_id) => RioEvent::Wakeup(route_id),
+        BackendEvent::Wakeup(id) => RioEvent::Wakeup(id),
         BackendEvent::Render => RioEvent::Render,
         BackendEvent::CursorBlinkingChange => RioEvent::CursorBlinkingChange,
-        BackendEvent::CursorBlinkingChangeOnRoute(route_id) => {
-            RioEvent::CursorBlinkingChangeOnRoute(route_id)
+        BackendEvent::CursorBlinkingChangeOnRoute(id) => {
+            RioEvent::CursorBlinkingChangeOnRoute(id)
         }
         BackendEvent::Bell => RioEvent::Bell,
         BackendEvent::Title(s) => RioEvent::Title(s),
@@ -400,9 +474,14 @@ fn convert_rio_event(event: rio_backend::event::RioEvent) -> RioEvent {
         BackendEvent::ClipboardStore(_, s) => RioEvent::ClipboardStore(s),
         BackendEvent::ClipboardLoad(_, _) => RioEvent::ClipboardLoad,
         BackendEvent::Exit => RioEvent::Exit,
-        BackendEvent::CloseTerminal(route_id) => RioEvent::CloseTerminal(route_id),
+        BackendEvent::CloseTerminal(id) => RioEvent::CloseTerminal(id),
         BackendEvent::Scroll(scroll) => RioEvent::Scroll(scroll),
         BackendEvent::MouseCursorDirty => RioEvent::MouseCursorDirty,
+        // 注入 route_id 到字符串事件
+        BackendEvent::CurrentDirectoryChanged(path) => {
+            RioEvent::CurrentDirectoryChanged(route_id, path.to_string_lossy().to_string())
+        }
+        BackendEvent::CommandExecuted(cmd) => RioEvent::CommandExecuted(route_id, cmd),
         _ => RioEvent::Noop,
     }
 }

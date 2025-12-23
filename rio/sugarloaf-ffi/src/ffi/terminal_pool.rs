@@ -436,6 +436,21 @@ pub extern "C" fn terminal_pool_set_event_callback(
     pool.set_event_callback(callback, context);
 }
 
+/// 设置字符串事件回调
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_string_event_callback(
+    handle: *mut TerminalPoolHandle,
+    callback: crate::app::ffi::TerminalPoolStringEventCallback,
+    context: *mut c_void,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.set_string_event_callback(callback, context);
+}
+
 /// 获取终端数量
 #[no_mangle]
 pub extern "C" fn terminal_pool_terminal_count(handle: *mut TerminalPoolHandle) -> usize {

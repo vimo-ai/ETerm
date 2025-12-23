@@ -88,6 +88,18 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     /// Bell 回调
     var onBell: ((Int) -> Void)?
 
+    /// 当前工作目录变化回调（OSC 7）
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - cwd: 新的工作目录路径
+    var onCurrentDirectoryChanged: ((Int, String) -> Void)?
+
+    /// Shell 命令执行回调（OSC 133;C）
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - command: 执行的命令
+    var onCommandExecuted: ((Int, String) -> Void)?
+
     /// 调试：上次 Event 时间（用于计算间隔）
     private var lastEventTime: Date?
     private var eventCounter: Int = 0
@@ -145,12 +157,26 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
 
         let contextPtr = Unmanaged.passUnretained(self).toOpaque()
 
+        // 设置常规事件回调
         terminal_pool_set_event_callback(
             handle,
             { (context, event) in
                 guard let context = context else { return }
                 let wrapper = Unmanaged<TerminalPoolWrapper>.fromOpaque(context).takeUnretainedValue()
                 wrapper.handleEvent(event)
+            },
+            contextPtr
+        )
+
+        // 设置字符串事件回调（用于 CWD、Command 等）
+        terminal_pool_set_string_event_callback(
+            handle,
+            { (context, eventType, terminalId, dataPtr) in
+                guard let context = context,
+                      let dataPtr = dataPtr else { return }
+                let wrapper = Unmanaged<TerminalPoolWrapper>.fromOpaque(context).takeUnretainedValue()
+                let data = String(cString: dataPtr)
+                wrapper.handleStringEvent(eventType: eventType.rawValue, terminalId: Int(terminalId), data: data)
             },
             contextPtr
         )
@@ -186,6 +212,29 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
             // Damaged 事件保留用于兼容，Rust 侧实际不会发送
             // 同样不需要调用 renderCallback，CVDisplayLink 会自动处理
             break
+
+        default:
+            break
+        }
+    }
+
+    /// 处理字符串事件（CWD、Command 等）
+    ///
+    /// - Parameters:
+    ///   - eventType: 事件类型（对应 SugarloafBridge.h 中的 TerminalEventType）
+    ///   - terminalId: 终端 ID
+    ///   - data: 字符串数据
+    private func handleStringEvent(eventType: UInt32, terminalId: Int, data: String) {
+        switch eventType {
+        case TerminalEventType_CurrentDirectoryChanged.rawValue:
+            DispatchQueue.main.async { [weak self] in
+                self?.onCurrentDirectoryChanged?(terminalId, data)
+            }
+
+        case TerminalEventType_CommandExecuted.rawValue:
+            DispatchQueue.main.async { [weak self] in
+                self?.onCommandExecuted?(terminalId, data)
+            }
 
         default:
             break

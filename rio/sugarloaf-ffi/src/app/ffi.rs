@@ -48,12 +48,14 @@ pub struct FontMetrics {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalEventType {
-    Wakeup = 0,       // 对应 Swift: case wakeup = 0
-    Render = 1,       // 对应 Swift: case render = 1
-    CursorBlink = 2,  // 对应 Swift: case cursorBlink = 2
-    Bell = 3,         // 对应 Swift: case bell = 3
-    TitleChanged = 4, // 对应 Swift: case titleChanged = 4
-    Damaged = 5,      // 保留用于兼容
+    Wakeup = 0,                   // 对应 Swift: case wakeup = 0
+    Render = 1,                   // 对应 Swift: case render = 1
+    CursorBlink = 2,              // 对应 Swift: case cursorBlink = 2
+    Bell = 3,                     // 对应 Swift: case bell = 3
+    TitleChanged = 4,             // 对应 Swift: case titleChanged = 4
+    Damaged = 5,                  // 保留用于兼容
+    CurrentDirectoryChanged = 6,  // OSC 7: 工作目录变化
+    CommandExecuted = 7,          // OSC 133;C: 命令执行
 }
 
 /// 终端事件
@@ -86,3 +88,13 @@ pub enum ErrorCode {
 
 /// 事件回调类型
 pub type TerminalPoolEventCallback = extern "C" fn(context: *mut c_void, event: TerminalEvent);
+
+/// 字符串事件回调类型（用于携带字符串数据的事件）
+///
+/// 用于 CurrentDirectoryChanged、CommandExecuted 等需要传递字符串的事件
+pub type TerminalPoolStringEventCallback = extern "C" fn(
+    context: *mut c_void,
+    event_type: TerminalEventType,
+    terminal_id: usize,
+    data: *const std::os::raw::c_char,
+);
