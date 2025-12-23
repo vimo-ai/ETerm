@@ -6,43 +6,38 @@
 
 import Foundation
 
-/// 事件订阅 - 用于管理和取消订阅
+/// 事件服务协议（通过 PluginContext 暴露给插件）
 ///
-/// 调用 unsubscribe() 可以取消订阅
-final class EventSubscription {
-    private let cancel: () -> Void
+/// 提供类型安全的事件发布/订阅机制
+protocol EventService: AnyObject {
 
-    init(cancel: @escaping () -> Void) {
-        self.cancel = cancel
-    }
+    /// 订阅事件
+    ///
+    /// - Parameters:
+    ///   - eventType: 事件类型
+    ///   - options: 订阅选项（队列、同步/异步）
+    ///   - handler: 事件处理器
+    /// - Returns: 订阅句柄（用于取消订阅，deinit 时自动取消）
+    func subscribe<E: DomainEvent>(
+        _ eventType: E.Type,
+        options: SubscriptionOptions,
+        handler: @escaping (E) -> Void
+    ) -> EventSubscription
 
-    /// 取消订阅
-    func unsubscribe() {
-        cancel()
-    }
-
-    /// 自动取消订阅（当对象被释放时）
-    deinit {
-        cancel()
-    }
+    /// 发射事件
+    ///
+    /// - Parameter event: 事件实例
+    func emit<E: DomainEvent>(_ event: E)
 }
 
-/// 事件服务 - 发布/订阅模式的事件总线
-///
-/// 提供松耦合的事件通信机制，插件可以：
-/// - 订阅感兴趣的事件
-/// - 发布自定义事件
-protocol EventService: AnyObject {
-    /// 订阅事件
-    /// - Parameters:
-    ///   - eventId: 事件标识符
-    ///   - handler: 事件处理器
-    /// - Returns: 订阅对象，用于取消订阅
-    func subscribe<T>(_ eventId: String, handler: @escaping (T) -> Void) -> EventSubscription
+// MARK: - 便捷方法
 
-    /// 发布事件
-    /// - Parameters:
-    ///   - eventId: 事件标识符
-    ///   - payload: 事件载荷数据
-    func publish<T>(_ eventId: String, payload: T)
+extension EventService {
+    /// 订阅事件（使用默认选项：主线程异步）
+    func subscribe<E: DomainEvent>(
+        _ eventType: E.Type,
+        handler: @escaping (E) -> Void
+    ) -> EventSubscription {
+        subscribe(eventType, options: .default, handler: handler)
+    }
 }
