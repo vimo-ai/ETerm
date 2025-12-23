@@ -23,11 +23,24 @@ extension TerminalWindowCoordinator {
     /// 关闭终端（统一入口）
     @discardableResult
     func closeTerminalInternal(_ terminalId: Int) -> Bool {
+        // 在关闭前查找 tabId（关闭后就找不到了）
+        var tabId: String?
+        for panel in terminalWindow.allPanels {
+            if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                tabId = tab.tabId.uuidString
+                break
+            }
+        }
+
         // 发送通知，让插件清理 Claude session 映射
+        var userInfo: [String: Any] = ["terminal_id": terminalId]
+        if let tabId = tabId {
+            userInfo["tab_id"] = tabId
+        }
         NotificationCenter.default.post(
             name: .terminalDidClose,
             object: nil,
-            userInfo: ["terminal_id": terminalId]
+            userInfo: userInfo
         )
 
         return terminalPool.closeTerminal(terminalId)
@@ -167,15 +180,15 @@ extension TerminalWindowCoordinator {
                             terminalId: terminalId
                         )
 
-                        // 检查是否需要恢复 Claude 会话
-                        let tabIdString = tab.tabId.uuidString
-                        if let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabIdString) {
-                            // 延迟发送恢复命令，等待终端完全启动
-                            let capturedTerminalId = terminalId
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                                self?.restoreClaudeSession(terminalId: capturedTerminalId, sessionId: sessionId)
-                            }
-                        }
+                        // 发送终端创建通知（插件可监听此通知进行恢复等操作）
+                        NotificationCenter.default.post(
+                            name: .terminalDidCreate,
+                            object: nil,
+                            userInfo: [
+                                "terminal_id": terminalId,
+                                "tab_id": tab.tabId.uuidString
+                            ]
+                        )
                     } else {
                         // 创建失败，保留状态供重试
                         workingDirectoryRegistry.retainPendingTerminal(tabId: tab.tabId)
@@ -191,17 +204,6 @@ extension TerminalWindowCoordinator {
             return
         }
         ensureTerminalsForPage(activePage)
-    }
-
-    /// 恢复 Claude 会话
-    ///
-    /// - Parameters:
-    ///   - terminalId: 终端 ID
-    ///   - sessionId: Claude Session ID
-    func restoreClaudeSession(terminalId: Int, sessionId: String) {
-        // 发送 claude --resume 命令
-        let command = "claude --resume \(sessionId)\n"
-        terminalPool.writeInput(terminalId: terminalId, data: command)
     }
 
     /// 处理终端关闭事件
@@ -221,12 +223,29 @@ extension TerminalWindowCoordinator {
         NSSound.beep()
     }
 
-    /// 处理标题变更事件
-    func handleTitleChange(terminalId: Int, title: String) {
-        // 找到对应的 Tab 并更新标题
+    /// 处理系统标题变更事件（由 TabTitleCoordinator 调用）
+    ///
+    /// 更新 Tab 的系统标题（目录名/进程名）
+    func handleSystemTitleChange(terminalId: Int, title: String) {
+        // 找到对应的 Tab 并更新系统标题
         for panel in terminalWindow.allPanels {
             if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
-                tab.title = title
+                tab.updateSystemTitle(title)
+                objectWillChange.send()
+                updateTrigger = UUID()
+                return
+            }
+        }
+    }
+
+    /// 处理插件标题清除事件（进程退出时由 TabTitleCoordinator 调用）
+    ///
+    /// 清除 Tab 的插件标题，恢复显示系统标题
+    func handlePluginTitleClear(terminalId: Int) {
+        // 找到对应的 Tab 并清除插件标题
+        for panel in terminalWindow.allPanels {
+            if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                tab.clearPluginTitle()
                 objectWillChange.send()
                 updateTrigger = UUID()
                 return
@@ -299,6 +318,28 @@ extension TerminalWindowCoordinator {
 
         // 初始化键盘系统
         self.keyboardSystem = KeyboardSystem(coordinator: self)
+
+        // 初始化 Tab 标题自动更新协调器
+        self.tabTitleCoordinator = TabTitleCoordinator(
+            terminalPool: pool,
+            onSystemTitleUpdate: { [weak self] terminalId, title in
+                self?.handleSystemTitleChange(terminalId: terminalId, title: title)
+            },
+            onPluginTitleClear: { [weak self] terminalId in
+                self?.handlePluginTitleClear(terminalId: terminalId)
+            }
+        )
+
+        // 连接 TerminalPoolWrapper 的事件回调
+        if let poolWrapper = pool as? TerminalPoolWrapper {
+            poolWrapper.onCurrentDirectoryChanged = { [weak self] terminalId, cwd in
+                self?.tabTitleCoordinator?.handleCurrentDirectoryChanged(terminalId: terminalId, cwd: cwd)
+            }
+
+            poolWrapper.onCommandExecuted = { [weak self] terminalId, command in
+                self?.tabTitleCoordinator?.handleCommandExecuted(terminalId: terminalId, command: command)
+            }
+        }
     }
 
     /// 设置待附加的分离终端（跨窗口迁移时使用）

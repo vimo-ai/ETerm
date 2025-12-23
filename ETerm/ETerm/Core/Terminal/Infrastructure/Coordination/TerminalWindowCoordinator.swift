@@ -36,6 +36,8 @@ import PanelLayoutKit
 extension Notification.Name {
     /// Active 终端变化通知（Tab 切换或 Panel 切换）
     static let activeTerminalDidChange = Notification.Name("activeTerminalDidChange")
+    /// 终端创建通知（用于插件恢复等场景）
+    static let terminalDidCreate = Notification.Name("terminalDidCreate")
     /// 终端关闭通知
     static let terminalDidClose = Notification.Name("terminalDidClose")
 }
@@ -165,6 +167,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 命令录制代理
     private let recordingProxy = CommandRecordingProxy()
+
+    /// Tab 标题自动更新协调器
+    var tabTitleCoordinator: TabTitleCoordinator?
 
     // MARK: - Constants
 
