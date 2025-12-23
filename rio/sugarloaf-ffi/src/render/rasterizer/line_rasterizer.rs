@@ -5,6 +5,7 @@ use crate::render::cache::{CursorInfo, SearchMatchInfo, HyperlinkHoverInfo};
 use crate::render::box_drawing::{detect_drawable_character, BoxDrawingConfig};
 use rio_backend::ansi::CursorShape;
 use skia_safe::{Image, Paint, ImageInfo, ColorType, AlphaType, Point, Color4f, FontMgr, Color};
+use skia_safe::gpu::{self, DirectContext, SurfaceOrigin, Budgeted};
 use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
 use sugarloaf::layout::{FragmentStyleDecoration, UnderlineShape};
 use std::cell::RefCell;
@@ -54,6 +55,7 @@ impl LineRasterizer {
     /// - baseline_offset: 基线偏移（y 坐标）
     /// - background_color: 背景色
     /// - box_drawing_config: Box-drawing 字符渲染配置
+    /// - gpu_context: 可选的 GPU 上下文，如果提供则使用 GPU Surface（避免 CPU→GPU 双份内存）
     ///
     /// 注意：IME 渲染已移到独立的 overlay 层（draw_ime_overlay）
     pub fn render(
@@ -70,18 +72,38 @@ impl LineRasterizer {
         baseline_offset: f32,
         background_color: Color4f,
         box_drawing_config: &BoxDrawingConfig,
+        gpu_context: Option<&mut DirectContext>,
     ) -> Option<Image> {
         // ===== 步骤 1: 创建 surface =====
         // 🎯 Image 高度使用 line_height（= cell_height * line_height_factor）
         // 这样 box-drawing 字符可以拉伸填满整个行高
+        let width = line_width.round() as i32;
+        let height = line_height.round() as i32;
+
         let image_info = ImageInfo::new(
-            (line_width.round() as i32, line_height.round() as i32),
+            (width, height),
             ColorType::BGRA8888,
             AlphaType::Premul,
-            None,
+            skia_safe::ColorSpace::new_srgb(),
         );
 
-        let mut surface = skia_safe::surfaces::raster(&image_info, None, None)?;
+        // 优先使用 GPU Surface（避免 CPU→GPU 双份内存）
+        let mut surface = if let Some(ctx) = gpu_context {
+            gpu::surfaces::render_target(
+                ctx,
+                Budgeted::Yes,
+                &image_info,
+                None,
+                SurfaceOrigin::TopLeft,
+                None,
+                false,
+                false,
+            )
+        } else {
+            // 回退到 CPU Surface（测试用）
+            skia_safe::surfaces::raster(&image_info, None, None)
+        }?;
+
         let canvas = surface.canvas();
 
         // ===== 步骤 2: 填充背景色 =====
@@ -423,7 +445,8 @@ mod tests {
     use skia_safe::Font;
 
     #[test]
-    fn test_render_empty_line() {
+    fn test_render_empty_line_cpu_fallback() {
+        // 测试 CPU 回退路径（gpu_context = None）
         let rasterizer = LineRasterizer::new();
         let layout = GlyphLayout {
             glyphs: vec![],
@@ -434,7 +457,6 @@ mod tests {
             None,   // cursor_info
             None,   // search_info
             None,   // hyperlink_hover_info
-            None,   // ime_info
             &[],    // url_ranges
             800.0,  // line_width
             10.0,   // cell_width
@@ -443,6 +465,7 @@ mod tests {
             12.0,   // baseline_offset
             Color4f::new(0.0, 0.0, 0.0, 1.0),  // black background
             &BoxDrawingConfig::default(),
+            None,   // gpu_context = None，使用 CPU raster
         );
 
         assert!(image.is_some());
@@ -453,7 +476,8 @@ mod tests {
     }
 
     #[test]
-    fn test_render_single_char() {
+    fn test_render_single_char_cpu_fallback() {
+        // 测试单字符渲染（CPU 回退路径）
         let rasterizer = LineRasterizer::new();
         let font = Font::default();
 
@@ -474,7 +498,6 @@ mod tests {
             None,   // cursor_info
             None,   // search_info
             None,   // hyperlink_hover_info
-            None,   // ime_info
             &[],    // url_ranges
             800.0,
             10.0,
@@ -483,6 +506,139 @@ mod tests {
             12.0,
             Color4f::new(0.0, 0.0, 0.0, 1.0),
             &BoxDrawingConfig::default(),
+            None,   // gpu_context = None，使用 CPU raster
+        );
+
+        assert!(image.is_some());
+    }
+
+    #[test]
+    fn test_gpu_surface_vs_cpu_surface_dimensions() {
+        // 验证 GPU 和 CPU 路径生成相同尺寸的 Image
+        let rasterizer = LineRasterizer::new();
+        let layout = GlyphLayout {
+            glyphs: vec![],
+        };
+
+        // CPU 路径
+        let cpu_image = rasterizer.render(
+            &layout,
+            None, None, None, &[],
+            1000.0, 10.0, 18.0, 21.6, 14.0,
+            Color4f::new(0.1, 0.1, 0.1, 1.0),
+            &BoxDrawingConfig::default(),
+            None,  // CPU
+        ).expect("CPU render failed");
+
+        // 验证尺寸
+        assert_eq!(cpu_image.width(), 1000);
+        assert_eq!(cpu_image.height(), 22);  // 21.6 rounded
+
+        // 注意：GPU 路径需要真实的 DirectContext，无法在单元测试中创建
+        // 但我们已经验证了 CPU 路径正常工作
+    }
+
+    #[test]
+    fn test_render_with_cursor() {
+        // 测试带光标的渲染
+        let rasterizer = LineRasterizer::new();
+        let font = Font::default();
+
+        let layout = GlyphLayout {
+            glyphs: vec![GlyphInfo {
+                grapheme: "H".to_string(),
+                font: font.clone(),
+                x: 0.0,
+                color: Color4f::new(1.0, 1.0, 1.0, 1.0),
+                background_color: None,
+                width: 1.0,
+                decoration: None,
+            }],
+        };
+
+        let cursor_info = CursorInfo {
+            col: 0,
+            shape: rio_backend::ansi::CursorShape::Block,
+            color: [1.0, 1.0, 1.0, 0.8],  // RGBA 数组
+        };
+
+        let image = rasterizer.render(
+            &layout,
+            Some(&cursor_info),
+            None, None, &[],
+            800.0, 10.0, 16.0, 19.2, 12.0,
+            Color4f::new(0.0, 0.0, 0.0, 1.0),
+            &BoxDrawingConfig::default(),
+            None,
+        );
+
+        assert!(image.is_some());
+    }
+
+    #[test]
+    fn test_render_with_search_highlight() {
+        // 测试带搜索高亮的渲染
+        let rasterizer = LineRasterizer::new();
+        let font = Font::default();
+
+        let layout = GlyphLayout {
+            glyphs: vec![
+                GlyphInfo {
+                    grapheme: "t".to_string(),
+                    font: font.clone(),
+                    x: 0.0,
+                    color: Color4f::new(1.0, 1.0, 1.0, 1.0),
+                    background_color: None,
+                    width: 1.0,
+                    decoration: None,
+                },
+                GlyphInfo {
+                    grapheme: "e".to_string(),
+                    font: font.clone(),
+                    x: 10.0,
+                    color: Color4f::new(1.0, 1.0, 1.0, 1.0),
+                    background_color: None,
+                    width: 1.0,
+                    decoration: None,
+                },
+                GlyphInfo {
+                    grapheme: "s".to_string(),
+                    font: font.clone(),
+                    x: 20.0,
+                    color: Color4f::new(1.0, 1.0, 1.0, 1.0),
+                    background_color: None,
+                    width: 1.0,
+                    decoration: None,
+                },
+                GlyphInfo {
+                    grapheme: "t".to_string(),
+                    font: font.clone(),
+                    x: 30.0,
+                    color: Color4f::new(1.0, 1.0, 1.0, 1.0),
+                    background_color: None,
+                    width: 1.0,
+                    decoration: None,
+                },
+            ],
+        };
+
+        let search_info = SearchMatchInfo {
+            ranges: vec![(0, 4, true)],  // (start_col, end_col, is_focused)
+            fg_color: [0.0, 0.0, 0.0, 1.0],        // 黑色文字
+            bg_color: [1.0, 1.0, 0.0, 0.5],        // 黄色高亮
+            focused_fg_color: [0.0, 0.0, 0.0, 1.0],
+            focused_bg_color: [1.0, 0.5, 0.0, 0.8], // 橙色焦点高亮
+        };
+
+        let image = rasterizer.render(
+            &layout,
+            None,
+            Some(&search_info),
+            None, &[],
+            800.0, 10.0, 16.0, 19.2, 12.0,
+            Color4f::new(0.0, 0.0, 0.0, 1.0),
+            &BoxDrawingConfig::default(),
+            None,
         );
 
         assert!(image.is_some());

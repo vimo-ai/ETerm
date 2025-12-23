@@ -57,7 +57,12 @@ impl Renderer {
     }
 
     /// 渲染一行（核心逻辑：三级缓存查询）
-    pub fn render_line(&mut self, line: usize, state: &TerminalState) -> skia_safe::Image {
+    ///
+    /// # 参数
+    /// - `line`: 屏幕行号
+    /// - `state`: 终端状态
+    /// - `gpu_context`: 可选的 GPU 上下文，如果提供则使用 GPU Surface（避免 CPU→GPU 双份内存）
+    pub fn render_line(&mut self, line: usize, state: &TerminalState, gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
         let text_hash = compute_text_hash(line, state);
         let state_hash = compute_state_hash_for_line(line, state);
 
@@ -71,7 +76,7 @@ impl Renderer {
                 // Level 2: 外层命中 → 快速绘制（30%）
                 // 复用字体选择（layout），重新计算状态（cursor/选区/搜索）
                 self.stats.layout_hits += 1;
-                let image = self.render_with_layout(layout.clone(), line, state);
+                let image = self.render_with_layout(layout.clone(), line, state, gpu_context);
                 self.cache.insert(text_hash, state_hash, layout, image.clone());
                 image
             }
@@ -79,7 +84,7 @@ impl Renderer {
                 // Level 3: 完全未命中 → 完整渲染（100%）
                 self.stats.cache_misses += 1;
                 let layout = self.compute_glyph_layout(line, state);
-                let image = self.render_with_layout(layout.clone(), line, state);
+                let image = self.render_with_layout(layout.clone(), line, state, gpu_context);
                 self.cache.insert(text_hash, state_hash, layout, image.clone());
                 image
             }
@@ -451,7 +456,7 @@ impl Renderer {
     /// 基于布局绘制（光栅化）
     ///
     /// 注意：cursor_info 从 state 动态计算，不从 layout 缓存读取
-    fn render_with_layout(&mut self, layout: GlyphLayout, line: usize, state: &TerminalState) -> skia_safe::Image {
+    fn render_with_layout(&mut self, layout: GlyphLayout, line: usize, state: &TerminalState, gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
         // 获取 metrics（自动缓存）
         let metrics = self.get_font_metrics();
 
@@ -579,6 +584,7 @@ impl Renderer {
                 metrics.baseline_offset.value,
                 background_color,
                 &self.config.box_drawing,
+                gpu_context,
             )
             .expect("Failed to render line")
     }
@@ -726,7 +732,7 @@ mod tests {
         let state = create_mock_state();
 
         // 渲染第 0 行
-        let img = renderer.render_line(0, &state);
+        let img = renderer.render_line(0, &state, None);
 
         // 验证图像生成
         assert!(img.width() > 0);
@@ -744,16 +750,16 @@ mod tests {
         let mut state = create_mock_state();
 
         // 第一次渲染：完全未命中
-        let _img1 = renderer.render_line(0, &state);
+        let _img1 = renderer.render_line(0, &state, None);
         assert_eq!(renderer.stats.cache_misses, 1);
 
         // 第二次渲染（状态不变）：内层命中
-        let _img2 = renderer.render_line(0, &state);
+        let _img2 = renderer.render_line(0, &state, None);
         assert_eq!(renderer.stats.cache_hits, 1);
 
         // 光标移动到第 0 行（改变状态）：外层命中
         state.cursor.position = AbsolutePoint::new(0, 5);
-        let _img3 = renderer.render_line(0, &state);
+        let _img3 = renderer.render_line(0, &state, None);
         assert_eq!(renderer.stats.layout_hits, 1);
     }
 
@@ -766,19 +772,19 @@ mod tests {
         state.cursor.position = AbsolutePoint::new(10, 0);
 
         // 首次渲染：完全未命中
-        let _img1 = renderer.render_line(10, &state);
+        let _img1 = renderer.render_line(10, &state, None);
         assert_eq!(renderer.stats.cache_misses, 1);
         assert_eq!(renderer.stats.layout_hits, 0);
         assert_eq!(renderer.stats.cache_hits, 0);
 
         // 光标移动到同一行的另一列：外层命中
         state.cursor.position = AbsolutePoint::new(10, 5);
-        let _img2 = renderer.render_line(10, &state);
+        let _img2 = renderer.render_line(10, &state, None);
         assert_eq!(renderer.stats.layout_hits, 1);
 
         // 光标回到原位置：内层命中
         state.cursor.position = AbsolutePoint::new(10, 0);
-        let _img3 = renderer.render_line(10, &state);
+        let _img3 = renderer.render_line(10, &state, None);
         assert_eq!(renderer.stats.cache_hits, 1);
     }
 
@@ -790,12 +796,12 @@ mod tests {
 
         // 光标在第 5 行，渲染第 10 行
         state.cursor.position = AbsolutePoint::new(5, 0);
-        let _img1 = renderer.render_line(10, &state);
+        let _img1 = renderer.render_line(10, &state, None);
         renderer.reset_stats();
 
         // 光标移动到第 6 行，第 10 行的 state_hash 应该不变
         state.cursor.position = AbsolutePoint::new(6, 0);
-        let _img2 = renderer.render_line(10, &state);
+        let _img2 = renderer.render_line(10, &state, None);
 
         // 验证：内层缓存命中（state_hash 没变）
         assert_eq!(renderer.stats.cache_hits, 1);
@@ -811,14 +817,14 @@ mod tests {
         // 先渲染 24 行（光标在第 5 行）
         state.cursor.position = AbsolutePoint::new(5, 0);
         for line in 0..24 {
-            renderer.render_line(line, &state);
+            renderer.render_line(line, &state, None);
         }
         renderer.reset_stats();
 
         // 光标移动到第 6 行，重新渲染所有行
         state.cursor.position = AbsolutePoint::new(6, 0);
         for line in 0..24 {
-            renderer.render_line(line, &state);
+            renderer.render_line(line, &state, None);
         }
 
         // 验证：只有第 5、6 行需要重绘（外层命中），其他 22 行内层命中
@@ -835,7 +841,7 @@ mod tests {
 
         // 先渲染 10 行（无选区）
         for line in 0..10 {
-            renderer.render_line(line, &state);
+            renderer.render_line(line, &state, None);
         }
         renderer.reset_stats();
 
@@ -846,7 +852,7 @@ mod tests {
             SelectionType::Simple,
         ));
         for line in 0..10 {
-            renderer.render_line(line, &state);
+            renderer.render_line(line, &state, None);
         }
 
         // 验证：外层缓存命中（跳过字体处理）
@@ -862,7 +868,7 @@ mod tests {
 
         // 先渲染 5 行（无搜索）
         for line in 0..5 {
-            renderer.render_line(line, &state);
+            renderer.render_line(line, &state, None);
         }
         renderer.reset_stats();
 
@@ -875,7 +881,7 @@ mod tests {
             0,
         ));
         for line in 0..5 {
-            renderer.render_line(line, &state);
+            renderer.render_line(line, &state, None);
         }
 
         // 验证：第 0、1、4 行内层命中，第 2、3 行外层命中
@@ -919,14 +925,14 @@ mod tests {
         assert_eq!(state.cursor.position.line, 0);
 
         // 渲染 Line 0（有光标）→ Miss
-        let _img0 = renderer.render_line(0, &state);
+        let _img0 = renderer.render_line(0, &state, None);
         assert_eq!(renderer.stats.cache_misses, 1, "Line 0 should be cache miss");
 
         renderer.reset_stats();
 
         // 渲染 Line 1（无光标，但 text_hash 相同）
         // 期望：要么 Miss（重新计算），要么 LayoutHit 但 cursor_info 为 None
-        let _img1 = renderer.render_line(1, &state);
+        let _img1 = renderer.render_line(1, &state, None);
 
         // 打印实际结果
         eprintln!("Line 1 stats: misses={}, layout_hits={}, cache_hits={}",
@@ -956,13 +962,13 @@ mod tests {
         assert_eq!(state.cursor.position.line, 0);
 
         // 渲染 Line 0（有光标）→ Miss，layout 里有 cursor_info
-        let _img0 = renderer.render_line(0, &state);
+        let _img0 = renderer.render_line(0, &state, None);
         assert_eq!(renderer.stats.cache_misses, 1);
 
         renderer.reset_stats();
 
         // 渲染 Line 1（无光标）→ LayoutHit
-        let _img1 = renderer.render_line(1, &state);
+        let _img1 = renderer.render_line(1, &state, None);
         assert_eq!(renderer.stats.layout_hits, 1, "Line 1 should be LayoutHit");
 
         // 注：cursor_info 在 render_with_layout() 中从 state 动态计算，
@@ -1081,7 +1087,7 @@ mod tests {
         let state = terminal.state();
 
         // 渲染第一行
-        let img = renderer.render_line(0, &state);
+        let img = renderer.render_line(0, &state, None);
 
         // 验证图像生成
         assert!(img.width() > 0);
@@ -1107,7 +1113,7 @@ mod tests {
         let state = terminal.state();
 
         // 渲染第一行
-        let img = renderer.render_line(0, &state);
+        let img = renderer.render_line(0, &state, None);
 
         assert!(img.width() > 0);
         assert!(img.height() > 0);
@@ -1130,7 +1136,7 @@ mod tests {
 
         // 渲染所有 5 行
         for line in 0..5 {
-            let img = renderer.render_line(line, &state);
+            let img = renderer.render_line(line, &state, None);
             assert!(img.width() > 0);
         }
 
@@ -1140,7 +1146,7 @@ mod tests {
         // 重新渲染相同的行（应该全部命中缓存）
         renderer.reset_stats();
         for line in 0..5 {
-            let _ = renderer.render_line(line, &state);
+            let _ = renderer.render_line(line, &state, None);
         }
 
         assert_eq!(renderer.stats.cache_hits, 5);
@@ -1159,7 +1165,7 @@ mod tests {
         let state1 = terminal.state();
 
         // 渲染第 0 行（光标在这里）
-        let _ = renderer.render_line(0, &state1);
+        let _ = renderer.render_line(0, &state1, None);
         assert_eq!(renderer.stats.cache_misses, 1);
 
         // 光标移动到第 1 行
@@ -1168,14 +1174,14 @@ mod tests {
         renderer.reset_stats();
 
         // 重新渲染第 0 行（光标已不在这里）
-        let _ = renderer.render_line(0, &state2);
+        let _ = renderer.render_line(0, &state2, None);
         // 注意：可能是 cache_hit 或 layout_hit，取决于行内容是否改变
         // 如果光标移动导致第 0 行内容不变，应该是 cache_hit
         // 但如果终端清除了光标位置的字符，可能是 layout_hit
         assert!(renderer.stats.cache_hits > 0 || renderer.stats.layout_hits > 0);
 
         // 渲染第 1 行（光标在这里，cache miss）
-        let _ = renderer.render_line(1, &state2);
+        let _ = renderer.render_line(1, &state2, None);
         assert_eq!(renderer.stats.cache_misses, 1);
     }
 
@@ -1191,7 +1197,7 @@ mod tests {
         let state = terminal.state();
 
         // 使用黑色背景渲染
-        let img1 = renderer.render_line(0, &state);
+        let img1 = renderer.render_line(0, &state, None);
         assert_eq!(renderer.stats.cache_misses, 1);
 
         // 改变背景色为白色
@@ -1199,7 +1205,7 @@ mod tests {
         renderer.reset_stats();
 
         // 重新渲染（应该 cache miss，因为背景色变了）
-        let img2 = renderer.render_line(0, &state);
+        let img2 = renderer.render_line(0, &state, None);
         assert_eq!(renderer.stats.cache_misses, 1);
 
         // 验证图像不同（宽高相同，但内容不同）
@@ -1238,7 +1244,7 @@ mod tests {
         // === 第一帧：渲染所有 100 行（全部 cache miss）===
         let frame1_start = std::time::Instant::now();
         for line in 0..100 {
-            let _img = renderer.render_line(line, &state);
+            let _img = renderer.render_line(line, &state, None);
         }
         let frame1_time = frame1_start.elapsed();
 
@@ -1260,7 +1266,7 @@ mod tests {
 
         let frame2_start = std::time::Instant::now();
         for line in 0..100 {
-            let _img = renderer.render_line(line, &state);
+            let _img = renderer.render_line(line, &state, None);
         }
         let frame2_time = frame2_start.elapsed();
 

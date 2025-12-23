@@ -5,8 +5,8 @@ use crate::render::layout::GlyphInfo;
 use rio_backend::ansi::CursorShape;
 
 /// 外层缓存最大条目数（text_hash → LineCacheEntry）
-/// 15000 条 × ~150KB ≈ 2.2GB 上限（实际会更小，因为有内层复用）
-const MAX_TEXT_ENTRIES: usize = 15000;
+/// 3000 条 ≈ 25 屏（4K@120行/屏），内存上限 ~400MB
+const MAX_TEXT_ENTRIES: usize = 3000;
 
 /// 内层缓存最大条目数（state_hash → Image）
 /// 限制每个 text_hash 条目下的 Image 缓存数量，防止内存泄漏
