@@ -2,6 +2,9 @@ use sugarloaf::font::fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle};
 use sugarloaf::font::FontLibrary;
 use std::sync::OnceLock;
 
+// 重新导出 mcp-router-core 的 FFI 函数（共享同一个 std 避免符号冲突）
+pub use mcp_router_core::ffi::*;
+
 // 同步原语（FairMutex, FairRwLock）
 mod sync;
 pub use sync::*;

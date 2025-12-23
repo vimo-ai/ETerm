@@ -1580,13 +1580,19 @@ impl TerminalPool {
                         let canvas = surface_cache.surface.canvas();
                         canvas.clear(skia_safe::Color::TRANSPARENT);
 
+                        // 获取 GPU context 用于创建 GPU-backed Images（避免 CPU→GPU 双份内存）
+                        let mut gpu_context = {
+                            let sugarloaf = self.sugarloaf.lock();
+                            sugarloaf.get_context().skia_context.clone()
+                        };
+
                         let mut renderer = self.renderer.lock();
 
                         let logical_cell_size = font_metrics.to_logical_size(scale);
                         let logical_line_height = logical_cell_size.height * self.config.line_height;
 
                         for line in 0..rows {
-                            let image = renderer.render_line(line, &state);
+                            let image = renderer.render_line(line, &state, Some(&mut gpu_context));
 
                             // 计算该行在 Surface 内的位置（物理像素）
                             let y_offset_pixels = (logical_line_height * (line as f32)) * scale;
@@ -2706,19 +2712,20 @@ impl TerminalPool {
         let skia_limit_mb = skia_cache_limit / (1024 * 1024);
         let skia_purgeable_mb = skia_purgeable / (1024 * 1024);
 
-        // 总计（包括 Skia GPU 缓存）
-        let total_tracked_bytes = line_cache_bytes + total_grid_bytes + total_render_cache_bytes + total_surface_bytes + skia_cache_bytes;
+        // 总计（去重：LineCache 和 SkiaGPU 指向同一块 GPU 内存，只计 SkiaGPU）
+        // LineCache 统计的是理论值 (width*height*4)，SkiaGPU 是实际 GPU 占用
+        let total_tracked_bytes = total_grid_bytes + total_render_cache_bytes + total_surface_bytes + skia_cache_bytes;
         let total_mb = total_tracked_bytes / (1024 * 1024);
 
         // 输出报告
         crate::rust_log_info!(
-            "[MemDebug] REPORT: total={}MB | LineCache={}MB ({}/{} entries, {} images) | Grid={}MB ({} terminals, {} history, {} total lines) | RenderCache={}MB ({} cached) | Surface={}MB ({} cached) | SkiaGPU={}MB (limit={}MB, purgeable={}MB)",
+            "[MemDebug] REPORT: total={}MB (dedup) | LineCache={}MB ({}/{} entries, {} images, theoretical) | Grid={}MB ({} terminals, {} history) | RenderCache={}MB | Surface={}MB | SkiaGPU={}MB (limit={}MB)",
             total_mb,
             line_cache_mb, line_cache_entries, line_cache_max, line_cache_images,
-            grid_mb, terminal_count, total_history_lines, total_grid_lines,
-            render_cache_mb, render_cache_count,
-            surface_mb, surface_count,
-            skia_cache_mb, skia_limit_mb, skia_purgeable_mb
+            grid_mb, terminal_count, total_history_lines,
+            render_cache_mb,
+            surface_mb,
+            skia_cache_mb, skia_limit_mb
         );
     }
 }
@@ -2859,7 +2866,7 @@ mod tests {
 
         let frame1_start = std::time::Instant::now();
         for line in 0..100 {
-            let _img = renderer.render_line(line, &state);
+            let _img = renderer.render_line(line, &state, None);
         }
         let frame1_time = frame1_start.elapsed();
         let frame1_stats = renderer.stats.clone();
@@ -2883,7 +2890,7 @@ mod tests {
 
         let render_start = std::time::Instant::now();
         for line in 0..100 {
-            let _img = renderer.render_line(line, &state2);
+            let _img = renderer.render_line(line, &state2, None);
         }
         let render_time = render_start.elapsed();
         let frame2_stats = renderer.stats.clone();

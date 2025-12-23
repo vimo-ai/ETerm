@@ -313,7 +313,7 @@ mod tests {
         let t3 = Instant::now();
         let mut images = Vec::with_capacity(24);
         for line in 0..24 {
-            let img = renderer.render_line(line, &state);
+            let img = renderer.render_line(line, &state, None);
             images.push(img);
         }
         let d3 = t3.elapsed();
@@ -322,7 +322,7 @@ mod tests {
         // === Stage 4: render_line × 24 (第二次，应该全 hit) ===
         let t4 = Instant::now();
         for line in 0..24 {
-            let _img = renderer.render_line(line, &state);
+            let _img = renderer.render_line(line, &state, None);
         }
         let d4 = t4.elapsed();
         println!("4. render_line × 24   : {:?} (二次全 hit)", d4);
@@ -362,12 +362,12 @@ mod tests {
 
         // 单行渲染 - 首次 (miss)
         let t1 = Instant::now();
-        let img1 = renderer.render_line(0, &state);
+        let img1 = renderer.render_line(0, &state, None);
         let d1 = t1.elapsed();
 
         // 单行渲染 - 二次 (hit)
         let t2 = Instant::now();
-        let _img2 = renderer.render_line(0, &state);
+        let _img2 = renderer.render_line(0, &state, None);
         let d2 = t2.elapsed();
 
         println!("Line 0 渲染:");
@@ -418,7 +418,7 @@ mod tests {
             // render_line × 200
             let t2 = Instant::now();
             for line in 0..200 {
-                let _img = renderer.render_line(line, &state);
+                let _img = renderer.render_line(line, &state, None);
             }
             let render_time = t2.elapsed();
 
@@ -449,7 +449,7 @@ mod tests {
         // 先预热缓存
         let warmup_state = terminal.state();
         for line in 0..200 {
-            let _img = renderer.render_line(line, &warmup_state);
+            let _img = renderer.render_line(line, &warmup_state, None);
         }
 
         let mut single_state_times = Vec::new();
@@ -470,7 +470,7 @@ mod tests {
             // render_line × 200 (大部分应该 hit)
             let t2 = Instant::now();
             for line in 0..200 {
-                let _img = renderer.render_line(line, &state);
+                let _img = renderer.render_line(line, &state, None);
             }
             let render_time = t2.elapsed();
 
@@ -533,7 +533,7 @@ mod tests {
         // 预热缓存
         let warmup_state = terminal.state();
         for line in 0..screen_lines {
-            let _img = renderer.render_line(line, &warmup_state);
+            let _img = renderer.render_line(line, &warmup_state, None);
         }
 
         let mut state_times = Vec::new();
@@ -554,7 +554,7 @@ mod tests {
             // render_line × screen_lines
             let t2 = Instant::now();
             for line in 0..screen_lines {
-                let _img = renderer.render_line(line, &state);
+                let _img = renderer.render_line(line, &state, None);
             }
             let render_time = t2.elapsed();
 

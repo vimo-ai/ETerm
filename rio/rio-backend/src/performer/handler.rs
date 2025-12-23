@@ -803,8 +803,8 @@ impl<U: Handler, T: Timeout> copa::Perform for Performer<'_, U, T> {
         }
 
         match params[0] {
-            // Set window title.
-            b"0" | b"2" => {
+            // Set window title (OSC 0: icon+title, OSC 1: icon, OSC 2: title).
+            b"0" | b"1" | b"2" => {
                 if params.len() >= 2 {
                     let title = params[1..]
                         .iter()
