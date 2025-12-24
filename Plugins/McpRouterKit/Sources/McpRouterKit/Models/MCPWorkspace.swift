@@ -129,7 +129,6 @@ final class MCPWorkspaceManager: ObservableObject {
     func syncWithWorkspacePlugin() {
         // TODO: Implement when WorkspacePlugin integration is available
         // This requires WorkspaceDataStore which is in ETerm main app
-        print("[MCPWorkspace] Sync with WorkspacePlugin not yet implemented in Bundle plugin")
     }
 
     // MARK: - CRUD
@@ -228,7 +227,7 @@ final class MCPWorkspaceManager: ObservableObject {
             let workspacePath = "\(pluginDir)/workspaces.json"
             try data.write(to: URL(fileURLWithPath: workspacePath))
         } catch {
-            print("[MCPWorkspace] Failed to save workspaces: \(error)")
+            // Silently ignore save failure
         }
     }
 

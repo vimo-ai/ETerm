@@ -30,7 +30,6 @@ final class PluginLoader {
 
             let tab = SidebarTab(id: tabId, title: title, icon: icon, viewProvider: viewProvider)
             SidebarRegistry.shared.registerTab(for: pluginId, pluginName: pluginName, tab: tab)
-            print("[PluginLoader] Registered sidebar tab '\(title)' for plugin \(pluginId)")
         }
     }
 
@@ -43,7 +42,6 @@ final class PluginLoader {
         // 确保插件目录存在
         try? FileManager.default.createDirectory(at: pluginsURL, withIntermediateDirectories: true)
 
-        print("[PluginLoader] Scanning plugins at: \(pluginsPath)")
         loadPluginsFrom(directory: pluginsURL, type: "plugin")
     }
 
@@ -71,12 +69,10 @@ final class PluginLoader {
                 bundles.append(contentsOf: pluginBundles)
             }
 
-            print("[PluginLoader] Found \(bundles.count) \(type) plugin(s)")
-
             bundles.forEach { loadPlugin(at: $0) }
 
         } catch {
-            print("[PluginLoader] Error scanning \(type) plugins: \(error)")
+            // Scanning error, silently ignore
         }
     }
 
@@ -86,20 +82,16 @@ final class PluginLoader {
         let pluginName = url.deletingPathExtension().lastPathComponent
 
         guard let bundle = Bundle(url: url) else {
-            print("[PluginLoader] ❌ Failed to create bundle: \(pluginName)")
             return false
         }
 
         // 加载 bundle（这会自动加载 bundle 里的 Contents/MacOS/ 下的主 dylib）
         guard bundle.load() else {
-            print("[PluginLoader] ❌ Failed to load bundle: \(pluginName)")
             return false
         }
 
         let identifier = bundle.bundleIdentifier ?? pluginName
         loadedPlugins[identifier] = bundle
-
-        print("[PluginLoader] ✅ Loaded: \(pluginName) (\(identifier))")
 
         // 调用插件入口点（如果定义了 principalClass）
         activatePlugin(bundle, name: pluginName)
@@ -112,7 +104,6 @@ final class PluginLoader {
         // 如果 Info.plist 中定义了 NSPrincipalClass，自动实例化
         if let principalClass = bundle.principalClass as? NSObject.Type {
             let instance = principalClass.init()
-            print("[PluginLoader] Activated principal class for \(name)")
 
             // 尝试调用 activate 方法（如果存在）
             if instance.responds(to: NSSelectorFromString("activate")) {
@@ -124,7 +115,6 @@ final class PluginLoader {
     /// 卸载插件
     func unloadPlugin(identifier: String) {
         guard let bundle = loadedPlugins[identifier] else {
-            print("[PluginLoader] Plugin not loaded: \(identifier)")
             return
         }
 
@@ -135,8 +125,6 @@ final class PluginLoader {
 
         bundle.unload()
         loadedPlugins.removeValue(forKey: identifier)
-
-        print("[PluginLoader] Unloaded: \(identifier)")
     }
 
     /// 重新加载所有插件
