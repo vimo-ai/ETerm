@@ -83,7 +83,7 @@ final class MCPRouterPlugin: Plugin, ObservableObject {
         }
 
         do {
-            router = MCPRouterBridge()
+            router = try MCPRouterBridge()
 
             // 加载服务器配置
             loadServerConfigs()
