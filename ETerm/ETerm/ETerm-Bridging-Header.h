@@ -9,6 +9,6 @@
 #define ETerm_Bridging_Header_h
 
 #import "Core/Terminal/Infrastructure/FFI/SugarloafBridge.h"
-#import "Core/Terminal/Infrastructure/FFI/mcp_router_core.h"
+// mcp_router_core.h 已移除 - 改用 dlopen 动态加载，见 MCPRouterBridge.swift
 
 #endif /* ETerm_Bridging_Header_h */

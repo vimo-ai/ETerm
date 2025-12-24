@@ -167,16 +167,31 @@ final class MCPRouterLibrary {
     func load() throws {
         guard !isLoaded else { return }
 
-        // 从 App bundle 的 Frameworks 目录加载
-        guard let path = Bundle.main.path(forResource: "libmcp_router_core", ofType: "dylib") else {
-            throw MCPRouterError.libraryNotLoaded
+        // 尝试多个位置查找 dylib
+        let possiblePaths = [
+            // 1. Frameworks 目录（推荐位置）
+            Bundle.main.privateFrameworksPath.map { "\($0)/libmcp_router_core.dylib" },
+            // 2. Resources 目录（备选）
+            Bundle.main.path(forResource: "libmcp_router_core", ofType: "dylib"),
+            // 3. Bundle 根目录
+            Bundle.main.bundlePath + "/Contents/Frameworks/libmcp_router_core.dylib",
+        ].compactMap { $0 }
+
+        var loadedPath: String?
+        for path in possiblePaths {
+            if FileManager.default.fileExists(atPath: path) {
+                libraryHandle = dlopen(path, RTLD_NOW | RTLD_LOCAL)
+                if libraryHandle != nil {
+                    loadedPath = path
+                    break
+                }
+            }
         }
 
-        libraryHandle = dlopen(path, RTLD_NOW | RTLD_LOCAL)
-
-        guard let handle = libraryHandle else {
-            let error = String(cString: dlerror())
+        guard let handle = libraryHandle, let path = loadedPath else {
+            let error = dlerror().map { String(cString: $0) } ?? "dylib not found in Frameworks or Resources"
             print("[MCPRouter] Failed to load library: \(error)")
+            print("[MCPRouter] Searched paths: \(possiblePaths)")
             throw MCPRouterError.libraryNotLoaded
         }
 
