@@ -2,8 +2,8 @@ use sugarloaf::font::fonts::{SugarloafFonts, SugarloafFont, SugarloafFontStyle};
 use sugarloaf::font::FontLibrary;
 use std::sync::OnceLock;
 
-// 重新导出 mcp-router-core 的 FFI 函数（共享同一个 std 避免符号冲突）
-pub use mcp_router_core::ffi::*;
+// MCP Router Core 已改为独立 dylib，通过 Swift dlopen 动态加载
+// 不再静态链接，避免多个 Rust staticlib 的符号冲突问题
 
 // 同步原语（FairMutex, FairRwLock）
 mod sync;

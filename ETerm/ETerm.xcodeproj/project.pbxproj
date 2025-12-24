@@ -467,6 +467,7 @@
 					"$(PROJECT_DIR)/ETerm/Core/Terminal/Infrastructure/FFI",
 					"$(PROJECT_DIR)/ETerm/Libs/Sugarloaf",
 					"$(PROJECT_DIR)/ETerm/Libs",
+					"$(PROJECT_DIR)/ETerm/Libs/MCPRouter",
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -525,6 +526,7 @@
 					"$(PROJECT_DIR)/ETerm/Core/Terminal/Infrastructure/FFI",
 					"$(PROJECT_DIR)/ETerm/Libs/Sugarloaf",
 					"$(PROJECT_DIR)/ETerm/Libs",
+					"$(PROJECT_DIR)/ETerm/Libs/MCPRouter",
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
