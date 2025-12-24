@@ -95,6 +95,7 @@ struct MCPWorkspace: Codable, Identifiable, Hashable {
 // MARK: - Workspace Manager
 
 /// MCP Workspace 管理器 - 监听 WorkspacePlugin 并管理 MCP 配置
+@MainActor
 final class MCPWorkspaceManager: ObservableObject {
     static let shared = MCPWorkspaceManager()
 
@@ -126,45 +127,9 @@ final class MCPWorkspaceManager: ObservableObject {
     /// 从 WorkspacePlugin 的 SwiftData 同步项目列表
     @MainActor
     func syncWithWorkspacePlugin() {
-        // 从 SwiftData 读取工作区文件夹
-        let container = WorkspaceDataStore.shared
-        let context = container.mainContext
-
-        do {
-            let descriptor = FetchDescriptor<WorkspaceFolder>(sortBy: [SortDescriptor(\.addedAt)])
-            let folders = try context.fetch(descriptor)
-
-            let existingPaths = Set(workspaces.filter { !$0.isDefault }.map { $0.projectPath })
-            let pluginPaths = Set(folders.map { $0.path })
-
-            // 添加新的项目
-            for folder in folders {
-                let path = folder.path
-                if !existingPaths.contains(path) {
-                    let name = (path as NSString).lastPathComponent
-                    let workspace = MCPWorkspace(name: name, projectPath: path)
-                    workspaces.append(workspace)
-
-                    // 写入 .mcp.json
-                    if let port = MCPRouterPlugin.shared?.currentPort {
-                        try? MCPProjectConfigManager.mergeRouterConfig(
-                            at: URL(fileURLWithPath: path),
-                            token: workspace.token,
-                            port: Int(port)
-                        )
-                    }
-                }
-            }
-
-            // 移除已删除的项目
-            workspaces.removeAll { ws in
-                !ws.isDefault && !pluginPaths.contains(ws.projectPath)
-            }
-
-            saveWorkspaces()
-        } catch {
-            logWarn("[MCPWorkspace] Failed to sync with WorkspacePlugin: \(error)")
-        }
+        // TODO: Implement when WorkspacePlugin integration is available
+        // This requires WorkspaceDataStore which is in ETerm main app
+        print("[MCPWorkspace] Sync with WorkspacePlugin not yet implemented in Bundle plugin")
     }
 
     // MARK: - CRUD
@@ -240,7 +205,7 @@ final class MCPWorkspaceManager: ObservableObject {
     // MARK: - Persistence
 
     private func loadWorkspaces() {
-        let configPath = ETermPaths.mcpRouterWorkspaces
+        let configPath = "\(NSHomeDirectory())/.eterm/plugins/McpRouter/workspaces.json"
         guard FileManager.default.fileExists(atPath: configPath) else { return }
 
         do {
@@ -254,13 +219,16 @@ final class MCPWorkspaceManager: ObservableObject {
 
     private func saveWorkspaces() {
         do {
-            try ETermPaths.ensureDirectory(ETermPaths.mcpRouterPlugin)
+            let pluginDir = "\(NSHomeDirectory())/.eterm/plugins/McpRouter"
+            try FileManager.default.createDirectory(atPath: pluginDir, withIntermediateDirectories: true)
+
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(workspaces)
-            try data.write(to: URL(fileURLWithPath: ETermPaths.mcpRouterWorkspaces))
+            let workspacePath = "\(pluginDir)/workspaces.json"
+            try data.write(to: URL(fileURLWithPath: workspacePath))
         } catch {
-            logWarn("[MCPWorkspace] Failed to save workspaces: \(error)")
+            print("[MCPWorkspace] Failed to save workspaces: \(error)")
         }
     }
 

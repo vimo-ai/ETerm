@@ -115,7 +115,7 @@ enum MCPRouterError: Error, LocalizedError {
 // MARK: - Dynamic Library Loader
 
 /// MCP Router 动态库加载器
-final class MCPRouterLibrary {
+final class MCPRouterLibrary: @unchecked Sendable {
     static let shared = MCPRouterLibrary()
 
     private var libraryHandle: UnsafeMutableRawPointer?
@@ -167,14 +167,19 @@ final class MCPRouterLibrary {
     func load() throws {
         guard !isLoaded else { return }
 
+        // 获取 McpRouterKit 所在的 Bundle（McpRouter.bundle）
+        let kitBundle = Bundle(for: MCPRouterLibrary.self)
+
         // 尝试多个位置查找 dylib
         let possiblePaths = [
-            // 1. Frameworks 目录（推荐位置）
+            // 1. 插件 Bundle 的 Frameworks 目录
+            kitBundle.privateFrameworksPath.map { "\($0)/libmcp_router_core.dylib" },
+            // 2. 插件 Bundle 的 Resources 目录
+            kitBundle.path(forResource: "libmcp_router_core", ofType: "dylib"),
+            // 3. 插件 Bundle 根目录
+            kitBundle.bundlePath + "/Contents/Frameworks/libmcp_router_core.dylib",
+            // 4. Fallback: 主应用 Bundle（兼容旧结构）
             Bundle.main.privateFrameworksPath.map { "\($0)/libmcp_router_core.dylib" },
-            // 2. Resources 目录（备选）
-            Bundle.main.path(forResource: "libmcp_router_core", ofType: "dylib"),
-            // 3. Bundle 根目录
-            Bundle.main.bundlePath + "/Contents/Frameworks/libmcp_router_core.dylib",
         ].compactMap { $0 }
 
         var loadedPath: String?
@@ -323,13 +328,13 @@ final class MCPRouterLibrary {
 // MARK: - MCP Router Bridge
 
 /// MCP Router Rust Core 桥接
-final class MCPRouterBridge {
+public final class MCPRouterBridge {
 
     private var handle: OpaquePointer?
     private let lib: MCPRouterLibrary
 
     /// 初始化
-    init() throws {
+    public init() throws {
         lib = MCPRouterLibrary.shared
         try lib.load()
         handle = lib.create()

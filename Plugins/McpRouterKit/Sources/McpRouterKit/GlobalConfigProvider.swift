@@ -69,7 +69,7 @@ struct CodexGlobalConfigProvider: GlobalConfigProvider {
 // MARK: - All Providers
 
 enum GlobalConfigProviders {
-    static let all: [any GlobalConfigProvider] = [
+    nonisolated(unsafe) static let all: [any GlobalConfigProvider] = [
         ClaudeGlobalConfigProvider(),
         CodexGlobalConfigProvider()
     ]

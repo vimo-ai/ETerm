@@ -501,7 +501,7 @@ struct MCPJSONImportView: View {
                     case .rename:
                         var newName = name
                         var suffix = 2
-                        var allNames = existingNames
+                        let allNames = existingNames
                         while allNames.contains(newName) {
                             newName = "\(name)-\(suffix)"
                             suffix += 1
@@ -534,6 +534,9 @@ struct MCPJSONImportView: View {
 
             // 保存配置到文件
             MCPRouterPlugin.shared?.saveServerConfigs()
+
+            // 通知外部刷新列表
+            onImported()
 
             importState = .completed
         }

@@ -41,6 +41,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				Libs/MCPRouter/libmcp_router_core.dylib,
 			);
 			target = 481CC2B82EC7B632009F969C /* ETerm */;
 		};
