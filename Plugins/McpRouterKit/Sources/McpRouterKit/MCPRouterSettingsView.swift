@@ -10,14 +10,18 @@ import SwiftUI
 /// MCP Router 设置主视图
 struct MCPRouterSettingsView: View {
     @ObservedObject private var plugin: MCPRouterPlugin
+    @StateObject private var serverListVM: MCPServerListViewModel
 
     @State private var selectedTab = 0
 
     init() {
         if let shared = MCPRouterPlugin.shared {
             self.plugin = shared
+            _serverListVM = StateObject(wrappedValue: MCPServerListViewModel(bridge: shared.routerBridge))
         } else {
-            self.plugin = MCPRouterPlugin()
+            let plugin = MCPRouterPlugin()
+            self.plugin = plugin
+            _serverListVM = StateObject(wrappedValue: MCPServerListViewModel(bridge: plugin.routerBridge))
         }
     }
 
@@ -50,7 +54,7 @@ struct MCPRouterSettingsView: View {
                 case 0:
                     BasicSettingsView(plugin: plugin)
                 case 1:
-                    MCPServerListView(viewModel: MCPServerListViewModel(bridge: plugin.routerBridge))
+                    MCPServerListView(viewModel: serverListVM)
                 case 2:
                     MCPWorkspaceConfigView()
                 case 3:

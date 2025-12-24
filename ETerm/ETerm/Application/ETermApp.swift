@@ -74,6 +74,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 加载内置插件
         PluginManager.shared.loadBuiltinPlugins()
 
+        // 加载 Bundle 插件（从 Contents/PlugIns/ 目录）
+        PluginLoader.shared.loadAllPlugins()
+
         // 启动会话录制器
         SessionRecorder.shared.setupIntegration()
 

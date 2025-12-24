@@ -308,6 +308,7 @@ private struct ServerRowView: View {
 
 // MARK: - ViewModel
 
+@MainActor
 final class MCPServerListViewModel: ObservableObject {
     @Published private(set) var servers: [MCPServerConfig] = []
 
