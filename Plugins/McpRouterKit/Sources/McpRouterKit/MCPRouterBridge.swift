@@ -193,14 +193,9 @@ final class MCPRouterLibrary: @unchecked Sendable {
             }
         }
 
-        guard let handle = libraryHandle, let path = loadedPath else {
-            let error = dlerror().map { String(cString: $0) } ?? "dylib not found in Frameworks or Resources"
-            print("[MCPRouter] Failed to load library: \(error)")
-            print("[MCPRouter] Searched paths: \(possiblePaths)")
+        guard let handle = libraryHandle, let _ = loadedPath else {
             throw MCPRouterError.libraryNotLoaded
         }
-
-        print("[MCPRouter] Library loaded from: \(path)")
         try loadSymbols(from: handle)
         isLoaded = true
     }
@@ -352,7 +347,7 @@ public final class MCPRouterBridge {
             try MCPRouterLibrary.shared.load()
             MCPRouterLibrary.shared.initLogging()
         } catch {
-            print("[MCPRouter] Failed to init logging: \(error)")
+            // Silently ignore logging init failure
         }
     }
 
