@@ -1,15 +1,38 @@
 use crate::domain::TerminalState;
 use crate::domain::views::grid::CellData;
 use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SearchMatchInfo, HyperlinkHoverInfo};
+use super::cache::GlyphAtlas;
 use super::cache::{compute_text_hash, compute_state_hash_for_line};
 use super::font::FontContext;
 use super::layout::TextShaper;
-use super::rasterizer::LineRasterizer;
+use super::rasterizer::{LineRasterizer, GlyphRasterizer};
 use super::config::{RenderConfig, FontMetrics};
 use sugarloaf::layout::{BuilderLine, FragmentData, FragmentStyle};
 use sugarloaf::font_introspector::Attributes;
 use rio_backend::config::colors::AnsiColor;
 use std::sync::Arc;
+use std::cell::RefCell;
+use skia_safe::{FontMgr, Color};
+use skia_safe::textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle};
+
+thread_local! {
+    /// 线程本地 FontCollection（用于 emoji 渲染）
+    static FONT_COLLECTION: RefCell<FontCollection> = RefCell::new({
+        let mut fc = FontCollection::new();
+        fc.set_default_font_manager(FontMgr::new(), None);
+        fc
+    });
+}
+
+/// Color4f 转 Color
+fn color4f_to_color(c: skia_safe::Color4f) -> Color {
+    Color::from_argb(
+        (c.a * 255.0) as u8,
+        (c.r * 255.0) as u8,
+        (c.g * 255.0) as u8,
+        (c.b * 255.0) as u8,
+    )
+}
 
 /// 渲染引擎（管理缓存 + 渲染流程）
 pub struct Renderer {
@@ -21,8 +44,14 @@ pub struct Renderer {
     font_context: Arc<FontContext>,
     /// 文本整形器
     text_shaper: TextShaper,
-    /// 行光栅化器
+    /// 行光栅化器（旧路径，保留用于回退）
     rasterizer: LineRasterizer,
+    /// 字形光栅化器（Atlas 路径）
+    glyph_rasterizer: GlyphRasterizer,
+    /// 字形 Atlas（字形纹理缓存）
+    glyph_atlas: GlyphAtlas,
+    /// 是否使用 Atlas 渲染（默认 true）
+    use_atlas: bool,
 
     // ===== 配置和缓存 =====
     /// 渲染配置（不可变）
@@ -51,37 +80,95 @@ impl Renderer {
             font_context,
             text_shaper,
             rasterizer: LineRasterizer::new(),
+            glyph_rasterizer: GlyphRasterizer::new(),
+            glyph_atlas: GlyphAtlas::new(),
+            use_atlas: true,  // 使用 draw_atlas 批量绘制
             config,
-            cached_metrics: None,  // 懒加载，首次使用时计算
+            cached_metrics: None,
         }
     }
 
-    /// 渲染一行（核心逻辑：三级缓存查询）
+    /// 启用/禁用 Atlas 渲染（用于测试对比）
+    pub fn set_use_atlas(&mut self, use_atlas: bool) {
+        self.use_atlas = use_atlas;
+    }
+
+    /// 获取 Atlas 统计信息
+    pub fn atlas_stats(&self) -> super::cache::AtlasStats {
+        self.glyph_atlas.stats()
+    }
+
+    /// 渲染一行
     ///
     /// # 参数
     /// - `line`: 屏幕行号
     /// - `state`: 终端状态
-    /// - `gpu_context`: 可选的 GPU 上下文，如果提供则使用 GPU Surface（避免 CPU→GPU 双份内存）
+    /// - `gpu_context`: 可选的 GPU 上下文
     pub fn render_line(&mut self, line: usize, state: &TerminalState, gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
+        if self.use_atlas {
+            self.render_line_atlas(line, state)
+        } else {
+            self.render_line_legacy(line, state, gpu_context)
+        }
+    }
+
+    /// 混合渲染策略：LineCache (1-2屏) + Atlas (历史滚动)
+    ///
+    /// 1. 首先查询 LineCache（FullHit = 最快，直接 blit）
+    /// 2. 如果 LineCache miss，使用 Atlas 渲染（字形已预热，快速组合）
+    /// 3. 渲染完成后存入 LineCache（LRU 自动淘汰旧条目）
+    fn render_line_atlas(&mut self, line: usize, state: &TerminalState) -> skia_safe::Image {
+        let text_hash = compute_text_hash(line, state);
+        let state_hash = compute_state_hash_for_line(line, state);
+
+        // 第一步：查询 LineCache（两层缓存）
+        match self.cache.get(text_hash, state_hash) {
+            CacheResult::FullHit(image) => {
+                // 🎯 最快路径：LineCache 完全命中，直接返回
+                self.stats.cache_hits += 1;
+                return image;
+            }
+            CacheResult::LayoutHit(layout) => {
+                // 📐 布局命中：使用 Atlas 重新组合渲染
+                self.stats.layout_hits += 1;
+                let image = self.render_with_atlas(layout.clone(), line, state);
+                // 存入 LineCache（LRU 会自动淘汰旧条目）
+                self.cache.insert(text_hash, state_hash, layout, image.clone());
+                return image;
+            }
+            CacheResult::Miss => {
+                // 继续执行下面的完整渲染流程
+            }
+        }
+
+        // 第二步：完全 miss，计算布局 + Atlas 渲染
+        self.stats.cache_misses += 1;
+        let layout = self.compute_glyph_layout(line, state);
+        let image = self.render_with_atlas(layout.clone(), line, state);
+
+        // 存入 LineCache
+        self.cache.insert(text_hash, state_hash, layout, image.clone());
+
+        image
+    }
+
+    /// 旧路径：三级缓存（保留用于对比测试）
+    fn render_line_legacy(&mut self, line: usize, state: &TerminalState, gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
         let text_hash = compute_text_hash(line, state);
         let state_hash = compute_state_hash_for_line(line, state);
 
         match self.cache.get(text_hash, state_hash) {
             CacheResult::FullHit(image) => {
-                // Level 1: 内层命中 → 零开销（0%）
                 self.stats.cache_hits += 1;
                 image
             }
             CacheResult::LayoutHit(layout) => {
-                // Level 2: 外层命中 → 快速绘制（30%）
-                // 复用字体选择（layout），重新计算状态（cursor/选区/搜索）
                 self.stats.layout_hits += 1;
                 let image = self.render_with_layout(layout.clone(), line, state, gpu_context);
                 self.cache.insert(text_hash, state_hash, layout, image.clone());
                 image
             }
             CacheResult::Miss => {
-                // Level 3: 完全未命中 → 完整渲染（100%）
                 self.stats.cache_misses += 1;
                 let layout = self.compute_glyph_layout(line, state);
                 let image = self.render_with_layout(layout.clone(), line, state, gpu_context);
@@ -91,19 +178,15 @@ impl Renderer {
         }
     }
 
+    /// 获取当前帧的缓存统计（不重置）
+    /// 返回 (cache_hits, layout_hits, cache_misses)
+    pub fn get_frame_stats(&self) -> (usize, usize, usize) {
+        (self.stats.cache_hits, self.stats.layout_hits, self.stats.cache_misses)
+    }
+
     /// 打印当前帧的缓存统计并重置
-    pub fn print_frame_stats(&mut self, frame_label: &str) {
-        let total = self.stats.cache_hits + self.stats.layout_hits + self.stats.cache_misses;
-        if total > 0 {
-            let hit_rate = (self.stats.cache_hits as f64 / total as f64) * 100.0;
-            // eprintln!("📊 CACHE [{}] L1={} L2={} L3={} total={} hit={:.1}%",
-            //     frame_label,
-            //     self.stats.cache_hits,
-            //     self.stats.layout_hits,
-            //     self.stats.cache_misses,
-            //     total,
-            //     hit_rate);
-        }
+    pub fn print_frame_stats(&mut self, _frame_label: &str) {
+        // 统计已移至 render_all 中输出
         self.reset_stats();
     }
 
@@ -432,6 +515,177 @@ impl Renderer {
     /// 获取当前配置（只读访问）
     pub fn config(&self) -> &RenderConfig {
         &self.config
+    }
+
+    /// Atlas 渲染：从 GlyphAtlas 组合字形
+    ///
+    /// 渲染策略：
+    /// - 普通字符：走 GlyphAtlas + draw_atlas（高效批量渲染）
+    /// - Emoji：直接使用 Paragraph API 渲染（支持彩色 emoji）
+    ///
+    /// 原因：draw_str 和 draw_atlas 不支持彩色 emoji（COLR/sbix 格式），
+    /// 只有 Paragraph API 能正确渲染 Apple Color Emoji 等彩色字体。
+    fn render_with_atlas(&mut self, layout: GlyphLayout, line: usize, state: &TerminalState) -> skia_safe::Image {
+        use skia_safe::{surfaces, Paint, Color4f, Rect, Point};
+        use rio_backend::ansi::CursorShape;
+
+        let metrics = self.get_font_metrics();
+        let line_width = metrics.cell_width.value * state.grid.columns() as f32;
+        let line_height = metrics.cell_height.value * self.config.line_height;
+        let cell_width = metrics.cell_width.value;
+        let cell_height = metrics.cell_height.value;
+        let baseline_offset = metrics.baseline_offset.value;
+        let font_size = self.config.physical_font_size().value;
+        let background_color = self.config.background_color;
+
+        // 创建行 Surface
+        let width = line_width.round() as i32;
+        let height = line_height.round() as i32;
+        let mut surface = surfaces::raster_n32_premul((width, height))
+            .expect("Failed to create line surface");
+        let canvas = surface.canvas();
+        canvas.clear(background_color);
+
+        // 计算光标信息
+        let cursor_screen_line = state.cursor.line()
+            .saturating_sub(state.grid.history_size())
+            .saturating_add(state.grid.display_offset());
+        let cursor_on_this_line = cursor_screen_line == line;
+        let cursor_col = if state.cursor.is_visible() && cursor_on_this_line {
+            Some(state.cursor.col())
+        } else {
+            None
+        };
+
+        // 预填充 Atlas + 收集绘制数据（仅普通字符）
+        let mut xforms: Vec<skia_safe::RSXform> = Vec::with_capacity(layout.glyphs.len());
+        let mut tex_rects: Vec<Rect> = Vec::with_capacity(layout.glyphs.len());
+        let mut colors: Vec<skia_safe::Color> = Vec::with_capacity(layout.glyphs.len());
+
+        // 收集需要单独渲染的 emoji
+        let mut emoji_glyphs: Vec<&super::layout::GlyphInfo> = Vec::new();
+
+        let mut bg_paint = Paint::default();
+
+        for glyph in &layout.glyphs {
+            // 绘制背景（如果有）
+            if let Some(bg) = glyph.background_color {
+                bg_paint.set_color4f(bg, None);
+                let bg_width = cell_width * glyph.width;
+                let rect = Rect::from_xywh(glyph.x, 0.0, bg_width, line_height);
+                canvas.draw_rect(rect, &bg_paint);
+            }
+
+            // 检测 emoji：不走 Atlas，收集后用 Paragraph 渲染
+            if glyph.is_emoji() {
+                emoji_glyphs.push(glyph);
+                continue;
+            }
+
+            // 普通字符：走 GlyphAtlas
+            let key = GlyphRasterizer::make_key(glyph, font_size);
+            let region = self.glyph_atlas.get_or_rasterize(key, || {
+                self.glyph_rasterizer.rasterize(glyph, cell_width, cell_height, baseline_offset)
+            });
+
+            if let Some(region) = region {
+                if region.width > 0 && region.height > 0 {
+                    // 计算 bitmap 内的 x 偏移（与 GlyphRasterizer 一致）
+                    // bitmap 中字形从 x_offset 开始，需要在定位时补偿
+                    let (_, bounds) = glyph.font.measure_str(&glyph.grapheme, None);
+                    let x_offset = if bounds.left < 0.0 { -bounds.left + 1.0 } else { 1.0 };
+
+                    // RSXform: 无旋转缩放，平移时减去 x_offset 补偿
+                    xforms.push(skia_safe::RSXform::new(1.0, 0.0, skia_safe::Vector::new(glyph.x - x_offset, 0.0)));
+                    tex_rects.push(region.to_src_rect());
+                    colors.push(glyph.color.to_color());
+                }
+            }
+        }
+
+        // 一次 draw_atlas 调用绘制所有普通字符
+        if !xforms.is_empty() {
+            let atlas_image = self.glyph_atlas.get_image();
+            canvas.draw_atlas(
+                atlas_image,
+                &xforms,
+                &tex_rects,
+                Some(colors.as_slice()),
+                skia_safe::BlendMode::Modulate,
+                skia_safe::SamplingOptions::default(),
+                None,
+                None,
+            );
+        }
+
+        // 🎯 使用 Paragraph API 渲染 emoji（和 LineRasterizer 相同逻辑）
+        // 这样才能正确渲染彩色 emoji（COLR/sbix 格式）
+        if !emoji_glyphs.is_empty() {
+            FONT_COLLECTION.with(|fc| {
+                let font_collection = fc.borrow();
+
+                for glyph in emoji_glyphs {
+                    let mut paragraph_style = ParagraphStyle::new();
+                    let mut text_style = TextStyle::new();
+                    text_style.set_font_size(glyph.font.size());
+                    text_style.set_color(color4f_to_color(glyph.color));
+                    // 明确指定 emoji 字体
+                    text_style.set_font_families(&["Apple Color Emoji"]);
+                    paragraph_style.set_text_style(&text_style);
+
+                    let mut builder = ParagraphBuilder::new(&paragraph_style, font_collection.clone());
+                    builder.add_text(&glyph.grapheme);
+
+                    let mut paragraph = builder.build();
+                    // 给 emoji 额外布局空间，和 LineRasterizer 保持一致
+                    paragraph.layout(cell_width * glyph.width + 10.0);
+
+                    // 使用 alphabetic_baseline 对齐，和 LineRasterizer 保持一致
+                    let para_baseline = paragraph.alphabetic_baseline();
+                    let y_offset = baseline_offset - para_baseline;
+
+                    paragraph.paint(canvas, Point::new(glyph.x, y_offset));
+                }
+            });
+        }
+
+        // 绘制光标
+        if let Some(col) = cursor_col {
+            let cursor_x = col as f32 * cell_width;
+            let cursor_color = Color4f::new(
+                state.cursor.color[0],
+                state.cursor.color[1],
+                state.cursor.color[2],
+                state.cursor.color[3],
+            );
+
+            let mut cursor_paint = Paint::default();
+            cursor_paint.set_anti_alias(true);
+            cursor_paint.set_color4f(cursor_color, None);
+
+            match state.cursor.shape {
+                CursorShape::Block => {
+                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                    let rect = Rect::from_xywh(cursor_x, 0.0, cell_width, line_height);
+                    canvas.draw_rect(rect, &cursor_paint);
+                }
+                CursorShape::Underline => {
+                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                    let underline_height = 2.0;
+                    let rect = Rect::from_xywh(cursor_x, line_height - underline_height, cell_width, underline_height);
+                    canvas.draw_rect(rect, &cursor_paint);
+                }
+                CursorShape::Beam => {
+                    cursor_paint.set_style(skia_safe::PaintStyle::Fill);
+                    let beam_width = 2.0;
+                    let rect = Rect::from_xywh(cursor_x, 0.0, beam_width, line_height);
+                    canvas.draw_rect(rect, &cursor_paint);
+                }
+                CursorShape::Hidden => {}
+            }
+        }
+
+        surface.image_snapshot()
     }
 
     /// 计算字形布局（文本整形 + 字体选择）
@@ -1292,5 +1546,243 @@ mod tests {
         eprintln!("Speedup: {:.1}x", frame1_time.as_micros() as f64 / frame2_time.as_micros() as f64);
         assert!(frame2_time < frame1_time / 2,
             "Frame 2 should be at least 2x faster than Frame 1");
+    }
+
+    /// 性能对比测试：Atlas vs Legacy
+    #[test]
+    fn test_atlas_vs_legacy_performance() {
+        use std::time::Instant;
+
+        // 创建 50 行的 mock state
+        let row_hashes: Vec<u64> = (0..50).map(|i| 2000 + i as u64).collect();
+        let grid_data = Arc::new(GridData::new_mock(120, 50, 0, row_hashes));
+        let grid = GridView::new(grid_data);
+        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
+        let state = TerminalState {
+            grid,
+            cursor,
+            selection: None,
+            search: None,
+            hyperlink_hover: None,
+            ime: None,
+        };
+
+        const WARMUP_FRAMES: usize = 5;
+        const TEST_FRAMES: usize = 20;
+
+        // ========== Legacy 路径 ==========
+        let mut legacy_renderer = create_test_renderer();
+        legacy_renderer.set_use_atlas(false);
+
+        // 预热
+        for _ in 0..WARMUP_FRAMES {
+            for line in 0..50 {
+                let _img = legacy_renderer.render_line(line, &state, None);
+            }
+        }
+        legacy_renderer.cache.clear();
+
+        // 测试
+        let legacy_start = Instant::now();
+        for _ in 0..TEST_FRAMES {
+            for line in 0..50 {
+                let _img = legacy_renderer.render_line(line, &state, None);
+            }
+        }
+        let legacy_time = legacy_start.elapsed();
+
+        // ========== Atlas 路径 ==========
+        let mut atlas_renderer = create_test_renderer();
+        atlas_renderer.set_use_atlas(true);
+
+        // 预热
+        for _ in 0..WARMUP_FRAMES {
+            for line in 0..50 {
+                let _img = atlas_renderer.render_line(line, &state, None);
+            }
+        }
+        atlas_renderer.cache.clear();
+
+        // 测试
+        let atlas_start = Instant::now();
+        for _ in 0..TEST_FRAMES {
+            for line in 0..50 {
+                let _img = atlas_renderer.render_line(line, &state, None);
+            }
+        }
+        let atlas_time = atlas_start.elapsed();
+
+        // 输出结果
+        let total_lines = TEST_FRAMES * 50;
+        let legacy_per_line = legacy_time.as_micros() as f64 / total_lines as f64;
+        let atlas_per_line = atlas_time.as_micros() as f64 / total_lines as f64;
+        let ratio = atlas_time.as_micros() as f64 / legacy_time.as_micros() as f64;
+
+        eprintln!("\n🎯 [Atlas vs Legacy] {} frames × 50 lines = {} lines", TEST_FRAMES, total_lines);
+        eprintln!("   Legacy: {:?} ({:.2}µs/line)", legacy_time, legacy_per_line);
+        eprintln!("   Atlas:  {:?} ({:.2}µs/line)", atlas_time, atlas_per_line);
+        eprintln!("   Ratio:  {:.2}x (Atlas/Legacy)", ratio);
+
+        if ratio < 1.0 {
+            eprintln!("   ✅ Atlas is {:.1}% faster", (1.0 - ratio) * 100.0);
+        } else {
+            eprintln!("   ⚠️ Atlas is {:.1}% slower", (ratio - 1.0) * 100.0);
+        }
+    }
+
+    /// 冷启动测试：第一帧性能（真正的 cache miss）
+    /// 使用真实内容测试 Atlas vs Legacy 的性能差异
+    #[test]
+    fn test_cold_start_performance() {
+        use std::time::Instant;
+
+        const LINES: usize = 50;
+        const COLS: usize = 120;
+
+        // 创建带内容的 mock state（真实字符，不是空格）
+        let grid_data = Arc::new(GridData::new_mock_with_content(COLS, LINES));
+        let grid = GridView::new(grid_data);
+        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
+        let state = TerminalState {
+            grid,
+            cursor,
+            selection: None,
+            search: None,
+            hyperlink_hover: None,
+            ime: None,
+        };
+
+        // ========== Legacy 冷启动 ==========
+        let mut legacy_renderer = create_test_renderer();
+        legacy_renderer.set_use_atlas(false);
+
+        let legacy_start = Instant::now();
+        for line in 0..LINES {
+            let _img = legacy_renderer.render_line(line, &state, None);
+        }
+        let legacy_cold = legacy_start.elapsed();
+
+        // ========== Atlas 冷启动（Atlas 也是空的）==========
+        let mut atlas_renderer = create_test_renderer();
+        atlas_renderer.set_use_atlas(true);
+
+        let atlas_start = Instant::now();
+        for line in 0..LINES {
+            let _img = atlas_renderer.render_line(line, &state, None);
+        }
+        let atlas_cold = atlas_start.elapsed();
+
+        // ========== Atlas 预热后再来一次（字形已缓存）==========
+        atlas_renderer.cache.clear();  // 只清 LineCache，保留 Atlas
+
+        let atlas_warm_start = Instant::now();
+        for line in 0..LINES {
+            let _img = atlas_renderer.render_line(line, &state, None);
+        }
+        let atlas_warm = atlas_warm_start.elapsed();
+
+        // 输出
+        eprintln!("\n🎯 [Cold Start] {} lines × {} cols (真实内容)", LINES, COLS);
+        eprintln!("   Legacy (cold):     {:?} ({:.2}µs/line)", legacy_cold, legacy_cold.as_micros() as f64 / LINES as f64);
+        eprintln!("   Atlas (cold):      {:?} ({:.2}µs/line)", atlas_cold, atlas_cold.as_micros() as f64 / LINES as f64);
+        eprintln!("   Atlas (warm):      {:?} ({:.2}µs/line)", atlas_warm, atlas_warm.as_micros() as f64 / LINES as f64);
+        eprintln!("   Cold ratio:        {:.2}x", atlas_cold.as_micros() as f64 / legacy_cold.as_micros() as f64);
+        eprintln!("   Warm ratio:        {:.2}x", atlas_warm.as_micros() as f64 / legacy_cold.as_micros() as f64);
+
+        // Atlas stats
+        let stats = atlas_renderer.glyph_atlas.stats();
+        eprintln!("   Atlas glyphs:      {} (unique)", stats.num_glyphs);
+        eprintln!("   Atlas utilization: {:.1}%", stats.utilization_ratio * 100.0);
+
+        // 验证 Atlas 有合理数量的字形（至少 50 个不同字符）
+        assert!(stats.num_glyphs >= 50, "Atlas should have at least 50 unique glyphs");
+    }
+
+    /// 混合策略测试：验证 LineCache + Atlas 的协同工作
+    #[test]
+    fn test_hybrid_strategy() {
+        use std::time::Instant;
+
+        const LINES: usize = 50;
+        const COLS: usize = 120;
+        const FRAMES: usize = 5;
+
+        // 创建带内容的 mock state
+        let grid_data = Arc::new(GridData::new_mock_with_content(COLS, LINES));
+        let grid = GridView::new(grid_data);
+        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
+        let state = TerminalState {
+            grid,
+            cursor,
+            selection: None,
+            search: None,
+            hyperlink_hover: None,
+            ime: None,
+        };
+
+        let mut renderer = create_test_renderer();
+        renderer.set_use_atlas(true);
+
+        // === 第1帧：冷启动（LineCache miss, Atlas cold）===
+        let start1 = Instant::now();
+        for line in 0..LINES {
+            let _img = renderer.render_line(line, &state, None);
+        }
+        let frame1_time = start1.elapsed();
+
+        // === 第2帧：热启动（LineCache hit）===
+        let start2 = Instant::now();
+        for line in 0..LINES {
+            let _img = renderer.render_line(line, &state, None);
+        }
+        let frame2_time = start2.elapsed();
+
+        // === 模拟滚动：清空 LineCache，但 Atlas 保留 ===
+        renderer.cache.clear();
+
+        // === 第3帧：滚动后（LineCache miss, Atlas warm）===
+        let start3 = Instant::now();
+        for line in 0..LINES {
+            let _img = renderer.render_line(line, &state, None);
+        }
+        let frame3_time = start3.elapsed();
+
+        // === 多帧稳态测试 ===
+        let start_stable = Instant::now();
+        for _frame in 0..FRAMES {
+            for line in 0..LINES {
+                let _img = renderer.render_line(line, &state, None);
+            }
+        }
+        let stable_time = start_stable.elapsed();
+        let avg_stable = stable_time.as_micros() as f64 / FRAMES as f64;
+
+        // 输出结果
+        eprintln!("\n🔀 [Hybrid Strategy] {} lines × {} cols", LINES, COLS);
+        eprintln!("   Frame 1 (cold):      {:?} ({:.2}µs/line) - LineCache miss, Atlas cold",
+            frame1_time, frame1_time.as_micros() as f64 / LINES as f64);
+        eprintln!("   Frame 2 (cache hit): {:?} ({:.2}µs/line) - LineCache HIT",
+            frame2_time, frame2_time.as_micros() as f64 / LINES as f64);
+        eprintln!("   Frame 3 (scroll):    {:?} ({:.2}µs/line) - LineCache miss, Atlas warm",
+            frame3_time, frame3_time.as_micros() as f64 / LINES as f64);
+        eprintln!("   Stable avg:          {:.0}µs/frame ({:.2}µs/line)",
+            avg_stable, avg_stable / LINES as f64);
+
+        // 性能验证
+        let speedup_cache_hit = frame1_time.as_micros() as f64 / frame2_time.as_micros() as f64;
+        let speedup_atlas_warm = frame1_time.as_micros() as f64 / frame3_time.as_micros() as f64;
+        eprintln!("   Cache hit speedup:   {:.1}x vs cold", speedup_cache_hit);
+        eprintln!("   Atlas warm speedup:  {:.1}x vs cold", speedup_atlas_warm);
+
+        // 内存统计
+        let (entries, images, max_entries, mem_bytes) = renderer.cache.memory_stats();
+        let atlas_stats = renderer.glyph_atlas.stats();
+        eprintln!("   LineCache:           {}/{} entries, {} images, {}KB",
+            entries, max_entries, images, mem_bytes / 1024);
+        eprintln!("   Atlas:               {} glyphs, {:.1}% utilization",
+            atlas_stats.num_glyphs, atlas_stats.utilization_ratio * 100.0);
+
+        // 验证：Cache hit 应该比 cold 快很多
+        assert!(speedup_cache_hit > 2.0, "Cache hit should be at least 2x faster than cold");
     }
 }
