@@ -77,25 +77,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 加载 Bundle 插件（从 Contents/PlugIns/ 目录）
         PluginLoader.shared.loadAllPlugins()
 
+        // 加载 SDK 插件（通过 Extension Host）
+        Task {
+            await SDKPluginLoader.shared.loadAllPlugins()
+        }
+
         // 启动会话录制器
         SessionRecorder.shared.setupIntegration()
 
+        // [TEST MODE] 暂时禁用 Session/Tab 恢复功能
         // 尝试恢复 Session
-        if let session = SessionManager.shared.load(), !session.windows.isEmpty {
-            // 恢复每个窗口
-            for (index, windowState) in session.windows.enumerated() {
-                restoreWindow(from: windowState)
-            }
-        } else {
-            // 没有 Session，创建默认窗口
-            WindowManager.shared.createWindow()
-        }
+        // if let session = SessionManager.shared.load(), !session.windows.isEmpty {
+        //     // 恢复每个窗口
+        //     for (index, windowState) in session.windows.enumerated() {
+        //         restoreWindow(from: windowState)
+        //     }
+        // } else {
+        //     // 没有 Session，创建默认窗口
+        //     WindowManager.shared.createWindow()
+        // }
+        WindowManager.shared.createWindow()
 
         // 设置主菜单
         setupMainMenu()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // 停止 Extension Host
+        Task {
+            await ExtensionHostManager.shared.stop()
+        }
+
         // 停止 Claude Socket Server
         ClaudeSocketServer.shared.stop()
 

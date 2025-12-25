@@ -8,6 +8,11 @@
 
 /* Begin PBXBuildFile section */
 		481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */ = {isa = PBXBuildFile; productRef = 481CC84B2ECD995E009F969C /* PanelLayoutKit */; };
+		4825DE232EFCF6C2003AE32C /* ETermKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE222EFCF6C2003AE32C /* ETermKit */; };
+		4825DE272EFD2E56003AE32C /* ETermKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE222EFCF6C2003AE32C /* ETermKit */; };
+		4825DE3B2EFD322E003AE32C /* ETermKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE3A2EFD322E003AE32C /* ETermKit */; };
+		4825DE3C2EFD322E003AE32C /* ETermKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE3A2EFD322E003AE32C /* ETermKit */; };
+		4825DE3F2EFD329A003AE32C /* ETermExtensionHost in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4825DE2F2EFD304B003AE32C /* ETermExtensionHost */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		482F3D712EFADA4500B33236 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 482F3D702EFADA4500B33236 /* SystemConfiguration.framework */; };
 		48979A022EE6B451006ECB59 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 48979A012EE6B451006ECB59 /* SocketIO */; };
 /* End PBXBuildFile section */
@@ -29,10 +34,55 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		4825DE282EFD2E56003AE32C /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				4825DE272EFD2E56003AE32C /* ETermKit in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4825DE2D2EFD304B003AE32C /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		4825DE3D2EFD322E003AE32C /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				4825DE3C2EFD322E003AE32C /* ETermKit in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4825DE3E2EFD3284003AE32C /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				4825DE3F2EFD329A003AE32C /* ETermExtensionHost in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		481CC2B92EC7B632009F969C /* ETerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ETerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		481CC2C82EC7B633009F969C /* ETermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ETermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		481CC2D22EC7B633009F969C /* ETermUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ETermUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4825DE2F2EFD304B003AE32C /* ETermExtensionHost */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ETermExtensionHost; sourceTree = BUILT_PRODUCTS_DIR; };
 		482F3D702EFADA4500B33236 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -66,6 +116,11 @@
 			path = ETermUITests;
 			sourceTree = "<group>";
 		};
+		4825DE302EFD304B003AE32C /* ETermExtensionHost */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ETermExtensionHost;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -73,6 +128,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4825DE232EFCF6C2003AE32C /* ETermKit in Frameworks */,
 				482F3D712EFADA4500B33236 /* SystemConfiguration.framework in Frameworks */,
 				481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */,
 				48979A022EE6B451006ECB59 /* SocketIO in Frameworks */,
@@ -93,6 +149,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4825DE2C2EFD304B003AE32C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4825DE3B2EFD322E003AE32C /* ETermKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -102,6 +166,7 @@
 				481CC2BB2EC7B632009F969C /* ETerm */,
 				481CC2CB2EC7B633009F969C /* ETermTests */,
 				481CC2D52EC7B633009F969C /* ETermUITests */,
+				4825DE302EFD304B003AE32C /* ETermExtensionHost */,
 				481CC2E62EC7B6A5009F969C /* Frameworks */,
 				481CC2BA2EC7B632009F969C /* Products */,
 			);
@@ -113,6 +178,7 @@
 				481CC2B92EC7B632009F969C /* ETerm.app */,
 				481CC2C82EC7B633009F969C /* ETermTests.xctest */,
 				481CC2D22EC7B633009F969C /* ETermUITests.xctest */,
+				4825DE2F2EFD304B003AE32C /* ETermExtensionHost */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -135,6 +201,8 @@
 				481CC2B52EC7B632009F969C /* Sources */,
 				481CC2B62EC7B632009F969C /* Frameworks */,
 				481CC2B72EC7B632009F969C /* Resources */,
+				4825DE282EFD2E56003AE32C /* Embed Frameworks */,
+				4825DE3E2EFD3284003AE32C /* CopyFiles */,
 			);
 			buildRules = (
 			);
@@ -147,6 +215,7 @@
 			packageProductDependencies = (
 				481CC84B2ECD995E009F969C /* PanelLayoutKit */,
 				48979A012EE6B451006ECB59 /* SocketIO */,
+				4825DE222EFCF6C2003AE32C /* ETermKit */,
 			);
 			productName = ETerm;
 			productReference = 481CC2B92EC7B632009F969C /* ETerm.app */;
@@ -198,6 +267,30 @@
 			productReference = 481CC2D22EC7B633009F969C /* ETermUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		4825DE2E2EFD304B003AE32C /* ETermExtensionHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4825DE332EFD304B003AE32C /* Build configuration list for PBXNativeTarget "ETermExtensionHost" */;
+			buildPhases = (
+				4825DE2B2EFD304B003AE32C /* Sources */,
+				4825DE2C2EFD304B003AE32C /* Frameworks */,
+				4825DE2D2EFD304B003AE32C /* CopyFiles */,
+				4825DE3D2EFD322E003AE32C /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				4825DE302EFD304B003AE32C /* ETermExtensionHost */,
+			);
+			name = ETermExtensionHost;
+			packageProductDependencies = (
+				4825DE3A2EFD322E003AE32C /* ETermKit */,
+			);
+			productName = ETermExtensionHost;
+			productReference = 4825DE2F2EFD304B003AE32C /* ETermExtensionHost */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -219,6 +312,9 @@
 						CreatedOnToolsVersion = 26.0.1;
 						TestTargetID = 481CC2B82EC7B632009F969C;
 					};
+					4825DE2E2EFD304B003AE32C = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
 				};
 			};
 			buildConfigurationList = 481CC2B42EC7B632009F969C /* Build configuration list for PBXProject "ETerm" */;
@@ -234,6 +330,7 @@
 			packageReferences = (
 				481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */,
 				48979A002EE6B3EC006ECB59 /* XCRemoteSwiftPackageReference "socket" */,
+				4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 481CC2BA2EC7B632009F969C /* Products */;
@@ -243,6 +340,7 @@
 				481CC2B82EC7B632009F969C /* ETerm */,
 				481CC2C72EC7B633009F969C /* ETermTests */,
 				481CC2D12EC7B633009F969C /* ETermUITests */,
+				4825DE2E2EFD304B003AE32C /* ETermExtensionHost */,
 			);
 		};
 /* End PBXProject section */
@@ -287,6 +385,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		481CC2CE2EC7B633009F969C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4825DE2B2EFD304B003AE32C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -440,7 +545,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = K7T2J28754;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
@@ -499,7 +604,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = K7T2J28754;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
@@ -629,6 +734,34 @@
 			};
 			name = Release;
 		};
+		4825DE342EFD304B003AE32C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				"LD_RUNPATH_SEARCH_PATHS[arch=*]" = "@executable_path/../Frameworks";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		4825DE352EFD304B003AE32C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -668,12 +801,25 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		4825DE332EFD304B003AE32C /* Build configuration list for PBXNativeTarget "ETermExtensionHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4825DE342EFD304B003AE32C /* Debug */,
+				4825DE352EFD304B003AE32C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
 		481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/PanelLayoutKit;
+		};
+		4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Packages/ETermKit;
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -693,6 +839,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */;
 			productName = PanelLayoutKit;
+		};
+		4825DE222EFCF6C2003AE32C /* ETermKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */;
+			productName = ETermKit;
+		};
+		4825DE3A2EFD322E003AE32C /* ETermKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */;
+			productName = ETermKit;
 		};
 		48979A012EE6B451006ECB59 /* SocketIO */ = {
 			isa = XCSwiftPackageProductDependency;
