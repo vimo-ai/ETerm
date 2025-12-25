@@ -14,7 +14,7 @@ use rio_backend::crosswords::grid::Dimensions;
 use rio_backend::crosswords::pos::{Column, Line};
 use rio_backend::crosswords::square::Flags;
 use rio_backend::crosswords::{Crosswords, Mode};
-use rio_backend::event::EventListener;
+use rio_backend::event::{EventListener, TerminalDamage};
 use smallvec::SmallVec;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -531,9 +531,11 @@ impl RenderState {
     }
 
     /// 增量同步变化的行
+    ///
+    /// 优化：利用 Crosswords 的 damage 信息，只处理真正变化的行
+    /// 避免每帧计算所有行的哈希（O(rows * columns) -> O(脏行数 * columns)）
     fn incremental_sync<T: EventListener>(&mut self, crosswords: &Crosswords<T>) -> bool {
         let grid = &crosswords.grid;
-        let screen_lines = grid.screen_lines();
         let columns = grid.columns();
         let display_offset = grid.display_offset();
 
@@ -545,22 +547,41 @@ impl RenderState {
             changed = true;
         }
 
-        // 逐行对比 row_hash
-        for screen_line in 0..screen_lines {
-            let grid_line = Line(screen_line as i32 - display_offset as i32);
+        // 利用 Crosswords 的 damage 信息，只处理脏行
+        match crosswords.peek_damage_event() {
+            Some(TerminalDamage::Full) => {
+                // 全量同步（罕见情况，如 resize、alt_screen 切换等）
+                self.full_sync(crosswords);
+                return true;
+            }
+            Some(TerminalDamage::Partial(damaged_lines)) => {
+                // 只同步脏行（常见情况：单行或少量行变化）
+                for line_damage in damaged_lines.iter() {
+                    if line_damage.damaged {
+                        let screen_line = line_damage.line;
+                        let grid_line = Line(screen_line as i32 - display_offset as i32);
 
-            // 计算 Crosswords 中该行的哈希
-            let new_hash = self.compute_row_hash_from_crosswords(crosswords, grid_line, columns);
+                        // 同步该行数据
+                        self.sync_row_from_crosswords(crosswords, screen_line, grid_line, columns);
 
-            // 对比哈希
-            if self.synced_row_hashes.get(screen_line) != Some(&new_hash) {
-                // 哈希不同，同步该行
-                self.sync_row_from_crosswords(crosswords, screen_line, grid_line, columns);
-                if screen_line < self.synced_row_hashes.len() {
-                    self.synced_row_hashes[screen_line] = new_hash;
+                        // 更新行哈希（用于后续对比）
+                        let new_hash =
+                            self.compute_row_hash_from_crosswords(crosswords, grid_line, columns);
+                        if screen_line < self.synced_row_hashes.len() {
+                            self.synced_row_hashes[screen_line] = new_hash;
+                        }
+
+                        self.mark_line_dirty(Line(screen_line as i32));
+                        changed = true;
+                    }
                 }
-                self.mark_line_dirty(Line(screen_line as i32));
-                changed = true;
+            }
+            Some(TerminalDamage::CursorOnly) => {
+                // 只有光标变化，不需要同步任何行数据
+                // cursor_changed 已在上面处理
+            }
+            None => {
+                // 无变化，跳过
             }
         }
 
@@ -1305,5 +1326,180 @@ mod tests {
 
         state.apply_event(RenderEvent::CursorVisible { visible: true });
         assert!(state.cursor_visible());
+    }
+
+    // ==================== sync_from_crosswords 测试 ====================
+
+    use rio_backend::crosswords::CrosswordsSize;
+    use rio_backend::event::VoidListener;
+    use rio_backend::performer::handler::Handler; // 提供 input() 方法
+
+    /// 辅助函数：创建测试用的 Crosswords
+    fn create_test_crosswords(cols: usize, rows: usize) -> Crosswords<VoidListener> {
+        let size = CrosswordsSize::new(cols, rows);
+        let window_id = rio_backend::event::WindowId::from(0);
+        Crosswords::new(size, CursorShape::Block, VoidListener {}, window_id, 0)
+    }
+
+    #[test]
+    fn test_sync_from_crosswords_initial_full_sync() {
+        // 首次同步应该触发全量同步
+        let mut state = RenderState::new(80, 24);
+        let cw = create_test_crosswords(80, 24);
+
+        // 首次同步，needs_full_sync 应该为 true
+        assert!(state.needs_full_sync);
+
+        let changed = state.sync_from_crosswords(&cw);
+
+        // 应该有变化（全量同步）
+        assert!(changed);
+        // 同步后 needs_full_sync 应该为 false
+        assert!(!state.needs_full_sync);
+    }
+
+    #[test]
+    fn test_sync_from_crosswords_no_change() {
+        // 连续两次同步，第二次应该检测到无变化
+        let mut state = RenderState::new(80, 24);
+        let mut cw = create_test_crosswords(80, 24);
+
+        // 首次同步
+        state.sync_from_crosswords(&cw);
+
+        // 模拟渲染完成后清除 damage 标记（实际渲染流程会做这一步）
+        cw.reset_damage();
+
+        // 第二次同步（无变化）
+        let changed = state.sync_from_crosswords(&cw);
+
+        // 应该无变化（因为 damage 已清除且没有新输入）
+        assert!(!changed);
+    }
+
+    #[test]
+    fn test_sync_from_crosswords_single_line_change() {
+        // 修改单行后同步应该检测到变化
+        let mut state = RenderState::new(80, 24);
+        let mut cw = create_test_crosswords(80, 24);
+
+        // 首次同步
+        state.sync_from_crosswords(&cw);
+
+        // 修改第一行
+        cw.input('H');
+        cw.input('e');
+        cw.input('l');
+        cw.input('l');
+        cw.input('o');
+
+        // 再次同步
+        let changed = state.sync_from_crosswords(&cw);
+
+        // 应该检测到变化
+        assert!(changed);
+
+        // 验证数据已同步
+        let cell = state.get_cell(Line(0), Column(0)).unwrap();
+        assert_eq!(cell.c, 'H');
+    }
+
+    #[test]
+    fn test_sync_from_crosswords_cursor_movement() {
+        // 光标移动应该触发变化
+        let mut state = RenderState::new(80, 24);
+        let mut cw = create_test_crosswords(80, 24);
+
+        // 首次同步
+        state.sync_from_crosswords(&cw);
+
+        // 移动光标
+        cw.goto(Line(5), Column(10));
+
+        // 再次同步
+        let changed = state.sync_from_crosswords(&cw);
+
+        // 光标移动应该触发变化
+        assert!(changed);
+
+        // 验证光标位置已同步
+        let (line, col) = state.cursor_position();
+        assert_eq!(line, Line(5));
+        assert_eq!(col, Column(10));
+    }
+
+    #[test]
+    fn test_sync_from_crosswords_resize_triggers_full_sync() {
+        // resize 后应该触发全量同步
+        let mut state = RenderState::new(80, 24);
+        let cw = create_test_crosswords(80, 24);
+
+        // 首次同步
+        state.sync_from_crosswords(&cw);
+        assert!(!state.needs_full_sync);
+
+        // 创建不同尺寸的 Crosswords
+        let cw_resized = create_test_crosswords(100, 30);
+
+        // 同步会触发 resize 处理
+        let changed = state.sync_from_crosswords(&cw_resized);
+
+        // 应该有变化
+        assert!(changed);
+        // 尺寸应该更新
+        assert_eq!(state.columns(), 100);
+        assert_eq!(state.screen_lines(), 30);
+    }
+
+    #[test]
+    fn test_sync_from_crosswords_preserves_row_hashes() {
+        // 同步后应该保存行哈希，用于下次变化检测
+        let mut state = RenderState::new(80, 24);
+        let mut cw = create_test_crosswords(80, 24);
+
+        // 首次同步
+        state.sync_from_crosswords(&cw);
+
+        // 记录第一行的哈希
+        let hash_before = state.get_row_hash(0);
+        assert!(hash_before.is_some());
+
+        // 修改第一行
+        cw.input('X');
+
+        // 再次同步
+        state.sync_from_crosswords(&cw);
+
+        // 哈希应该变化
+        let hash_after = state.get_row_hash(0);
+        assert!(hash_after.is_some());
+        assert_ne!(hash_before, hash_after);
+    }
+
+    #[test]
+    fn test_sync_from_crosswords_multiple_lines() {
+        // 修改多行后同步
+        let mut state = RenderState::new(80, 24);
+        let mut cw = create_test_crosswords(80, 24);
+
+        // 首次同步
+        state.sync_from_crosswords(&cw);
+
+        // 在不同行写入内容
+        cw.goto(Line(0), Column(0));
+        cw.input('A');
+        cw.goto(Line(5), Column(0));
+        cw.input('B');
+        cw.goto(Line(10), Column(0));
+        cw.input('C');
+
+        // 再次同步
+        let changed = state.sync_from_crosswords(&cw);
+        assert!(changed);
+
+        // 验证所有行都已同步
+        assert_eq!(state.get_cell(Line(0), Column(0)).unwrap().c, 'A');
+        assert_eq!(state.get_cell(Line(5), Column(0)).unwrap().c, 'B');
+        assert_eq!(state.get_cell(Line(10), Column(0)).unwrap().c, 'C');
     }
 }
