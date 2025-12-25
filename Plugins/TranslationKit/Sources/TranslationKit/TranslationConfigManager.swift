@@ -36,14 +36,21 @@ public struct TranslationConfig: Codable, Equatable, Sendable {
 // MARK: - Configuration Manager
 
 /// 翻译插件配置管理器
+///
+/// 线程安全：使用串行队列保护可变状态
 final class TranslationConfigManager: @unchecked Sendable {
 
+    private let queue = DispatchQueue(label: "com.eterm.translation.config")
     private let configFilePath: String
-    private(set) var config: TranslationConfig
+    private var _config: TranslationConfig
+
+    var config: TranslationConfig {
+        queue.sync { _config }
+    }
 
     init() {
         self.configFilePath = Self.defaultConfigPath()
-        self.config = Self.loadConfig(from: configFilePath)
+        self._config = Self.loadConfig(from: configFilePath)
     }
 
     // MARK: - Public Methods
@@ -54,18 +61,22 @@ final class TranslationConfigManager: @unchecked Sendable {
         analysisModel: String,
         translationModel: String
     ) {
-        config = TranslationConfig(
-            dispatcherModel: dispatcherModel,
-            analysisModel: analysisModel,
-            translationModel: translationModel
-        )
-        saveConfig()
+        queue.sync {
+            _config = TranslationConfig(
+                dispatcherModel: dispatcherModel,
+                analysisModel: analysisModel,
+                translationModel: translationModel
+            )
+            saveConfig()
+        }
     }
 
     /// 重置为默认配置
     func resetToDefault() {
-        config = .default
-        saveConfig()
+        queue.sync {
+            _config = .default
+            saveConfig()
+        }
     }
 
     // MARK: - Private
