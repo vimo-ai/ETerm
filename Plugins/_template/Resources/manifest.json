@@ -1,0 +1,12 @@
+{
+    "id": "__PLUGIN_ID__",
+    "name": "__PLUGIN_DISPLAY_NAME__",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "dependencies": [],
+    "capabilities": [],
+    "principalClass": "__PRINCIPAL_CLASS__",
+    "commands": [],
+    "subscribes": []
+}

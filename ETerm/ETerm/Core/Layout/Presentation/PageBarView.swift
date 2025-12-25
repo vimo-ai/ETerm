@@ -452,8 +452,14 @@ final class PageBarHostingView: NSView {
             }
         }
 
-        // 点击在空白区域，启动窗口拖动
-        window?.performDrag(with: event)
+        // 点击在空白区域
+        if event.clickCount == 2 {
+            // 双击全屏/还原
+            window?.zoom(nil)
+        } else {
+            // 单击启动窗口拖动
+            window?.performDrag(with: event)
+        }
     }
 }
 
