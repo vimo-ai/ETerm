@@ -284,6 +284,9 @@ final class SDKPluginLoader {
 
             // 注册 sidebarTabs 到 SidebarRegistry
             registerSidebarTabs(for: manifest)
+
+            // 注册 keyBindings 到 KeyboardService
+            registerKeyBindings(for: manifest)
         } catch {
             print("[SDKPluginLoader] Failed to activate \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: error.localizedDescription)
@@ -340,5 +343,62 @@ final class SDKPluginLoader {
 
             print("[SDKPluginLoader] Registered sidebar tab '\(tabConfig.id)' for \(manifest.id)")
         }
+    }
+
+    /// 注册 SDK 插件的 keyBindings 到 KeyboardService
+    private func registerKeyBindings(for manifest: PluginManifest) {
+        guard !manifest.commands.isEmpty else { return }
+
+        let pluginId = manifest.id
+
+        for command in manifest.commands {
+            // 只处理有 keyBinding 的命令
+            guard let keyBindingStr = command.keyBinding else { continue }
+
+            // 解析 keyBinding 字符串为 KeyStroke
+            guard let keyStroke = parseKeyBinding(keyBindingStr) else {
+                print("[SDKPluginLoader] Failed to parse keyBinding \(keyBindingStr) for command \(command.id)")
+                continue
+            }
+
+            // 注册快捷键到 KeyboardService
+            KeyboardServiceImpl.shared.bind(keyStroke, to: command.id, when: nil)
+
+            print("[SDKPluginLoader] Registered keyBinding \(keyBindingStr) -> \(command.id) for \(pluginId)")
+        }
+    }
+
+    /// 解析 keyBinding 字符串为 KeyStroke
+    /// 支持格式："cmd+shift+o", "ctrl+a", "option+1", "cmd+/"
+    private func parseKeyBinding(_ str: String) -> KeyStroke? {
+        let parts = str.lowercased().split(separator: "+").map { String($0) }
+        guard !parts.isEmpty else { return nil }
+
+        var modifiers: KeyModifiers = []
+        var character: String?
+
+        for part in parts {
+            switch part {
+            case "cmd", "command":
+                modifiers.insert(.command)
+            case "ctrl", "control":
+                modifiers.insert(.control)
+            case "shift":
+                modifiers.insert(.shift)
+            case "option", "opt", "alt":
+                modifiers.insert(.option)
+            default:
+                character = part
+            }
+        }
+
+        guard let char = character else { return nil }
+
+        return KeyStroke(
+            keyCode: 0,
+            character: char,
+            actualCharacter: nil,
+            modifiers: modifiers
+        )
     }
 }
