@@ -13,7 +13,12 @@ import ETermKit
 /// - 处理翻译相关命令
 /// - 管理翻译配置
 /// - 向 ViewModel 发送状态更新
-@objc public final class TranslationPluginLogic: NSObject, PluginLogic {
+///
+/// 线程安全说明：
+/// - `host` 引用的 `HostBridge` 本身是 `Sendable` 且内部线程安全
+/// - `configManager` 使用串行队列保护可变状态
+/// - 服务回调可能在任意线程执行，但访问的数据都有同步保护
+@objc public final class TranslationPluginLogic: NSObject, PluginLogic, @unchecked Sendable {
 
     // MARK: - PluginLogic
 
