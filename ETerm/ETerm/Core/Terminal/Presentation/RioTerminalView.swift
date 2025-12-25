@@ -1422,6 +1422,10 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true
+    }
+
     override func becomeFirstResponder() -> Bool {
         return true
     }
