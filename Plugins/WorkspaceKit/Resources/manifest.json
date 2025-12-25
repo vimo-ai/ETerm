@@ -10,7 +10,6 @@
         "service.register"
     ],
     "principalClass": "WorkspaceLogic",
-    "viewModelClass": "WorkspaceViewModel",
     "sidebarTabs": [
         {
             "id": "workspace-entry",
