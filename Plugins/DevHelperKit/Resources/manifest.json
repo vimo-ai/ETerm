@@ -1,0 +1,39 @@
+{
+    "id": "com.eterm.dev-helper",
+    "name": "DevHelper",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "dependencies": ["com.eterm.workspace"],
+    "capabilities": [
+        "ui.sidebar",
+        "service.register",
+        "service.call"
+    ],
+    "principalClass": "DevHelperLogic",
+    "viewProviderClass": "DevHelperViewProvider",
+    "sidebarTabs": [
+        {
+            "id": "dev-helper-entry",
+            "title": "开发助手",
+            "icon": "hammer.fill",
+            "viewClass": "DevHelperView"
+        }
+    ],
+    "commands": [
+        {
+            "id": "devHelper.refresh",
+            "title": "Refresh Projects",
+            "handler": "handleRefresh"
+        }
+    ],
+    "subscribes": [
+        "plugin.workspace.folderAdded",
+        "plugin.workspace.folderRemoved"
+    ],
+    "emits": [
+        "plugin.devHelper.projectScanned",
+        "plugin.devHelper.taskStarted",
+        "plugin.devHelper.taskStopped"
+    ]
+}
