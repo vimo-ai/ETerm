@@ -11,7 +11,7 @@
         "service.call"
     ],
     "principalClass": "DevHelperLogic",
-    "viewModelClass": "DevHelperViewModel",
+    "viewProviderClass": "DevHelperViewProvider",
     "sidebarTabs": [
         {
             "id": "dev-helper-entry",
