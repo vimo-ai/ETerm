@@ -1,0 +1,26 @@
+{
+    "id": "com.eterm.one-line-command",
+    "name": "一行命令",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "dependencies": [],
+    "capabilities": [],
+    "principalClass": "OneLineCommandLogic",
+    "sidebarTabs": [],
+    "commands": [
+        {
+            "id": "one-line-command.show",
+            "title": "显示一行命令输入框",
+            "handler": "handleCommand",
+            "keyBinding": "cmd+shift+o"
+        },
+        {
+            "id": "one-line-command.hide",
+            "title": "隐藏一行命令输入框",
+            "handler": "handleCommand"
+        }
+    ],
+    "subscribes": [],
+    "emits": []
+}
