@@ -1,0 +1,33 @@
+{
+    "id": "com.eterm.writing-assistant",
+    "name": "写作助手",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "dependencies": [],
+    "capabilities": [],
+    "principalClass": "WritingAssistantPlugin",
+    "viewModelClass": null,
+    "sidebarTabs": [],
+    "commands": [
+        {
+            "id": "writing.showComposer",
+            "title": "显示写作助手",
+            "handler": "handleCommand",
+            "keyBinding": null
+        },
+        {
+            "id": "writing.hideComposer",
+            "title": "隐藏写作助手",
+            "handler": "handleCommand",
+            "keyBinding": null
+        },
+        {
+            "id": "writing.toggleComposer",
+            "title": "切换写作助手",
+            "handler": "handleCommand",
+            "keyBinding": "cmd+k"
+        }
+    ],
+    "subscribes": []
+}
