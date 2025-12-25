@@ -1,0 +1,49 @@
+{
+    "id": "com.eterm.translation",
+    "name": "Translation",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "dependencies": [],
+    "capabilities": [
+        "service.register",
+        "service.call"
+    ],
+    "principalClass": "TranslationKit.TranslationPluginLogic",
+    "viewModelClass": null,
+    "sidebarTabs": [
+        {
+            "id": "translation-settings",
+            "title": "Translation Config",
+            "icon": "gearshape.fill",
+            "viewClass": "TranslationPluginSettingsView"
+        }
+    ],
+    "commands": [
+        {
+            "id": "translation.show",
+            "title": "Show Translation",
+            "handler": "handleCommand",
+            "keyBinding": null
+        },
+        {
+            "id": "translation.hide",
+            "title": "Hide Translation",
+            "handler": "handleCommand",
+            "keyBinding": null
+        },
+        {
+            "id": "translation.toggle",
+            "title": "Toggle Translation",
+            "handler": "handleCommand",
+            "keyBinding": "Cmd+Shift+T"
+        },
+        {
+            "id": "translation.resetConfig",
+            "title": "Reset Translation Config",
+            "handler": "handleCommand",
+            "keyBinding": null
+        }
+    ],
+    "subscribes": []
+}
