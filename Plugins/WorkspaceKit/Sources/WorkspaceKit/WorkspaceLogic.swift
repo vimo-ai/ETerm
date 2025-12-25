@@ -18,13 +18,33 @@ struct WorkspaceFolder: Codable, Sendable {
 }
 
 /// 工作区插件逻辑入口
+///
+/// 线程安全说明：
+/// - 使用串行队列 `stateQueue` 保护所有可变状态访问
+/// - `host` 引用的 `HostBridge` 本身是 `Sendable` 且内部线程安全
 @objc(WorkspaceLogic)
-public final class WorkspaceLogic: NSObject, PluginLogic {
+public final class WorkspaceLogic: NSObject, PluginLogic, @unchecked Sendable {
 
     public static var id: String { "com.eterm.workspace" }
 
-    private var host: HostBridge?
-    private var folders: [WorkspaceFolder] = []
+    /// 串行队列，保护可变状态访问
+    private let stateQueue = DispatchQueue(label: "com.eterm.workspace.state")
+
+    /// 受保护的可变状态
+    private var _host: HostBridge?
+    private var _folders: [WorkspaceFolder] = []
+
+    /// 线程安全的 host 访问
+    private var host: HostBridge? {
+        get { stateQueue.sync { _host } }
+        set { stateQueue.sync { _host = newValue } }
+    }
+
+    /// 线程安全的 folders 访问
+    private var folders: [WorkspaceFolder] {
+        get { stateQueue.sync { _folders } }
+        set { stateQueue.sync { _folders = newValue } }
+    }
 
     /// 数据存储路径
     private var storagePath: String {
