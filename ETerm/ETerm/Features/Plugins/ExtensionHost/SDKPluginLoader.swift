@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import AppKit
 import ETermKit
 import Combine
 
@@ -46,6 +47,12 @@ final class SDKPluginLoader {
 
     /// 跳过的插件（依赖问题）
     private var skippedPlugins: [String: String] = [:]
+
+    /// MenuBar 状态栏项 (pluginId -> NSStatusItem)
+    private var menuBarItems: [String: NSStatusItem] = [:]
+
+    /// ViewProvider 实例 (pluginId -> PluginViewProvider)
+    private var viewProviders: [String: any PluginViewProvider] = [:]
 
     // MARK: - Init
 
@@ -284,6 +291,9 @@ final class SDKPluginLoader {
 
             // 注册 sidebarTabs 到 SidebarRegistry
             registerSidebarTabs(for: manifest)
+
+            // 注册 MenuBar
+            registerMenuBar(for: manifest)
         } catch {
             print("[SDKPluginLoader] Failed to activate \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: error.localizedDescription)
@@ -340,5 +350,83 @@ final class SDKPluginLoader {
 
             print("[SDKPluginLoader] Registered sidebar tab '\(tabConfig.id)' for \(manifest.id)")
         }
+    }
+
+    /// 注册 SDK 插件的 MenuBar 到系统状态栏
+    private func registerMenuBar(for manifest: PluginManifest) {
+        guard let config = manifest.menuBar else { return }
+
+        // 获取或创建 ViewProvider
+        let provider = getOrCreateViewProvider(for: manifest)
+        guard let provider = provider else {
+            print("[SDKPluginLoader] No ViewProvider for \(manifest.id), skipping MenuBar registration")
+            return
+        }
+
+        // 获取 MenuBar 视图
+        guard let menuBarView = provider.createMenuBarView() else {
+            print("[SDKPluginLoader] ViewProvider for \(manifest.id) does not provide MenuBar view")
+            return
+        }
+
+        // 创建 NSStatusItem
+        let statusItem = NSStatusBar.system.statusItem(withLength: CGFloat(config.width))
+
+        // 使用 NSHostingView 嵌入 SwiftUI 视图
+        if let button = statusItem.button {
+            let hostingView = NSHostingView(rootView: menuBarView)
+            hostingView.frame = button.bounds
+            hostingView.autoresizingMask = [.width, .height]
+            button.addSubview(hostingView)
+        }
+
+        menuBarItems[manifest.id] = statusItem
+        print("[SDKPluginLoader] Registered menuBar '\(config.id)' for \(manifest.id)")
+    }
+
+    /// 获取或创建 ViewProvider 实例
+    private func getOrCreateViewProvider(for manifest: PluginManifest) -> (any PluginViewProvider)? {
+        // 如果已有实例，直接返回
+        if let existing = viewProviders[manifest.id] {
+            return existing
+        }
+
+        // 需要 viewProviderClass 才能创建
+        guard let viewProviderClassName = manifest.viewProviderClass,
+              let bundlePath = bundlePaths[manifest.id] else {
+            return nil
+        }
+
+        // 加载插件 Bundle
+        guard let bundle = Bundle(path: bundlePath), bundle.load() else {
+            print("[SDKPluginLoader] Failed to load bundle at \(bundlePath)")
+            return nil
+        }
+
+        // 获取 ViewProvider 类
+        // 尝试多种类名格式
+        let classNames = [
+            viewProviderClassName,
+            "\(manifest.name).\(viewProviderClassName)",
+            "\(manifest.id.replacingOccurrences(of: ".", with: "_")).\(viewProviderClassName)"
+        ]
+
+        var viewProviderClass: (any PluginViewProvider.Type)?
+        for className in classNames {
+            if let cls = NSClassFromString(className) as? any PluginViewProvider.Type {
+                viewProviderClass = cls
+                break
+            }
+        }
+
+        guard let providerClass = viewProviderClass else {
+            print("[SDKPluginLoader] ViewProvider class '\(viewProviderClassName)' not found for \(manifest.id)")
+            return nil
+        }
+
+        // 创建实例
+        let provider = providerClass.init()
+        viewProviders[manifest.id] = provider
+        return provider
     }
 }
