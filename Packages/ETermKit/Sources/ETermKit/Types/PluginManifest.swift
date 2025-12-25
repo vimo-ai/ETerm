@@ -55,6 +55,11 @@ public struct PluginManifest: Sendable, Codable, Equatable {
     /// 实现 PluginViewModel 协议的类名
     public let viewModelClass: String?
 
+    /// ViewProvider 类名（可选）
+    ///
+    /// 实现 PluginViewProvider 协议的类名，用于提供插件的 UI 视图
+    public let viewProviderClass: String?
+
     // MARK: - UI 注册
 
     /// 侧边栏 Tab 注册
@@ -65,6 +70,9 @@ public struct PluginManifest: Sendable, Codable, Equatable {
 
     /// 订阅的事件列表
     public let subscribes: [String]
+
+    /// MenuBar 配置（可选）
+    public let menuBar: MenuBarConfig?
 
     // MARK: - 初始化
 
@@ -78,9 +86,11 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         capabilities: [String] = [],
         principalClass: String,
         viewModelClass: String? = nil,
+        viewProviderClass: String? = nil,
         sidebarTabs: [SidebarTab] = [],
         commands: [Command] = [],
-        subscribes: [String] = []
+        subscribes: [String] = [],
+        menuBar: MenuBarConfig? = nil
     ) {
         self.id = id
         self.name = name
@@ -91,9 +101,11 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         self.capabilities = capabilities
         self.principalClass = principalClass
         self.viewModelClass = viewModelClass
+        self.viewProviderClass = viewProviderClass
         self.sidebarTabs = sidebarTabs
         self.commands = commands
         self.subscribes = subscribes
+        self.menuBar = menuBar
     }
 }
 
@@ -156,6 +168,20 @@ extension PluginManifest {
             self.title = title
             self.handler = handler
             self.keyBinding = keyBinding
+        }
+    }
+
+    /// MenuBar 状态栏配置
+    public struct MenuBarConfig: Sendable, Codable, Equatable {
+        /// MenuBar 标识符
+        public let id: String
+
+        /// NSStatusItem 宽度，默认 90
+        public let width: Int
+
+        public init(id: String, width: Int = 90) {
+            self.id = id
+            self.width = width
         }
     }
 }
