@@ -1,0 +1,22 @@
+{
+    "id": "com.eterm.vlaude",
+    "name": "Vlaude Remote",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "dependencies": [],
+    "capabilities": [
+        "terminal.write",
+        "ui.tabDecoration",
+        "service.call"
+    ],
+    "principalClass": "VlaudeLogic",
+    "sidebarTabs": [],
+    "commands": [],
+    "subscribes": [
+        "core.terminal.didExit",
+        "plugin.claude.responseComplete",
+        "plugin.claude.sessionEnd"
+    ],
+    "emits": []
+}
