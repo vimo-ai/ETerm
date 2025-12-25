@@ -80,6 +80,9 @@ public struct IPCMessage: Sendable, Codable, Equatable {
         /// 服务调用请求
         case serviceCall
 
+        /// 插件请求（Host → Plugin，需要响应）
+        case pluginRequest
+
         // MARK: - Plugin → Host
 
         /// 更新 ViewModel

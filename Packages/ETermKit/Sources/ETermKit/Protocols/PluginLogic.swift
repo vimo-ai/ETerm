@@ -71,4 +71,24 @@ public protocol PluginLogic: AnyObject {
     ///
     /// - Parameter commandId: 命令标识符
     func handleCommand(_ commandId: String)
+
+    /// 处理请求（可选）
+    ///
+    /// 接收来自主应用的请求并返回结果。用于需要响应的操作。
+    /// 默认实现返回空结果。
+    ///
+    /// - Parameters:
+    ///   - requestId: 请求标识符
+    ///   - params: 请求参数
+    /// - Returns: 响应数据
+    func handleRequest(_ requestId: String, params: [String: Any]) -> [String: Any]
+}
+
+// MARK: - Default Implementation
+
+public extension PluginLogic {
+    /// 默认实现：返回空响应
+    func handleRequest(_ requestId: String, params: [String: Any]) -> [String: Any] {
+        return ["success": false, "error": "Not implemented"]
+    }
 }

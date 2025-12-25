@@ -168,7 +168,7 @@ struct RicePaperView<Content: View>: View {
 
                 // 深色模式下的暗化遮罩层
                 if colorScheme == .dark {
-                    Color.black.opacity(0.6)
+                    Color.black.opacity(0.75)
                         .ignoresSafeArea()
                 }
 

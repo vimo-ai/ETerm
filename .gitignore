@@ -36,3 +36,7 @@ TESTING_GUIDE.md
 
 # Local secrets
 .env
+
+# Plugin build artifacts
+Plugins/*/.build/
+Plugins/*/build/
