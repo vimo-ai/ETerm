@@ -5,8 +5,12 @@ use crate::render::layout::GlyphInfo;
 use rio_backend::ansi::CursorShape;
 
 /// 外层缓存最大条目数（text_hash → LineCacheEntry）
-/// 3000 条 ≈ 25 屏（4K@120行/屏），内存上限 ~400MB
-const MAX_TEXT_ENTRIES: usize = 3000;
+///
+/// 混合渲染策略：LineCache 只保留 1-2 屏，其余走 Atlas
+/// - 200 条 ≈ 2 屏（假设每屏约 50-100 行）
+/// - 内存上限 ~25MB（大幅降低）
+/// - Atlas 负责历史滚动区域的高效渲染
+const MAX_TEXT_ENTRIES: usize = 200;
 
 /// 内层缓存最大条目数（state_hash → Image）
 /// 限制每个 text_hash 条目下的 Image 缓存数量，防止内存泄漏
@@ -117,6 +121,31 @@ impl LineCache {
                 }
             }
             None => CacheResult::Miss,
+        }
+    }
+
+    // ===== Atlas 路径专用方法 =====
+
+    /// 只查询布局（用于 Atlas 路径）
+    pub fn get_layout(&mut self, text_hash: u64) -> Option<GlyphLayout> {
+        self.cache.get(&text_hash).map(|entry| entry.layout.clone())
+    }
+
+    /// 只插入布局（用于 Atlas 路径，不插入 Image）
+    pub fn insert_layout(&mut self, text_hash: u64, layout: GlyphLayout) {
+        use std::num::NonZeroUsize;
+
+        if self.cache.contains(&text_hash) {
+            // 已存在，更新布局
+            if let Some(entry) = self.cache.get_mut(&text_hash) {
+                entry.layout = layout;
+            }
+        } else {
+            // 新建条目（空的 renders）
+            let renders = lru::LruCache::new(
+                NonZeroUsize::new(MAX_STATE_ENTRIES_PER_LINE).unwrap()
+            );
+            self.cache.put(text_hash, LineCacheEntry { layout, renders });
         }
     }
 

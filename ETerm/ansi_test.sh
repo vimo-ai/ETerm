@@ -54,6 +54,14 @@ echo -e "\033[38;2;255;153;51m✳\033[0m \033[38;2;244;148;116mCatapulting…\03
 echo -e "\033[38;2;255;255;255m⏺\033[0m pong"
 echo ""
 
+echo "--- 8. 斜体测试 ---"
+echo -e "\033[3mItalic English Text\033[0m"
+echo -e "\033[3m斜体中文测试\033[0m"
+echo -e "\033[38;2;255;153;51m\033[3m橙色斜体\033[0m"
+echo -e "\033[1m\033[3mBold + Italic\033[0m"
+echo -e "\033[3m✳ 斜体特殊符号\033[0m"
+echo ""
+
 echo "=== 测试完成 ==="
 echo "hereisenglth"
 echo "这里是纯中文的"

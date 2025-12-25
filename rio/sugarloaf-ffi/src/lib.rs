@@ -54,7 +54,7 @@ pub fn create_default_font_spec(font_size: f32) -> SugarloafFonts {
         hinting: true,
         regular: SugarloafFont {
             family: "MapleMono-NF-CN-Regular".to_string(),
-            weight: Some(600),
+            weight: Some(400),
             style: SugarloafFontStyle::Normal,
             width: None,
         },
