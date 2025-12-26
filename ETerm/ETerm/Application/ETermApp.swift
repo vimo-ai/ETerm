@@ -71,29 +71,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 清理上次运行残留的剪贴板临时文件
         CoreCommandsBootstrap.cleanupClipboardTempFiles()
 
-        // 加载内置插件
-        PluginManager.shared.loadBuiltinPlugins()
+        // [SDK Migration] 暂停内置插件加载，改用 SDK 插件
+        // PluginManager.shared.loadBuiltinPlugins()
 
-        // 加载 Bundle 插件（从 Contents/PlugIns/ 目录）
-        PluginLoader.shared.loadAllPlugins()
+        // [SDK Migration] 暂停 Bundle 插件加载
+        // PluginLoader.shared.loadAllPlugins()
+
+        // 安装/更新内置插件（从 app bundle 复制到用户目录）
+        BuiltinPluginInstaller.installIfNeeded()
 
         // 加载 SDK 插件（通过 Extension Host）
         Task {
             await SDKPluginLoader.shared.loadAllPlugins()
+            // 设置事件桥接（在插件加载完成后）
+            SDKEventBridge.shared.setup()
         }
 
         // 启动会话录制器
         SessionRecorder.shared.setupIntegration()
 
         // [TEST MODE] 暂时禁用 Session/Tab 恢复功能
-        // 尝试恢复 Session
         // if let session = SessionManager.shared.load(), !session.windows.isEmpty {
-        //     // 恢复每个窗口
         //     for (index, windowState) in session.windows.enumerated() {
         //         restoreWindow(from: windowState)
         //     }
         // } else {
-        //     // 没有 Session，创建默认窗口
         //     WindowManager.shared.createWindow()
         // }
         WindowManager.shared.createWindow()
