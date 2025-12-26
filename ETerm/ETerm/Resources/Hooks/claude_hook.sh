@@ -33,7 +33,10 @@ prompt=$(echo "$input" | jq -r '.prompt // ""')
 
 # 读取环境变量
 terminal_id="${ETERM_TERMINAL_ID}"
-socket_path="${ETERM_SOCKET_PATH}"
+socket_dir="${ETERM_SOCKET_DIR}"
+
+# 构造 socket 路径（新路径格式）
+socket_path="${socket_dir}/claude.sock"
 
 # 记录日志（包含完整 JSON 便于调试）
 {
@@ -43,6 +46,7 @@ socket_path="${ETERM_SOCKET_PATH}"
     echo "Source: $source"
     echo "Session ID: $session_id"
     echo "Terminal ID: $terminal_id"
+    echo "Socket Dir: $socket_dir"
     echo "Socket Path: $socket_path"
     echo "Raw JSON:"
     echo "$input" | jq '.' 2>/dev/null || echo "$input"
@@ -54,8 +58,8 @@ if [ -z "$terminal_id" ]; then
     exit 0  # 优雅降级
 fi
 
-if [ -z "$socket_path" ]; then
-    echo "⚠️ Not in ETerm environment (ETERM_SOCKET_PATH not set) - skipping" >> "$LOG_FILE"
+if [ -z "$socket_dir" ]; then
+    echo "⚠️ Not in ETerm environment (ETERM_SOCKET_DIR not set) - skipping" >> "$LOG_FILE"
     exit 0  # 优雅降级
 fi
 

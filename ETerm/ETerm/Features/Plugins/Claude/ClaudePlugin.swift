@@ -13,6 +13,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import ETermKit
 
 final class ClaudePlugin: Plugin {
     static let id = "claude"
@@ -267,38 +268,35 @@ final class ClaudePlugin: Plugin {
 
     /// 处理终端创建 → 检查并恢复 Claude 会话
     private func handleTerminalCreated(_ event: CoreEvents.Terminal.DidCreate) {
-        // [TEST MODE] 暂时禁用 Claude resume 功能
-        return
+        let terminalId = event.terminalId
+        let tabId = event.tabId
 
-        // let terminalId = event.terminalId
-        // let tabId = event.tabId
-        //
-        // // 检查是否需要恢复
-        // guard let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId) else {
-        //     return
-        // }
-        //
-        // // 延迟恢复，等待终端完全启动
-        // DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-        //     guard let self = self else { return }
-        //
-        //     // 重新验证：确保 tab 仍然对应同一个 sessionId
-        //     guard let currentSessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId),
-        //           currentSessionId == sessionId else {
-        //         return
-        //     }
-        //
-        //     // 重新验证：确保 terminalId 仍然属于这个 tabId
-        //     guard let currentTabId = self.context?.terminal.getTabId(for: terminalId),
-        //           currentTabId == tabId else {
-        //         return
-        //     }
-        //
-        //     self.context?.terminal.write(
-        //         terminalId: terminalId,
-        //         data: "claude --resume \(sessionId)\n"
-        //     )
-        // }
+        // 检查是否需要恢复
+        guard let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId) else {
+            return
+        }
+
+        // 延迟恢复，等待终端完全启动
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+
+            // 重新验证：确保 tab 仍然对应同一个 sessionId
+            guard let currentSessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId),
+                  currentSessionId == sessionId else {
+                return
+            }
+
+            // 重新验证：确保 terminalId 仍然属于这个 tabId
+            guard let currentTabId = self.context?.terminal.getTabId(for: terminalId),
+                  currentTabId == tabId else {
+                return
+            }
+
+            self.context?.terminal.write(
+                terminalId: terminalId,
+                data: "claude --resume \(sessionId)\n"
+            )
+        }
     }
 
     /// 处理终端关闭 → 清理 Session 映射
