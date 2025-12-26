@@ -1,12 +1,13 @@
 {
-    "id": "com.eterm.one-line-command",
+    "id": "one-line-command",
     "name": "一行命令",
     "version": "1.0.0",
     "minHostVersion": "1.0.0",
     "sdkVersion": "1.0.0",
+    "runMode": "main",
     "dependencies": [],
     "capabilities": [],
-    "principalClass": "OneLineCommandLogic",
+    "principalClass": "OneLineCommandKit.OneLineCommandPlugin",
     "sidebarTabs": [],
     "commands": [
         {

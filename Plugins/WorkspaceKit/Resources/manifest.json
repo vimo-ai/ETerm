@@ -1,16 +1,15 @@
 {
     "id": "com.eterm.workspace",
-    "name": "Workspace",
-    "version": "0.0.1-beta.1",
-    "minHostVersion": "0.0.1-beta.1",
-    "sdkVersion": "0.0.1-beta.1",
+    "name": "工作区",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "runMode": "main",
     "dependencies": [],
     "capabilities": [
-        "ui.sidebar",
-        "service.register"
+        "ui.sidebar"
     ],
-    "principalClass": "WorkspaceLogic",
-    "viewProviderClass": "WorkspaceViewProvider",
+    "principalClass": "WorkspaceKit.WorkspacePlugin",
     "sidebarTabs": [
         {
             "id": "workspace-entry",
@@ -20,16 +19,9 @@
             "renderMode": "tab"
         }
     ],
-    "commands": [
-        {
-            "id": "workspace.refresh",
-            "title": "Refresh Workspace",
-            "handler": "handleRefresh"
-        }
-    ],
+    "commands": [],
     "subscribes": [],
     "emits": [
-        "plugin.workspace.folderAdded",
-        "plugin.workspace.folderRemoved"
+        "plugin.com.eterm.workspace.didUpdate"
     ]
 }

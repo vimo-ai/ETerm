@@ -1,5 +1,5 @@
 // swift-tools-version: 6.0
-// WorkspaceKit - 工作区插件 (SDK 架构版本)
+// WorkspaceKit - ETerm Plugin (main mode)
 
 import PackageDescription
 
@@ -22,6 +22,9 @@ let package = Package(
         .target(
             name: "WorkspaceKit",
             dependencies: ["ETermKit"],
+            resources: [
+                .copy("../../Resources/manifest.json")
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]

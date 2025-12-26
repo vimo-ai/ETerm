@@ -1,164 +1,58 @@
 #!/bin/bash
-# build.sh - 通用插件构建脚本
-# 自动处理纯 Swift 和带 dylib 的插件
+# WorkspaceKit build script
 
-set -euo pipefail
+set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-KIT_DIR="$SCRIPT_DIR"
-KIT_NAME="$(basename "$KIT_DIR" | sed 's/Kit$//')"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# 从 Xcode 环境变量获取配置，默认为 Debug
+# 配置
+BUNDLE_NAME="WorkspaceKit"
 CONFIGURATION="${CONFIGURATION:-Debug}"
+BUNDLE_OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-$HOME/.eterm/plugins}"
 
-# 输出路径逻辑：
-# 输出到 ~/.eterm/plugins/{PluginName}/{PluginName}.bundle
-if [ -n "${BUNDLE_OUTPUT_DIR:-}" ]; then
-    # 通过脚本构建：输出到 ~/.eterm/plugins/{PluginName}/
-    PLUGIN_DIR="${BUNDLE_OUTPUT_DIR}/${KIT_NAME}"
-    mkdir -p "$PLUGIN_DIR"
-    OUTPUT_DIR="$PLUGIN_DIR"
-else
-    # 独立构建：输出到本地 build/
-    OUTPUT_DIR="${KIT_DIR}/build"
-fi
+echo "Building $BUNDLE_NAME ($CONFIGURATION)..."
 
-BUNDLE_NAME="${KIT_NAME}.bundle"
-BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
+# 构建
+swift build -c $(echo $CONFIGURATION | tr '[:upper:]' '[:lower:]')
 
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# 创建 bundle 结构
+BUNDLE_DIR="$BUNDLE_OUTPUT_DIR/$BUNDLE_NAME.bundle"
+rm -rf "$BUNDLE_DIR"
+mkdir -p "$BUNDLE_DIR/Contents/MacOS"
+mkdir -p "$BUNDLE_DIR/Contents/Resources"
 
-log_info() {
-    echo -e "${BLUE}[${KIT_NAME}]${NC} $*" >&2
-}
+# 复制动态库
+BUILD_DIR=".build/$(echo $CONFIGURATION | tr '[:upper:]' '[:lower:]')"
+cp "$BUILD_DIR/lib${BUNDLE_NAME}.dylib" "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
 
-log_success() {
-    echo -e "${GREEN}[${KIT_NAME}]${NC} $*" >&2
-}
+# 修复 ETermKit 依赖路径：从 @rpath/libETermKit.dylib 改为指向 app bundle 的 framework
+install_name_tool -change @rpath/libETermKit.dylib @executable_path/../Frameworks/ETermKit.framework/ETermKit "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
 
-log_error() {
-    echo -e "${RED}[${KIT_NAME}]${NC} $*" >&2
-}
+# 修改后需要重签名
+codesign -f -s - "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
 
-# 清理并创建构建目录
-rm -rf "$BUNDLE_PATH"
-mkdir -p "${OUTPUT_DIR}"
-mkdir -p "${BUNDLE_PATH}/Contents/MacOS"
-mkdir -p "${BUNDLE_PATH}/Contents/Resources"
+# 复制 manifest
+cp "Resources/manifest.json" "$BUNDLE_DIR/Contents/Resources/"
 
-log_info "Building Swift package (${CONFIGURATION})..."
-
-# 构建 Swift 包
-cd "$KIT_DIR"
-if [ "$CONFIGURATION" = "Release" ]; then
-    swift build -c release
-    SWIFT_BUILD_DIR=".build/release"
-else
-    swift build
-    SWIFT_BUILD_DIR=".build/debug"
-fi
-
-# 复制编译产物
-log_info "Packaging bundle..."
-
-# Swift Package 产物可能是 lib{KitName}.dylib 或 {KitName}
-SWIFT_PRODUCT=""
-if [ -f "${SWIFT_BUILD_DIR}/lib${KIT_NAME}Kit.dylib" ]; then
-    SWIFT_PRODUCT="${SWIFT_BUILD_DIR}/lib${KIT_NAME}Kit.dylib"
-elif [ -f "${SWIFT_BUILD_DIR}/${KIT_NAME}Kit.dylib" ]; then
-    SWIFT_PRODUCT="${SWIFT_BUILD_DIR}/${KIT_NAME}Kit.dylib"
-elif [ -f "${SWIFT_BUILD_DIR}/${KIT_NAME}Kit" ]; then
-    SWIFT_PRODUCT="${SWIFT_BUILD_DIR}/${KIT_NAME}Kit"
-else
-    log_error "Build product not found in ${SWIFT_BUILD_DIR}"
-    exit 1
-fi
-
-cp "$SWIFT_PRODUCT" "${BUNDLE_PATH}/Contents/MacOS/"
-log_success "Copied $(basename "$SWIFT_PRODUCT")"
-
-# 修复 ETermKit 链接路径：SPM dylib -> Xcode framework
-# SPM 构建的是 libETermKit.dylib，但 app bundle 里是 ETermKit.framework
-DYLIB_PATH="${BUNDLE_PATH}/Contents/MacOS/$(basename "$SWIFT_PRODUCT")"
-log_info "Fixing ETermKit link path..."
-install_name_tool -change \
-    "@rpath/libETermKit.dylib" \
-    "@rpath/ETermKit.framework/Versions/A/ETermKit" \
-    "$DYLIB_PATH" 2>/dev/null || true
-
-# 重新签名
-codesign -f -s - "$DYLIB_PATH" 2>/dev/null || true
-log_success "Fixed ETermKit link path"
-
-# 复制 Libs/ 目录下的预编译 dylib（如果存在）
-if [ -d "${KIT_DIR}/Libs" ]; then
-    mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"
-
-    for dylib in "${KIT_DIR}/Libs"/*.dylib; do
-        [ -f "$dylib" ] || continue
-
-        dylib_name="$(basename "$dylib")"
-        cp "$dylib" "${BUNDLE_PATH}/Contents/Frameworks/"
-        log_success "Copied ${dylib_name}"
-
-        # 修复 install_name 为相对路径
-        install_name_tool -id "@rpath/${dylib_name}" \
-            "${BUNDLE_PATH}/Contents/Frameworks/${dylib_name}" 2>/dev/null || true
-
-        log_info "Fixed install_name for ${dylib_name}"
-    done
-fi
-
-# 复制 manifest.json 到 Resources
-if [ -f "${KIT_DIR}/Resources/manifest.json" ]; then
-    cp "${KIT_DIR}/Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"
-    log_success "Copied manifest.json"
-fi
-
-# 复制 Info.plist
-if [ -f "${KIT_DIR}/Info.plist" ]; then
-    cp "${KIT_DIR}/Info.plist" "${BUNDLE_PATH}/Contents/"
-    log_success "Copied Info.plist"
-else
-    log_info "Generating Info.plist..."
-    cat > "${BUNDLE_PATH}/Contents/Info.plist" <<EOF
+# 创建 Info.plist
+cat > "$BUNDLE_DIR/Contents/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.eterm.plugins.${KIT_NAME}</string>
+    <string>com.eterm.workspace</string>
     <key>CFBundleName</key>
-    <string>${KIT_NAME}</string>
-    <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>$BUNDLE_NAME</string>
+    <key>CFBundleExecutable</key>
+    <string>$BUNDLE_NAME</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
-    <key>CFBundleExecutable</key>
-    <string>$(basename "$SWIFT_PRODUCT")</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
 </dict>
 </plist>
 EOF
-fi
 
-# 签名整个 bundle
-log_info "Signing bundle..."
-codesign -f -s - "${BUNDLE_PATH}" 2>/dev/null || true
-
-log_success "✅ Bundle created: ${BUNDLE_PATH}"
-
-# 自动安装到 ~/.eterm/plugins/（除非设置了 BUNDLE_OUTPUT_DIR）
-if [ -z "${BUNDLE_OUTPUT_DIR:-}" ]; then
-    INSTALL_DIR="$HOME/.eterm/plugins"
-    mkdir -p "$INSTALL_DIR"
-    rm -rf "${INSTALL_DIR}/${BUNDLE_NAME}"
-    cp -R "${BUNDLE_PATH}" "${INSTALL_DIR}/"
-    # 复制后重新签名
-    codesign -f -s - "${INSTALL_DIR}/${BUNDLE_NAME}/Contents/MacOS/"*.dylib 2>/dev/null || true
-    codesign -f -s - "${INSTALL_DIR}/${BUNDLE_NAME}" 2>/dev/null || true
-    log_success "✅ Installed to ${INSTALL_DIR}/${BUNDLE_NAME}"
-fi
+echo "Bundle created at: $BUNDLE_DIR"

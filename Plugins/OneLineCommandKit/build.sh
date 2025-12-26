@@ -1,71 +1,58 @@
 #!/bin/bash
-# build.sh - Build OneLineCommandKit plugin
+# OneLineCommandKit build script
 
-set -euo pipefail
+set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_NAME="OneLineCommandKit"
-BUNDLE_NAME="${PLUGIN_NAME}.bundle"
-
-# Output directory
-OUTPUT_DIR="${HOME}/.eterm/plugins"
-BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
-
-# Colors
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log_info() { echo -e "${BLUE}[${PLUGIN_NAME}]${NC} $*"; }
-log_success() { echo -e "${GREEN}[${PLUGIN_NAME}]${NC} $*"; }
-
-# Build Swift Package
-log_info "Building Swift package..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-swift build
 
-# Create Bundle structure
-log_info "Creating bundle..."
-rm -rf "$BUNDLE_PATH"
-mkdir -p "${BUNDLE_PATH}/Contents/MacOS"
-mkdir -p "${BUNDLE_PATH}/Contents/Resources"
+# 配置
+BUNDLE_NAME="OneLineCommandKit"
+CONFIGURATION="${CONFIGURATION:-Debug}"
+BUNDLE_OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-$HOME/.eterm/plugins}"
 
-# Copy dylib
-cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
+echo "Building $BUNDLE_NAME ($CONFIGURATION)..."
 
-# Fix ETermKit link path: SPM dylib -> Xcode framework
-log_info "Fixing ETermKit link path for framework..."
-install_name_tool -change \
-    "@rpath/libETermKit.dylib" \
-    "@rpath/ETermKit.framework/Versions/A/ETermKit" \
-    "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+# 构建
+swift build -c $(echo $CONFIGURATION | tr '[:upper:]' '[:lower:]')
 
-# Re-sign after modification
-codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+# 创建 bundle 结构
+BUNDLE_DIR="$BUNDLE_OUTPUT_DIR/$BUNDLE_NAME.bundle"
+rm -rf "$BUNDLE_DIR"
+mkdir -p "$BUNDLE_DIR/Contents/MacOS"
+mkdir -p "$BUNDLE_DIR/Contents/Resources"
 
-# Copy manifest.json
-cp "Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"
+# 复制动态库
+BUILD_DIR=".build/$(echo $CONFIGURATION | tr '[:upper:]' '[:lower:]')"
+cp "$BUILD_DIR/lib${BUNDLE_NAME}.dylib" "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
 
-# Create Info.plist
-cat > "${BUNDLE_PATH}/Contents/Info.plist" <<EOF
+# 修复 ETermKit 依赖路径：从 @rpath/libETermKit.dylib 改为指向 app bundle 的 framework
+install_name_tool -change @rpath/libETermKit.dylib @executable_path/../Frameworks/ETermKit.framework/ETermKit "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
+
+# 修改后需要重签名
+codesign -f -s - "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
+
+# 复制 manifest
+cp "Resources/manifest.json" "$BUNDLE_DIR/Contents/Resources/"
+
+# 创建 Info.plist
+cat > "$BUNDLE_DIR/Contents/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.eterm.one-line-command</string>
+    <string>one-line-command</string>
     <key>CFBundleName</key>
-    <string>${PLUGIN_NAME}</string>
-    <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>$BUNDLE_NAME</string>
+    <key>CFBundleExecutable</key>
+    <string>$BUNDLE_NAME</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
-    <key>CFBundleExecutable</key>
-    <string>lib${PLUGIN_NAME}.dylib</string>
-    <key>NSPrincipalClass</key>
-    <string>OneLineCommandLogic</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
 </dict>
 </plist>
 EOF
 
-log_success "Installed to ${BUNDLE_PATH}"
+echo "Bundle created at: $BUNDLE_DIR"

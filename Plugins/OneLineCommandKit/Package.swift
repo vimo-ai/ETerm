@@ -1,5 +1,5 @@
 // swift-tools-version: 6.0
-// OneLineCommandKit - 一行命令插件 (SDK 架构版本)
+// OneLineCommandKit - ETerm Plugin (main mode)
 
 import PackageDescription
 

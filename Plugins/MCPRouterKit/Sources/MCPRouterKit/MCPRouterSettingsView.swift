@@ -1,8 +1,8 @@
 //
-//  MCPRouterViewProvider.swift
+//  MCPRouterSettingsView.swift
 //  MCPRouterKit
 //
-//  ViewProvider - 提供 SwiftUI View 给主进程
+//  MCP Router 设置视图 - 4 个分栏（基本、服务器、工作区、集成）
 
 import Foundation
 import SwiftUI
@@ -10,171 +10,21 @@ import ETermKit
 import UniformTypeIdentifiers
 import AppKit
 
-// MARK: - Plugin ID
-
-private let pluginId = "com.eterm.mcp-router"
-
-// MARK: - ViewProvider
-
-/// MCP Router ViewProvider
-@objc(MCPRouterViewProvider)
-public final class MCPRouterViewProvider: NSObject, PluginViewProvider {
-
-    public required override init() {
-        super.init()
-        print("[MCPRouterViewProvider] Initialized")
-    }
-
-    @MainActor
-    public func view(for tabId: String) -> AnyView {
-        print("[MCPRouterViewProvider] Creating sidebar view for tab: \(tabId)")
-
-        switch tabId {
-        case "mcp-router-settings":
-            return AnyView(MCPRouterSettingsView())
-        default:
-            return AnyView(
-                Text("Unknown tab: \(tabId)")
-                    .foregroundColor(.secondary)
-            )
-        }
-    }
-}
-
-// MARK: - DTO Types
-
-/// 服务器配置 DTO
-struct MCPServerConfigDTO: Identifiable, Hashable {
-    var id: String { name }
-    let name: String
-    let serverType: String  // "http" or "stdio"
-    var enabled: Bool
-    var flattenMode: Bool
-    let description: String?
-    let url: String?
-    let headers: [String: String]?
-    let command: String?
-    let args: [String]?
-    let env: [String: String]?
-
-    init(from dict: [String: Any]) {
-        self.name = dict["name"] as? String ?? ""
-        self.serverType = dict["type"] as? String ?? "http"
-        self.enabled = dict["enabled"] as? Bool ?? true
-        self.flattenMode = dict["flattenMode"] as? Bool ?? false
-        self.description = dict["description"] as? String
-        self.url = dict["url"] as? String
-        self.headers = dict["headers"] as? [String: String]
-        self.command = dict["command"] as? String
-        self.args = dict["args"] as? [String]
-        self.env = dict["env"] as? [String: String]
-    }
-
-    init(name: String, serverType: String, enabled: Bool = true, flattenMode: Bool = false,
-         description: String? = nil, url: String? = nil, headers: [String: String]? = nil,
-         command: String? = nil, args: [String]? = nil, env: [String: String]? = nil) {
-        self.name = name
-        self.serverType = serverType
-        self.enabled = enabled
-        self.flattenMode = flattenMode
-        self.description = description
-        self.url = url
-        self.headers = headers
-        self.command = command
-        self.args = args
-        self.env = env
-    }
-
-    func toDictionary() -> [String: Any] {
-        var dict: [String: Any] = [
-            "name": name,
-            "type": serverType,
-            "enabled": enabled,
-            "flattenMode": flattenMode
-        ]
-        if let description = description { dict["description"] = description }
-        if let url = url { dict["url"] = url }
-        if let headers = headers { dict["headers"] = headers }
-        if let command = command { dict["command"] = command }
-        if let args = args { dict["args"] = args }
-        if let env = env { dict["env"] = env }
-        return dict
-    }
-
-    static func http(name: String, url: String, headers: [String: String]? = nil, description: String? = nil) -> MCPServerConfigDTO {
-        MCPServerConfigDTO(name: name, serverType: "http", description: description, url: url, headers: headers)
-    }
-
-    static func stdio(name: String, command: String, args: [String] = [], env: [String: String] = [:], description: String? = nil) -> MCPServerConfigDTO {
-        MCPServerConfigDTO(name: name, serverType: "stdio", description: description, command: command, args: args, env: env)
-    }
-}
-
-/// 工作区配置 DTO
-struct MCPWorkspaceDTO: Identifiable, Hashable {
-    var id: String { token }
-    let token: String
-    let name: String
-    let projectPath: String
-    let isDefault: Bool
-    let serverOverrides: [String: Bool]
-    let flattenOverrides: [String: Bool]
-
-    init(from dict: [String: Any]) {
-        self.token = dict["token"] as? String ?? ""
-        self.name = dict["name"] as? String ?? ""
-        self.projectPath = dict["projectPath"] as? String ?? ""
-        self.isDefault = dict["isDefault"] as? Bool ?? false
-        self.serverOverrides = dict["serverOverrides"] as? [String: Bool] ?? [:]
-        self.flattenOverrides = dict["flattenOverrides"] as? [String: Bool] ?? [:]
-    }
-
-    func isServerEnabled(_ serverName: String, serverConfig: MCPServerConfigDTO?, defaultWorkspace: MCPWorkspaceDTO?) -> Bool {
-        if let override = serverOverrides[serverName] {
-            return override
-        }
-        if isDefault {
-            return serverConfig?.enabled ?? true
-        }
-        if let defaultWs = defaultWorkspace {
-            return defaultWs.serverOverrides[serverName] ?? (serverConfig?.enabled ?? true)
-        }
-        return serverConfig?.enabled ?? true
-    }
-
-    func isServerCustomized(_ serverName: String) -> Bool {
-        serverOverrides[serverName] != nil
-    }
-
-    func isFlattenEnabled(_ serverName: String, serverConfig: MCPServerConfigDTO?, defaultWorkspace: MCPWorkspaceDTO?) -> Bool {
-        if let override = flattenOverrides[serverName] {
-            return override
-        }
-        if isDefault {
-            return serverConfig?.flattenMode ?? false
-        }
-        if let defaultWs = defaultWorkspace {
-            return defaultWs.flattenOverrides[serverName] ?? (serverConfig?.flattenMode ?? false)
-        }
-        return serverConfig?.flattenMode ?? false
-    }
-
-    func isFlattenCustomized(_ serverName: String) -> Bool {
-        flattenOverrides[serverName] != nil
-    }
-}
-
 // MARK: - ViewModel
 
-/// MCP Router View 状态
+/// MCP Router View 状态 - 直接调用 Bridge
+@MainActor
 final class MCPRouterViewState: ObservableObject {
     @Published var isRunning = false
     @Published var port: Int = 19104
-    @Published var statusMessage = "Not running"
+    @Published var statusMessage = "未运行"
     @Published var version = ""
     @Published var fullMode = false
     @Published var servers: [MCPServerConfigDTO] = []
     @Published var workspaces: [MCPWorkspaceDTO] = []
+
+    private let bridge = MCPRouterBridge.shared
+    private var workspaceObserver: NSObjectProtocol?
 
     var endpointURL: String {
         "http://127.0.0.1:\(port)"
@@ -188,118 +38,185 @@ final class MCPRouterViewState: ObservableObject {
         workspaces.first { $0.isDefault }
     }
 
-    private var observer: Any?
+    init() {
+        version = MCPRouterBridge.version
+        setupWorkspaceObserver()
+        // 从缓存加载已有的工作区数据
+        loadCachedWorkspaces()
+    }
 
-    func startListening() {
-        observer = NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("ETerm.UpdateViewModel"),
+    private func loadCachedWorkspaces() {
+        let cached = WorkspaceCache.shared.workspaces
+        if !cached.isEmpty {
+            updateWorkspaces(from: cached)
+        }
+    }
+
+    deinit {
+        if let observer = workspaceObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func setupWorkspaceObserver() {
+        workspaceObserver = NotificationCenter.default.addObserver(
+            forName: .mcpRouterWorkspacesUpdated,
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleUpdate(notification)
-        }
+            guard let self = self,
+                  let rawWorkspaces = notification.userInfo?["workspaces"] as? [[String: Any]] else {
+                return
+            }
 
-        // 请求初始数据
-        sendRequest("getServers")
-        sendRequest("getWorkspaces")
-    }
-
-    func stopListening() {
-        if let observer = observer {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        observer = nil
-    }
-
-    private func handleUpdate(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let pid = userInfo["pluginId"] as? String,
-              pid == pluginId,
-              let data = userInfo["data"] as? [String: Any] else {
-            return
-        }
-
-        if let isRunning = data["isRunning"] as? Bool {
-            self.isRunning = isRunning
-        }
-        if let port = data["port"] as? Int {
-            self.port = port
-        }
-        if let statusMessage = data["statusMessage"] as? String {
-            self.statusMessage = statusMessage
-        }
-        if let version = data["version"] as? String {
-            self.version = version
-        }
-        if let fullMode = data["exposeManagementTools"] as? Bool {
-            self.fullMode = fullMode
-        }
-        if let serversData = data["servers"] as? [[String: Any]] {
-            self.servers = serversData.map { MCPServerConfigDTO(from: $0) }
-        }
-        if let workspacesData = data["workspaces"] as? [[String: Any]] {
-            self.workspaces = workspacesData.map { MCPWorkspaceDTO(from: $0) }
+            Task { @MainActor in
+                self.updateWorkspaces(from: rawWorkspaces)
+            }
         }
     }
 
-    // MARK: - Request Helpers
+    /// 从 WorkspaceKit 的路径列表更新工作区
+    private func updateWorkspaces(from rawWorkspaces: [[String: Any]]) {
+        // 将简单的路径列表转换为 MCPWorkspaceDTO
+        // 保留现有的配置（serverOverrides 等）
+        let newWorkspaces = rawWorkspaces.compactMap { raw -> MCPWorkspaceDTO? in
+            guard let path = raw["path"] as? String else { return nil }
+            let name = raw["name"] as? String ?? (path as NSString).lastPathComponent
 
-    func sendRequest(_ requestId: String, params: [String: Any] = [:]) {
-        NotificationCenter.default.post(
-            name: NSNotification.Name("ETerm.PluginRequest"),
-            object: nil,
-            userInfo: [
-                "pluginId": pluginId,
-                "requestId": requestId,
-                "params": params
-            ]
-        )
-    }
+            // 查找现有工作区的配置
+            if let existing = workspaces.first(where: { $0.projectPath == path }) {
+                return existing
+            }
 
-    func sendCommand(_ command: String) {
-        // 使用请求机制发送命令（通过 _command 请求转发到 handleCommand）
-        sendRequest("_command", params: ["commandId": "mcp-router.\(command)"])
+            // 创建新工作区（使用路径作为 token）
+            return MCPWorkspaceDTO(
+                token: path,
+                name: name,
+                projectPath: path
+            )
+        }
+
+        workspaces = newWorkspaces
+
+        // 同步到 Bridge
+        do {
+            try bridge.loadWorkspaces(workspaces)
+        } catch {
+            print("[MCPRouter] loadWorkspaces error: \(error)")
+        }
     }
 
     func refresh() {
-        sendRequest("getServers")
-        sendRequest("getWorkspaces")
+        do {
+            servers = try bridge.listServers()
+            if let status = bridge.getStatus() {
+                isRunning = status.isRunning
+                statusMessage = isRunning ? "运行中 (端口 \(port))" : "未运行"
+            }
+            fullMode = bridge.getExposeManagementTools()
+        } catch {
+            print("[MCPRouter] refresh error: \(error)")
+        }
+    }
+
+    func start() {
+        do {
+            try bridge.startServer(port: UInt16(port))
+            isRunning = true
+            statusMessage = "运行中 (端口 \(port))"
+        } catch {
+            statusMessage = "启动失败: \(error.localizedDescription)"
+        }
+    }
+
+    func stop() {
+        do {
+            try bridge.stopServer()
+            isRunning = false
+            statusMessage = "未运行"
+        } catch {
+            statusMessage = "停止失败: \(error.localizedDescription)"
+        }
+    }
+
+    func reload() {
+        stop()
+        start()
+        refresh()
+    }
+
+    func setPort(_ newPort: Int) {
+        let wasRunning = isRunning
+        if wasRunning {
+            stop()
+        }
+        port = newPort
+        if wasRunning {
+            start()
+        }
     }
 
     func addServer(_ config: MCPServerConfigDTO) {
-        sendRequest("addServer", params: config.toDictionary())
+        do {
+            // 获取现有服务器列表，追加新服务器，然后批量加载
+            var currentServers = try bridge.listServers()
+            // 检查是否已存在同名服务器
+            if !currentServers.contains(where: { $0.name == config.name }) {
+                currentServers.append(config)
+                try bridge.loadServers(currentServers)
+            }
+            refresh()
+        } catch {
+            print("[MCPRouter] addServer error: \(error)")
+        }
     }
 
     func removeServer(_ name: String) {
-        sendRequest("removeServer", params: ["name": name])
+        do {
+            try bridge.removeServer(name: name)
+            refresh()
+        } catch {
+            print("[MCPRouter] removeServer error: \(error)")
+        }
     }
 
     func setServerEnabled(_ name: String, enabled: Bool) {
-        sendRequest("setServerEnabled", params: ["name": name, "enabled": enabled])
+        do {
+            try bridge.setServerEnabled(name: name, enabled: enabled)
+            refresh()
+        } catch {
+            print("[MCPRouter] setServerEnabled error: \(error)")
+        }
     }
 
     func setServerFlattenMode(_ name: String, flatten: Bool) {
-        sendRequest("setServerFlattenMode", params: ["name": name, "flatten": flatten])
+        do {
+            try bridge.setServerFlattenMode(name: name, flatten: flatten)
+            refresh()
+        } catch {
+            print("[MCPRouter] setServerFlattenMode error: \(error)")
+        }
     }
 
     func setWorkspaceServerEnabled(token: String, serverName: String, enabled: Bool) {
-        sendRequest("setWorkspaceServerEnabled", params: [
-            "token": token,
-            "serverName": serverName,
-            "enabled": enabled
-        ])
+        // TODO: 需要 Bridge 支持
     }
 
     func setWorkspaceFlattenMode(token: String, serverName: String, flatten: Bool) {
-        sendRequest("setWorkspaceFlattenMode", params: [
-            "token": token,
-            "serverName": serverName,
-            "flatten": flatten
-        ])
+        // TODO: 需要 Bridge 支持
     }
 
     func resetWorkspaceOverrides(token: String) {
-        sendRequest("resetWorkspaceOverrides", params: ["token": token])
+        // TODO: 需要 Bridge 支持
+    }
+
+    func setExposeManagementTools(_ expose: Bool) {
+        do {
+            try bridge.setExposeManagementTools(expose)
+            fullMode = expose
+        } catch {
+            print("[MCPRouter] setExposeManagementTools error: \(error)")
+        }
     }
 }
 
@@ -348,13 +265,8 @@ struct MCPRouterSettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 400)
         .onAppear {
-            viewModel.startListening()
             viewModel.refresh()
-        }
-        .onDisappear {
-            viewModel.stopListening()
         }
     }
 }
@@ -411,7 +323,7 @@ private struct BasicSettingsTab: View {
                 HStack(spacing: 12) {
                     if viewModel.isRunning {
                         Button(action: {
-                            viewModel.sendCommand("stop")
+                            viewModel.stop()
                         }) {
                             Label("停止", systemImage: "stop.fill")
                         }
@@ -419,14 +331,14 @@ private struct BasicSettingsTab: View {
                         .tint(.red)
 
                         Button(action: {
-                            viewModel.sendCommand("reload")
+                            viewModel.reload()
                         }) {
                             Label("重载", systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.bordered)
                     } else {
                         Button(action: {
-                            viewModel.sendCommand("start")
+                            viewModel.start()
                         }) {
                             Label("启动", systemImage: "play.fill")
                         }
@@ -474,7 +386,7 @@ private struct BasicSettingsTab: View {
 
                         Button("应用") {
                             if let port = Int(portText) {
-                                viewModel.sendRequest("setPort", params: ["port": port])
+                                viewModel.setPort(port)
                             }
                         }
                         .disabled(Int(portText) == viewModel.port)
@@ -1747,7 +1659,6 @@ private struct CodexIntegrationRowView: View {
 
         if configExists {
             if let content = try? String(contentsOfFile: expandedPath, encoding: .utf8) {
-                // 简单检查 TOML 中是否有 mcp-router 配置
                 isInstalled = content.contains("[mcp_servers.mcp-router]")
             }
         }
@@ -1761,8 +1672,6 @@ private struct CodexIntegrationRowView: View {
         }
 
         if isInstalled {
-            // 移除 mcp-router 配置块
-            // 匹配 [mcp_servers.mcp-router] 及其后续行直到下一个 section 或文件末尾
             let pattern = #"\[mcp_servers\.mcp-router\]\n(?:(?!\[)[^\n]*\n)*"#
             if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
                 content = regex.stringByReplacingMatches(
@@ -1773,7 +1682,6 @@ private struct CodexIntegrationRowView: View {
                 )
             }
         } else {
-            // 添加 mcp-router 配置
             let mcpConfig = """
 
             [mcp_servers.mcp-router]

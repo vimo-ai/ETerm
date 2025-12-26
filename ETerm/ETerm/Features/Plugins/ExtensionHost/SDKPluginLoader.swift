@@ -49,6 +49,9 @@ final class SDKPluginLoader {
     /// 已加载的 Plugin 实例 (pluginId -> Plugin)，仅 main 模式使用
     private var mainModePlugins: [String: any ETermKit.Plugin] = [:]
 
+    /// 已加载的 HostBridge 实例 (pluginId -> HostBridge)，保持强引用避免被释放
+    private var hostBridges: [String: any ETermKit.HostBridge] = [:]
+
     /// 已加载的 PluginHost (pluginId -> PluginHost)，统一接口
     private var pluginHosts: [String: any PluginHost] = [:]
 
@@ -89,16 +92,13 @@ final class SDKPluginLoader {
 
         let params = userInfo["params"] as? [String: Any] ?? [:]
 
-        print("[SDKPluginLoader] Forwarding request: \(pluginId).\(requestId)")
-
         Task {
             do {
-                let result = try await ExtensionHostManager.shared.sendRequest(
+                _ = try await ExtensionHostManager.shared.sendRequest(
                     pluginId: pluginId,
                     requestId: requestId,
                     params: params
                 )
-                print("[SDKPluginLoader] Request completed: \(result)")
             } catch {
                 print("[SDKPluginLoader] Request failed: \(error)")
             }
@@ -125,7 +125,6 @@ final class SDKPluginLoader {
         if hasIsolatedPlugins {
             do {
                 try await ExtensionHostManager.shared.start()
-                print("[SDKPluginLoader] Extension Host started for isolated plugins")
             } catch {
                 print("[SDKPluginLoader] Failed to start Extension Host: \(error)")
                 // 继续加载 main 模式插件
@@ -364,7 +363,6 @@ final class SDKPluginLoader {
         do {
             try bundle.loadAndReturnError()
             loadedBundles[pluginId] = bundle
-            print("[SDKPluginLoader] Loaded bundle for \(pluginId) (main mode)")
         } catch {
             print("[SDKPluginLoader] Failed to load bundle for \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: "Failed to load bundle: \(error.localizedDescription)")
@@ -383,13 +381,11 @@ final class SDKPluginLoader {
             if let pluginClass = bundle.classNamed(name) as? NSObject.Type,
                let instance = pluginClass.init() as? any ETermKit.Plugin {
                 pluginInstance = instance
-                print("[SDKPluginLoader] Loaded Plugin '\(name)' for \(pluginId)")
                 break
             }
             if let pluginClass = NSClassFromString(name) as? NSObject.Type,
                let instance = pluginClass.init() as? any ETermKit.Plugin {
                 pluginInstance = instance
-                print("[SDKPluginLoader] Loaded Plugin '\(name)' for \(pluginId)")
                 break
             }
         }
@@ -404,15 +400,14 @@ final class SDKPluginLoader {
         let hostBridge = MainProcessHostBridge(pluginId: pluginId, manifest: manifest)
         plugin.activate(host: hostBridge)
 
-        // 存储
+        // 存储（hostBridge 必须被强引用保持，否则插件的 weak var host 会变成 nil）
+        hostBridges[pluginId] = hostBridge
         mainModePlugins[pluginId] = plugin
         manifests[pluginId] = manifest
 
         // 创建 PluginHost
         let pluginHost = MainModePluginHost(plugin: plugin, manifest: manifest)
         pluginHosts[pluginId] = pluginHost
-
-        print("[SDKPluginLoader] Activated plugin: \(pluginId) (main mode)")
 
         // 注册 UI
         registerSidebarTabs(for: manifest)
@@ -445,7 +440,6 @@ final class SDKPluginLoader {
             do {
                 try bundle.loadAndReturnError()
                 loadedBundles[pluginId] = bundle
-                print("[SDKPluginLoader] Loaded bundle for \(pluginId) (isolated mode)")
 
                 // 加载 ViewProvider
                 if let viewProviderClassName = manifest.viewProviderClass {
@@ -470,7 +464,6 @@ final class SDKPluginLoader {
                 bundlePath: bundlePath,
                 manifest: manifest
             )
-            print("[SDKPluginLoader] Activated plugin: \(pluginId) (isolated mode)")
 
             // 创建 PluginHost
             let pluginHost = IsolatedModePluginHost(
@@ -506,7 +499,6 @@ final class SDKPluginLoader {
             if let providerClass = bundle.classNamed(name) as? NSObject.Type,
                let provider = providerClass.init() as? PluginViewProvider {
                 viewProviders[pluginId] = provider
-                print("[SDKPluginLoader] Loaded ViewProvider '\(name)' for \(pluginId)")
                 return
             }
 
@@ -514,7 +506,6 @@ final class SDKPluginLoader {
             if let providerClass = NSClassFromString(name) as? NSObject.Type,
                let provider = providerClass.init() as? PluginViewProvider {
                 viewProviders[pluginId] = provider
-                print("[SDKPluginLoader] Loaded ViewProvider '\(name)' for \(pluginId)")
                 return
             }
         }
@@ -550,6 +541,7 @@ final class SDKPluginLoader {
         guard !manifest.sidebarTabs.isEmpty else { return }
 
         let pluginId = manifest.id
+        let isMainMode = manifest.runMode == .main
 
         for tabConfig in manifest.sidebarTabs {
             // 检查渲染模式
@@ -569,14 +561,12 @@ final class SDKPluginLoader {
                             viewId: tabConfig.id,
                             title: tabConfig.title
                         ) {
-                            if let viewProvider = self?.viewProviders[pluginId] {
-                                return viewProvider.view(for: tabConfig.id)
-                            }
-                            return AnyView(SDKPluginPlaceholderView(
-                                pluginId: pluginId,
-                                tabId: tabConfig.id,
-                                message: "ViewProvider not loaded"
-                            ))
+                            self?.getSidebarView(pluginId: pluginId, tabId: tabConfig.id, isMainMode: isMainMode)
+                                ?? AnyView(SDKPluginPlaceholderView(
+                                    pluginId: pluginId,
+                                    tabId: tabConfig.id,
+                                    message: "View not available"
+                                ))
                         }
 
                         // 创建或切换到 View Tab
@@ -586,14 +576,12 @@ final class SDKPluginLoader {
                             title: tabConfig.title,
                             placement: .split(.horizontal)
                         ) {
-                            if let viewProvider = self?.viewProviders[pluginId] {
-                                return viewProvider.view(for: tabConfig.id)
-                            }
-                            return AnyView(SDKPluginPlaceholderView(
-                                pluginId: pluginId,
-                                tabId: tabConfig.id,
-                                message: "ViewProvider not loaded"
-                            ))
+                            self?.getSidebarView(pluginId: pluginId, tabId: tabConfig.id, isMainMode: isMainMode)
+                                ?? AnyView(SDKPluginPlaceholderView(
+                                    pluginId: pluginId,
+                                    tabId: tabConfig.id,
+                                    message: "View not available"
+                                ))
                         }
                     }
                 )
@@ -603,8 +591,6 @@ final class SDKPluginLoader {
                     pluginName: manifest.name,
                     tab: tab
                 )
-
-                print("[SDKPluginLoader] Registered sidebar tab '\(tabConfig.id)' for \(manifest.id) (tab mode)")
             } else {
                 // Inline 模式：直接在 sidebar 里渲染
                 let tab = SidebarTab(
@@ -612,17 +598,12 @@ final class SDKPluginLoader {
                     title: tabConfig.title,
                     icon: tabConfig.icon
                 ) { [weak self] in
-                    // 优先使用 ViewProvider 获取 View
-                    if let viewProvider = self?.viewProviders[pluginId] {
-                        return viewProvider.view(for: tabConfig.id)
-                    }
-
-                    // 回退：使用通用的占位视图
-                    return AnyView(SDKPluginPlaceholderView(
-                        pluginId: pluginId,
-                        tabId: tabConfig.id,
-                        message: "ViewProvider not loaded"
-                    ))
+                    self?.getSidebarView(pluginId: pluginId, tabId: tabConfig.id, isMainMode: isMainMode)
+                        ?? AnyView(SDKPluginPlaceholderView(
+                            pluginId: pluginId,
+                            tabId: tabConfig.id,
+                            message: "View not available"
+                        ))
                 }
 
                 SidebarRegistry.shared.registerTab(
@@ -630,9 +611,18 @@ final class SDKPluginLoader {
                     pluginName: manifest.name,
                     tab: tab
                 )
-
-                print("[SDKPluginLoader] Registered sidebar tab '\(tabConfig.id)' for \(manifest.id) (inline mode)")
             }
+        }
+    }
+
+    /// 获取侧边栏视图（区分 main/isolated 模式）
+    private func getSidebarView(pluginId: String, tabId: String, isMainMode: Bool) -> AnyView? {
+        if isMainMode {
+            // main mode: 使用 Plugin.sidebarView(for:)
+            return mainModePlugins[pluginId]?.sidebarView(for: tabId)
+        } else {
+            // isolated mode: 使用 ViewProvider.view(for:)
+            return viewProviders[pluginId]?.view(for: tabId)
         }
     }
 
@@ -641,15 +631,8 @@ final class SDKPluginLoader {
         guard let config = manifest.menuBar else { return }
 
         // 获取或创建 ViewProvider
-        let provider = getOrCreateViewProvider(for: manifest)
-        guard let provider = provider else {
-            print("[SDKPluginLoader] No ViewProvider for \(manifest.id), skipping MenuBar registration")
-            return
-        }
-
-        // 获取 MenuBar 视图
-        guard let menuBarView = provider.createMenuBarView() else {
-            print("[SDKPluginLoader] ViewProvider for \(manifest.id) does not provide MenuBar view")
+        guard let provider = getOrCreateViewProvider(for: manifest),
+              let menuBarView = provider.createMenuBarView() else {
             return
         }
 
@@ -665,7 +648,6 @@ final class SDKPluginLoader {
         }
 
         menuBarItems[manifest.id] = statusItem
-        print("[SDKPluginLoader] Registered menuBar '\(config.id)' for \(manifest.id)")
     }
 
     /// 获取或创建 ViewProvider 实例
@@ -683,7 +665,6 @@ final class SDKPluginLoader {
 
         // 加载插件 Bundle
         guard let bundle = Bundle(path: bundlePath), bundle.load() else {
-            print("[SDKPluginLoader] Failed to load bundle at \(bundlePath)")
             return nil
         }
 
@@ -720,20 +701,37 @@ final class SDKPluginLoader {
 
         let pluginId = manifest.id
 
-        for command in manifest.commands {
-            // 只处理有 keyBinding 的命令
-            guard let keyBindingStr = command.keyBinding else { continue }
-
-            // 解析 keyBinding 字符串为 KeyStroke
-            guard let keyStroke = parseKeyBinding(keyBindingStr) else {
-                print("[SDKPluginLoader] Failed to parse keyBinding \(keyBindingStr) for command \(command.id)")
-                continue
+        for cmdConfig in manifest.commands {
+            // 注册 Command 到 CommandRegistry（无论有无快捷键）
+            let command = Command(
+                id: cmdConfig.id,
+                title: cmdConfig.title,
+                icon: nil
+            ) { [weak self] _ in
+                // main mode: 调用插件的 handleCommand
+                if let plugin = self?.mainModePlugins[pluginId] {
+                    plugin.handleCommand(cmdConfig.id)
+                } else {
+                    // isolated mode: 通过 ExtensionHost 发送命令
+                    Task {
+                        try? await ExtensionHostManager.shared.sendRequest(
+                            pluginId: pluginId,
+                            requestId: "handleCommand",
+                            params: ["commandId": cmdConfig.id]
+                        )
+                    }
+                }
             }
+            CommandRegistry.shared.register(command)
 
-            // 注册快捷键到 KeyboardService
-            KeyboardServiceImpl.shared.bind(keyStroke, to: command.id, when: nil)
-
-            print("[SDKPluginLoader] Registered keyBinding \(keyBindingStr) -> \(command.id) for \(pluginId)")
+            // 如果有快捷键，注册到 KeyboardService
+            if let keyBindingStr = cmdConfig.keyBinding {
+                guard let keyStroke = parseKeyBinding(keyBindingStr) else {
+                    print("[SDKPluginLoader] Failed to parse keyBinding '\(keyBindingStr)' for \(cmdConfig.id)")
+                    continue
+                }
+                KeyboardServiceImpl.shared.bind(keyStroke, to: cmdConfig.id, when: nil)
+            }
         }
     }
 
@@ -797,8 +795,6 @@ final class SDKPluginLoader {
                         .foregroundColor(.secondary)
                 )
             }
-
-            print("[SDKPluginLoader] Registered infoPanelContent '\(content.id)' for \(pluginId)")
         }
     }
 
@@ -829,7 +825,6 @@ final class SDKPluginLoader {
                 self?.toggleBottomDock(pluginId: pluginId)
             }
             CommandRegistry.shared.register(command)
-            print("[SDKPluginLoader] Registered bottomDock toggle command '\(toggleCmd)' for \(pluginId)")
         }
 
         if let showCmd = config.showCommand {
@@ -841,7 +836,6 @@ final class SDKPluginLoader {
                 self?.showBottomDock(pluginId: pluginId)
             }
             CommandRegistry.shared.register(command)
-            print("[SDKPluginLoader] Registered bottomDock show command '\(showCmd)' for \(pluginId)")
         }
 
         if let hideCmd = config.hideCommand {
@@ -853,7 +847,6 @@ final class SDKPluginLoader {
                 self?.hideBottomDock(pluginId: pluginId)
             }
             CommandRegistry.shared.register(command)
-            print("[SDKPluginLoader] Registered bottomDock hide command '\(hideCmd)' for \(pluginId)")
         }
     }
 
@@ -909,12 +902,6 @@ final class SDKPluginLoader {
 
         // 存储配置
         SDKPluginLoader.bubbleConfigs[pluginId] = config
-
-        // 订阅触发事件（通过 EventBus）
-        // 注意：实际的事件订阅在 ExtensionHost 端处理，这里只是注册配置
-        // TranslationController 会查询这些配置来决定如何处理
-
-        print("[SDKPluginLoader] Registered bubble '\(config.id)' for \(pluginId), trigger: \(config.trigger)")
     }
 
     /// 获取已注册的 bubble 配置
@@ -930,6 +917,11 @@ final class SDKPluginLoader {
     /// 获取已加载的所有 Manifest
     func getLoadedManifests() -> [String: PluginManifest] {
         return manifests
+    }
+
+    /// 获取 main mode 插件实例
+    func getMainModePlugin(_ pluginId: String) -> (any ETermKit.Plugin)? {
+        return mainModePlugins[pluginId]
     }
 
     /// 获取 bubble 内容视图

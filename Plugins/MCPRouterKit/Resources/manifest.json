@@ -4,13 +4,14 @@
     "version": "0.0.1-beta.1",
     "minHostVersion": "0.0.1-beta.1",
     "sdkVersion": "0.0.1-beta.1",
-    "dependencies": [],
+    "runMode": "main",
+    "dependencies": [
+        { "id": "com.eterm.workspace", "minVersion": "1.0.0" }
+    ],
     "capabilities": [
         "ui.sidebar"
     ],
-    "principalClass": "MCPRouterLogic",
-    "viewModelClass": "MCPRouterViewModel",
-    "viewProviderClass": "MCPRouterViewProvider",
+    "principalClass": "MCPRouterKit.MCPRouterPlugin",
     "sidebarTabs": [
         {
             "id": "mcp-router-settings",
@@ -19,20 +20,9 @@
             "viewClass": "MCPRouterSettingsView"
         }
     ],
-    "commands": [
-        {
-            "id": "mcp-router.start",
-            "title": "Start MCP Router",
-            "handler": "handleStart"
-        },
-        {
-            "id": "mcp-router.stop",
-            "title": "Stop MCP Router",
-            "handler": "handleStop"
-        }
-    ],
+    "commands": [],
     "subscribes": [
-        "plugin.workspace.folderAdded",
-        "plugin.workspace.folderRemoved"
-    ]
+        "plugin.com.eterm.workspace.didUpdate"
+    ],
+    "emits": []
 }

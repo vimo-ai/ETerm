@@ -1,6 +1,6 @@
 //
 //  FocusableTextField.swift
-//  OneLineCommandKit
+//  ETerm
 //
 //  可聚焦的 TextField（使用 NSTextField 实现）
 
@@ -11,25 +11,13 @@ import AppKit
 ///
 /// 使用 NSViewRepresentable 包装原生 NSTextField，
 /// 解决 SwiftUI TextField 在 Panel 中无法自动聚焦的问题
-public struct FocusableTextField: NSViewRepresentable {
+struct FocusableTextField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
     var onSubmit: () -> Void
     var onEscape: () -> Void
 
-    public init(
-        text: Binding<String>,
-        placeholder: String,
-        onSubmit: @escaping () -> Void,
-        onEscape: @escaping () -> Void
-    ) {
-        self._text = text
-        self.placeholder = placeholder
-        self.onSubmit = onSubmit
-        self.onEscape = onEscape
-    }
-
-    public func makeNSView(context: Context) -> NSTextField {
+    func makeNSView(context: Context) -> NSTextField {
         let textField = FocusableNSTextField()
         textField.placeholderString = placeholder
         textField.font = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
@@ -80,27 +68,27 @@ public struct FocusableTextField: NSViewRepresentable {
         }
     }
 
-    public func updateNSView(_ nsView: NSTextField, context: Context) {
+    func updateNSView(_ nsView: NSTextField, context: Context) {
         nsView.stringValue = text
     }
 
-    public func makeCoordinator() -> Coordinator {
+    func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
-    public class Coordinator: NSObject, NSTextFieldDelegate {
+    class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: FocusableTextField
 
         init(_ parent: FocusableTextField) {
             self.parent = parent
         }
 
-        public func controlTextDidChange(_ obj: Notification) {
+        func controlTextDidChange(_ obj: Notification) {
             guard let textField = obj.object as? NSTextField else { return }
             parent.text = textField.stringValue
         }
 
-        public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             if commandSelector == #selector(NSResponder.insertNewline(_:)) {
                 // Enter 键
                 parent.onSubmit()

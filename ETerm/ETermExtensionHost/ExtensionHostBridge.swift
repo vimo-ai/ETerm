@@ -310,6 +310,18 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
+    // MARK: - 窗口与终端查询
+
+    public func getActiveTabCwd() -> String? {
+        // isolated 模式暂不支持，返回 nil
+        return nil
+    }
+
+    public func getKeyWindowFrame() -> CGRect? {
+        // isolated 模式暂不支持，返回 nil
+        return nil
+    }
+
     // MARK: - Internal
 
     func setHostInfo(_ info: HostInfo) {
