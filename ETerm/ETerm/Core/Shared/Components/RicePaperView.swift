@@ -168,7 +168,7 @@ struct RicePaperView<Content: View>: View {
 
                 // 深色模式下的暗化遮罩层
                 if colorScheme == .dark {
-                    Color.black.opacity(0.75)
+                    Color.black.opacity(0.95)
                         .ignoresSafeArea()
                 }
 
@@ -192,7 +192,7 @@ struct RicePaperView<Content: View>: View {
     @ViewBuilder
     private func ricePaperTextureView(in size: CGSize) -> some View {
         let textureName = colorScheme == .dark ? "rice-paper-warm" : "rice-paper"
-        let textureOpacity = colorScheme == .dark ? 0.5 : 0.8
+        let textureOpacity = colorScheme == .dark ? 0.3 : 0.8
 
         if let nsImage = NSImage(named: textureName) {
             TiledImageView(image: nsImage)

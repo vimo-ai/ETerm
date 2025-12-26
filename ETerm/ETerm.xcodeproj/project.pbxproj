@@ -32,6 +32,13 @@
 			remoteGlobalIDString = 481CC2B82EC7B632009F969C;
 			remoteInfo = ETerm;
 		};
+		4825E2712EFDBE71003AE32C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 481CC2B12EC7B632009F969C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4825DE2E2EFD304B003AE32C;
+			remoteInfo = ETermExtensionHost;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -203,10 +210,12 @@
 				481CC2B72EC7B632009F969C /* Resources */,
 				4825DE282EFD2E56003AE32C /* Embed Frameworks */,
 				4825DE3E2EFD3284003AE32C /* CopyFiles */,
+				4825E2762EFDBF41003AE32C /* ShellScript */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				4825E2722EFDBE71003AE32C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				481CC2BB2EC7B632009F969C /* ETerm */,
@@ -369,6 +378,27 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		4825E2762EFDBF41003AE32C /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "  # Package Builtin Plugins\n  set -euo pipefail\n\n  SCRIPT_DIR=\"${SRCROOT}/Scripts\"\n  PLUGINS_DIR=\"${SRCROOT}/../Plugins\"\n  OUTPUT_DIR=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/BuiltinPlugins\"\n\n  echo \"=== Packaging Builtin Plugins ===\"\n  echo \"Output: ${OUTPUT_DIR}\"\n\n  mkdir -p \"${OUTPUT_DIR}\"\n\n  export BUNDLE_OUTPUT_DIR=\"${OUTPUT_DIR}\"\n  export CONFIGURATION=\"${CONFIGURATION}\"\n\n  \"${SCRIPT_DIR}/build_all_plugins.sh\" \"${OUTPUT_DIR}\"\n\n  echo \"=== Done ===\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		481CC2B52EC7B632009F969C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -411,6 +441,11 @@
 			target = 481CC2B82EC7B632009F969C /* ETerm */;
 			targetProxy = 481CC2D32EC7B633009F969C /* PBXContainerItemProxy */;
 		};
+		4825E2722EFDBE71003AE32C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4825DE2E2EFD304B003AE32C /* ETermExtensionHost */;
+			targetProxy = 4825E2712EFDBE71003AE32C /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -452,7 +487,7 @@
 				DEVELOPMENT_TEAM = K7T2J28754;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -517,7 +552,7 @@
 				DEVELOPMENT_TEAM = K7T2J28754;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
