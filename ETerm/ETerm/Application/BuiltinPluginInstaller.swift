@@ -130,6 +130,12 @@ enum BuiltinPluginInstaller {
         #endif
     }
 
+    /// 是否从 Xcode 运行（检测 DerivedData 路径）
+    private static var isRunningFromXcode: Bool {
+        guard let executablePath = Bundle.main.executablePath else { return false }
+        return executablePath.contains("DerivedData")
+    }
+
     /// 判断安装动作
     private static func determineAction(source: String, target: String) -> InstallAction {
         // 目标不存在 → 新安装

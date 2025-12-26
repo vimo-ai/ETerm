@@ -12,7 +12,7 @@
         "ui.pageBar",
         "selection.registerAction"
     ],
-    "principalClass": "TranslationKit.TranslationPlugin",
+    "principalClass": "TranslationPlugin",
     "sidebarTabs": [
         {
             "id": "translation-settings",

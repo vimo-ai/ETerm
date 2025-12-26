@@ -78,7 +78,7 @@ final class SDKPluginLoader {
             view.workingDirectory = cwd
             view.onTerminalCreated = { id in
                 // 更新 terminalId 映射（可选，用于后续控制）
-                print("[SDKPluginLoader] Embedded terminal created: \(id) for placeholder: \(terminalId)")
+                logInfo("[SDKPluginLoader] Embedded terminal created: \(id) for placeholder: \(terminalId)")
             }
             return view
         }
@@ -100,7 +100,7 @@ final class SDKPluginLoader {
         guard let userInfo = notification.userInfo,
               let pluginId = userInfo["pluginId"] as? String,
               let requestId = userInfo["requestId"] as? String else {
-            print("[SDKPluginLoader] Invalid plugin request notification")
+            logWarn("[SDKPluginLoader] Invalid plugin request notification")
             return
         }
 
@@ -114,7 +114,7 @@ final class SDKPluginLoader {
                     params: params
                 )
             } catch {
-                print("[SDKPluginLoader] Request failed: \(error)")
+                logError("[SDKPluginLoader] Request failed: \(error)")
             }
         }
     }
@@ -123,17 +123,21 @@ final class SDKPluginLoader {
 
     /// 加载所有 SDK 插件
     func loadAllPlugins() async {
+        logInfo("[SDKPluginLoader] Starting plugin loading...")
+
         // 0. 注入嵌入终端工厂
         setupEmbeddedTerminalFactory()
 
         // 1. 扫描插件目录
         let pluginPaths = scanPluginDirectories()
+        logInfo("[SDKPluginLoader] Found \(pluginPaths.count) plugin bundles: \(pluginPaths.map { ($0 as NSString).lastPathComponent })")
 
         // 2. 读取所有 Manifest
         var pendingManifests: [PluginManifest] = []
         for path in pluginPaths {
             if let manifest = loadManifest(from: path) {
                 pendingManifests.append(manifest)
+                logInfo("[SDKPluginLoader] Parsed manifest: \(manifest.id) (v\(manifest.version), mode: \(manifest.runMode))")
             }
         }
 
@@ -143,7 +147,7 @@ final class SDKPluginLoader {
             do {
                 try await ExtensionHostManager.shared.start()
             } catch {
-                print("[SDKPluginLoader] Failed to start Extension Host: \(error)")
+                logError("[SDKPluginLoader] Failed to start Extension Host: \(error)")
                 // 继续加载 main 模式插件
             }
         }
@@ -158,7 +162,7 @@ final class SDKPluginLoader {
 
         let mainCount = mainModePlugins.count
         let isolatedCount = viewProviders.count
-        print("[SDKPluginLoader] Loaded \(manifests.count) plugins (main: \(mainCount), isolated: \(isolatedCount)), \(failedPlugins.count) failed, \(skippedPlugins.count) skipped")
+        logInfo("[SDKPluginLoader] Loaded \(manifests.count) plugins (main: \(mainCount), isolated: \(isolatedCount)), \(failedPlugins.count) failed, \(skippedPlugins.count) skipped")
     }
 
     /// 获取所有已加载的插件信息
@@ -251,7 +255,7 @@ final class SDKPluginLoader {
                 }
             }
         } catch {
-            print("[SDKPluginLoader] Failed to scan \(path): \(error)")
+            logError("[SDKPluginLoader] Failed to scan \(path): \(error)")
         }
 
         return results
@@ -273,7 +277,7 @@ final class SDKPluginLoader {
             bundlePaths[manifest.id] = bundlePath
             return manifest
         } catch {
-            print("[SDKPluginLoader] Failed to parse manifest at \(manifestPath): \(error)")
+            logError("[SDKPluginLoader] Failed to parse manifest at \(manifestPath): \(error)")
             failedPlugins[bundlePath] = .manifestParseError(reason: error.localizedDescription)
             return nil
         }
@@ -322,7 +326,7 @@ final class SDKPluginLoader {
         if result.count != manifests.count {
             let stuck = manifests.filter { !result.map { $0.id }.contains($0.id) }
             for m in stuck {
-                print("[SDKPluginLoader] Circular dependency detected: \(m.id)")
+                logError("[SDKPluginLoader] Circular dependency detected: \(m.id)")
                 failedPlugins[m.id] = .circularDependency(pluginIds: [m.id])
             }
         }
@@ -338,7 +342,7 @@ final class SDKPluginLoader {
         for dep in manifest.dependencies {
             if manifests[dep.id] == nil {
                 skippedPlugins[pluginId] = "Missing dependency: \(dep.id)"
-                print("[SDKPluginLoader] Skipping \(pluginId): missing dependency \(dep.id)")
+                logWarn("[SDKPluginLoader] Skipping \(pluginId): missing dependency \(dep.id)")
                 return
             }
 
@@ -365,14 +369,14 @@ final class SDKPluginLoader {
         let pluginId = manifest.id
 
         guard let bundlePath = bundlePaths[pluginId] else {
-            print("[SDKPluginLoader] Missing bundlePath for \(pluginId)")
+            logError("[SDKPluginLoader] Missing bundlePath for \(pluginId)")
             failedPlugins[pluginId] = .activationFailed(reason: "Missing bundlePath")
             return
         }
 
         // 加载 Bundle
         guard let bundle = Bundle(path: bundlePath) else {
-            print("[SDKPluginLoader] Failed to create bundle for \(pluginId)")
+            logError("[SDKPluginLoader] Failed to create bundle for \(pluginId)")
             failedPlugins[pluginId] = .activationFailed(reason: "Failed to create bundle")
             return
         }
@@ -380,36 +384,50 @@ final class SDKPluginLoader {
         do {
             try bundle.loadAndReturnError()
             loadedBundles[pluginId] = bundle
+            logInfo("[SDKPluginLoader] Bundle loaded: \(bundlePath), isLoaded=\(bundle.isLoaded), executablePath=\(bundle.executablePath ?? "nil")")
         } catch {
-            print("[SDKPluginLoader] Failed to load bundle for \(pluginId): \(error)")
+            logError("[SDKPluginLoader] Failed to load bundle for \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: "Failed to load bundle: \(error.localizedDescription)")
             return
         }
 
         // 获取 Plugin 类
+        // manifest.principalClass 应与 @objc(ClassName) 一致，不带模块前缀
         let className = manifest.principalClass
-        let classNames = [
-            className,
-            "\(bundle.bundleIdentifier ?? "").\(className)",
-        ]
 
-        var pluginInstance: (any ETermKit.Plugin)?
-        for name in classNames {
-            if let pluginClass = bundle.classNamed(name) as? NSObject.Type,
-               let instance = pluginClass.init() as? any ETermKit.Plugin {
-                pluginInstance = instance
-                break
-            }
-            if let pluginClass = NSClassFromString(name) as? NSObject.Type,
-               let instance = pluginClass.init() as? any ETermKit.Plugin {
-                pluginInstance = instance
-                break
-            }
+        // 通过 bundle.classNamed 或 NSClassFromString 获取类
+        var pluginClass: NSObject.Type?
+
+        // 方式 1: bundle.classNamed
+        if let cls = bundle.classNamed(className) as? NSObject.Type {
+            pluginClass = cls
+            logInfo("[SDKPluginLoader] Found class via bundle.classNamed: \(className)")
+        }
+        // 方式 2: NSClassFromString
+        else if let cls = NSClassFromString(className) as? NSObject.Type {
+            pluginClass = cls
+            logInfo("[SDKPluginLoader] Found class via NSClassFromString: \(className)")
+        }
+        // 方式 3: bundle.principalClass (Info.plist 的 NSPrincipalClass)
+        else if let cls = bundle.principalClass as? NSObject.Type {
+            pluginClass = cls
+            logInfo("[SDKPluginLoader] Found class via bundle.principalClass: \(cls)")
         }
 
-        guard let plugin = pluginInstance else {
-            print("[SDKPluginLoader] Failed to load Plugin class '\(className)' for \(pluginId), tried: \(classNames)")
+        guard let cls = pluginClass else {
+            logError("[SDKPluginLoader] Failed to find Plugin class '\(className)' for \(pluginId)")
             failedPlugins[pluginId] = .activationFailed(reason: "Plugin class not found: \(className)")
+            return
+        }
+
+        // 创建实例
+        let instance = cls.init()
+        logInfo("[SDKPluginLoader] Created instance: \(type(of: instance)), conforms to Plugin: \(instance is any ETermKit.Plugin)")
+
+        guard let plugin = instance as? any ETermKit.Plugin else {
+            logError("[SDKPluginLoader] Instance '\(type(of: instance))' does not conform to ETermKit.Plugin for \(pluginId)")
+            logError("[SDKPluginLoader] Instance protocols: \(String(describing: Mirror(reflecting: instance).subjectType))")
+            failedPlugins[pluginId] = .activationFailed(reason: "Plugin does not conform to ETermKit.Plugin")
             return
         }
 
@@ -421,6 +439,8 @@ final class SDKPluginLoader {
         hostBridges[pluginId] = hostBridge
         mainModePlugins[pluginId] = plugin
         manifests[pluginId] = manifest
+
+        logInfo("[SDKPluginLoader] Activated main-mode plugin: \(pluginId)")
 
         // 创建 PluginHost
         let pluginHost = MainModePluginHost(plugin: plugin, manifest: manifest)
@@ -451,7 +471,7 @@ final class SDKPluginLoader {
         await ExtensionHostManager.shared.getBridge()?.registerManifest(manifest)
 
         guard let bundlePath = bundlePaths[pluginId] else {
-            print("[SDKPluginLoader] Missing bundlePath for \(pluginId)")
+            logError("[SDKPluginLoader] Missing bundlePath for \(pluginId)")
             failedPlugins[pluginId] = .activationFailed(reason: "Missing bundlePath")
             manifests.removeValue(forKey: pluginId)
             return
@@ -468,13 +488,13 @@ final class SDKPluginLoader {
                     loadViewProvider(pluginId: pluginId, className: viewProviderClassName, bundle: bundle)
                 }
             } catch {
-                print("[SDKPluginLoader] Failed to load bundle for \(pluginId): \(error)")
+                logError("[SDKPluginLoader] Failed to load bundle for \(pluginId): \(error)")
                 failedPlugins[pluginId] = .activationFailed(reason: "Failed to load bundle: \(error.localizedDescription)")
                 manifests.removeValue(forKey: pluginId)
                 return
             }
         } else {
-            print("[SDKPluginLoader] Failed to create bundle for \(pluginId)")
+            logError("[SDKPluginLoader] Failed to create bundle for \(pluginId)")
             failedPlugins[pluginId] = .activationFailed(reason: "Failed to create bundle")
             manifests.removeValue(forKey: pluginId)
             return
@@ -494,6 +514,8 @@ final class SDKPluginLoader {
             )
             pluginHosts[pluginId] = pluginHost
 
+            logInfo("[SDKPluginLoader] Activated isolated-mode plugin: \(pluginId)")
+
             // 注册 UI（需要在主线程，因为 Registry 有 @Published）
             await MainActor.run {
                 registerSidebarTabs(for: manifest)
@@ -507,7 +529,7 @@ final class SDKPluginLoader {
                 registerPageSlots(for: manifest)
             }
         } catch {
-            print("[SDKPluginLoader] Failed to activate \(pluginId): \(error)")
+            logError("[SDKPluginLoader] Failed to activate \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: error.localizedDescription)
             manifests.removeValue(forKey: pluginId)
         }
@@ -537,7 +559,7 @@ final class SDKPluginLoader {
             }
         }
 
-        print("[SDKPluginLoader] Failed to load ViewProvider '\(className)' for \(pluginId), tried: \(classNames)")
+        logWarn("[SDKPluginLoader] Failed to load ViewProvider '\(className)' for \(pluginId), tried: \(classNames)")
     }
 
     /// 版本兼容性检查
@@ -712,7 +734,7 @@ final class SDKPluginLoader {
         }
 
         guard let providerClass = viewProviderClass else {
-            print("[SDKPluginLoader] ViewProvider class '\(viewProviderClassName)' not found for \(manifest.id)")
+            logWarn("[SDKPluginLoader] ViewProvider class '\(viewProviderClassName)' not found for \(manifest.id)")
             return nil
         }
 
@@ -754,7 +776,7 @@ final class SDKPluginLoader {
             // 如果有快捷键，注册到 KeyboardService
             if let keyBindingStr = cmdConfig.keyBinding {
                 guard let keyStroke = parseKeyBinding(keyBindingStr) else {
-                    print("[SDKPluginLoader] Failed to parse keyBinding '\(keyBindingStr)' for \(cmdConfig.id)")
+                    logWarn("[SDKPluginLoader] Failed to parse keyBinding '\(keyBindingStr)' for \(cmdConfig.id)")
                     continue
                 }
                 KeyboardServiceImpl.shared.bind(keyStroke, to: cmdConfig.id, when: nil)
@@ -890,7 +912,7 @@ final class SDKPluginLoader {
         guard let config = SDKPluginLoader.bottomDockConfigs[pluginId],
               let provider = viewProviders[pluginId],
               let view = provider.createBottomDockView(id: config.id) else {
-            print("[SDKPluginLoader] Cannot show bottomDock for \(pluginId): config or view not available")
+            logWarn("[SDKPluginLoader] Cannot show bottomDock for \(pluginId): config or view not available")
             return
         }
 

@@ -12,7 +12,7 @@
         "terminal.embed",
         "terminal.write"
     ],
-    "principalClass": "DevHelperKit.DevHelperPlugin",
+    "principalClass": "DevHelperPlugin",
     "sidebarTabs": [
         {
             "id": "dev-helper-entry",

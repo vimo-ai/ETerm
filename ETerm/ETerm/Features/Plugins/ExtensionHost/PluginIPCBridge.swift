@@ -450,18 +450,66 @@ actor PluginIPCBridge {
             return
         }
 
-        // TODO: 实现获取终端信息
-        await sendResponse(to: message, payload: [
-            "terminalId": terminalId,
-            "cwd": "/",
-            "columns": 80,
-            "rows": 24
-        ])
+        // 在主线程查询终端信息
+        let info: [String: Any]? = await MainActor.run {
+            for window in WindowManager.shared.windows {
+                guard let coordinator = WindowManager.shared.getCoordinator(for: window.windowNumber) else { continue }
+                for panel in coordinator.terminalWindow.allPanels {
+                    for tab in panel.tabs {
+                        if tab.rustTerminalId == terminalId {
+                            let cwd = coordinator.getCwd(terminalId: terminalId) ?? NSHomeDirectory()
+                            let activeTerminalId = coordinator.getActiveTerminalId()
+                            return [
+                                "terminalId": terminalId,
+                                "tabId": tab.tabId.uuidString,
+                                "panelId": panel.panelId.uuidString,
+                                "cwd": cwd,
+                                "columns": 80,
+                                "rows": 24,
+                                "isActive": activeTerminalId == terminalId
+                            ]
+                        }
+                    }
+                }
+            }
+            return nil
+        }
+
+        if let info = info {
+            await sendResponse(to: message, payload: info)
+        } else {
+            await sendError(to: message, code: "NOT_FOUND", message: "Terminal not found: \(terminalId)")
+        }
     }
 
     private func handleGetAllTerminals(_ message: IPCMessage) async {
-        // TODO: 实现获取所有终端
-        await sendResponse(to: message, payload: ["terminals": []])
+        // 在主线程查询所有终端信息
+        let terminals: [[String: Any]] = await MainActor.run {
+            var result: [[String: Any]] = []
+            for window in WindowManager.shared.windows {
+                guard let coordinator = WindowManager.shared.getCoordinator(for: window.windowNumber) else { continue }
+                let activeTerminalId = coordinator.getActiveTerminalId()
+
+                for panel in coordinator.terminalWindow.allPanels {
+                    for tab in panel.tabs {
+                        guard let terminalId = tab.rustTerminalId else { continue }
+                        let cwd = coordinator.getCwd(terminalId: terminalId) ?? NSHomeDirectory()
+                        result.append([
+                            "terminalId": terminalId,
+                            "tabId": tab.tabId.uuidString,
+                            "panelId": panel.panelId.uuidString,
+                            "cwd": cwd,
+                            "columns": 80,
+                            "rows": 24,
+                            "isActive": activeTerminalId == terminalId
+                        ])
+                    }
+                }
+            }
+            return result
+        }
+
+        await sendResponse(to: message, payload: ["terminals": terminals])
     }
 
     private func handleRegisterService(_ message: IPCMessage) async {

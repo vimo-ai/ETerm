@@ -9,7 +9,7 @@
     "capabilities": [
         "ui.infoPanel"
     ],
-    "principalClass": "ClaudeMonitorKit.ClaudeMonitorPlugin",
+    "principalClass": "ClaudeMonitorPlugin",
     "sidebarTabs": [
         {
             "id": "claude-monitor-settings",

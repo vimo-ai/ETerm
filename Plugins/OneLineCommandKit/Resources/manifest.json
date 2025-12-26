@@ -7,7 +7,7 @@
     "runMode": "main",
     "dependencies": [],
     "capabilities": [],
-    "principalClass": "OneLineCommandKit.OneLineCommandPlugin",
+    "principalClass": "OneLineCommandPlugin",
     "sidebarTabs": [],
     "commands": [
         {

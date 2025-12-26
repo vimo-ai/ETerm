@@ -11,7 +11,7 @@
         "ui.tabTitle",
         "terminal.write"
     ],
-    "principalClass": "ClaudeKit.ClaudePlugin",
+    "principalClass": "ClaudePlugin",
     "sidebarTabs": [],
     "infoPanelContents": [],
     "commands": [],
