@@ -11,16 +11,47 @@ import SwiftUI
 import AppKit
 import Combine
 
+// MARK: - Translation Mode Notifications
+
+extension NSNotification.Name {
+    /// 翻译模式状态已改变（由主程序发送，value: Bool）
+    static let translationModeDidChange = NSNotification.Name("ETerm.TranslationModeDidChange")
+    /// 请求切换翻译模式（由插件发送）
+    static let translationModeToggleRequest = NSNotification.Name("ETerm.TranslationModeToggleRequest")
+}
+
 // MARK: - Translation Mode
 
 @MainActor
 final class TranslationModeStore: ObservableObject {
     static let shared = TranslationModeStore()
 
-    @Published var isEnabled: Bool = false
+    @Published var isEnabled: Bool = false {
+        didSet {
+            // 状态改变时发送通知，让插件同步
+            NotificationCenter.default.post(
+                name: .translationModeDidChange,
+                object: nil,
+                userInfo: ["isEnabled": isEnabled]
+            )
+        }
+    }
 
     var statusText: String {
         isEnabled ? "翻译模式：开" : "翻译模式：关"
+    }
+
+    private init() {
+        // 监听来自插件的 toggle 请求
+        NotificationCenter.default.addObserver(
+            forName: .translationModeToggleRequest,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.toggle()
+            }
+        }
     }
 
     func toggle() {
