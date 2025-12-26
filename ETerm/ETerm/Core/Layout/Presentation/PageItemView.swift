@@ -13,6 +13,7 @@
 
 import AppKit
 import SwiftUI
+import ETermKit
 import Foundation
 
 // MARK: - 禁止窗口拖动的 NSHostingView

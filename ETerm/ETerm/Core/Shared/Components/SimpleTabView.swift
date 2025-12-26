@@ -4,6 +4,7 @@
  */
 import SwiftUI
 import AppKit
+import ETermKit
 
 // MARK: - 简约 Tab 视图
 struct SimpleTabView: View {

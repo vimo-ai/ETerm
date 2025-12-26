@@ -12,6 +12,7 @@
 
 import Foundation
 import PanelLayoutKit
+import ETermKit
 
 /// Tab 容器（聚合根）
 ///
@@ -324,5 +325,14 @@ extension Tab: CustomStringConvertible {
           content: \(content.contentTypeDescription)
         )
         """
+    }
+}
+
+// MARK: - TabSlotContext
+
+extension Tab: TabSlotContext {
+    /// 终端 ID（仅终端 Tab 有效，View Tab 返回 nil）
+    var terminalId: Int? {
+        return rustTerminalId
     }
 }

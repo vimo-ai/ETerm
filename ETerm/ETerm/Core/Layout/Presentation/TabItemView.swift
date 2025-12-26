@@ -13,6 +13,7 @@
 
 import AppKit
 import SwiftUI
+import ETermKit
 import Foundation
 
 /// 单个 Tab 的视图

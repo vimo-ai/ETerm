@@ -16,6 +16,7 @@
 import Foundation
 import CoreGraphics
 import SwiftUI
+import ETermKit
 
 /// 页面聚合根
 ///
@@ -608,4 +609,13 @@ extension Page: Hashable {
 
 extension Page: Identifiable {
     var id: UUID { pageId }
+}
+
+// MARK: - PageSlotContext
+
+extension Page: PageSlotContext {
+    /// 转换为 Slot 协议需要的类型
+    var slotTabs: [any TabSlotContext] {
+        return allTabs
+    }
 }
