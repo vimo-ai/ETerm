@@ -117,6 +117,15 @@ public protocol Plugin: AnyObject {
     ///
     /// - Returns: MenuBar 视图；返回 nil 表示不提供
     func menuBarView() -> AnyView?
+
+    /// PageBar 组件视图
+    ///
+    /// 根据 itemId 返回对应的 PageBar 组件视图。
+    /// PageBar 组件显示在 PageBar 右侧区域。
+    ///
+    /// - Parameter itemId: pageBarItem 的 id（manifest.json 中定义）
+    /// - Returns: PageBar 组件视图；返回 nil 表示不提供
+    func pageBarView(for itemId: String) -> AnyView?
 }
 
 // MARK: - Default Implementation
@@ -152,6 +161,10 @@ public extension Plugin {
     }
 
     func menuBarView() -> AnyView? {
+        return nil
+    }
+
+    func pageBarView(for itemId: String) -> AnyView? {
         return nil
     }
 }
