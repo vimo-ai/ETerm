@@ -383,6 +383,19 @@ class TerminalWindowCoordinator: ObservableObject {
         perform(.tab(.close(panelId: panelId, scope: .right(of: fromTabId))))
     }
 
+    /// 跨 Panel 合并 Tab（从 header 区域拖入）
+    ///
+    /// 将 Tab 从源 Panel 移动到目标 Panel，合并到 Tab 列表末尾。
+    /// 使用 DropIntentQueue 确保在 drag session 结束后执行。
+    func handleTabMerge(tabId: UUID, from sourcePanelId: UUID, to targetPanelId: UUID) {
+        // 提交意图到队列，等待 drag session 结束后执行
+        DropIntentQueue.shared.submit(.moveTabToPanel(
+            tabId: tabId,
+            sourcePanelId: sourcePanelId,
+            targetPanelId: targetPanelId
+        ))
+    }
+
     /// 智能关闭（Cmd+W）
     ///
     /// 关闭逻辑：
@@ -437,9 +450,20 @@ class TerminalWindowCoordinator: ObservableObject {
         }
     }
 
+    /// 获取指定 Panel 中激活终端的 CWD
+    func getActiveCwd(for panelId: UUID) -> String? {
+        guard let panel = terminalWindow.getPanel(panelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId else {
+            return nil
+        }
+        return getCwd(terminalId: Int(terminalId))
+    }
+
     /// 用户添加 Tab
     func handleAddTab(panelId: UUID) {
-        let result = perform(.tab(.add(panelId: panelId)))
+        let config = TabConfig(cwd: getActiveCwd(for: panelId))
+        let result = perform(.tab(.addWithConfig(panelId: panelId, config: config)))
 
         // Coordinator 特有状态：同步 activePanelId
         if result.success {
@@ -449,15 +473,7 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 用户分割 Panel
     func handleSplitPanel(panelId: UUID, direction: SplitDirection) {
-        // 获取当前激活终端的 CWD（用于继承）
-        var inheritedCwd: String? = nil
-        if let panel = terminalWindow.getPanel(panelId),
-           let activeTab = panel.activeTab,
-           let terminalId = activeTab.rustTerminalId {
-            inheritedCwd = getCwd(terminalId: Int(terminalId))
-        }
-
-        let result = perform(.panel(.split(panelId: panelId, direction: direction, cwd: inheritedCwd)))
+        let result = perform(.panel(.split(panelId: panelId, direction: direction, cwd: getActiveCwd(for: panelId))))
 
         // Coordinator 特有状态：同步 activePanelId
         if result.success {
