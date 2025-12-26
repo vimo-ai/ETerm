@@ -25,6 +25,11 @@ Cargo.lock
 *.dylib
 *.so
 *.a
+ETerm/build/
+
+# LSP
+buildServer.json
+**/buildServer.json
 
 # Claude/AI tool configs
 .vlaude/
