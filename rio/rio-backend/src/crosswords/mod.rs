@@ -2191,19 +2191,55 @@ impl<U: EventListener> Handler for Crosswords<U> {
 
         // Handle zero-width characters.
         if width == 0 {
-            // // Get previous column.
+            // Get previous column.
             let mut column = self.grid.cursor.pos.col;
             if !self.grid.cursor.should_wrap {
                 column.0 = column.saturating_sub(1);
             }
 
-            // // Put zerowidth characters over first fullwidth character cell.
+            // Put zerowidth characters over first fullwidth character cell.
             let row = self.grid.cursor.pos.row;
             if self.grid[row][column]
                 .flags
                 .contains(square::Flags::WIDE_CHAR_SPACER)
             {
                 column.0 = column.saturating_sub(1);
+            }
+
+            // 🔧 VS16 (U+FE0F) 处理：将前一个字符升级为双宽
+            // VS16 用于将 text presentation 的字符转换为 emoji presentation
+            // 例如：☀ (U+2600) + VS16 → ☀️（彩色 emoji，需要双宽显示）
+            if c == '\u{FE0F}' {
+                let cell = &self.grid[row][column];
+                // 检查是否需要升级为双宽：当前不是双宽字符
+                if !cell.flags.contains(square::Flags::WIDE_CHAR) {
+                    let columns = self.grid.columns();
+                    // 确保有空间放置 WIDE_CHAR_SPACER
+                    if column.0 + 1 < columns {
+                        // 将当前 cell 标记为 WIDE_CHAR
+                        self.grid[row][column].flags.insert(square::Flags::WIDE_CHAR);
+
+                        // 在下一个 cell 写入 WIDE_CHAR_SPACER
+                        let next_col = Column(column.0 + 1);
+                        let bg = self.grid[row][column].bg;
+                        let fg = self.grid[row][column].fg;
+
+                        self.grid[row][next_col].c = ' ';
+                        self.grid[row][next_col].bg = bg;
+                        self.grid[row][next_col].fg = fg;
+                        self.grid[row][next_col].flags = square::Flags::WIDE_CHAR_SPACER;
+                        self.grid[row][next_col].extra = None;
+
+                        // 更新光标位置（跳过 spacer）
+                        if self.grid.cursor.pos.col.0 <= column.0 + 1 {
+                            self.grid.cursor.pos.col = Column(column.0 + 2);
+                            if self.grid.cursor.pos.col.0 >= columns {
+                                self.grid.cursor.should_wrap = true;
+                                self.grid.cursor.pos.col = Column(columns - 1);
+                            }
+                        }
+                    }
+                }
             }
 
             self.grid[row][column].push_zerowidth(c);
