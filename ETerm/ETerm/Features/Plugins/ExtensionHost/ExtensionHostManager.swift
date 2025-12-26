@@ -153,6 +153,11 @@ actor ExtensionHostManager {
         return try await bridge.sendRequest(pluginId: pluginId, requestId: requestId, params: params)
     }
 
+    /// 发送事件给插件
+    func sendEvent(name: String, payload: [String: Any], targetPluginId: String? = nil) async {
+        await ipcBridge?.sendEvent(name: name, payload: payload, targetPluginId: targetPluginId)
+    }
+
     // MARK: - Private
 
     /// 启动 Host 进程
