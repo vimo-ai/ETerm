@@ -125,6 +125,7 @@ final class DashScopeClient {
     private let decoder: JSONDecoder
 
     private func debugLog(_ message: String) {
+        print("[DashScope] \(message)")
     }
 
     init(configuration: Configuration, session: URLSession = .shared) {
