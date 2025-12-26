@@ -1,5 +1,5 @@
 // swift-tools-version: 6.0
-// MCPRouterKit - MCP Router 插件
+// MCPRouterKit - ETerm Plugin
 
 import PackageDescription
 
@@ -19,9 +19,16 @@ let package = Package(
         .package(path: "../../Packages/ETermKit"),
     ],
     targets: [
+        .systemLibrary(
+            name: "MCPRouterCore",
+            path: "Lib"
+        ),
         .target(
             name: "MCPRouterKit",
-            dependencies: ["ETermKit"],
+            dependencies: [
+                "ETermKit",
+                "MCPRouterCore"
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ]

@@ -196,4 +196,16 @@ public protocol HostBridge: AnyObject, Sendable {
     ///
     /// 需要 capability: `ui.bubble`
     func hideBubble()
+
+    // MARK: - 窗口与终端查询
+
+    /// 获取当前激活 Tab 的工作目录
+    ///
+    /// - Returns: 工作目录路径，无法获取时返回 nil
+    func getActiveTabCwd() -> String?
+
+    /// 获取当前 Key Window 的 frame
+    ///
+    /// - Returns: 窗口 frame，无法获取时返回 nil
+    func getKeyWindowFrame() -> CGRect?
 }

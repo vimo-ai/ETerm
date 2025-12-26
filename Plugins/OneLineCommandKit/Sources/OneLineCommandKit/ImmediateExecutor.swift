@@ -1,16 +1,10 @@
 //
 //  ImmediateExecutor.swift
-//  OneLineCommandKit
+//  ETerm
 //
 //  立即执行器 - 使用 Process API 后台执行命令
 
 import Foundation
-
-/// 命令执行结果
-public enum CommandExecutionResult {
-    case success(String)  // 成功，包含输出
-    case failure(String)  // 失败，包含错误信息
-}
 
 /// 立即执行器
 ///
@@ -18,14 +12,14 @@ public enum CommandExecutionResult {
 /// - 快速查询命令（git status, ls, pwd 等）
 /// - 一次性操作（open ., mkdir 等）
 /// - 不需要交互的命令
-public final class ImmediateExecutor {
+final class ImmediateExecutor {
 
-    /// 执行命令（异步）
+    /// 执行命令
     /// - Parameters:
     ///   - command: 要执行的命令字符串
     ///   - cwd: 工作目录
     ///   - completion: 完成回调（在后台线程调用）
-    public static func execute(
+    static func execute(
         _ command: String,
         cwd: String,
         completion: @escaping (CommandExecutionResult) -> Void
@@ -41,14 +35,10 @@ public final class ImmediateExecutor {
         }
     }
 
-    // MARK: - Internal Methods
+    // MARK: - 私有方法
 
-    /// 同步执行命令（带超时）
-    /// - Parameters:
-    ///   - command: 要执行的命令
-    ///   - cwd: 工作目录
-    ///   - timeout: 超时时间（秒），默认 30 秒
-    static func executeSync(_ command: String, cwd: String, timeout: TimeInterval = 30) throws -> String {
+    /// 同步执行命令
+    private static func executeSync(_ command: String, cwd: String) throws -> String {
         let process = Process()
 
         // 配置 shell 环境
@@ -59,78 +49,22 @@ public final class ImmediateExecutor {
         // 继承环境变量
         process.environment = ProcessInfo.processInfo.environment
 
-        // 捕获输出（使用异步读取避免死锁）
+        // 捕获输出
         let outputPipe = Pipe()
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
-        var outputData = Data()
-        var errorData = Data()
-        let outputLock = NSLock()
-        let errorLock = NSLock()
-
-        // 异步读取 stdout
-        outputPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if !data.isEmpty {
-                outputLock.lock()
-                outputData.append(data)
-                outputLock.unlock()
-            }
-        }
-
-        // 异步读取 stderr
-        errorPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if !data.isEmpty {
-                errorLock.lock()
-                errorData.append(data)
-                errorLock.unlock()
-            }
-        }
-
         // 执行
         try process.run()
+        process.waitUntilExit()
 
-        // 等待完成或超时
-        let semaphore = DispatchSemaphore(value: 0)
-        var didTimeout = false
+        // 读取输出
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
 
-        process.terminationHandler = { _ in
-            semaphore.signal()
-        }
-
-        let result = semaphore.wait(timeout: .now() + timeout)
-        if result == .timedOut {
-            didTimeout = true
-            process.terminate()
-            // 给进程一点时间来清理
-            Thread.sleep(forTimeInterval: 0.1)
-            if process.isRunning {
-                process.interrupt()
-            }
-        }
-
-        // 清理 readability handlers
-        outputPipe.fileHandleForReading.readabilityHandler = nil
-        errorPipe.fileHandleForReading.readabilityHandler = nil
-
-        // 读取剩余数据
-        outputLock.lock()
-        let finalOutputData = outputData
-        outputLock.unlock()
-
-        errorLock.lock()
-        let finalErrorData = errorData
-        errorLock.unlock()
-
-        if didTimeout {
-            throw ExecutionError.timeout
-        }
-
-        let output = String(data: finalOutputData, encoding: .utf8) ?? ""
-        let error = String(data: finalErrorData, encoding: .utf8) ?? ""
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        let error = String(data: errorData, encoding: .utf8) ?? ""
 
         // 检查退出状态
         if process.terminationStatus == 0 {
@@ -177,11 +111,10 @@ public final class ImmediateExecutor {
 // MARK: - 错误定义
 
 /// 执行错误
-public enum ExecutionError: LocalizedError {
+enum ExecutionError: LocalizedError {
     case commandFailed(exitCode: Int32, message: String)
-    case timeout
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .commandFailed(let code, let message):
             if message.isEmpty {
@@ -189,8 +122,6 @@ public enum ExecutionError: LocalizedError {
             } else {
                 return "命令执行失败 (退出码: \(code)):\n\(message)"
             }
-        case .timeout:
-            return "命令执行超时 (30秒)"
         }
     }
 }

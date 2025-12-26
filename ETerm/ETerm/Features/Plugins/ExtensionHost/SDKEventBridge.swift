@@ -36,7 +36,32 @@ final class SDKEventBridge {
         }
         subscriptions.append(subscription)
 
+        // 监听插件发射的事件，分发给订阅的插件
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePluginEvent(_:)),
+            name: NSNotification.Name("ETerm.PluginEvent"),
+            object: nil
+        )
+
         print("[SDKEventBridge] Setup complete")
+    }
+
+    // MARK: - Plugin Event Dispatch
+
+    @objc private func handlePluginEvent(_ notification: Notification) {
+        guard let eventName = notification.userInfo?["eventName"] as? String,
+              let payload = notification.userInfo?["payload"] as? [String: Any] else {
+            return
+        }
+
+        // 查找订阅了此事件的插件并分发
+        let subscribingPluginIds = findSubscribingPlugins(for: eventName)
+        for pluginId in subscribingPluginIds {
+            if let plugin = SDKPluginLoader.shared.getMainModePlugin(pluginId) {
+                plugin.handleEvent(eventName, payload: payload)
+            }
+        }
     }
 
     // MARK: - Event Handlers

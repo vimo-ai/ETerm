@@ -1,60 +1,49 @@
 //
 //  MCPRouterBridge.swift
-//  ETerm
+//  MCPRouterKit
 //
-//  MCP Router Rust Core 的 Swift 桥接层
-//  使用 dlopen 动态加载 dylib，避免与其他 Rust staticlib 的符号冲突
-//
+//  MCP Router Rust Core 的 Swift 封装
 
 import Foundation
+import MCPRouterCore
 
-// MARK: - Data Models
+// MARK: - DTO Types
 
-/// 服务器类型
-enum MCPServerType: String, Codable {
-    case http = "http"
-    case stdio = "stdio"
-}
+/// 服务器配置 DTO
+public struct MCPServerConfigDTO: Identifiable, Hashable {
+    public var id: String { name }
+    public let name: String
+    public let serverType: String  // "http" or "stdio"
+    public var enabled: Bool
+    public var flattenMode: Bool
+    public let description: String?
+    public let url: String?
+    public let headers: [String: String]?
+    public let command: String?
+    public let args: [String]?
+    public let env: [String: String]?
 
-/// 服务器配置
-struct MCPServerConfig: Codable, Identifiable, Hashable {
-    var id: String { name }
-    let name: String
-    let serverType: MCPServerType
-    let enabled: Bool
-    let description: String?
-    let flattenMode: Bool
-
-    // HTTP 服务器字段
-    let url: String?
-    let headers: [String: String]?
-
-    // Stdio 服务器字段
-    let command: String?
-    let args: [String]?
-    let env: [String: String]?
-
-    enum CodingKeys: String, CodingKey {
-        case name
-        case serverType = "type"
-        case enabled = "is_enabled"
-        case description
-        case flattenMode = "flatten_mode"
-        case url
-        case headers
-        case command
-        case args
-        case env
+    public init(from dict: [String: Any]) {
+        self.name = dict["name"] as? String ?? ""
+        self.serverType = dict["type"] as? String ?? "http"
+        self.enabled = dict["is_enabled"] as? Bool ?? true
+        self.flattenMode = dict["flatten_mode"] as? Bool ?? false
+        self.description = dict["description"] as? String
+        self.url = dict["url"] as? String
+        self.headers = dict["headers"] as? [String: String]
+        self.command = dict["command"] as? String
+        self.args = dict["args"] as? [String]
+        self.env = dict["env"] as? [String: String]
     }
 
-    init(name: String, serverType: MCPServerType, enabled: Bool = true, description: String? = nil,
-         flattenMode: Bool = false, url: String? = nil, headers: [String: String]? = nil,
+    public init(name: String, serverType: String, enabled: Bool = true, flattenMode: Bool = false,
+         description: String? = nil, url: String? = nil, headers: [String: String]? = nil,
          command: String? = nil, args: [String]? = nil, env: [String: String]? = nil) {
         self.name = name
         self.serverType = serverType
         self.enabled = enabled
-        self.description = description
         self.flattenMode = flattenMode
+        self.description = description
         self.url = url
         self.headers = headers
         self.command = command
@@ -62,267 +51,428 @@ struct MCPServerConfig: Codable, Identifiable, Hashable {
         self.env = env
     }
 
-    /// 创建 HTTP 服务器配置
-    static func http(name: String, url: String, headers: [String: String]? = nil, description: String? = nil) -> MCPServerConfig {
-        MCPServerConfig(name: name, serverType: .http, description: description, url: url, headers: headers)
+    public func toDictionary() -> [String: Any] {
+        var dict: [String: Any] = [
+            "name": name,
+            "type": serverType,
+            "is_enabled": enabled,
+            "flatten_mode": flattenMode
+        ]
+        if let description = description { dict["description"] = description }
+        if let url = url { dict["url"] = url }
+        if let headers = headers { dict["headers"] = headers }
+        if let command = command { dict["command"] = command }
+        if let args = args { dict["args"] = args }
+        if let env = env { dict["env"] = env }
+        return dict
     }
 
-    /// 创建 Stdio 服务器配置
-    static func stdio(name: String, command: String, args: [String] = [], env: [String: String] = [:], description: String? = nil) -> MCPServerConfig {
-        MCPServerConfig(name: name, serverType: .stdio, description: description, command: command, args: args, env: env)
+    public static func http(name: String, url: String, headers: [String: String]? = nil, description: String? = nil) -> MCPServerConfigDTO {
+        MCPServerConfigDTO(name: name, serverType: "http", description: description, url: url, headers: headers)
+    }
+
+    public static func stdio(name: String, command: String, args: [String] = [], env: [String: String] = [:], description: String? = nil) -> MCPServerConfigDTO {
+        MCPServerConfigDTO(name: name, serverType: "stdio", description: description, command: command, args: args, env: env)
     }
 }
 
-/// Router 状态
-struct MCPRouterStatus: Codable {
-    let isRunning: Bool
-    let serverCount: Int
-    let enabledServerCount: Int
+/// 工作区配置 DTO
+public struct MCPWorkspaceDTO: Identifiable, Hashable {
+    public var id: String { token }
+    public let token: String
+    public let name: String
+    public let projectPath: String
+    public let isDefault: Bool
+    public let serverOverrides: [String: Bool]
+    public let flattenOverrides: [String: Bool]
 
-    enum CodingKeys: String, CodingKey {
-        case isRunning = "is_running"
-        case serverCount = "server_count"
-        case enabledServerCount = "enabled_server_count"
+    public init(from dict: [String: Any]) {
+        self.token = dict["token"] as? String ?? ""
+        self.name = dict["name"] as? String ?? ""
+        self.projectPath = dict["projectPath"] as? String ?? ""
+        self.isDefault = dict["isDefault"] as? Bool ?? false
+        self.serverOverrides = dict["serverOverrides"] as? [String: Bool] ?? [:]
+        self.flattenOverrides = dict["flattenOverrides"] as? [String: Bool] ?? [:]
+    }
+
+    public init(token: String, name: String, projectPath: String, isDefault: Bool = false,
+                serverOverrides: [String: Bool] = [:], flattenOverrides: [String: Bool] = [:]) {
+        self.token = token
+        self.name = name
+        self.projectPath = projectPath
+        self.isDefault = isDefault
+        self.serverOverrides = serverOverrides
+        self.flattenOverrides = flattenOverrides
+    }
+
+    public func toDictionary() -> [String: Any] {
+        return [
+            "token": token,
+            "name": name,
+            "project_path": projectPath,
+            "is_default": isDefault,
+            "server_overrides": serverOverrides,
+            "flatten_overrides": flattenOverrides
+        ]
+    }
+
+    public func isServerEnabled(_ serverName: String, serverConfig: MCPServerConfigDTO?, defaultWorkspace: MCPWorkspaceDTO?) -> Bool {
+        if let override = serverOverrides[serverName] {
+            return override
+        }
+        if isDefault {
+            return serverConfig?.enabled ?? true
+        }
+        if let defaultWs = defaultWorkspace {
+            return defaultWs.serverOverrides[serverName] ?? (serverConfig?.enabled ?? true)
+        }
+        return serverConfig?.enabled ?? true
+    }
+
+    public func isServerCustomized(_ serverName: String) -> Bool {
+        serverOverrides[serverName] != nil
+    }
+
+    public func isFlattenEnabled(_ serverName: String, serverConfig: MCPServerConfigDTO?, defaultWorkspace: MCPWorkspaceDTO?) -> Bool {
+        if let override = flattenOverrides[serverName] {
+            return override
+        }
+        if isDefault {
+            return serverConfig?.flattenMode ?? false
+        }
+        if let defaultWs = defaultWorkspace {
+            return defaultWs.flattenOverrides[serverName] ?? (serverConfig?.flattenMode ?? false)
+        }
+        return serverConfig?.flattenMode ?? false
+    }
+
+    public func isFlattenCustomized(_ serverName: String) -> Bool {
+        flattenOverrides[serverName] != nil
     }
 }
 
-// MARK: - Error Types
+// MARK: - Bridge
 
-/// MCP Router 错误类型
-enum MCPRouterError: Error, LocalizedError {
-    case invalidHandle
-    case libraryNotLoaded
-    case symbolNotFound(String)
-    case operationFailed(String)
-    case jsonParsingFailed(String)
+/// MCP Router Bridge - 封装 Rust FFI 调用
+@MainActor
+public final class MCPRouterBridge {
 
-    var errorDescription: String? {
-        switch self {
-        case .invalidHandle:
-            return "Invalid router handle"
-        case .libraryNotLoaded:
-            return "MCP Router library not loaded"
-        case .symbolNotFound(let symbol):
-            return "Symbol not found: \(symbol)"
-        case .operationFailed(let message):
-            return message
-        case .jsonParsingFailed(let message):
-            return "JSON parsing failed: \(message)"
+    public static let shared = MCPRouterBridge()
+
+    private var handle: OpaquePointer?
+
+    /// 配置文件路径
+    private static let configPath: String = {
+        let dataDir = NSHomeDirectory() + "/.eterm/data"
+        try? FileManager.default.createDirectory(
+            atPath: dataDir,
+            withIntermediateDirectories: true
+        )
+        return dataDir + "/mcp_router_servers.json"
+    }()
+
+    private init() {
+        handle = mcp_router_create()
+        // 从磁盘加载已保存的服务器配置
+        loadServersFromDisk()
+    }
+
+    // MARK: - Persistence
+
+    /// 从磁盘加载服务器配置
+    private func loadServersFromDisk() {
+        guard let handle = handle else { return }
+
+        let path = Self.configPath
+        guard FileManager.default.fileExists(atPath: path),
+              let data = FileManager.default.contents(atPath: path),
+              let jsonString = String(data: data, encoding: .utf8) else {
+            return
+        }
+
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let success = jsonString.withCString { jsonPtr in
+            mcp_router_load_servers_json(handle, jsonPtr, &errorPtr)
+        }
+
+        if !success, let errorPtr = errorPtr {
+            let error = String(cString: errorPtr)
+            mcp_router_free_string(errorPtr)
+            print("[MCPRouter] Failed to load servers: \(error)")
         }
     }
-}
 
-// MARK: - Dynamic Library Loader
+    /// 保存服务器配置到磁盘
+    private func saveServersToDisk() {
+        guard let handle = handle,
+              let jsonPtr = mcp_router_list_servers(handle) else {
+            return
+        }
 
-/// MCP Router 动态库加载器
-final class MCPRouterLibrary: @unchecked Sendable {
-    static let shared = MCPRouterLibrary()
+        let jsonString = String(cString: jsonPtr)
+        mcp_router_free_string(jsonPtr)
 
-    private var libraryHandle: UnsafeMutableRawPointer?
-    private(set) var isLoaded = false
+        do {
+            try jsonString.write(toFile: Self.configPath, atomically: true, encoding: .utf8)
+        } catch {
+            print("[MCPRouter] Failed to save servers: \(error)")
+        }
+    }
 
-    // 函数指针类型定义（所有类型都是 C 兼容的）
-    private typealias CreateFunc = @convention(c) () -> OpaquePointer?
-    private typealias DestroyFunc = @convention(c) (OpaquePointer?) -> Void
-    private typealias FreeStringFunc = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
-    private typealias InitLoggingFunc = @convention(c) () -> Void
-    private typealias VersionFunc = @convention(c) () -> UnsafeMutablePointer<CChar>?
-    private typealias ListServersFunc = @convention(c) (OpaquePointer?) -> UnsafeMutablePointer<CChar>?
-    private typealias GetExposeManagementToolsFunc = @convention(c) (OpaquePointer?) -> Bool
-    private typealias GetStatusFunc = @convention(c) (OpaquePointer?) -> UnsafeMutablePointer<CChar>?
+    deinit {
+        if let handle = handle {
+            mcp_router_destroy(handle)
+        }
+    }
 
-    // 带 out_error 参数的函数类型
-    private typealias AddHttpServerFunc = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Bool
-    private typealias JsonOpFunc = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Bool
-    private typealias NameOpFunc = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Bool
-    private typealias NameBoolOpFunc = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, Bool, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Bool
-    private typealias BoolOpFunc = @convention(c) (OpaquePointer?, Bool, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Bool
-    private typealias StartServerFunc = @convention(c) (OpaquePointer?, UInt16, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Bool
-    private typealias StopServerFunc = @convention(c) (OpaquePointer?, UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Bool
+    /// 初始化日志（启动时调用一次）
+    public static func initLogging() {
+        mcp_router_init_logging()
+    }
 
-    // 函数指针存储
-    private var _create: CreateFunc?
-    private var _destroy: DestroyFunc?
-    private var _freeString: FreeStringFunc?
-    private var _initLogging: InitLoggingFunc?
-    private var _version: VersionFunc?
-    private var _listServers: ListServersFunc?
-    private var _getExposeManagementTools: GetExposeManagementToolsFunc?
-    private var _getStatus: GetStatusFunc?
+    /// 获取库版本
+    public static var version: String {
+        guard let cStr = mcp_router_version() else {
+            return "unknown"
+        }
+        let version = String(cString: cStr)
+        mcp_router_free_string(cStr)
+        return version
+    }
 
-    private var _addHttpServer: AddHttpServerFunc?
-    private var _addServerJson: JsonOpFunc?
-    private var _loadServersJson: JsonOpFunc?
-    private var _loadWorkspacesJson: JsonOpFunc?
-    private var _removeServer: NameOpFunc?
-    private var _setServerEnabled: NameBoolOpFunc?
-    private var _setServerFlattenMode: NameBoolOpFunc?
-    private var _setExposeManagementTools: BoolOpFunc?
-    private var _startServer: StartServerFunc?
-    private var _stopServer: StopServerFunc?
+    // MARK: - Server Management
 
-    private init() {}
+    /// 批量加载服务器（会替换现有列表）
+    public func loadServers(_ servers: [MCPServerConfigDTO]) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
 
-    /// 加载动态库
-    func load() throws {
-        guard !isLoaded else { return }
+        let array = servers.map { $0.toDictionary() }
+        let jsonData = try JSONSerialization.data(withJSONObject: array)
+        let jsonString = String(data: jsonData, encoding: .utf8) ?? "[]"
 
-        // 获取 MCPRouterSDK 所在的 Bundle
-        let kitBundle = Bundle(for: MCPRouterLibrary.self)
+        var errorPtr: UnsafeMutablePointer<CChar>?
 
-        // 用户插件目录
-        let userPluginsPath = NSHomeDirectory() + "/.eterm/plugins/MCPRouterSDK.bundle"
+        let success = jsonString.withCString { jsonPtr in
+            mcp_router_load_servers_json(handle, jsonPtr, &errorPtr)
+        }
 
-        // 尝试多个位置查找 dylib
-        let possiblePaths = [
-            // 1. 用户插件目录的 Frameworks（最常见）
-            userPluginsPath + "/Contents/Frameworks/libmcp_router_core.dylib",
-            // 2. 插件 Bundle 的 Frameworks 目录
-            kitBundle.privateFrameworksPath.map { "\($0)/libmcp_router_core.dylib" },
-            // 3. 插件 Bundle 的 Resources 目录
-            kitBundle.path(forResource: "libmcp_router_core", ofType: "dylib"),
-            // 4. 插件 Bundle 根目录
-            kitBundle.bundlePath + "/Contents/Frameworks/libmcp_router_core.dylib",
-            // 5. Fallback: 主应用 Bundle（兼容旧结构）
-            Bundle.main.privateFrameworksPath.map { "\($0)/libmcp_router_core.dylib" },
-            // 6. ETerm Libs 目录（开发环境）
-            Bundle.main.bundlePath + "/Contents/Frameworks/libmcp_router_core.dylib",
-        ].compactMap { $0 }
+        try checkResult(success: success, errorPtr: errorPtr)
+        saveServersToDisk()
+    }
 
-        var loadedPath: String?
-        for path in possiblePaths {
-            print("[MCPRouterLibrary] Trying: \(path)")
-            if FileManager.default.fileExists(atPath: path) {
-                libraryHandle = dlopen(path, RTLD_NOW | RTLD_LOCAL)
-                if libraryHandle != nil {
-                    loadedPath = path
-                    print("[MCPRouterLibrary] Loaded from: \(path)")
-                    break
-                } else if let error = dlerror() {
-                    print("[MCPRouterLibrary] dlopen failed: \(String(cString: error))")
+    /// 列出所有服务器
+    public func listServers() throws -> [MCPServerConfigDTO] {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
+        guard let jsonPtr = mcp_router_list_servers(handle) else {
+            return []
+        }
+
+        let jsonString = String(cString: jsonPtr)
+        mcp_router_free_string(jsonPtr)
+
+        guard let data = jsonString.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+
+        return array.compactMap { MCPServerConfigDTO(from: $0) }
+    }
+
+    /// 添加 HTTP 服务器
+    public func addHTTPServer(name: String, url: String, description: String = "") throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
+        var errorPtr: UnsafeMutablePointer<CChar>?
+
+        let success = name.withCString { namePtr in
+            url.withCString { urlPtr in
+                description.withCString { descPtr in
+                    mcp_router_add_http_server(handle, namePtr, urlPtr, descPtr, &errorPtr)
                 }
             }
         }
 
-        guard let handle = libraryHandle, let _ = loadedPath else {
-            throw MCPRouterError.libraryNotLoaded
-        }
-        try loadSymbols(from: handle)
-        isLoaded = true
+        try checkResult(success: success, errorPtr: errorPtr)
+        saveServersToDisk()
     }
 
-    private func loadSymbols(from handle: UnsafeMutableRawPointer) throws {
-        func sym<T>(_ name: String, as type: T.Type) throws -> T {
-            guard let s = dlsym(handle, name) else {
-                throw MCPRouterError.symbolNotFound(name)
-            }
-            return unsafeBitCast(s, to: type)
+    /// 添加服务器（JSON 格式）
+    public func addServer(_ config: MCPServerConfigDTO) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
         }
 
-        _create = try sym("mcp_router_create", as: CreateFunc.self)
-        _destroy = try sym("mcp_router_destroy", as: DestroyFunc.self)
-        _freeString = try sym("mcp_router_free_string", as: FreeStringFunc.self)
-        _initLogging = try sym("mcp_router_init_logging", as: InitLoggingFunc.self)
-        _version = try sym("mcp_router_version", as: VersionFunc.self)
-        _listServers = try sym("mcp_router_list_servers", as: ListServersFunc.self)
-        _getExposeManagementTools = try sym("mcp_router_get_expose_management_tools", as: GetExposeManagementToolsFunc.self)
-        _getStatus = try sym("mcp_router_get_status", as: GetStatusFunc.self)
+        let dict = config.toDictionary()
+        let jsonData = try JSONSerialization.data(withJSONObject: dict)
+        let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
 
-        _addHttpServer = try sym("mcp_router_add_http_server", as: AddHttpServerFunc.self)
-        _addServerJson = try sym("mcp_router_add_server_json", as: JsonOpFunc.self)
-        _loadServersJson = try sym("mcp_router_load_servers_json", as: JsonOpFunc.self)
-        _loadWorkspacesJson = try sym("mcp_router_load_workspaces_json", as: JsonOpFunc.self)
-        _removeServer = try sym("mcp_router_remove_server", as: NameOpFunc.self)
-        _setServerEnabled = try sym("mcp_router_set_server_enabled", as: NameBoolOpFunc.self)
-        _setServerFlattenMode = try sym("mcp_router_set_server_flatten_mode", as: NameBoolOpFunc.self)
-        _setExposeManagementTools = try sym("mcp_router_set_expose_management_tools", as: BoolOpFunc.self)
-        _startServer = try sym("mcp_router_start_server", as: StartServerFunc.self)
-        _stopServer = try sym("mcp_router_stop_server", as: StopServerFunc.self)
-    }
+        var errorPtr: UnsafeMutablePointer<CChar>?
 
-    deinit {
-        if let handle = libraryHandle {
-            dlclose(handle)
+        let success = jsonString.withCString { jsonPtr in
+            mcp_router_add_server_json(handle, jsonPtr, &errorPtr)
         }
+
+        try checkResult(success: success, errorPtr: errorPtr)
+        saveServersToDisk()
     }
 
-    // MARK: - Public API
+    /// 移除服务器
+    public func removeServer(name: String) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
 
-    func create() -> OpaquePointer? { _create?() }
-    func destroy(_ handle: OpaquePointer?) { _destroy?(handle) }
-    func freeString(_ str: UnsafeMutablePointer<CChar>?) { _freeString?(str) }
-    func initLogging() { _initLogging?() }
-    func version() -> UnsafeMutablePointer<CChar>? { _version?() }
-    func listServers(_ handle: OpaquePointer?) -> UnsafeMutablePointer<CChar>? { _listServers?(handle) }
-    func getExposeManagementTools(_ handle: OpaquePointer?) -> Bool { _getExposeManagementTools?(handle) ?? false }
-    func getStatus(_ handle: OpaquePointer?) -> UnsafeMutablePointer<CChar>? { _getStatus?(handle) }
-
-    func addHttpServer(_ handle: OpaquePointer?, name: UnsafePointer<CChar>, url: UnsafePointer<CChar>, desc: UnsafePointer<CChar>) throws {
         var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _addHttpServer?(handle, name, url, desc, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+
+        let success = name.withCString { namePtr in
+            mcp_router_remove_server(handle, namePtr, &errorPtr)
+        }
+
+        try checkResult(success: success, errorPtr: errorPtr)
+        saveServersToDisk()
     }
 
-    func addServerJson(_ handle: OpaquePointer?, json: UnsafePointer<CChar>) throws {
+    /// 设置服务器启用状态
+    public func setServerEnabled(name: String, enabled: Bool) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
         var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _addServerJson?(handle, json, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+
+        let success = name.withCString { namePtr in
+            mcp_router_set_server_enabled(handle, namePtr, enabled, &errorPtr)
+        }
+
+        try checkResult(success: success, errorPtr: errorPtr)
+        saveServersToDisk()
     }
 
-    func loadServersJson(_ handle: OpaquePointer?, json: UnsafePointer<CChar>) throws {
+    /// 设置服务器平铺模式
+    public func setServerFlattenMode(name: String, flatten: Bool) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
         var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _loadServersJson?(handle, json, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+
+        let success = name.withCString { namePtr in
+            mcp_router_set_server_flatten_mode(handle, namePtr, flatten, &errorPtr)
+        }
+
+        try checkResult(success: success, errorPtr: errorPtr)
+        saveServersToDisk()
     }
 
-    func loadWorkspacesJson(_ handle: OpaquePointer?, json: UnsafePointer<CChar>) throws {
+    // MARK: - Workspace Management
+
+    /// 加载工作区（JSON 格式）
+    public func loadWorkspaces(_ workspaces: [MCPWorkspaceDTO]) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
+        let array = workspaces.map { $0.toDictionary() }
+        let jsonData = try JSONSerialization.data(withJSONObject: array)
+        let jsonString = String(data: jsonData, encoding: .utf8) ?? "[]"
+
         var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _loadWorkspacesJson?(handle, json, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+
+        let success = jsonString.withCString { jsonPtr in
+            mcp_router_load_workspaces_json(handle, jsonPtr, &errorPtr)
+        }
+
+        try checkResult(success: success, errorPtr: errorPtr)
     }
 
-    func removeServer(_ handle: OpaquePointer?, name: UnsafePointer<CChar>) throws {
+    // MARK: - HTTP Server Control
+
+    /// 启动 HTTP 服务
+    public func startServer(port: UInt16) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
         var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _removeServer?(handle, name, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+        let success = mcp_router_start_server(handle, port, &errorPtr)
+
+        try checkResult(success: success, errorPtr: errorPtr)
     }
 
-    func setServerEnabled(_ handle: OpaquePointer?, name: UnsafePointer<CChar>, enabled: Bool) throws {
+    /// 停止 HTTP 服务
+    public func stopServer() throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
         var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _setServerEnabled?(handle, name, enabled, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+        let success = mcp_router_stop_server(handle, &errorPtr)
+
+        try checkResult(success: success, errorPtr: errorPtr)
     }
 
-    func setServerFlattenMode(_ handle: OpaquePointer?, name: UnsafePointer<CChar>, flatten: Bool) throws {
+    /// 获取状态
+    public func getStatus() -> MCPRouterStatus? {
+        guard let handle = handle else {
+            return nil
+        }
+
+        guard let jsonPtr = mcp_router_get_status(handle) else {
+            return nil
+        }
+
+        let jsonString = String(cString: jsonPtr)
+        mcp_router_free_string(jsonPtr)
+
+        guard let data = jsonString.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        return MCPRouterStatus(
+            isRunning: dict["is_running"] as? Bool ?? false,
+            serverCount: dict["server_count"] as? Int ?? 0,
+            enabledServerCount: dict["enabled_server_count"] as? Int ?? 0
+        )
+    }
+
+    // MARK: - Settings
+
+    /// 设置是否暴露管理工具（Full 模式）
+    public func setExposeManagementTools(_ expose: Bool) throws {
+        guard let handle = handle else {
+            throw MCPRouterError.invalidHandle
+        }
+
         var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _setServerFlattenMode?(handle, name, flatten, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+        let success = mcp_router_set_expose_management_tools(handle, expose, &errorPtr)
+
+        try checkResult(success: success, errorPtr: errorPtr)
     }
 
-    func setExposeManagementTools(_ handle: OpaquePointer?, expose: Bool) throws {
-        var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _setExposeManagementTools?(handle, expose, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
+    /// 获取是否暴露管理工具
+    public func getExposeManagementTools() -> Bool {
+        guard let handle = handle else {
+            return false
+        }
+        return mcp_router_get_expose_management_tools(handle)
     }
 
-    func startServer(_ handle: OpaquePointer?, port: UInt16) throws {
-        var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _startServer?(handle, port, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
-    }
+    // MARK: - Private Helpers
 
-    func stopServer(_ handle: OpaquePointer?) throws {
-        var errorPtr: UnsafeMutablePointer<CChar>?
-        let success = _stopServer?(handle, &errorPtr) ?? false
-        try checkResult(success, errorPtr)
-    }
-
-    private func checkResult(_ success: Bool, _ errorPtr: UnsafeMutablePointer<CChar>?) throws {
+    private func checkResult(success: Bool, errorPtr: UnsafeMutablePointer<CChar>?) throws {
         if !success {
             let message: String
             if let errorPtr = errorPtr {
                 message = String(cString: errorPtr)
-                freeString(errorPtr)
+                mcp_router_free_string(errorPtr)
             } else {
                 message = "Unknown error"
             }
@@ -331,198 +481,26 @@ final class MCPRouterLibrary: @unchecked Sendable {
     }
 }
 
-// MARK: - MCP Router Bridge
+// MARK: - Status
 
-/// MCP Router Rust Core 桥接
-public final class MCPRouterBridge {
+public struct MCPRouterStatus {
+    public let isRunning: Bool
+    public let serverCount: Int
+    public let enabledServerCount: Int
+}
 
-    private var handle: OpaquePointer?
-    private let lib: MCPRouterLibrary
+// MARK: - Errors
 
-    /// 初始化
-    public init() throws {
-        lib = MCPRouterLibrary.shared
-        try lib.load()
-        handle = lib.create()
-    }
+public enum MCPRouterError: Error, LocalizedError {
+    case invalidHandle
+    case operationFailed(String)
 
-    deinit {
-        if let handle = handle {
-            lib.destroy(handle)
+    public var errorDescription: String? {
+        switch self {
+        case .invalidHandle:
+            return "Invalid router handle"
+        case .operationFailed(let message):
+            return message
         }
-    }
-
-    /// 初始化日志（应用启动时调用一次）
-    static func initLogging() {
-        do {
-            try MCPRouterLibrary.shared.load()
-            MCPRouterLibrary.shared.initLogging()
-        } catch {
-            // Silently ignore logging init failure
-        }
-    }
-
-    /// 获取库版本
-    static var version: String {
-        do {
-            try MCPRouterLibrary.shared.load()
-            guard let cStr = MCPRouterLibrary.shared.version() else {
-                return "unknown"
-            }
-            let version = String(cString: cStr)
-            MCPRouterLibrary.shared.freeString(cStr)
-            return version
-        } catch {
-            return "unknown"
-        }
-    }
-
-    // MARK: - Server Management
-
-    /// 添加 HTTP 服务器
-    func addHTTPServer(name: String, url: String, description: String = "") throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        try name.withCString { namePtr in
-            try url.withCString { urlPtr in
-                try description.withCString { descPtr in
-                    try lib.addHttpServer(handle, name: namePtr, url: urlPtr, desc: descPtr)
-                }
-            }
-        }
-    }
-
-    /// 从 JSON 添加服务器
-    func addServerFromJSON(_ json: String) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        try json.withCString { jsonPtr in
-            try lib.addServerJson(handle, json: jsonPtr)
-        }
-    }
-
-    /// 从 JSON 数组加载服务器
-    func loadServersFromJSON(_ json: String) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        try json.withCString { jsonPtr in
-            try lib.loadServersJson(handle, json: jsonPtr)
-        }
-    }
-
-    /// 从 JSON 数组加载 Workspaces
-    func loadWorkspacesFromJSON(_ json: String) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        try json.withCString { jsonPtr in
-            try lib.loadWorkspacesJson(handle, json: jsonPtr)
-        }
-    }
-
-    /// 添加服务器配置
-    func addServer(_ config: MCPServerConfig) throws {
-        let jsonData = try JSONEncoder().encode(config)
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
-            throw MCPRouterError.jsonParsingFailed("Failed to encode config")
-        }
-        try addServerFromJSON(jsonString)
-    }
-
-    /// 批量加载服务器配置
-    func loadServers(_ configs: [MCPServerConfig]) throws {
-        let jsonData = try JSONEncoder().encode(configs)
-        guard let jsonString = String(data: jsonData, encoding: .utf8) else {
-            throw MCPRouterError.jsonParsingFailed("Failed to encode configs")
-        }
-        try loadServersFromJSON(jsonString)
-    }
-
-    // MARK: - Server Query & Management
-
-    /// 列出所有服务器配置
-    func listServers() throws -> [MCPServerConfig] {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        guard let cStr = lib.listServers(handle) else { return [] }
-        defer { lib.freeString(cStr) }
-
-        let jsonString = String(cString: cStr)
-        guard let jsonData = jsonString.data(using: .utf8) else {
-            throw MCPRouterError.jsonParsingFailed("Invalid UTF-8 string")
-        }
-
-        return try JSONDecoder().decode([MCPServerConfig].self, from: jsonData)
-    }
-
-    /// 移除服务器
-    func removeServer(name: String) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        try name.withCString { namePtr in
-            try lib.removeServer(handle, name: namePtr)
-        }
-    }
-
-    /// 设置服务器启用/禁用状态
-    func setServerEnabled(name: String, enabled: Bool) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        try name.withCString { namePtr in
-            try lib.setServerEnabled(handle, name: namePtr, enabled: enabled)
-        }
-    }
-
-    /// 设置服务器平铺模式
-    func setServerFlattenMode(name: String, flatten: Bool) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        try name.withCString { namePtr in
-            try lib.setServerFlattenMode(handle, name: namePtr, flatten: flatten)
-        }
-    }
-
-    // MARK: - Light/Full Mode
-
-    /// 设置是否暴露管理工具（Light/Full 模式）
-    func setExposeManagementTools(_ expose: Bool) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-        try lib.setExposeManagementTools(handle, expose: expose)
-    }
-
-    /// 获取当前是否暴露管理工具
-    func getExposeManagementTools() -> Bool {
-        guard let handle = handle else { return false }
-        return lib.getExposeManagementTools(handle)
-    }
-
-    /// 获取 Router 状态
-    func getStatus() throws -> MCPRouterStatus {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-
-        guard let cStr = lib.getStatus(handle) else {
-            throw MCPRouterError.operationFailed("Failed to get status")
-        }
-        defer { lib.freeString(cStr) }
-
-        let jsonString = String(cString: cStr)
-        guard let jsonData = jsonString.data(using: .utf8) else {
-            throw MCPRouterError.jsonParsingFailed("Invalid UTF-8 string")
-        }
-
-        return try JSONDecoder().decode(MCPRouterStatus.self, from: jsonData)
-    }
-
-    // MARK: - HTTP Server Control
-
-    /// 启动 HTTP 服务器
-    func startServer(port: UInt16) throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-        try lib.startServer(handle, port: port)
-    }
-
-    /// 停止 HTTP 服务器
-    func stopServer() throws {
-        guard let handle = handle else { throw MCPRouterError.invalidHandle }
-        try lib.stopServer(handle)
     }
 }

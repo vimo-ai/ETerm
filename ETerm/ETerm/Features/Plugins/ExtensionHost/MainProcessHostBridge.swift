@@ -6,6 +6,7 @@
 //  直接调用主进程服务，无需 IPC
 
 import Foundation
+import AppKit
 import ETermKit
 
 /// 主进程模式 HostBridge
@@ -266,6 +267,20 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
                 )
             }
         }
+    }
+
+    // MARK: - 窗口与终端查询
+
+    func getActiveTabCwd() -> String? {
+        guard let keyWindow = WindowManager.shared.keyWindow,
+              let coordinator = WindowManager.shared.getCoordinator(for: keyWindow.windowNumber) else {
+            return nil
+        }
+        return coordinator.getActiveTabCwd()
+    }
+
+    func getKeyWindowFrame() -> CGRect? {
+        return WindowManager.shared.keyWindow?.frame
     }
 
     // MARK: - Private Helpers

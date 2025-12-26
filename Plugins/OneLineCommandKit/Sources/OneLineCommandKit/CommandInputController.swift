@@ -1,19 +1,25 @@
 //
 //  CommandInputController.swift
-//  OneLineCommandKit
+//  ETerm
 //
 //  命令输入控制器
 
 import AppKit
 import SwiftUI
 
+/// 命令执行结果
+enum CommandExecutionResult {
+    case success(String)  // 成功，包含输出
+    case failure(String)  // 失败，包含错误信息
+}
+
 /// 自定义 Panel - 允许成为 key window
-public class KeyablePanel: NSPanel {
-    public override var canBecomeKey: Bool {
+class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool {
         return true
     }
 
-    public override var canBecomeMain: Bool {
+    override var canBecomeMain: Bool {
         return false
     }
 }
@@ -21,7 +27,7 @@ public class KeyablePanel: NSPanel {
 /// 命令输入控制器
 ///
 /// 管理命令输入面板的显示和交互
-public final class CommandInputController {
+final class CommandInputController {
     // MARK: - 回调
 
     private let onExecute: (String) -> Void
@@ -34,7 +40,7 @@ public final class CommandInputController {
 
     // MARK: - 初始化
 
-    public init(
+    init(
         onExecute: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
@@ -45,8 +51,11 @@ public final class CommandInputController {
     // MARK: - 公共方法
 
     /// 显示输入面板
-    @MainActor
-    public func show(in window: NSWindow?, cwd: String) {
+    ///
+    /// - Parameters:
+    ///   - windowFrame: 窗口 frame，用于定位面板（nil 则使用屏幕中心）
+    ///   - cwd: 当前工作目录
+    func show(windowFrame: CGRect?, cwd: String) {
         // 如果已显示，直接显示面板（输入框会自动聚焦）
         if let panel = panel, panel.isVisible {
             panel.makeKeyAndOrderFront(nil)
@@ -88,11 +97,10 @@ public final class CommandInputController {
         // 关键：允许面板成为 key window
         newPanel.becomesKeyOnlyIfNeeded = false
 
-        // 定位到当前窗口中心（如果有窗口）或屏幕中心
-        if let targetWindow = window {
-            let windowFrame = targetWindow.frame
-            let x = windowFrame.midX - 250
-            let y = windowFrame.midY + 100  // 稍微偏上
+        // 定位到当前窗口中心（如果有窗口 frame）或屏幕中心
+        if let frame = windowFrame {
+            let x = frame.midX - 250
+            let y = frame.midY + 100  // 稍微偏上
             newPanel.setFrameOrigin(NSPoint(x: x, y: y))
         } else if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
@@ -120,15 +128,14 @@ public final class CommandInputController {
     }
 
     /// 隐藏输入面板
-    @MainActor
-    public func hide() {
+    func hide() {
         panel?.close()
         panel = nil
         hostingView = nil
     }
 
     /// 显示执行结果
-    public func showResult(_ message: String, isError: Bool) {
+    func showResult(_ message: String, isError: Bool) {
         // 更新 SwiftUI 视图显示结果
         // 注意：这里需要通过 @Published 或 @Binding 更新视图
         // 暂时使用简单的通知方式
@@ -142,6 +149,6 @@ public final class CommandInputController {
 
 // MARK: - 通知名称
 
-public extension Notification.Name {
+extension Notification.Name {
     static let commandExecutionResult = Notification.Name("commandExecutionResult")
 }

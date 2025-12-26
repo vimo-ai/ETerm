@@ -37,7 +37,7 @@ cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 log_info "Fixing ETermKit link path for framework..."
 install_name_tool -change \
     "@rpath/libETermKit.dylib" \
-    "@rpath/ETermKit.framework/Versions/A/ETermKit" \
+    "@executable_path/../Frameworks/ETermKit.framework/ETermKit" \
     "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
 # Re-sign after modification

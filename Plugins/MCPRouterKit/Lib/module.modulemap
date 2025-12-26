@@ -1,0 +1,4 @@
+module MCPRouterCore {
+    header "mcp_router_core.h"
+    export *
+}

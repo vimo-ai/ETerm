@@ -1,14 +1,13 @@
 //
 //  CommandInputView.swift
-//  OneLineCommandKit
+//  ETerm
 //
 //  命令输入视图（SwiftUI）
 
 import SwiftUI
-import Foundation
 
 /// 命令输入视图
-public struct CommandInputView: View {
+struct CommandInputView: View {
     // MARK: - 状态
 
     @State private var command: String = ""
@@ -20,21 +19,9 @@ public struct CommandInputView: View {
     let onExecute: (String) -> Void
     let onCancel: () -> Void
 
-    // MARK: - 初始化
-
-    public init(
-        cwd: String,
-        onExecute: @escaping (String) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.cwd = cwd
-        self.onExecute = onExecute
-        self.onCancel = onCancel
-    }
-
     // MARK: - 视图
 
-    public var body: some View {
+    var body: some View {
         VStack(spacing: 0) {
             // 输入框区域
             HStack(spacing: 12) {
@@ -148,7 +135,7 @@ public struct CommandInputView: View {
 #Preview {
     CommandInputView(
         cwd: "/Users/username/Documents/project",
-        onExecute: { _ in
+        onExecute: { command in
         },
         onCancel: {
         }
