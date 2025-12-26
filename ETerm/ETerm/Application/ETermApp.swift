@@ -65,6 +65,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动 MCP Server（HTTP 模式，端口 11218）
         MCPServerCoordinator.shared.start()
 
+        // 初始化翻译模式状态（注册通知监听）
+        _ = TranslationModeStore.shared
+
         // 注册核心命令（必须在加载插件之前，让插件可以覆盖）
         CoreCommandsBootstrap.registerCoreCommands()
 
@@ -80,25 +83,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 安装/更新内置插件（从 app bundle 复制到用户目录）
         BuiltinPluginInstaller.installIfNeeded()
 
-        // 加载 SDK 插件（通过 Extension Host）
-        Task {
-            await SDKPluginLoader.shared.loadAllPlugins()
-            // 设置事件桥接（在插件加载完成后）
-            SDKEventBridge.shared.setup()
-        }
-
         // 启动会话录制器
         SessionRecorder.shared.setupIntegration()
 
-        // [TEST MODE] 暂时禁用 Session/Tab 恢复功能
-        // if let session = SessionManager.shared.load(), !session.windows.isEmpty {
-        //     for (index, windowState) in session.windows.enumerated() {
-        //         restoreWindow(from: windowState)
-        //     }
-        // } else {
-        //     WindowManager.shared.createWindow()
-        // }
-        WindowManager.shared.createWindow()
+        // 先创建窗口（快速响应）
+        if let session = SessionManager.shared.load(), !session.windows.isEmpty {
+            // 恢复每个窗口
+            for windowState in session.windows {
+                restoreWindow(from: windowState)
+            }
+        } else {
+            // 没有 Session，创建默认窗口
+            WindowManager.shared.createWindow()
+        }
+
+        // 后台加载插件，完成后再触发需要插件的操作
+        Task.detached(priority: .userInitiated) {
+            await SDKPluginLoader.shared.loadAllPlugins()
+            await MainActor.run {
+                // 设置事件桥接
+                SDKEventBridge.shared.setup()
+                // 通知插件加载完成，触发 Claude resume 等操作
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("ETerm.PluginsLoaded"),
+                    object: nil
+                )
+            }
+        }
 
         // 设置主菜单
         setupMainMenu()
