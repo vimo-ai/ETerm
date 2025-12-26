@@ -6,44 +6,58 @@
     "sdkVersion": "1.0.0",
     "dependencies": [],
     "capabilities": [
+        "ui.sidebar",
+        "ui.infoPanel",
+        "ui.bubble",
         "service.register",
         "service.call"
     ],
     "principalClass": "TranslationKit.TranslationPluginLogic",
-    "viewModelClass": null,
+    "viewProviderClass": "TranslationViewProvider",
     "sidebarTabs": [
         {
             "id": "translation-settings",
-            "title": "Translation Config",
+            "title": "翻译配置",
             "icon": "gearshape.fill",
-            "viewClass": "TranslationPluginSettingsView"
+            "viewClass": "TranslationSettingsView"
         }
     ],
+    "infoPanelContents": [
+        {
+            "id": "translation",
+            "title": "翻译",
+            "viewClass": "TranslationContentView"
+        }
+    ],
+    "bubble": {
+        "id": "translation-bubble",
+        "hintIcon": "sparkles",
+        "contentViewClass": "TranslationContentView",
+        "expandToInfoPanel": "translation",
+        "trigger": "terminal.didEndSelection"
+    },
     "commands": [
         {
             "id": "translation.show",
-            "title": "Show Translation",
-            "handler": "handleCommand",
-            "keyBinding": null
+            "title": "显示翻译",
+            "handler": "handleCommand"
         },
         {
             "id": "translation.hide",
-            "title": "Hide Translation",
-            "handler": "handleCommand",
-            "keyBinding": null
+            "title": "隐藏翻译",
+            "handler": "handleCommand"
         },
         {
             "id": "translation.toggle",
-            "title": "Toggle Translation",
+            "title": "切换翻译模式",
             "handler": "handleCommand",
-            "keyBinding": "Cmd+Shift+T"
-        },
-        {
-            "id": "translation.resetConfig",
-            "title": "Reset Translation Config",
-            "handler": "handleCommand",
-            "keyBinding": null
+            "keyBinding": "cmd+shift+t"
         }
     ],
-    "subscribes": []
+    "subscribes": [
+        "terminal.didEndSelection"
+    ],
+    "emits": [
+        "plugin.translation.stateUpdated"
+    ]
 }

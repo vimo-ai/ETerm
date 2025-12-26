@@ -5,6 +5,7 @@
 
 import Foundation
 import ETermKit
+// import SQLite3  // 暂时禁用，可能导致 Extension Host 崩溃
 
 /// 工作区文件夹数据模型
 struct WorkspaceFolder: Codable, Sendable {
@@ -95,6 +96,8 @@ public final class WorkspaceLogic: NSObject, PluginLogic, @unchecked Sendable {
 
         switch requestId {
         case "getFolders":
+            // 同时推送 ViewModel 更新，确保 View 能收到数据
+            updateUI()
             return getFoldersResponse()
 
         case "addFolder":
@@ -270,6 +273,11 @@ public final class WorkspaceLogic: NSObject, PluginLogic, @unchecked Sendable {
     private func loadFolders() {
         let path = storagePath
 
+        // 暂时禁用 SwiftData 迁移（可能导致 Extension Host 崩溃）
+        // if !FileManager.default.fileExists(atPath: path) {
+        //     migrateFromSwiftData()
+        // }
+
         guard FileManager.default.fileExists(atPath: path),
               let data = FileManager.default.contents(atPath: path) else {
             folders = []
@@ -283,6 +291,13 @@ public final class WorkspaceLogic: NSObject, PluginLogic, @unchecked Sendable {
             print("[WorkspaceLogic] Failed to load folders: \(error)")
             folders = []
         }
+    }
+
+    /// 从旧的 SwiftData 数据库迁移数据
+    /// 暂时禁用 - SQLite3 可能导致 Extension Host 崩溃
+    private func migrateFromSwiftData() {
+        print("[WorkspaceLogic] SwiftData migration disabled")
+        // TODO: 重新实现，使用进程外方式读取 SQLite
     }
 
     private func saveFolders() {

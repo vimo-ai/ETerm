@@ -1,12 +1,14 @@
 {
     "id": "__PLUGIN_ID__",
     "name": "__PLUGIN_DISPLAY_NAME__",
-    "version": "1.0.0",
-    "minHostVersion": "1.0.0",
-    "sdkVersion": "1.0.0",
+    "version": "0.0.1-beta.1",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
     "dependencies": [],
     "capabilities": [],
     "principalClass": "__PRINCIPAL_CLASS__",
+    "viewProviderClass": "__PLUGIN_NAME__ViewProvider",
     "commands": [],
-    "subscribes": []
+    "subscribes": [],
+    "emits": []
 }

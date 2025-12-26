@@ -1,14 +1,20 @@
 #!/bin/bash
-# build.sh - 构建 MCPRouterSDK 插件
+# build.sh - 构建 MCPRouterKit 插件
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_NAME="MCPRouterSDK"
+PLUGIN_NAME="MCPRouter"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
-# 输出目录
-OUTPUT_DIR="${HOME}/.eterm/plugins"
+# 输出目录：参数 > 环境变量 > 默认值
+if [ -n "${BUNDLE_OUTPUT_DIR:-}" ]; then
+    # 通过构建系统调用，输出到 {OUTPUT_DIR}/{PluginName}/{PluginName}.bundle
+    OUTPUT_DIR="${BUNDLE_OUTPUT_DIR}/${PLUGIN_NAME}"
+else
+    OUTPUT_DIR="${HOME}/.eterm/plugins"
+fi
+mkdir -p "$OUTPUT_DIR"
 BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
 
 # 颜色
@@ -32,7 +38,7 @@ mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"
 mkdir -p "${BUNDLE_PATH}/Contents/Resources"
 
 # 复制 dylib
-cp ".build/debug/libMCPRouterSDK.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
+cp ".build/debug/libMCPRouterKit.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 
 # 复制 mcp_router_core dylib
 # 按优先级搜索 dylib：
@@ -73,10 +79,10 @@ log_info "Fixing ETermKit link path for framework..."
 install_name_tool -change \
     "@rpath/libETermKit.dylib" \
     "@rpath/ETermKit.framework/Versions/A/ETermKit" \
-    "${BUNDLE_PATH}/Contents/MacOS/libMCPRouterSDK.dylib"
+    "${BUNDLE_PATH}/Contents/MacOS/libMCPRouterKit.dylib"
 
 # 重新签名（修改后需要重签）
-codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/libMCPRouterSDK.dylib"
+codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/libMCPRouterKit.dylib"
 
 # 复制 manifest.json
 cp "Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"
@@ -90,13 +96,13 @@ cat > "${BUNDLE_PATH}/Contents/Info.plist" <<EOF
     <key>CFBundleIdentifier</key>
     <string>com.eterm.mcp-router</string>
     <key>CFBundleName</key>
-    <string>MCPRouterSDK</string>
+    <string>MCPRouterKit</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleExecutable</key>
-    <string>libMCPRouterSDK.dylib</string>
+    <string>libMCPRouterKit.dylib</string>
     <key>NSPrincipalClass</key>
     <string>MCPRouterLogic</string>
 </dict>

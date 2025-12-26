@@ -89,9 +89,12 @@ cp -r "$TEMPLATE_DIR" "$PLUGIN_DIR"
 # Rename source directory
 mv "${PLUGIN_DIR}/Sources/__PLUGIN_NAME__" "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}"
 
-# Rename source file
+# Rename source files
 mv "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/__PLUGIN_NAME__Logic.swift" \
    "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/${PRINCIPAL_CLASS}.swift"
+
+mv "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/__PLUGIN_NAME__ViewProvider.swift" \
+   "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/${PLUGIN_NAME}ViewProvider.swift"
 
 # Replace placeholders in all files
 log_info "Replacing placeholders..."
