@@ -17,6 +17,7 @@
 
 import SwiftUI
 import Combine
+import ETermKit
 
 // MARK: - PluginDataStore
 

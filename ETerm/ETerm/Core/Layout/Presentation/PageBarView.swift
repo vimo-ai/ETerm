@@ -587,7 +587,6 @@ extension PageBarHostingView {
 
 /// 只包含红绿灯和添加按钮的控制栏
 struct PageBarControlsView: View {
-    @ObservedObject private var translationMode = TranslationModeStore.shared
     @ObservedObject private var pageBarItems = PageBarItemRegistry.shared
     var onAddPage: (() -> Void)?
 
@@ -619,18 +618,11 @@ struct PageBarControlsView: View {
             .buttonStyle(.plain)
             .padding(.trailing, 6)
 
-            // 插件注册的 PageBar 组件
+            // 插件注册的 PageBar 组件（包括翻译模式开关等）
             ForEach(pageBarItems.items) { item in
                 item.viewProvider()
                     .padding(.trailing, 6)
             }
-
-            StatusTabView(
-                text: translationMode.statusText,
-                isActive: translationMode.isEnabled,
-                onTap: { translationMode.toggle() }
-            )
-            .padding(.trailing, 12)
         }
         .frame(height: kPageBarHeight)
     }
