@@ -25,6 +25,10 @@ pub mod events;
 
 pub mod state;
 
+// 可渲染状态 trait
+
+pub mod renderable;
+
 // 视图层
 
 pub mod views;
@@ -42,6 +46,8 @@ pub use events::TerminalEvent;
 
 
 pub use state::TerminalState;
+
+pub use renderable::RenderableState;
 
 
 pub use views::{GridView, RowView, GridData, CursorView, SelectionView, SelectionType, SearchView, MatchRange, HyperlinkHoverView, ImeView};

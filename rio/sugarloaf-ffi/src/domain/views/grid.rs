@@ -204,7 +204,7 @@ impl RowView {
         // 计算实际数组索引
         let array_index = self.data.screen_line_to_array_index(self.screen_line)
             .expect("RowView should always have valid screen_line");
-        &self.data.rows[array_index].cells
+        &self.data.rows[array_index].cells  // Arc 自动 deref
     }
 
     /// 获取行的 URL 列表
@@ -213,7 +213,7 @@ impl RowView {
         // 计算实际数组索引
         let array_index = self.data.screen_line_to_array_index(self.screen_line)
             .expect("RowView should always have valid screen_line");
-        &self.data.rows[array_index].urls
+        &self.data.rows[array_index].urls  // Arc 自动 deref
     }
 }
 
@@ -334,6 +334,11 @@ impl RowData {
             urls: Vec::new(),
         }
     }
+
+    /// 创建空行的 Arc（用于 COW）
+    pub fn empty_arc(columns: usize) -> Arc<RowData> {
+        Arc::new(Self::empty(columns))
+    }
 }
 
 /// Grid Data - Underlying Grid Storage
@@ -365,8 +370,8 @@ pub struct GridData {
     display_offset: usize,
     /// 行哈希列表（预计算，与 rows 一一对应）
     row_hashes: Vec<u64>,
-    /// 行数据（包含实际的 cells）
-    rows: Vec<RowData>,
+    /// 行数据（COW: Arc 共享，clone 只复制指针）
+    rows: Vec<Arc<RowData>>,
 }
 
 impl GridData {
@@ -437,7 +442,7 @@ impl GridData {
             history_size,
             display_offset,
             row_hashes: row_hashes.clone(),
-            rows: vec![RowData::empty(columns); total_lines],
+            rows: (0..total_lines).map(|_| RowData::empty_arc(columns)).collect(),
         }
     }
 
@@ -450,7 +455,124 @@ impl GridData {
             history_size: 0,
             display_offset: 0,
             row_hashes: vec![0; screen_lines],
-            rows: vec![RowData::empty(columns); screen_lines],
+            rows: (0..screen_lines).map(|_| RowData::empty_arc(columns)).collect(),
+        }
+    }
+
+    /// 创建新的 GridData
+    ///
+    /// # 参数
+    /// - `columns`: 列数
+    /// - `screen_lines`: 屏幕行数
+    /// - `history_size`: 历史缓冲区大小
+    /// - `display_offset`: 滚动偏移
+    /// - `rows`: 行数据
+    /// - `row_hashes`: 行哈希列表
+    pub fn new(
+        columns: usize,
+        screen_lines: usize,
+        history_size: usize,
+        display_offset: usize,
+        rows: Vec<RowData>,
+        row_hashes: Vec<u64>,
+    ) -> Self {
+        Self {
+            columns,
+            screen_lines,
+            history_size,
+            display_offset,
+            rows: rows.into_iter().map(Arc::new).collect(),
+            row_hashes,
+        }
+    }
+
+    /// 获取行数据的 Arc（用于 COW）
+    #[inline]
+    pub fn row_arc(&self, index: usize) -> Option<&Arc<RowData>> {
+        self.rows.get(index)
+    }
+
+    /// 创建带内容的 mock GridData（用于性能测试）
+    ///
+    /// 生成包含真实字符的测试数据，模拟终端典型内容
+    #[cfg(test)]
+    pub fn new_mock_with_content(columns: usize, screen_lines: usize) -> Self {
+        use rio_backend::config::colors::{AnsiColor, NamedColor};
+        use std::hash::{Hash, Hasher};
+
+        // 典型终端内容：代码、命令行、日志等
+        let sample_lines = [
+            "fn main() { println!(\"Hello, World!\"); }",
+            "$ cargo build --release",
+            "[INFO] 2024-01-15 10:30:45 - Server started on port 8080",
+            "error[E0382]: borrow of moved value: `x`",
+            "const MAX_SIZE: usize = 1024 * 1024;",
+            "impl Iterator for MyStruct { type Item = u32; }",
+            "export PATH=\"$HOME/.cargo/bin:$PATH\"",
+            "drwxr-xr-x  5 user staff  160 Jan 15 10:30 src",
+            "git commit -m \"Fix: resolve memory leak in renderer\"",
+            "这是中文测试文本，包含各种字符：你好世界！",
+        ];
+
+        let mut rows = Vec::with_capacity(screen_lines);
+        let mut row_hashes = Vec::with_capacity(screen_lines);
+
+        for line_idx in 0..screen_lines {
+            let content = sample_lines[line_idx % sample_lines.len()];
+            let mut cells = Vec::with_capacity(columns);
+
+            // 使用不同颜色
+            let colors = [
+                AnsiColor::Named(NamedColor::Foreground),
+                AnsiColor::Named(NamedColor::Green),
+                AnsiColor::Named(NamedColor::Yellow),
+                AnsiColor::Named(NamedColor::Red),
+                AnsiColor::Named(NamedColor::Cyan),
+            ];
+            let fg = colors[line_idx % colors.len()];
+
+            let mut col = 0;
+            for c in content.chars() {
+                if col >= columns {
+                    break;
+                }
+                cells.push(CellData {
+                    c,
+                    fg,
+                    bg: AnsiColor::Named(NamedColor::Background),
+                    flags: 0,
+                    zerowidth: Vec::new(),
+                    underline_color: None,
+                });
+                col += 1;
+            }
+
+            // 填充剩余列为空格
+            while cells.len() < columns {
+                cells.push(CellData::default());
+            }
+
+            // 计算行哈希
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            content.hash(&mut hasher);
+            line_idx.hash(&mut hasher);
+            let hash = hasher.finish();
+
+            rows.push(Arc::new(RowData {
+                cells,
+                content_hash: hash,
+                urls: Vec::new(),
+            }));
+            row_hashes.push(hash);
+        }
+
+        Self {
+            columns,
+            screen_lines,
+            history_size: 0,
+            display_offset: 0,
+            row_hashes,
+            rows,
         }
     }
 
@@ -487,7 +609,68 @@ impl GridData {
             // 获取该行数据
             let row_data = Self::convert_row::<T>(grid, line, columns);
             row_hashes.push(row_data.content_hash);
-            rows.push(row_data);
+            rows.push(Arc::new(row_data));
+        }
+
+        Self {
+            columns,
+            screen_lines,
+            history_size,
+            display_offset,
+            row_hashes,
+            rows,
+        }
+    }
+
+    /// 从 Crosswords 增量构造 GridData（COW 优化）
+    ///
+    /// 只更新变化的行，未变化的行共享 Arc
+    ///
+    /// # 参数
+    /// - `crosswords`: 终端数据
+    /// - `previous`: 上一帧的 GridData（用于复用未变化的行）
+    /// - `damaged_lines`: 已损坏的行索引列表（需要重新转换）
+    ///
+    /// # 性能
+    /// - 未变化的行：O(1)（Arc clone）
+    /// - 变化的行：O(columns)（需要转换）
+    pub fn incremental_from_crosswords<T: EventListener>(
+        crosswords: &Crosswords<T>,
+        previous: &GridData,
+        damaged_lines: &[usize],
+    ) -> Self {
+        let grid = &crosswords.grid;
+        let display_offset = grid.display_offset();
+        let columns = grid.columns();
+        let screen_lines = grid.screen_lines();
+        let history_size = grid.history_size();
+
+        // 如果尺寸变化或 display_offset 变化，回退到全量构建
+        if screen_lines != previous.screen_lines
+            || columns != previous.columns
+            || display_offset != previous.display_offset
+        {
+            return Self::from_crosswords(crosswords);
+        }
+
+        // COW: 复用未变化的行
+        let mut rows = Vec::with_capacity(screen_lines);
+        let mut row_hashes = Vec::with_capacity(screen_lines);
+
+        let start_line = -(display_offset as i32);
+
+        for screen_line in 0..screen_lines {
+            if damaged_lines.contains(&screen_line) {
+                // 脏行：需要重新转换
+                let line = Line(start_line + screen_line as i32);
+                let row_data = Self::convert_row::<T>(grid, line, columns);
+                row_hashes.push(row_data.content_hash);
+                rows.push(Arc::new(row_data));
+            } else {
+                // 干净行：复用 Arc（O(1)）
+                rows.push(previous.rows[screen_line].clone());
+                row_hashes.push(previous.row_hashes[screen_line]);
+            }
         }
 
         Self {

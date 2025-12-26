@@ -1443,28 +1443,17 @@ impl TerminalPool {
                         return true;
                     }
 
-                    // 增量同步 RenderState（核心优化点，现在在 terminals 读锁外执行）
-                    // 只同步变化的行，避免每帧完整复制
-                    let state_changed = {
-                        let mut render_state = render_state_arc.lock();
-                        terminal.sync_render_state(&mut render_state)
-                    };
+                    // 使用增量更新获取状态（COW 优化）
+                    let mut state = terminal.state_incremental();
+                    let rows = state.grid.lines();
 
                     // 检查是否需要渲染
-                    // 如果缓存有效、RenderState 无变化、无 damage、dirty_flag 未标记、且选区无变化，跳过渲染
-                    // 注：dirty_flag 用于外部触发（滚动等），is_damaged() 用于内部 PTY 输出
-                    // P1-W1 修复：使用阶段 0 中 check_and_clear() 的返回值，而不是再次调用 is_dirty()
-                    // 因为 dirty 标志已经在阶段 0 被清除，此时调用 is_dirty() 会永远返回 false
                     let is_damaged = terminal.is_damaged();
-                    if cache_valid && !state_changed && !is_damaged && !dirty_cleared && !sel_dirty_cleared {
+                    if cache_valid && !is_damaged && !dirty_cleared && !sel_dirty_cleared {
                         return true;
                     }
 
-                    // 获取状态快照（暂时保留，后续 Step 4 会从 RenderState 读取）
-                    let mut state = terminal.state();
-                    let rows = terminal.rows();
-
-                    // 重置 damage（与获取 state 在同一 terminal 锁范围内，避免 TOCTOU）
+                    // 重置 damage（与 sync 在同一 terminal 锁范围内，避免 TOCTOU）
                     terminal.reset_damage();
 
                     // 添加 IME 状态（从 TerminalEntry 独立存储中获取，不在 Terminal 聚合根内）
@@ -1640,7 +1629,8 @@ impl TerminalPool {
                             );
                         }
 
-                        renderer.print_frame_stats(&format!("terminal_{}", id));
+                        // 统计在 render_all 中统一输出，这里不重置
+                        // renderer.print_frame_stats(&format!("terminal_{}", id));
 
                         // 从 Surface 获取 Image 快照并更新缓存
                         let cached_image = surface_cache.surface.image_snapshot();
@@ -1845,6 +1835,10 @@ impl TerminalPool {
     /// 完整的渲染循环：apply_pending → begin_frame → render_terminal × N → end_frame
     /// 在 Rust 侧完成，无需 Swift 参与
     pub fn render_all(&mut self) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let frame_start = std::time::Instant::now();
+
         // 先应用主线程排队的待处理更新（避免更新丢失）
         self.apply_pending_updates();
 
@@ -1856,7 +1850,6 @@ impl TerminalPool {
 
         if layout.is_empty() {
             // 布局为空时输出警告（Release 也输出，但限制频率）
-            use std::sync::atomic::{AtomicU64, Ordering};
             static LAST_EMPTY_WARN: AtomicU64 = AtomicU64::new(0);
             let now_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1874,22 +1867,35 @@ impl TerminalPool {
         self.begin_frame();
 
         // 渲染每个终端
+        let render_start = std::time::Instant::now();
         for (terminal_id, x, y, width, height) in &layout {
             self.render_terminal(*terminal_id, *x, *y, *width, *height);
         }
+        let render_time = render_start.elapsed();
 
         // 结束帧（统一提交渲染）
         self.end_frame();
 
-        // 打印缓存统计
+        let frame_time = frame_start.elapsed();
+
+        // 🎯 帧时间日志（每帧都输出）
         {
+            static FRAME_NUM: AtomicU64 = AtomicU64::new(0);
+            let n = FRAME_NUM.fetch_add(1, Ordering::Relaxed);
+
             let mut renderer = self.renderer.lock();
-            renderer.print_frame_stats("render_all");
+            let (hits, layout_hits, misses) = renderer.get_frame_stats();
+
+            // ⚠️ DO NOT DELETE - 帧性能定位日志，用于调试渲染性能问题
+            // 输出: 帧序号、总耗时、渲染耗时、缓存命中(H)、布局命中(L)、缓存未命中(M)、终端数量
+            // eprintln!("🎯 [Frame] #{} total={:?} render={:?} H={} L={} M={} terminals={}",
+            //     n, frame_time, render_time, hits, layout_hits, misses, layout.len());
+
+            // renderer.print_frame_stats("render_all");
         }
 
         // [MemDebug] 定期输出内存报告（每 600 帧 = ~10 秒 @ 60fps）
         {
-            use std::sync::atomic::{AtomicU64, Ordering};
             static FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
             let frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
             if frame % 600 == 0 {

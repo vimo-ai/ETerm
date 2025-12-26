@@ -20,7 +20,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
-use crate::domain::events::{CellData, LineClearMode, RenderEvent, ScreenClearMode};
+use crate::domain::events::{CellData as EventCellData, LineClearMode, RenderEvent, ScreenClearMode};
+use crate::domain::views::{SelectionView, SearchView, HyperlinkHoverView, ImeView, GridView, GridData, RowData, CellData, CursorView};
+use crate::domain::primitives::AbsolutePoint;
+use crate::domain::TerminalState;
+use crate::domain::renderable::RenderableState;
+use std::sync::Arc;
 
 /// 默认历史缓冲区大小
 const DEFAULT_HISTORY_SIZE: usize = 10_000;
@@ -79,6 +84,28 @@ pub struct RenderState {
 
     /// 是否需要全量同步（首次或 resize 后）
     needs_full_sync: bool,
+
+    // ==================== 视图层字段（用于渲染叠加层）====================
+
+    /// 选区视图（可选）
+    selection: Option<SelectionView>,
+
+    /// 搜索视图（可选）
+    search: Option<SearchView>,
+
+    /// 超链接悬停视图（可选）
+    hyperlink_hover: Option<HyperlinkHoverView>,
+
+    /// 输入法预编辑视图（可选）
+    ime: Option<ImeView>,
+
+    // ==================== 缓存字段（用于 RenderableState trait）====================
+
+    /// 缓存的 GridView（惰性构建，脏时重建）
+    cached_grid_view: Option<GridView>,
+
+    /// GridView 缓存是否有效
+    grid_view_valid: bool,
 }
 
 /// 网格数据
@@ -133,14 +160,14 @@ impl Default for Cell {
     }
 }
 
-impl From<CellData> for Cell {
-    fn from(data: CellData) -> Self {
+impl From<EventCellData> for Cell {
+    fn from(data: EventCellData) -> Self {
         Self {
             c: data.c,
             fg: data.fg,
             bg: data.bg,
             flags: data.flags,
-            zerowidth: SmallVec::new(), // CellData 没有 zerowidth，同步时单独处理
+            zerowidth: SmallVec::new(), // EventCellData 没有 zerowidth，同步时单独处理
             underline_color: None,
         }
     }
@@ -452,6 +479,14 @@ impl RenderState {
             synced_row_hashes: vec![0; rows],
             synced_display_offset: 0,
             needs_full_sync: true, // 首次需要全量同步
+            // 视图层字段
+            selection: None,
+            search: None,
+            hyperlink_hover: None,
+            ime: None,
+            // 缓存字段
+            cached_grid_view: None,
+            grid_view_valid: false,
         }
     }
 
@@ -526,7 +561,9 @@ impl RenderState {
         }
 
         self.synced_display_offset = display_offset;
+        self.display_offset = display_offset;  // 🔧 同步 display_offset
         self.needs_full_sync = false;  // 全量同步完成，重置标记
+        self.grid_view_valid = false;  // 🔧 使 GridView 缓存失效
         self.mark_all_dirty();
     }
 
@@ -572,6 +609,7 @@ impl RenderState {
                         }
 
                         self.mark_line_dirty(Line(screen_line as i32));
+                        self.grid_view_valid = false;  // 🔧 使 GridView 缓存失效
                         changed = true;
                     }
                 }
@@ -635,6 +673,7 @@ impl RenderState {
 
         self.synced_display_offset = new_offset;
         self.display_offset = new_offset;
+        self.grid_view_valid = false;  // 🔧 使 GridView 缓存失效
         self.mark_all_dirty();
         true
     }
@@ -1053,6 +1092,251 @@ impl RenderState {
     pub fn scroll_region(&self) -> &Range<Line> {
         &self.scroll_region
     }
+
+    // ==================== 视图层 API ====================
+
+    /// 获取选区视图
+    #[inline]
+    pub fn selection(&self) -> Option<&SelectionView> {
+        self.selection.as_ref()
+    }
+
+    /// 设置选区视图
+    #[inline]
+    pub fn set_selection(&mut self, selection: Option<SelectionView>) {
+        self.selection = selection;
+    }
+
+    /// 获取搜索视图
+    #[inline]
+    pub fn search(&self) -> Option<&SearchView> {
+        self.search.as_ref()
+    }
+
+    /// 设置搜索视图
+    #[inline]
+    pub fn set_search(&mut self, search: Option<SearchView>) {
+        self.search = search;
+    }
+
+    /// 获取超链接悬停视图
+    #[inline]
+    pub fn hyperlink_hover(&self) -> Option<&HyperlinkHoverView> {
+        self.hyperlink_hover.as_ref()
+    }
+
+    /// 设置超链接悬停视图
+    #[inline]
+    pub fn set_hyperlink_hover(&mut self, hover: Option<HyperlinkHoverView>) {
+        self.hyperlink_hover = hover;
+    }
+
+    /// 获取 IME 视图
+    #[inline]
+    pub fn ime(&self) -> Option<&ImeView> {
+        self.ime.as_ref()
+    }
+
+    /// 设置 IME 视图
+    #[inline]
+    pub fn set_ime(&mut self, ime: Option<ImeView>) {
+        self.ime = ime;
+    }
+
+    /// 获取历史大小
+    #[inline]
+    pub fn history_size(&self) -> usize {
+        self.active_grid().current_history_lines
+    }
+
+    // ==================== GridView 缓存 API ====================
+
+    /// 使 GridView 缓存失效
+    ///
+    /// 在状态变化后调用此方法，下次访问 grid_view() 时将重建缓存
+    #[inline]
+    pub fn invalidate_grid_cache(&mut self) {
+        self.grid_view_valid = false;
+    }
+
+    /// 确保 GridView 缓存有效
+    ///
+    /// 如果缓存无效，从内部 Grid 构建新的 GridView
+    pub fn ensure_grid_view(&mut self) {
+        if self.grid_view_valid && self.cached_grid_view.is_some() {
+            return;
+        }
+
+        // 从内部 Grid 构建 GridData
+        let grid = self.active_grid();
+        let screen_lines = grid.screen_lines;
+        let columns = grid.columns;
+
+        let mut rows = Vec::with_capacity(screen_lines);
+        let mut row_hashes = Vec::with_capacity(screen_lines);
+
+        for screen_line in 0..screen_lines {
+            // 获取行数据（考虑 display_offset）
+            let grid_line = Line((screen_line as i32) - (self.display_offset as i32));
+
+            if let Some(line) = grid.get_line(grid_line) {
+                // 转换 Cell -> CellData (views 版本)
+                let cells: Vec<CellData> = line.iter().map(|cell| {
+                    CellData {
+                        c: cell.c,
+                        fg: cell.fg,
+                        bg: cell.bg,
+                        flags: cell.flags.bits(),  // Flags -> u16
+                        zerowidth: cell.zerowidth.to_vec(),
+                        underline_color: cell.underline_color,
+                    }
+                }).collect();
+
+                // 计算行哈希
+                let mut hasher = DefaultHasher::new();
+                for cell in &cells {
+                    cell.c.hash(&mut hasher);
+                    cell.fg.hash(&mut hasher);
+                    cell.bg.hash(&mut hasher);
+                    cell.flags.hash(&mut hasher);  // CellData.flags is u16, implements Hash
+                }
+                let content_hash = hasher.finish();
+
+                // 检测 URL（简化版，不做完整检测）
+                let urls = Vec::new();
+
+                rows.push(RowData {
+                    cells,
+                    content_hash,
+                    urls,
+                });
+                row_hashes.push(content_hash);
+            } else {
+                // 行不存在，使用空行
+                rows.push(RowData::empty(columns));
+                row_hashes.push(0);
+            }
+        }
+
+        let grid_data = Arc::new(GridData::new(
+            columns,
+            screen_lines,
+            grid.current_history_lines,
+            self.display_offset,
+            rows,
+            row_hashes,
+        ));
+
+        self.cached_grid_view = Some(GridView::new(grid_data));
+        self.grid_view_valid = true;
+    }
+
+    /// 获取 GridView 引用
+    ///
+    /// 如果缓存无效，会先重建缓存
+    /// 注意：这个方法需要 &mut self 因为可能需要重建缓存
+    pub fn grid_view(&mut self) -> &GridView {
+        self.ensure_grid_view();
+        self.cached_grid_view.as_ref().unwrap()
+    }
+
+    /// 获取不可变的 GridView 引用（要求缓存已有效）
+    ///
+    /// # Panics
+    /// 如果缓存无效会 panic
+    #[inline]
+    pub fn grid_view_unchecked(&self) -> &GridView {
+        self.cached_grid_view.as_ref()
+            .expect("GridView cache not valid, call ensure_grid_view() first")
+    }
+
+    /// 转换为 TerminalState
+    ///
+    /// 从缓存的 GridView 和当前状态构建 TerminalState。
+    /// 必须先调用 `ensure_grid_view()` 确保缓存有效。
+    ///
+    /// # 性能
+    /// 这个方法很便宜（只是克隆 Arc 和拷贝小结构体），
+    /// 因为 GridView 内部使用 Arc 共享数据。
+    ///
+    /// # 使用场景
+    /// 当需要将 RenderState 传递给期望 TerminalState 的代码时使用。
+    pub fn as_terminal_state(&self) -> TerminalState {
+        // 获取缓存的 GridView（克隆 Arc，便宜）
+        let grid = self.grid_view_unchecked().clone();
+
+        // 构建 CursorView
+        let cursor_position = AbsolutePoint::new(
+            self.active_grid().current_history_lines
+                .saturating_add(self.cursor_line.0 as usize),
+            self.cursor_col.0,
+        );
+        let cursor = CursorView::new(cursor_position, self.cursor_shape);
+
+        // 构建 TerminalState
+        let mut state = TerminalState::new(grid, cursor);
+
+        // 复制叠加层视图
+        if let Some(sel) = &self.selection {
+            state.selection = Some(sel.clone());
+        }
+        if let Some(search) = &self.search {
+            state.search = Some(search.clone());
+        }
+        if let Some(hover) = &self.hyperlink_hover {
+            state.hyperlink_hover = Some(hover.clone());
+        }
+        if let Some(ime) = &self.ime {
+            state.ime = Some(ime.clone());
+        }
+
+        state
+    }
+}
+
+// ==================== RenderableState trait 实现 ====================
+
+impl RenderableState for RenderState {
+    fn grid(&self) -> &GridView {
+        self.grid_view_unchecked()
+    }
+
+    fn cursor_position(&self) -> AbsolutePoint {
+        // 转换 (Line, Column) 到 AbsolutePoint
+        // Line 是屏幕坐标，需要加上历史行数
+        let abs_line = self.active_grid().current_history_lines
+            .saturating_add(self.cursor_line.0 as usize);
+        AbsolutePoint::new(abs_line, self.cursor_col.0)
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        self.cursor_shape
+    }
+
+    fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    fn cursor_color(&self) -> [f32; 4] {
+        // RenderState 没有存储光标颜色，使用默认值
+        [1.0, 1.0, 1.0, 0.8]
+    }
+
+    fn selection(&self) -> Option<&SelectionView> {
+        self.selection.as_ref()
+    }
+
+    fn search(&self) -> Option<&SearchView> {
+        self.search.as_ref()
+    }
+
+    fn hyperlink_hover(&self) -> Option<&HyperlinkHoverView> {
+        self.hyperlink_hover.as_ref()
+    }
+
+    fn ime(&self) -> Option<&ImeView> {
+        self.ime.as_ref()
+    }
 }
 
 #[cfg(test)]
@@ -1091,8 +1375,8 @@ mod tests {
         let mut state = RenderState::new(80, 24);
 
         let cells = vec![
-            CellData::new('H', AnsiColor::Named(NamedColor::Foreground), AnsiColor::Named(NamedColor::Background), Flags::empty()),
-            CellData::new('i', AnsiColor::Named(NamedColor::Foreground), AnsiColor::Named(NamedColor::Background), Flags::empty()),
+            EventCellData::new('H', AnsiColor::Named(NamedColor::Foreground), AnsiColor::Named(NamedColor::Background), Flags::empty()),
+            EventCellData::new('i', AnsiColor::Named(NamedColor::Foreground), AnsiColor::Named(NamedColor::Background), Flags::empty()),
         ];
 
         state.apply_event(RenderEvent::CellsUpdate {
@@ -1501,5 +1785,209 @@ mod tests {
         assert_eq!(state.get_cell(Line(0), Column(0)).unwrap().c, 'A');
         assert_eq!(state.get_cell(Line(5), Column(0)).unwrap().c, 'B');
         assert_eq!(state.get_cell(Line(10), Column(0)).unwrap().c, 'C');
+    }
+
+    // ==================== RenderState vs TerminalState 一致性验证 ====================
+
+    #[test]
+    fn test_render_state_vs_grid_data_consistency() {
+        use crate::domain::views::{GridData, GridView};
+        use std::sync::Arc;
+
+        // 1. 创建 Crosswords 并写入测试内容
+        let mut cw = create_test_crosswords(80, 24);
+
+        // 写入一些内容
+        for c in "Hello, World!".chars() {
+            cw.input(c);
+        }
+        cw.carriage_return();
+        cw.linefeed();
+        for c in "Line 2 content".chars() {
+            cw.input(c);
+        }
+
+        // 2. 从 Crosswords 构建 GridData（TerminalState 使用的）
+        let grid_data = Arc::new(GridData::from_crosswords(&cw));
+        let grid_view = GridView::new(grid_data);
+
+        // 3. 同步到 RenderState
+        let mut render_state = RenderState::new(80, 24);
+        render_state.sync_from_crosswords(&cw);
+
+        // 4. 对比两者的 grid 数据
+        let mut mismatches = Vec::new();
+        for row in 0..24 {
+            if let Some(row_view) = grid_view.row(row) {
+                let cells = row_view.cells();
+                for col in 0..cells.len().min(80) {
+                    let ts_cell = &cells[col];
+                    let rs_cell = render_state.get_cell(Line(row as i32), Column(col));
+
+                    if let Some(rs) = rs_cell {
+                        if ts_cell.c != rs.c {
+                            mismatches.push(format!(
+                                "({}, {}): GridData='{}' vs RenderState='{}'",
+                                row, col, ts_cell.c, rs.c
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            mismatches.is_empty(),
+            "Grid data mismatches found:\n{}",
+            mismatches.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_render_state_cursor_consistency() {
+        // 验证光标位置一致性
+        let mut cw = create_test_crosswords(80, 24);
+
+        // 移动光标到特定位置
+        cw.goto(Line(5), Column(10));
+
+        // 获取 Crosswords 的光标位置
+        let cw_cursor_line = cw.grid.cursor.pos.row;
+        let cw_cursor_col = cw.grid.cursor.pos.col;
+
+        // 同步到 RenderState
+        let mut render_state = RenderState::new(80, 24);
+        render_state.sync_from_crosswords(&cw);
+
+        // 获取 RenderState 的光标位置
+        let (rs_line, rs_col) = render_state.cursor_position();
+
+        assert_eq!(
+            cw_cursor_line.0, rs_line.0,
+            "Cursor line mismatch: Crosswords={} vs RenderState={}",
+            cw_cursor_line.0, rs_line.0
+        );
+        assert_eq!(
+            cw_cursor_col.0, rs_col.0,
+            "Cursor col mismatch: Crosswords={} vs RenderState={}",
+            cw_cursor_col.0, rs_col.0
+        );
+    }
+
+    #[test]
+    fn test_render_state_incremental_sync_consistency() {
+        use crate::domain::views::{GridData, GridView};
+        use std::sync::Arc;
+
+        // 测试增量同步后的一致性
+        let mut cw = create_test_crosswords(80, 24);
+        let mut render_state = RenderState::new(80, 24);
+
+        // 首次同步
+        render_state.sync_from_crosswords(&cw);
+        cw.reset_damage();
+
+        // 第二次写入（只有部分行变化）
+        cw.goto(Line(10), Column(0));
+        for c in "Incremental update".chars() {
+            cw.input(c);
+        }
+
+        // 增量同步
+        render_state.sync_from_crosswords(&cw);
+
+        // 构建新的 GridData
+        let grid_data = Arc::new(GridData::from_crosswords(&cw));
+        let grid_view = GridView::new(grid_data);
+
+        // 验证第 10 行一致
+        if let Some(row_view) = grid_view.row(10) {
+            let cells = row_view.cells();
+            for col in 0..18 {
+                // "Incremental update" 长度
+                let ts_cell = &cells[col];
+                let rs_cell = render_state.get_cell(Line(10), Column(col));
+
+                if let Some(rs) = rs_cell {
+                    assert_eq!(
+                        ts_cell.c, rs.c,
+                        "Mismatch at (10, {}): GridData='{}' vs RenderState='{}'",
+                        col, ts_cell.c, rs.c
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_render_state_performance_comparison() {
+        use std::time::Instant;
+        use crate::domain::views::GridData;
+
+        // 性能对比：GridData::from_crosswords vs RenderState::sync_from_crosswords
+        let mut cw = create_test_crosswords(80, 50);
+        let mut render_state = RenderState::new(80, 50);
+
+        // 写入大量内容
+        for line in 0..50 {
+            cw.goto(Line(line), Column(0));
+            for c in format!("Line {} with some content here", line).chars() {
+                cw.input(c);
+            }
+        }
+
+        // 首次同步 RenderState
+        render_state.sync_from_crosswords(&cw);
+        cw.reset_damage();
+
+        // 测试 1: 全量构建 GridData 的时间
+        let iterations = 100;
+
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _grid_data = GridData::from_crosswords(&cw);
+        }
+        let grid_data_time = start.elapsed();
+
+        // 测试 2: 无变化时增量同步 RenderState 的时间
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _changed = render_state.sync_from_crosswords(&cw);
+        }
+        let render_state_time = start.elapsed();
+
+        println!("\n📊 Performance Comparison ({} iterations):", iterations);
+        println!(
+            "   GridData::from_crosswords:         {:?} ({:.2}μs/call)",
+            grid_data_time,
+            grid_data_time.as_micros() as f64 / iterations as f64
+        );
+        println!(
+            "   RenderState::sync (no change):     {:?} ({:.2}μs/call)",
+            render_state_time,
+            render_state_time.as_micros() as f64 / iterations as f64
+        );
+        println!(
+            "   Speedup: {:.1}x",
+            grid_data_time.as_micros() as f64 / render_state_time.as_micros().max(1) as f64
+        );
+
+        // 测试 3: 单行变化时的增量同步
+        cw.goto(Line(25), Column(0));
+        cw.input('X');
+
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _changed = render_state.sync_from_crosswords(&cw);
+            cw.reset_damage();
+            cw.input('Y'); // 保持 damage
+        }
+        let incremental_time = start.elapsed();
+
+        println!(
+            "   RenderState::sync (1 line change): {:?} ({:.2}μs/call)",
+            incremental_time,
+            incremental_time.as_micros() as f64 / iterations as f64
+        );
     }
 }
