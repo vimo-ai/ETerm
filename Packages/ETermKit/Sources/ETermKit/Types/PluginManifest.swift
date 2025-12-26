@@ -5,6 +5,14 @@
 
 import Foundation
 
+/// 插件运行模式
+public enum PluginRunMode: String, Sendable, Codable {
+    /// 全部在主进程运行（简单，推荐内置插件用）
+    case main
+    /// Logic 在子进程运行（进程隔离，第三方插件可选）
+    case isolated
+}
+
 /// 插件清单
 ///
 /// 对应 manifest.json 的结构，声明插件的元信息、依赖、能力和注册项。
@@ -30,6 +38,12 @@ public struct PluginManifest: Sendable, Codable, Equatable {
 
     /// 使用的 SDK 版本
     public let sdkVersion: String
+
+    /// 运行模式
+    ///
+    /// - `main`: 全部在主进程运行（默认，推荐内置插件用）
+    /// - `isolated`: Logic 在子进程运行（进程隔离）
+    public let runMode: PluginRunMode
 
     // MARK: - 依赖
 
@@ -57,7 +71,7 @@ public struct PluginManifest: Sendable, Codable, Equatable {
 
     /// ViewProvider 类名（可选）
     ///
-    /// 实现 PluginViewProvider 协议的类名，用于提供插件的 UI 视图
+    /// 实现 PluginViewProvider 协议的 @objc 类名，用于从 Bundle 加载 SwiftUI View
     public let viewProviderClass: String?
 
     // MARK: - UI 注册
@@ -74,6 +88,18 @@ public struct PluginManifest: Sendable, Codable, Equatable {
     /// MenuBar 配置（可选）
     public let menuBar: MenuBarConfig?
 
+    /// 底部停靠视图配置（可选）
+    public let bottomDock: BottomDockConfig?
+
+    /// 信息面板内容注册
+    public let infoPanelContents: [InfoPanelContent]
+
+    /// 选中气泡配置（可选）
+    public let bubble: BubbleConfig?
+
+    /// 插件发出的事件列表
+    public let emits: [String]
+
     // MARK: - 初始化
 
     public init(
@@ -82,6 +108,7 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         version: String,
         minHostVersion: String,
         sdkVersion: String,
+        runMode: PluginRunMode = .main,
         dependencies: [Dependency] = [],
         capabilities: [String] = [],
         principalClass: String,
@@ -90,13 +117,18 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         sidebarTabs: [SidebarTab] = [],
         commands: [Command] = [],
         subscribes: [String] = [],
-        menuBar: MenuBarConfig? = nil
+        menuBar: MenuBarConfig? = nil,
+        bottomDock: BottomDockConfig? = nil,
+        infoPanelContents: [InfoPanelContent] = [],
+        bubble: BubbleConfig? = nil,
+        emits: [String] = []
     ) {
         self.id = id
         self.name = name
         self.version = version
         self.minHostVersion = minHostVersion
         self.sdkVersion = sdkVersion
+        self.runMode = runMode
         self.dependencies = dependencies
         self.capabilities = capabilities
         self.principalClass = principalClass
@@ -106,6 +138,10 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         self.commands = commands
         self.subscribes = subscribes
         self.menuBar = menuBar
+        self.bottomDock = bottomDock
+        self.infoPanelContents = infoPanelContents
+        self.bubble = bubble
+        self.emits = emits
     }
 }
 
@@ -141,11 +177,18 @@ extension PluginManifest {
         /// 视图类名
         public let viewClass: String
 
-        public init(id: String, title: String, icon: String, viewClass: String) {
+        /// 渲染模式
+        ///
+        /// - "inline": 直接在 sidebar 里渲染 View（默认）
+        /// - "tab": 点击后在 Tab 区域创建新的 View Tab
+        public let renderMode: String?
+
+        public init(id: String, title: String, icon: String, viewClass: String, renderMode: String? = nil) {
             self.id = id
             self.title = title
             self.icon = icon
             self.viewClass = viewClass
+            self.renderMode = renderMode
         }
     }
 
@@ -183,6 +226,133 @@ extension PluginManifest {
             self.id = id
             self.width = width
         }
+    }
+
+    /// 底部停靠视图配置
+    ///
+    /// 底部停靠视图会挤压终端渲染区域，显示在终端底部
+    public struct BottomDockConfig: Sendable, Codable, Equatable {
+        /// 视图标识符
+        public let id: String
+
+        /// 视图类名
+        public let viewClass: String
+
+        /// 切换显示的命令 ID（关联 commands 中的命令）
+        public let toggleCommand: String?
+
+        /// 显示的命令 ID
+        public let showCommand: String?
+
+        /// 隐藏的命令 ID
+        public let hideCommand: String?
+
+        public init(
+            id: String,
+            viewClass: String,
+            toggleCommand: String? = nil,
+            showCommand: String? = nil,
+            hideCommand: String? = nil
+        ) {
+            self.id = id
+            self.viewClass = viewClass
+            self.toggleCommand = toggleCommand
+            self.showCommand = showCommand
+            self.hideCommand = hideCommand
+        }
+    }
+
+    /// 信息面板内容配置
+    ///
+    /// 注册到全局信息面板窗口的内容
+    public struct InfoPanelContent: Sendable, Codable, Equatable {
+        /// 内容标识符
+        public let id: String
+
+        /// 内容标题
+        public let title: String
+
+        /// 视图类名
+        public let viewClass: String
+
+        public init(id: String, title: String, viewClass: String) {
+            self.id = id
+            self.title = title
+            self.viewClass = viewClass
+        }
+    }
+
+    /// 选中气泡配置
+    ///
+    /// 在终端选中文本时显示的气泡
+    public struct BubbleConfig: Sendable, Codable, Equatable {
+        /// 气泡标识符
+        public let id: String
+
+        /// 提示图标（SF Symbol）
+        public let hintIcon: String
+
+        /// 气泡内容视图类名
+        public let contentViewClass: String
+
+        /// 展开后显示到信息面板的内容 ID（关联 infoPanelContents）
+        public let expandToInfoPanel: String?
+
+        /// 触发事件名
+        public let trigger: String
+
+        public init(
+            id: String,
+            hintIcon: String,
+            contentViewClass: String,
+            expandToInfoPanel: String? = nil,
+            trigger: String = "terminal.didEndSelection"
+        ) {
+            self.id = id
+            self.hintIcon = hintIcon
+            self.contentViewClass = contentViewClass
+            self.expandToInfoPanel = expandToInfoPanel
+            self.trigger = trigger
+        }
+    }
+}
+
+// MARK: - Decodable（为新字段提供默认值）
+
+extension PluginManifest {
+    enum CodingKeys: String, CodingKey {
+        case id, name, version, minHostVersion, sdkVersion, runMode
+        case dependencies, capabilities, principalClass
+        case viewModelClass, viewProviderClass
+        case sidebarTabs, commands, subscribes
+        case menuBar, bottomDock, infoPanelContents, bubble, emits
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // 必填字段
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        version = try container.decode(String.self, forKey: .version)
+        minHostVersion = try container.decode(String.self, forKey: .minHostVersion)
+        sdkVersion = try container.decode(String.self, forKey: .sdkVersion)
+        principalClass = try container.decode(String.self, forKey: .principalClass)
+
+        // 可选字段（有默认值）
+        runMode = try container.decodeIfPresent(PluginRunMode.self, forKey: .runMode) ?? .main
+        dependencies = try container.decodeIfPresent([Dependency].self, forKey: .dependencies) ?? []
+        capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
+        viewModelClass = try container.decodeIfPresent(String.self, forKey: .viewModelClass)
+        viewProviderClass = try container.decodeIfPresent(String.self, forKey: .viewProviderClass)
+        sidebarTabs = try container.decodeIfPresent([SidebarTab].self, forKey: .sidebarTabs) ?? []
+        commands = try container.decodeIfPresent([Command].self, forKey: .commands) ?? []
+        subscribes = try container.decodeIfPresent([String].self, forKey: .subscribes) ?? []
+        menuBar = try container.decodeIfPresent(MenuBarConfig.self, forKey: .menuBar)
+        bottomDock = try container.decodeIfPresent(BottomDockConfig.self, forKey: .bottomDock)
+        infoPanelContents = try container.decodeIfPresent([InfoPanelContent].self, forKey: .infoPanelContents) ?? []
+        bubble = try container.decodeIfPresent(BubbleConfig.self, forKey: .bubble)
+        emits = try container.decodeIfPresent([String].self, forKey: .emits) ?? []
     }
 }
 

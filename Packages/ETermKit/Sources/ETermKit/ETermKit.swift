@@ -5,14 +5,23 @@
 
 // MARK: - Protocols
 
-// 插件逻辑协议（Extension Host 进程）
+// 插件协议（主进程模式，runMode: main）
+public typealias _Plugin = Plugin
+
+// 插件逻辑协议（隔离模式，runMode: isolated，Extension Host 进程）
 public typealias _PluginLogic = PluginLogic
 
 // 插件 ViewModel 协议（主进程）
 public typealias _PluginViewModel = PluginViewModel
 
+// 插件 View 提供者协议（隔离模式，主进程加载 Bundle 中的 View）
+public typealias _PluginViewProvider = PluginViewProvider
+
 // 主应用桥接协议
 public typealias _HostBridge = HostBridge
+
+// 插件运行模式
+public typealias _PluginRunMode = PluginRunMode
 
 // MARK: - Types
 
@@ -53,4 +62,4 @@ public let ETermKitIPCProtocolVersion = IPCProtocolVersion
 // MARK: - SDK Version
 
 /// ETermKit SDK 版本
-public let ETermKitVersion = "1.0.0"
+public let ETermKitVersion = "0.0.1-beta.1"

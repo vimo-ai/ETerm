@@ -118,6 +118,32 @@ public struct IPCMessage: Sendable, Codable, Equatable {
         /// 发射事件
         case emit
 
+        // MARK: - UI 控制 (Plugin → Host)
+
+        /// 显示底部停靠视图
+        case showBottomDock
+
+        /// 隐藏底部停靠视图
+        case hideBottomDock
+
+        /// 切换底部停靠视图
+        case toggleBottomDock
+
+        /// 显示信息面板
+        case showInfoPanel
+
+        /// 隐藏信息面板
+        case hideInfoPanel
+
+        /// 显示选中气泡
+        case showBubble
+
+        /// 展开气泡
+        case expandBubble
+
+        /// 隐藏气泡
+        case hideBubble
+
         // MARK: - 双向
 
         /// 握手消息（连接建立后发送，单向通知）

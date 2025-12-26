@@ -136,4 +136,64 @@ public protocol HostBridge: AnyObject, Sendable {
     ///   - eventName: 事件名称
     ///   - payload: 事件载荷
     func emit(eventName: String, payload: [String: Any])
+
+    // MARK: - 底部停靠视图控制
+
+    /// 显示底部停靠视图
+    ///
+    /// 需要 capability: `ui.bottomDock`
+    ///
+    /// - Parameter id: bottomDock 的 id（manifest.json 中定义）
+    func showBottomDock(_ id: String)
+
+    /// 隐藏底部停靠视图
+    ///
+    /// 需要 capability: `ui.bottomDock`
+    ///
+    /// - Parameter id: bottomDock 的 id
+    func hideBottomDock(_ id: String)
+
+    /// 切换底部停靠视图显示状态
+    ///
+    /// 需要 capability: `ui.bottomDock`
+    ///
+    /// - Parameter id: bottomDock 的 id
+    func toggleBottomDock(_ id: String)
+
+    // MARK: - 信息面板控制
+
+    /// 显示信息面板内容
+    ///
+    /// 需要 capability: `ui.infoPanel`
+    ///
+    /// - Parameter id: infoPanelContent 的 id（manifest.json 中定义）
+    func showInfoPanel(_ id: String)
+
+    /// 隐藏信息面板内容
+    ///
+    /// 需要 capability: `ui.infoPanel`
+    ///
+    /// - Parameter id: infoPanelContent 的 id
+    func hideInfoPanel(_ id: String)
+
+    // MARK: - 选中气泡控制
+
+    /// 显示选中气泡（hint 模式）
+    ///
+    /// 需要 capability: `ui.bubble`
+    ///
+    /// - Parameters:
+    ///   - text: 选中的文本
+    ///   - position: 屏幕坐标位置
+    func showBubble(text: String, position: [String: Double])
+
+    /// 展开气泡（从 hint 变为展开状态）
+    ///
+    /// 需要 capability: `ui.bubble`
+    func expandBubble()
+
+    /// 隐藏气泡
+    ///
+    /// 需要 capability: `ui.bubble`
+    func hideBubble()
 }

@@ -267,6 +267,32 @@ actor PluginIPCBridge {
         case .emit:
             await handleEmit(message)
 
+        // MARK: UI 控制消息
+
+        case .showBottomDock:
+            await handleShowBottomDock(message)
+
+        case .hideBottomDock:
+            await handleHideBottomDock(message)
+
+        case .toggleBottomDock:
+            await handleToggleBottomDock(message)
+
+        case .showInfoPanel:
+            await handleShowInfoPanel(message)
+
+        case .hideInfoPanel:
+            await handleHideInfoPanel(message)
+
+        case .showBubble:
+            await handleShowBubble(message)
+
+        case .expandBubble:
+            await handleExpandBubble(message)
+
+        case .hideBubble:
+            await handleHideBubble(message)
+
         default:
             print("[PluginIPCBridge] Unhandled message type: \(message.type)")
         }
@@ -466,7 +492,16 @@ actor PluginIPCBridge {
             return
         }
 
-        // 检查服务是否存在
+        let params = message.rawPayload["params"] as? [String: Any] ?? [:]
+
+        // 核心服务特殊处理（eterm.* 命名空间）
+        if targetPluginId == "eterm" {
+            let result = await handleCoreService(name: serviceName, params: params)
+            await sendResponse(to: message, payload: result)
+            return
+        }
+
+        // 其他插件服务
         let hasService = await MainActor.run {
             ServiceRegistry.shared.hasService(pluginId: targetPluginId, name: serviceName)
         }
@@ -476,8 +511,122 @@ actor PluginIPCBridge {
             return
         }
 
-        // TODO: 实现跨进程服务调用
-        await sendError(to: message, code: "NOT_IMPLEMENTED", message: "Cross-process service call not yet implemented")
+        // TODO: 实现其他插件的跨进程服务调用
+        await sendError(to: message, code: "NOT_IMPLEMENTED", message: "Cross-process service call for plugins not yet implemented")
+    }
+
+    // MARK: - Core Services
+
+    /// 处理核心服务调用（eterm.* 命名空间）
+    private func handleCoreService(name: String, params: [String: Any]) async -> [String: Any] {
+        switch name {
+        case "ai.translate":
+            return await handleAITranslate(params: params)
+
+        case "ai.analyzeSentence":
+            return await handleAIAnalyzeSentence(params: params)
+
+        case "dictionary.lookup":
+            return await handleDictionaryLookup(params: params)
+
+        default:
+            return ["success": false, "error": "Unknown core service: \(name)"]
+        }
+    }
+
+    /// AI 翻译服务
+    private func handleAITranslate(params: [String: Any]) async -> [String: Any] {
+        guard let text = params["text"] as? String else {
+            return ["success": false, "error": "Missing parameter: text"]
+        }
+
+        let model = params["model"] as? String ?? "qwen-mt-flash"
+
+        do {
+            let result = try await AIService.shared.translate(text, model: model)
+            return ["success": true, "result": result]
+        } catch {
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// AI 句子分析服务（非流式，等待完成后返回）
+    private func handleAIAnalyzeSentence(params: [String: Any]) async -> [String: Any] {
+        guard let text = params["text"] as? String else {
+            return ["success": false, "error": "Missing parameter: text"]
+        }
+
+        let model = params["model"] as? String ?? "qwen3-max"
+
+        do {
+            var finalTranslation = ""
+            var finalGrammar = ""
+
+            try await AIService.shared.analyzeSentence(text, model: model) { translation, grammar in
+                finalTranslation = translation
+                finalGrammar = grammar
+            }
+
+            return [
+                "success": true,
+                "translation": finalTranslation,
+                "grammar": finalGrammar
+            ]
+        } catch {
+            return ["success": false, "error": error.localizedDescription]
+        }
+    }
+
+    /// 词典查询服务
+    private func handleDictionaryLookup(params: [String: Any]) async -> [String: Any] {
+        guard let word = params["word"] as? String else {
+            return ["success": false, "error": "Missing parameter: word"]
+        }
+
+        do {
+            let result = try await DictionaryService.shared.lookup(word)
+
+            // 转换为可序列化的字典
+            let phonetics: [[String: Any]] = result.phonetics?.map { phonetic in
+                var dict: [String: Any] = [:]
+                if let text = phonetic.text { dict["text"] = text }
+                if let audio = phonetic.audio { dict["audio"] = audio }
+                return dict
+            } ?? []
+
+            let meanings: [[String: Any]] = result.meanings.map { meaning in
+                let definitions: [[String: Any]] = meaning.definitions.map { def in
+                    var dict: [String: Any] = ["definition": def.definition]
+                    if let example = def.example { dict["example"] = example }
+                    if let synonyms = def.synonyms { dict["synonyms"] = synonyms }
+                    return dict
+                }
+                return [
+                    "partOfSpeech": meaning.partOfSpeech,
+                    "definitions": definitions
+                ]
+            }
+
+            var resultDict: [String: Any] = [
+                "success": true,
+                "word": result.word,
+                "meanings": meanings,
+                "phonetics": phonetics
+            ]
+            if let phonetic = result.phonetic {
+                resultDict["phonetic"] = phonetic
+            }
+
+            return resultDict
+        } catch let error as DictionaryError {
+            return [
+                "success": false,
+                "error": error.localizedDescription,
+                "errorType": String(describing: error)
+            ]
+        } catch {
+            return ["success": false, "error": error.localizedDescription]
+        }
     }
 
     private func handleEmit(_ message: IPCMessage) async {
@@ -491,6 +640,153 @@ actor PluginIPCBridge {
         // 需要设计动态事件类型或专门的插件事件通道
         print("[PluginIPCBridge] Plugin event emitted: \(eventName)")
 
+        await sendResponse(to: message)
+    }
+
+    // MARK: - UI 控制处理
+
+    private func handleShowBottomDock(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.bottomDock") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.bottomDock")
+            return
+        }
+
+        guard let dockId = message.rawPayload["id"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing id")
+            return
+        }
+
+        // TODO: 实现 BottomDockRegistry
+        print("[PluginIPCBridge] showBottomDock: \(dockId) (not implemented)")
+        await sendResponse(to: message)
+    }
+
+    private func handleHideBottomDock(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.bottomDock") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.bottomDock")
+            return
+        }
+
+        guard let dockId = message.rawPayload["id"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing id")
+            return
+        }
+
+        // TODO: 实现 BottomDockRegistry
+        print("[PluginIPCBridge] hideBottomDock: \(dockId) (not implemented)")
+        await sendResponse(to: message)
+    }
+
+    private func handleToggleBottomDock(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.bottomDock") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.bottomDock")
+            return
+        }
+
+        guard let dockId = message.rawPayload["id"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing id")
+            return
+        }
+
+        // TODO: 实现 BottomDockRegistry
+        print("[PluginIPCBridge] toggleBottomDock: \(dockId) (not implemented)")
+        await sendResponse(to: message)
+    }
+
+    private func handleShowInfoPanel(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.infoPanel") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.infoPanel")
+            return
+        }
+
+        guard let panelId = message.rawPayload["id"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing id")
+            return
+        }
+
+        await MainActor.run {
+            InfoWindowRegistry.shared.showContent(id: panelId)
+        }
+        await sendResponse(to: message)
+    }
+
+    private func handleHideInfoPanel(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.infoPanel") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.infoPanel")
+            return
+        }
+
+        guard let panelId = message.rawPayload["id"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing id")
+            return
+        }
+
+        await MainActor.run {
+            InfoWindowRegistry.shared.hideContent(id: panelId)
+        }
+        await sendResponse(to: message)
+    }
+
+    private func handleShowBubble(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.bubble") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.bubble")
+            return
+        }
+
+        guard let text = message.rawPayload["text"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing text")
+            return
+        }
+
+        // 位置参数可选
+        let position = message.rawPayload["position"] as? [String: Double]
+
+        await MainActor.run {
+            // 使用 TranslationController 显示 bubble（保持与内置逻辑一致）
+            // 由于没有 view 上下文，这里记录日志即可
+            // 实际 bubble 显示由 SDKEventBridge 处理
+            print("[PluginIPCBridge] showBubble: text=\(text), position=\(String(describing: position))")
+        }
+        await sendResponse(to: message)
+    }
+
+    private func handleExpandBubble(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.bubble") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.bubble")
+            return
+        }
+
+        await MainActor.run {
+            TranslationController.shared.state.expand()
+        }
+        await sendResponse(to: message)
+    }
+
+    private func handleHideBubble(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "ui.bubble") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: ui.bubble")
+            return
+        }
+
+        await MainActor.run {
+            TranslationController.shared.hide()
+        }
         await sendResponse(to: message)
     }
 

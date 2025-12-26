@@ -224,6 +224,92 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
+    // MARK: - 底部停靠视图控制
+
+    public func showBottomDock(_ id: String) {
+        let dockId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .showBottomDock,
+                payload: ["id": dockId]
+            ))
+        }
+    }
+
+    public func hideBottomDock(_ id: String) {
+        let dockId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .hideBottomDock,
+                payload: ["id": dockId]
+            ))
+        }
+    }
+
+    public func toggleBottomDock(_ id: String) {
+        let dockId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .toggleBottomDock,
+                payload: ["id": dockId]
+            ))
+        }
+    }
+
+    // MARK: - 信息面板控制
+
+    public func showInfoPanel(_ id: String) {
+        let panelId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .showInfoPanel,
+                payload: ["id": panelId]
+            ))
+        }
+    }
+
+    public func hideInfoPanel(_ id: String) {
+        let panelId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .hideInfoPanel,
+                payload: ["id": panelId]
+            ))
+        }
+    }
+
+    // MARK: - 选中气泡控制
+
+    public func showBubble(text: String, position: [String: Double]) {
+        let t = text
+        let pos = position
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .showBubble,
+                payload: [
+                    "text": t,
+                    "position": pos
+                ]
+            ))
+        }
+    }
+
+    public func expandBubble() {
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .expandBubble
+            ))
+        }
+    }
+
+    public func hideBubble() {
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .hideBubble
+            ))
+        }
+    }
+
     // MARK: - Internal
 
     func setHostInfo(_ info: HostInfo) {
