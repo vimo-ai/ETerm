@@ -12,7 +12,8 @@ struct PluginManagerView: View {
     private var plugins: [PluginInfo] {
         let frameworkPlugins = pluginManager.allPluginInfos()
         let bundlePlugins = PluginLoader.shared.allPluginInfos()
-        return frameworkPlugins + bundlePlugins
+        let sdkPlugins = SDKPluginLoader.shared.allPluginInfos()
+        return frameworkPlugins + bundlePlugins + sdkPlugins
     }
 
     private var enabledCount: Int {
