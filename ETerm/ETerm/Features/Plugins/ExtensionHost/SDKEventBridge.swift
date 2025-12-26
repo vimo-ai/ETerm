@@ -28,13 +28,40 @@ final class SDKEventBridge {
     /// 设置事件监听（在 SDK 插件加载完成后调用）
     func setup() {
         // 监听选中结束事件
-        let subscription = EventBus.shared.subscribe(
+        let selectionSub = EventBus.shared.subscribe(
             CoreEvents.Terminal.DidEndSelection.self,
             options: .default
         ) { [weak self] event in
             self?.handleSelectionEnd(event)
         }
-        subscriptions.append(subscription)
+        subscriptions.append(selectionSub)
+
+        // 监听终端创建事件
+        let createSub = EventBus.shared.subscribe(
+            CoreEvents.Terminal.DidCreate.self,
+            options: .default
+        ) { [weak self] event in
+            self?.handleTerminalCreate(event)
+        }
+        subscriptions.append(createSub)
+
+        // 监听终端关闭事件
+        let closeSub = EventBus.shared.subscribe(
+            CoreEvents.Terminal.DidClose.self,
+            options: .default
+        ) { [weak self] event in
+            self?.handleTerminalClose(event)
+        }
+        subscriptions.append(closeSub)
+
+        // 监听 Tab 激活事件
+        let tabActivateSub = EventBus.shared.subscribe(
+            CoreEvents.Tab.DidActivate.self,
+            options: .default
+        ) { [weak self] event in
+            self?.handleTabActivate(event)
+        }
+        subscriptions.append(tabActivateSub)
 
         // 监听插件发射的事件，分发给订阅的插件
         NotificationCenter.default.addObserver(
@@ -53,6 +80,43 @@ final class SDKEventBridge {
         )
 
         print("[SDKEventBridge] Setup complete")
+    }
+
+    // MARK: - Terminal Events
+
+    private func handleTerminalCreate(_ event: CoreEvents.Terminal.DidCreate) {
+        let payload: [String: Any] = [
+            "terminalId": event.terminalId,
+            "tabId": event.tabId
+        ]
+        dispatchEvent("terminal.didCreate", payload: payload)
+    }
+
+    private func handleTerminalClose(_ event: CoreEvents.Terminal.DidClose) {
+        var payload: [String: Any] = [
+            "terminalId": event.terminalId
+        ]
+        if let tabId = event.tabId {
+            payload["tabId"] = tabId
+        }
+        dispatchEvent("terminal.didClose", payload: payload)
+    }
+
+    private func handleTabActivate(_ event: CoreEvents.Tab.DidActivate) {
+        let payload: [String: Any] = [
+            "terminalId": event.terminalId
+        ]
+        dispatchEvent("tab.didActivate", payload: payload)
+    }
+
+    /// 分发事件给订阅的 SDK 插件
+    private func dispatchEvent(_ eventName: String, payload: [String: Any]) {
+        let subscribingPluginIds = findSubscribingPlugins(for: eventName)
+        for pluginId in subscribingPluginIds {
+            if let plugin = SDKPluginLoader.shared.getMainModePlugin(pluginId) {
+                plugin.handleEvent(eventName, payload: payload)
+            }
+        }
     }
 
     // MARK: - Plugin Event Dispatch

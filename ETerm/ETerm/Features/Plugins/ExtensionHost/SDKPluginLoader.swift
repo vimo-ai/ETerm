@@ -426,14 +426,18 @@ final class SDKPluginLoader {
         let pluginHost = MainModePluginHost(plugin: plugin, manifest: manifest)
         pluginHosts[pluginId] = pluginHost
 
-        // 注册 UI
-        registerSidebarTabs(for: manifest)
-        registerMenuBar(for: manifest)
-        registerKeyBindings(for: manifest)
-        registerInfoPanelContents(for: manifest)
-        registerBottomDock(for: manifest)
-        registerBubble(for: manifest)
-        registerPageBarItems(for: manifest)
+        // 注册 UI（需要在主线程，因为 Registry 有 @Published）
+        await MainActor.run {
+            registerSidebarTabs(for: manifest)
+            registerMenuBar(for: manifest)
+            registerKeyBindings(for: manifest)
+            registerInfoPanelContents(for: manifest)
+            registerBottomDock(for: manifest)
+            registerBubble(for: manifest)
+            registerPageBarItems(for: manifest)
+            registerTabSlots(for: manifest)
+            registerPageSlots(for: manifest)
+        }
     }
 
     /// 加载隔离模式插件
@@ -490,14 +494,18 @@ final class SDKPluginLoader {
             )
             pluginHosts[pluginId] = pluginHost
 
-            // 注册 UI
-            registerSidebarTabs(for: manifest)
-            registerMenuBar(for: manifest)
-            registerKeyBindings(for: manifest)
-            registerInfoPanelContents(for: manifest)
-            registerBottomDock(for: manifest)
-            registerBubble(for: manifest)
-            registerPageBarItems(for: manifest)
+            // 注册 UI（需要在主线程，因为 Registry 有 @Published）
+            await MainActor.run {
+                registerSidebarTabs(for: manifest)
+                registerMenuBar(for: manifest)
+                registerKeyBindings(for: manifest)
+                registerInfoPanelContents(for: manifest)
+                registerBottomDock(for: manifest)
+                registerBubble(for: manifest)
+                registerPageBarItems(for: manifest)
+                registerTabSlots(for: manifest)
+                registerPageSlots(for: manifest)
+            }
         } catch {
             print("[SDKPluginLoader] Failed to activate \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: error.localizedDescription)
@@ -957,6 +965,102 @@ final class SDKPluginLoader {
         return provider.createBubbleContentView(id: bubbleId)
     }
 
+    // MARK: - Slot Registration
+
+    /// 已注册的 tabSlots 配置 (pluginId -> [TabSlot])
+    private static var tabSlotsConfigs: [String: [PluginManifest.TabSlot]] = [:]
+
+    /// 已注册的 pageSlots 配置 (pluginId -> [PageSlot])
+    private static var pageSlotsConfigs: [String: [PluginManifest.PageSlot]] = [:]
+
+    /// 注册 SDK 插件的 tabSlots
+    private func registerTabSlots(for manifest: PluginManifest) {
+        guard !manifest.tabSlots.isEmpty else { return }
+
+        let pluginId = manifest.id
+
+        for slotConfig in manifest.tabSlots {
+            tabSlotRegistry.register(
+                pluginId: pluginId,
+                slotId: slotConfig.id,
+                priority: 0
+            ) { [weak self] tab in
+                // Tab 已遵循 TabSlotContext 协议
+                self?.getTabSlotView(pluginId: pluginId, slotId: slotConfig.id, tab: tab)
+            }
+        }
+
+        // 存储配置（供查询使用）
+        SDKPluginLoader.tabSlotsConfigs[pluginId] = manifest.tabSlots
+    }
+
+    /// 注册 SDK 插件的 pageSlots
+    private func registerPageSlots(for manifest: PluginManifest) {
+        guard !manifest.pageSlots.isEmpty else { return }
+
+        let pluginId = manifest.id
+
+        for slotConfig in manifest.pageSlots {
+            pageSlotRegistry.register(
+                pluginId: pluginId,
+                slotId: slotConfig.id,
+                priority: 0
+            ) { [weak self] page in
+                // Page 已遵循 PageSlotContext 协议
+                self?.getPageSlotView(pluginId: pluginId, slotId: slotConfig.id, page: page)
+            }
+        }
+
+        // 存储配置（供查询使用）
+        SDKPluginLoader.pageSlotsConfigs[pluginId] = manifest.pageSlots
+    }
+
+    /// 获取所有已注册的 tabSlots 配置
+    static func getAllTabSlotConfigs() -> [String: [PluginManifest.TabSlot]] {
+        return tabSlotsConfigs
+    }
+
+    /// 获取所有已注册的 pageSlots 配置
+    static func getAllPageSlotConfigs() -> [String: [PluginManifest.PageSlot]] {
+        return pageSlotsConfigs
+    }
+
+    /// 获取 Tab Slot 视图
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - slotId: Slot ID
+    ///   - tab: Tab 上下文
+    /// - Returns: Slot 视图
+    func getTabSlotView(pluginId: String, slotId: String, tab: any TabSlotContext) -> AnyView? {
+        guard let manifest = manifests[pluginId] else { return nil }
+
+        if manifest.runMode == .main {
+            return mainModePlugins[pluginId]?.tabSlotView(for: slotId, tab: tab)
+        } else {
+            // isolated mode 暂不支持 Slot（需要 IPC 传递 Context）
+            return nil
+        }
+    }
+
+    /// 获取 Page Slot 视图
+    ///
+    /// - Parameters:
+    ///   - pluginId: 插件 ID
+    ///   - slotId: Slot ID
+    ///   - page: Page 上下文
+    /// - Returns: Slot 视图
+    func getPageSlotView(pluginId: String, slotId: String, page: any PageSlotContext) -> AnyView? {
+        guard let manifest = manifests[pluginId] else { return nil }
+
+        if manifest.runMode == .main {
+            return mainModePlugins[pluginId]?.pageSlotView(for: slotId, page: page)
+        } else {
+            // isolated mode 暂不支持 Slot（需要 IPC 传递 Context）
+            return nil
+        }
+    }
+
     // MARK: - PageBar Registration
 
     /// 注册 SDK 插件的 pageBarItems 到 PageBarItemRegistry
@@ -986,5 +1090,19 @@ final class SDKPluginLoader {
             // isolated mode: 使用 ViewProvider（暂不支持）
             return nil
         }
+    }
+
+    // MARK: - Bottom Overlay
+
+    /// 获取底部 Overlay 视图
+    ///
+    /// 遍历所有 main mode 插件，返回提供该 overlay 的视图
+    func getWindowBottomOverlayView(for id: String) -> AnyView? {
+        for (_, plugin) in mainModePlugins {
+            if let view = plugin.windowBottomOverlayView(for: id) {
+                return view
+            }
+        }
+        return nil
     }
 }

@@ -4,6 +4,7 @@
 // HostBridge 协议实现 - 通过 IPC 调用主进程能力
 
 import Foundation
+import AppKit
 import ETermKit
 
 /// Extension Host 端的 HostBridge 实现
@@ -256,6 +257,38 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
+    // MARK: - 底部 Overlay 控制
+
+    public func showBottomOverlay(_ id: String) {
+        let overlayId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .showBottomOverlay,
+                payload: ["id": overlayId]
+            ))
+        }
+    }
+
+    public func hideBottomOverlay(_ id: String) {
+        let overlayId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .hideBottomOverlay,
+                payload: ["id": overlayId]
+            ))
+        }
+    }
+
+    public func toggleBottomOverlay(_ id: String) {
+        let overlayId = id
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .toggleBottomOverlay,
+                payload: ["id": overlayId]
+            ))
+        }
+    }
+
     // MARK: - 信息面板控制
 
     public func showInfoPanel(_ id: String) {
@@ -494,6 +527,20 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         return result
     }
 
+    // MARK: - Socket
+
+    var socketDirectory: String {
+        // 从环境变量获取，或使用默认路径
+        if let dir = ProcessInfo.processInfo.environment["ETERM_SOCKET_DIR"] {
+            return dir
+        }
+        return NSHomeDirectory() + "/.eterm/run/sockets"
+    }
+
+    func socketPath(for namespace: String) -> String {
+        return "\(socketDirectory)/\(namespace).sock"
+    }
+
     // MARK: - Internal
 
     func setHostInfo(_ info: HostInfo) {
@@ -539,12 +586,36 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
 
     private func encodeDecoration(_ decoration: TabDecoration) -> [String: Any] {
         var dict: [String: Any] = [:]
-        if let icon = decoration.icon { dict["icon"] = icon }
-        if let iconColor = decoration.iconColor { dict["iconColor"] = iconColor }
-        if let badge = decoration.badge { dict["badge"] = badge }
-        if let badgeColor = decoration.badgeColor { dict["badgeColor"] = badgeColor }
-        if let backgroundColor = decoration.backgroundColor { dict["backgroundColor"] = backgroundColor }
-        dict["showActivity"] = decoration.showActivity
+
+        // 编码优先级
+        switch decoration.priority {
+        case .system(let level):
+            dict["priorityType"] = "system"
+            dict["priorityValue"] = level.rawValue
+        case .plugin(let id, let priority):
+            dict["priorityType"] = "plugin"
+            dict["priorityPluginId"] = id
+            dict["priorityValue"] = priority
+        }
+
+        // 编码颜色（RGBA）
+        dict["colorRed"] = decoration.color.redComponent
+        dict["colorGreen"] = decoration.color.greenComponent
+        dict["colorBlue"] = decoration.color.blueComponent
+        dict["colorAlpha"] = decoration.color.alphaComponent
+
+        // 编码样式
+        switch decoration.style {
+        case .solid:
+            dict["style"] = "solid"
+        case .pulse:
+            dict["style"] = "pulse"
+        case .breathing:
+            dict["style"] = "breathing"
+        }
+
+        dict["persistent"] = decoration.persistent
+
         return dict
     }
 
