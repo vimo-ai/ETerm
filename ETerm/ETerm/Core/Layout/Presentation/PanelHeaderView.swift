@@ -147,6 +147,9 @@ final class PanelHeaderHostingView: NSView {
     var onTabCloseLeft: ((UUID) -> Void)?    // 关闭指定 Tab 左侧的所有 Tab
     var onTabCloseRight: ((UUID) -> Void)?   // 关闭指定 Tab 右侧的所有 Tab
 
+    // 跨 Panel 合并回调（从其他 Panel 拖入 Tab）
+    var onTabMergedFromOtherPanel: ((UUID, UUID) -> Void)?  // tabId, sourcePanelId
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHostingView()
@@ -450,8 +453,9 @@ extension PanelHeaderHostingView {
 
         // 检查是否是同一个 Panel 内的重排序
         guard sourcePanelId == panelId else {
-            // 跨 Panel 同窗口拖拽，返回 false 让 DomainPanelView 处理
-            return false
+            // 跨 Panel 同窗口拖拽，调用合并回调
+            onTabMergedFromOtherPanel?(tabId, sourcePanelId)
+            return true
         }
 
         // 同 Panel 内重排序，使用粘贴板中的 tabId

@@ -142,18 +142,14 @@ final class DomainPanelView: NSView {
 
         // Content 区域：检查是否有 View Tab 内容
         if let hostingView = viewTabHostingView, !hostingView.isHidden {
-            // View Tab：让事件路由到 SwiftUI 视图
-            let contentPoint = convert(point, to: contentView)
-            if contentView.bounds.contains(contentPoint) {
-                let hostingPoint = contentView.convert(contentPoint, to: hostingView)
-                if let hitView = hostingView.hitTest(hostingPoint) {
-                    return hitView
-                }
+            // View Tab：直接返回 NSHostingView，让它自己处理内部事件分发
+            let hostingPoint = convert(point, to: hostingView)
+            if hostingView.bounds.contains(hostingPoint) {
                 return hostingView
             }
         }
 
-        // 终端 Tab 或无内容：让事件穿透到底层 Metal 视图
+        // 终端 Tab：让事件穿透到底层 Metal 视图
         return nil
     }
 
@@ -225,6 +221,11 @@ final class DomainPanelView: NSView {
             self?.handleTabCloseRight(tabId)
         }
 
+        // 跨 Panel 合并回调
+        headerView.onTabMergedFromOtherPanel = { [weak self] tabId, sourcePanelId in
+            self?.handleTabMergedFromOtherPanel(tabId, sourcePanelId: sourcePanelId)
+        }
+
         // 设置 panelId（用于拖拽数据）
         headerView.panelId = panel?.panelId
     }
@@ -292,6 +293,9 @@ final class DomainPanelView: NSView {
 
         viewTabHostingView = hostingView
         currentViewId = viewContent.viewId
+
+        // 确保立即触发布局更新，修复初始 frame 为零的问题
+        needsLayout = true
     }
 
     /// 隐藏 View Tab 内容
@@ -311,8 +315,22 @@ final class DomainPanelView: NSView {
 
     // MARK: - Layout
 
+    private static var layoutCount = 0
+    private static var lastLayoutLog = Date()
+
     override func layout() {
         super.layout()
+
+        // 调试：统计 layout 调用频率
+        Self.layoutCount += 1
+        let now = Date()
+        if now.timeIntervalSince(Self.lastLayoutLog) > 1.0 {
+            if Self.layoutCount > 10 {
+                print("[DomainPanelView] layout called \(Self.layoutCount) times in last second!")
+            }
+            Self.layoutCount = 0
+            Self.lastLayoutLog = now
+        }
 
         let headerHeight = PanelHeaderHostingView.recommendedHeight()
 
@@ -331,6 +349,12 @@ final class DomainPanelView: NSView {
             width: bounds.width,
             height: bounds.height - headerHeight
         )
+
+        // 显式更新 View Tab hosting view 的 frame
+        // 修复：autoresizingMask 可能无法正确处理初始零尺寸的情况
+        if let hostingView = viewTabHostingView, !hostingView.isHidden {
+            hostingView.frame = contentView.bounds
+        }
     }
 
     // MARK: - Event Handlers
@@ -455,6 +479,14 @@ final class DomainPanelView: NSView {
               let coordinator = coordinator else { return }
 
         coordinator.handleTabCloseRight(panelId: panel.panelId, fromTabId: tabId)
+    }
+
+    /// 处理跨 Panel 合并（从其他 Panel 拖入 Tab 到当前 Panel 的 header）
+    private func handleTabMergedFromOtherPanel(_ tabId: UUID, sourcePanelId: UUID) {
+        guard let panel = panel,
+              let coordinator = coordinator else { return }
+
+        coordinator.handleTabMerge(tabId: tabId, from: sourcePanelId, to: panel.panelId)
     }
 
     // MARK: - Drop Zone Calculation (Public for RioContainerView)
