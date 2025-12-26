@@ -34,6 +34,15 @@ public typealias _PluginManifest = PluginManifest
 // Tab 装饰
 public typealias _TabDecoration = TabDecoration
 
+// 装饰优先级
+public typealias _DecorationPriority = DecorationPriority
+
+// Tab Slot 上下文
+public typealias _TabSlotContext = TabSlotContext
+
+// Page Slot 上下文
+public typealias _PageSlotContext = PageSlotContext
+
 // 终端信息
 public typealias _TerminalInfo = TerminalInfo
 

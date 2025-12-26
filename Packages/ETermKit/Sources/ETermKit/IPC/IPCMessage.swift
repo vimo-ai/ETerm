@@ -129,6 +129,15 @@ public struct IPCMessage: Sendable, Codable, Equatable {
         /// 切换底部停靠视图
         case toggleBottomDock
 
+        /// 显示底部 Overlay
+        case showBottomOverlay
+
+        /// 隐藏底部 Overlay
+        case hideBottomOverlay
+
+        /// 切换底部 Overlay
+        case toggleBottomOverlay
+
         /// 显示信息面板
         case showInfoPanel
 

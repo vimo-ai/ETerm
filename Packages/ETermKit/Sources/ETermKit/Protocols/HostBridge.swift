@@ -176,6 +176,30 @@ public protocol HostBridge: AnyObject, Sendable {
     /// - Parameter id: infoPanelContent 的 id
     func hideInfoPanel(_ id: String)
 
+    // MARK: - 底部 Overlay 控制
+
+    /// 显示底部 Overlay
+    ///
+    /// 需要 capability: `ui.bottomOverlay`
+    /// 多个 Overlay 按显示顺序排列，全部隐藏后关闭区域。
+    ///
+    /// - Parameter id: windowBottomOverlay 的 id（manifest.json 中定义）
+    func showBottomOverlay(_ id: String)
+
+    /// 隐藏底部 Overlay
+    ///
+    /// 需要 capability: `ui.bottomOverlay`
+    ///
+    /// - Parameter id: windowBottomOverlay 的 id
+    func hideBottomOverlay(_ id: String)
+
+    /// 切换底部 Overlay 显示状态
+    ///
+    /// 需要 capability: `ui.bottomOverlay`
+    ///
+    /// - Parameter id: windowBottomOverlay 的 id
+    func toggleBottomOverlay(_ id: String)
+
     // MARK: - 选中气泡控制
 
     /// 显示选中气泡（hint 模式）
@@ -339,4 +363,22 @@ public protocol HostBridge: AnyObject, Sendable {
     ///
     /// - Returns: 当前活跃终端的 ID，无活跃终端时返回 nil
     func getActiveTerminalId() -> Int?
+
+    // MARK: - Socket
+
+    /// 获取 Socket 目录路径
+    ///
+    /// 返回 `~/.eterm/run/sockets` 的绝对路径。
+    /// 插件在此目录下创建自己的 socket 文件。
+    ///
+    /// - Returns: Socket 目录的绝对路径
+    var socketDirectory: String { get }
+
+    /// 获取指定 namespace 的 socket 路径
+    ///
+    /// 返回 `~/.eterm/run/sockets/{namespace}.sock` 的绝对路径。
+    ///
+    /// - Parameter namespace: socket namespace（如 "claude"）
+    /// - Returns: Socket 文件的绝对路径
+    func socketPath(for namespace: String) -> String
 }

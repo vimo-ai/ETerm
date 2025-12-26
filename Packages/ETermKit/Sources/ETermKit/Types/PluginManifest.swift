@@ -102,8 +102,29 @@ public struct PluginManifest: Sendable, Codable, Equatable {
     /// 显示在 PageBar 右侧的组件（如用量监控）
     public let pageBarItems: [PageBarItem]
 
+    /// Tab Slot 注册
+    ///
+    /// 在 Tab 标题旁边注入自定义视图（如状态图标、徽章）
+    public let tabSlots: [TabSlot]
+
+    /// Page Slot 注册
+    ///
+    /// 在 Page 标题旁边注入自定义视图（如统计信息）
+    public let pageSlots: [PageSlot]
+
     /// 插件发出的事件列表
     public let emits: [String]
+
+    /// Socket namespace 列表
+    ///
+    /// 声明插件需要的 socket namespace。主进程会：
+    /// 1. 创建 `~/.eterm/run/sockets/{namespace}.sock` 路径
+    /// 2. 设置环境变量 `ETERM_SOCKET_DIR=~/.eterm/run/sockets`
+    ///
+    /// 插件在 activate 时自己创建 socket server。
+    ///
+    /// 示例：`["claude"]` → `~/.eterm/run/sockets/claude.sock`
+    public let sockets: [String]
 
     // MARK: - 初始化
 
@@ -127,7 +148,10 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         infoPanelContents: [InfoPanelContent] = [],
         bubble: BubbleConfig? = nil,
         pageBarItems: [PageBarItem] = [],
-        emits: [String] = []
+        tabSlots: [TabSlot] = [],
+        pageSlots: [PageSlot] = [],
+        emits: [String] = [],
+        sockets: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -148,7 +172,10 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         self.infoPanelContents = infoPanelContents
         self.bubble = bubble
         self.pageBarItems = pageBarItems
+        self.tabSlots = tabSlots
+        self.pageSlots = pageSlots
         self.emits = emits
+        self.sockets = sockets
     }
 }
 
@@ -338,6 +365,38 @@ extension PluginManifest {
             self.viewClass = viewClass
         }
     }
+
+    /// Tab Slot 配置
+    ///
+    /// 在 Tab 标题旁边注入自定义视图
+    public struct TabSlot: Sendable, Codable, Equatable {
+        /// Slot 标识符
+        public let id: String
+
+        /// 位置（leading 或 trailing）
+        public let position: String
+
+        public init(id: String, position: String = "trailing") {
+            self.id = id
+            self.position = position
+        }
+    }
+
+    /// Page Slot 配置
+    ///
+    /// 在 Page 标题旁边注入自定义视图
+    public struct PageSlot: Sendable, Codable, Equatable {
+        /// Slot 标识符
+        public let id: String
+
+        /// 位置（leading 或 trailing）
+        public let position: String
+
+        public init(id: String, position: String = "trailing") {
+            self.id = id
+            self.position = position
+        }
+    }
 }
 
 // MARK: - Decodable（为新字段提供默认值）
@@ -348,7 +407,8 @@ extension PluginManifest {
         case dependencies, capabilities, principalClass
         case viewModelClass, viewProviderClass
         case sidebarTabs, commands, subscribes
-        case menuBar, bottomDock, infoPanelContents, bubble, pageBarItems, emits
+        case menuBar, bottomDock, infoPanelContents, bubble, pageBarItems
+        case tabSlots, pageSlots, emits, sockets
     }
 
     public init(from decoder: Decoder) throws {
@@ -376,7 +436,10 @@ extension PluginManifest {
         infoPanelContents = try container.decodeIfPresent([InfoPanelContent].self, forKey: .infoPanelContents) ?? []
         bubble = try container.decodeIfPresent(BubbleConfig.self, forKey: .bubble)
         pageBarItems = try container.decodeIfPresent([PageBarItem].self, forKey: .pageBarItems) ?? []
+        tabSlots = try container.decodeIfPresent([TabSlot].self, forKey: .tabSlots) ?? []
+        pageSlots = try container.decodeIfPresent([PageSlot].self, forKey: .pageSlots) ?? []
         emits = try container.decodeIfPresent([String].self, forKey: .emits) ?? []
+        sockets = try container.decodeIfPresent([String].self, forKey: .sockets) ?? []
     }
 }
 
