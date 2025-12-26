@@ -322,6 +322,178 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         return nil
     }
 
+    // MARK: - 嵌入终端
+
+    public func createEmbeddedTerminal(cwd: String) -> Int {
+        // isolated 模式不支持嵌入终端（需要 Metal 渲染）
+        return -1
+    }
+
+    public func closeEmbeddedTerminal(terminalId: Int) {
+        // isolated 模式不支持嵌入终端
+    }
+
+    // MARK: - AI 服务
+
+    func aiChat(
+        model: String,
+        system: String?,
+        user: String,
+        extraBody: [String: Any]?
+    ) async throws -> String {
+        // isolated 模式暂不支持 AI 服务（需要 API Key 等敏感信息）
+        throw NSError(domain: "ExtensionHostBridge", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: "AI service not available in isolated mode"
+        ])
+    }
+
+    func aiStreamChat(
+        model: String,
+        system: String?,
+        user: String,
+        onChunk: @escaping @MainActor (String) -> Void
+    ) async throws {
+        // isolated 模式暂不支持 AI 服务
+        throw NSError(domain: "ExtensionHostBridge", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: "AI service not available in isolated mode"
+        ])
+    }
+
+    // MARK: - 选中操作注册
+
+    func registerSelectionAction(_ action: SelectionAction) {
+        // 通过 IPC 转发到主进程
+        let actionData: [String: Any] = [
+            "id": action.id,
+            "title": action.title,
+            "icon": action.icon,
+            "priority": action.priority,
+            "autoTriggerOnMode": action.autoTriggerOnMode as Any
+        ]
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .registerSelectionAction,
+                payload: actionData
+            ))
+        }
+    }
+
+    func unregisterSelectionAction(actionId: String) {
+        let id = actionId
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .unregisterSelectionAction,
+                payload: ["actionId": id]
+            ))
+        }
+    }
+
+    // MARK: - 命令注册
+
+    func registerCommand(_ command: PluginCommand) {
+        let cmd = command
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .registerCommand,
+                payload: [
+                    "id": cmd.id,
+                    "title": cmd.title,
+                    "icon": cmd.icon as Any
+                ]
+            ))
+        }
+    }
+
+    func unregisterCommand(commandId: String) {
+        let cmdId = commandId
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .unregisterCommand,
+                payload: ["commandId": cmdId]
+            ))
+        }
+    }
+
+    // MARK: - 快捷键绑定
+
+    func bindKeyboard(_ shortcut: KeyboardShortcut, to commandId: String) {
+        let sc = shortcut
+        let cmdId = commandId
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .bindKeyboard,
+                payload: [
+                    "key": sc.key,
+                    "modifiers": sc.modifiers.rawValue,
+                    "commandId": cmdId
+                ]
+            ))
+        }
+    }
+
+    func unbindKeyboard(_ shortcut: KeyboardShortcut) {
+        let sc = shortcut
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .unbindKeyboard,
+                payload: [
+                    "key": sc.key,
+                    "modifiers": sc.modifiers.rawValue
+                ]
+            ))
+        }
+    }
+
+    // MARK: - Composer 控制
+
+    func showComposer() {
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .showComposer
+            ))
+        }
+    }
+
+    func hideComposer() {
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .hideComposer
+            ))
+        }
+    }
+
+    func toggleComposer() {
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .toggleComposer
+            ))
+        }
+    }
+
+    // MARK: - 终端操作扩展
+
+    func getActiveTerminalId() -> Int? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: Int?
+
+        Task { @Sendable in
+            do {
+                let response = try await self.connection.request(IPCMessage(
+                    type: .getActiveTerminalId
+                ))
+                if response.type == .response {
+                    result = response.rawPayload["terminalId"] as? Int
+                }
+            } catch {
+                // 超时或错误
+            }
+            semaphore.signal()
+        }
+
+        _ = semaphore.wait(timeout: .now() + 5)
+        return result
+    }
+
     // MARK: - Internal
 
     func setHostInfo(_ info: HostInfo) {
