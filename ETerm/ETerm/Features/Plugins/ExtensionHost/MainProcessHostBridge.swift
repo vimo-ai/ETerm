@@ -66,11 +66,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
 
         Task { @Sendable in
             await MainActor.run {
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("ETerm.SetTabDecoration"),
-                    object: nil,
-                    userInfo: ["terminalId": termId, "decoration": deco as Any]
-                )
+                UIServiceImpl.shared.setTabDecoration(terminalId: termId, decoration: deco)
             }
         }
     }
@@ -85,11 +81,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
 
         Task { @Sendable in
             await MainActor.run {
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("ETerm.SetTabTitle"),
-                    object: nil,
-                    userInfo: ["terminalId": termId, "title": t]
-                )
+                UIServiceImpl.shared.setTabTitle(terminalId: termId, title: t)
             }
         }
     }
@@ -99,11 +91,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
 
         Task { @Sendable in
             await MainActor.run {
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("ETerm.ClearTabTitle"),
-                    object: nil,
-                    userInfo: ["terminalId": termId]
-                )
+                UIServiceImpl.shared.clearTabTitle(terminalId: termId)
             }
         }
     }
@@ -114,23 +102,91 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
 
         Task { @Sendable in
             await MainActor.run {
-                NotificationCenter.default.post(
-                    name: NSNotification.Name("ETerm.WriteToTerminal"),
-                    object: nil,
-                    userInfo: ["terminalId": termId, "data": d]
-                )
+                TerminalServiceImpl.shared.write(terminalId: termId, data: d)
             }
         }
     }
 
     func getTerminalInfo(terminalId: Int) -> TerminalInfo? {
-        // 暂时返回 nil，后续实现
+        if Thread.isMainThread {
+            return Self.doGetTerminalInfo(terminalId: terminalId)
+        } else {
+            var result: TerminalInfo?
+            DispatchQueue.main.sync {
+                result = Self.doGetTerminalInfo(terminalId: terminalId)
+            }
+            return result
+        }
+    }
+
+    private static func doGetTerminalInfo(terminalId: Int) -> TerminalInfo? {
+        for window in WindowManager.shared.windows {
+            guard let coordinator = WindowManager.shared.getCoordinator(for: window.windowNumber) else { continue }
+            for panel in coordinator.terminalWindow.allPanels {
+                for tab in panel.tabs {
+                    if tab.rustTerminalId == terminalId {
+                        // 找到终端，构建 TerminalInfo
+                        let cwd = coordinator.getCwd(terminalId: terminalId) ?? NSHomeDirectory()
+                        let activeTerminalId = coordinator.getActiveTerminalId()
+
+                        return TerminalInfo(
+                            terminalId: terminalId,
+                            tabId: tab.tabId.uuidString,
+                            panelId: panel.panelId.uuidString,
+                            cwd: cwd,
+                            columns: 80,  // TODO: 从终端池获取实际尺寸
+                            rows: 24,
+                            isActive: activeTerminalId == terminalId,
+                            pid: nil
+                        )
+                    }
+                }
+            }
+        }
         return nil
     }
 
     func getAllTerminals() -> [TerminalInfo] {
-        // 暂时返回空，后续实现
-        return []
+        if Thread.isMainThread {
+            return Self.doGetAllTerminals()
+        } else {
+            var result: [TerminalInfo] = []
+            DispatchQueue.main.sync {
+                result = Self.doGetAllTerminals()
+            }
+            return result
+        }
+    }
+
+    private static func doGetAllTerminals() -> [TerminalInfo] {
+        var terminals: [TerminalInfo] = []
+
+        for window in WindowManager.shared.windows {
+            guard let coordinator = WindowManager.shared.getCoordinator(for: window.windowNumber) else { continue }
+            let activeTerminalId = coordinator.getActiveTerminalId()
+
+            for panel in coordinator.terminalWindow.allPanels {
+                for tab in panel.tabs {
+                    guard let terminalId = tab.rustTerminalId else { continue }
+
+                    let cwd = coordinator.getCwd(terminalId: Int(terminalId)) ?? NSHomeDirectory()
+
+                    let info = TerminalInfo(
+                        terminalId: Int(terminalId),
+                        tabId: tab.tabId.uuidString,
+                        panelId: panel.panelId.uuidString,
+                        cwd: cwd,
+                        columns: 80,
+                        rows: 24,
+                        isActive: activeTerminalId == Int(terminalId),
+                        pid: nil
+                    )
+                    terminals.append(info)
+                }
+            }
+        }
+
+        return terminals
     }
 
     func registerService(
@@ -218,6 +274,35 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
             await MainActor.run {
                 print("[MainProcessHostBridge] hideInfoPanel: \(panelId)")
                 InfoWindowRegistry.shared.hideContent(id: panelId)
+            }
+        }
+    }
+
+    // MARK: - 底部 Overlay 控制
+
+    func showBottomOverlay(_ id: String) {
+        let overlayId = id
+        Task { @Sendable in
+            await MainActor.run {
+                BottomOverlayRegistry.shared.show(overlayId)
+            }
+        }
+    }
+
+    func hideBottomOverlay(_ id: String) {
+        let overlayId = id
+        Task { @Sendable in
+            await MainActor.run {
+                BottomOverlayRegistry.shared.hide(overlayId)
+            }
+        }
+    }
+
+    func toggleBottomOverlay(_ id: String) {
+        let overlayId = id
+        Task { @Sendable in
+            await MainActor.run {
+                BottomOverlayRegistry.shared.toggle(overlayId)
             }
         }
     }
@@ -508,6 +593,16 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    // MARK: - Socket
+
+    var socketDirectory: String {
+        ETermPaths.sockets
+    }
+
+    func socketPath(for namespace: String) -> String {
+        ETermPaths.socketPath(for: namespace)
     }
 
     // MARK: - 终端操作扩展
