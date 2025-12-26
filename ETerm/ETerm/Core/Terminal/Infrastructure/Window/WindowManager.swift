@@ -218,11 +218,11 @@ final class WindowManager: NSObject {
                     // 终端 Tab：创建 TerminalTab，包装为 Tab
                     let tabId = UUID(uuidString: tabState.tabId) ?? UUID()
                     let terminalTab = TerminalTab(tabId: tabId, title: tabState.title)
-                    // [TEST MODE] 暂时禁用 CWD 恢复功能
-                    // registry.registerPendingTerminal(
-                    //     tabId: tabId,
-                    //     workingDirectory: .restored(path: tabState.cwd)
-                    // )
+                    // 将 CWD 注册到 Registry（作为 Single Source of Truth）
+                    registry.registerPendingTerminal(
+                        tabId: tabId,
+                        workingDirectory: .restored(path: tabState.cwd)
+                    )
                     let tab = Tab(tabId: tabId, title: tabState.title, content: .terminal(terminalTab), userTitle: tabState.userTitle)
                     tabs.append(tab)
 
