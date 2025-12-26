@@ -4,7 +4,19 @@
 //
 //  MCP Tool 注册表 - 管理插件提供的 Tools
 //
-//  预留实现，当前仅定义接口结构
+//  ⚠️ 当前状态：预留接口，未集成到 MCPServerCoordinator
+//
+//  设计目的：
+//  - 允许 SDK 插件动态注册自己的 MCP Tools
+//  - 插件启动时调用 register()，卸载时调用 unregister()
+//  - MCPServerCoordinator 从这里获取所有可用 tools
+//
+//  TODO: 集成步骤
+//  1. MCPServerCoordinator.handleMethod() 的 "tools/list" 分支
+//     改为从 ToolRegistry.shared.allTools() 获取
+//  2. MCPServerCoordinator.callTool() 改为查询 ToolRegistry
+//     并调用对应 provider 的 execute 方法
+//  3. 插件需实现 MCPToolProvider 协议
 //
 
 import Foundation
