@@ -1,5 +1,5 @@
-// MCPRouterSDK.swift
-// MCPRouterSDK
+// MCPRouterKit.swift
+// MCPRouterKit
 //
 // 插件入口
 

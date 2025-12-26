@@ -145,4 +145,20 @@ else
 EOF
 fi
 
+# 签名整个 bundle
+log_info "Signing bundle..."
+codesign -f -s - "${BUNDLE_PATH}" 2>/dev/null || true
+
 log_success "✅ Bundle created: ${BUNDLE_PATH}"
+
+# 自动安装到 ~/.eterm/plugins/（除非设置了 BUNDLE_OUTPUT_DIR）
+if [ -z "${BUNDLE_OUTPUT_DIR:-}" ]; then
+    INSTALL_DIR="$HOME/.eterm/plugins"
+    mkdir -p "$INSTALL_DIR"
+    rm -rf "${INSTALL_DIR}/${BUNDLE_NAME}"
+    cp -R "${BUNDLE_PATH}" "${INSTALL_DIR}/"
+    # 复制后重新签名
+    codesign -f -s - "${INSTALL_DIR}/${BUNDLE_NAME}/Contents/MacOS/"*.dylib 2>/dev/null || true
+    codesign -f -s - "${INSTALL_DIR}/${BUNDLE_NAME}" 2>/dev/null || true
+    log_success "✅ Installed to ${INSTALL_DIR}/${BUNDLE_NAME}"
+fi

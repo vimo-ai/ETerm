@@ -64,6 +64,9 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
             // 加载工作区配置
             loadWorkspaces()
 
+            // 同步 WorkspaceKit 的工作区（事件订阅已在 manifest.json 中声明）
+            syncWorkspacesFromWorkspaceKit()
+
             // 自动启动
             start()
         } catch {
@@ -80,7 +83,20 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
     }
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        print("[MCPRouterLogic] Event: \(eventName)")
+        print("[MCPRouterLogic] Event: \(eventName), payload: \(payload)")
+
+        switch eventName {
+        case "plugin.workspace.folderAdded":
+            if let path = payload["path"] as? String {
+                addWorkspaceForFolder(path)
+            }
+        case "plugin.workspace.folderRemoved":
+            if let path = payload["path"] as? String {
+                removeWorkspaceForFolder(path)
+            }
+        default:
+            break
+        }
     }
 
     public func handleCommand(_ commandId: String) {
@@ -108,9 +124,20 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
     public func handleRequest(_ requestId: String, params: [String: Any]) -> [String: Any] {
         print("[MCPRouterLogic] Request: \(requestId) params: \(params)")
 
+        // 处理命令请求（从 View 层通过请求机制发送的命令）
+        if requestId == "_command", let commandId = params["commandId"] as? String {
+            handleCommand(commandId)
+            return ["success": true]
+        }
+
         switch requestId {
         case "getServers":
+            updateUI()  // 同时推送 ViewModel 更新
             return getServersResponse()
+
+        case "getWorkspaces":
+            updateUI()  // 同时推送 ViewModel 更新
+            return getWorkspacesResponse()
 
         case "addServer":
             return addServerFromParams(params)
@@ -142,6 +169,9 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
             guard let port = params["port"] as? Int else {
                 return ["success": false, "error": "Missing port"]
             }
+            guard port > 0, port <= 65535 else {
+                return ["success": false, "error": "Port must be between 1 and 65535"]
+            }
             return setPortValue(UInt16(port))
 
         case "setFullMode":
@@ -158,9 +188,6 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
 
         case "exportServers":
             return exportServersToJSON()
-
-        case "getWorkspaces":
-            return getWorkspacesResponse()
 
         case "setWorkspaceServerEnabled":
             guard let token = params["token"] as? String,
@@ -205,6 +232,7 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
                 "flattenMode": server.flattenMode,
                 "description": server.description ?? "",
                 "url": server.url ?? "",
+                "headers": server.headers ?? [:],
                 "command": server.command ?? "",
                 "args": server.args ?? [],
                 "env": server.env ?? [:]
@@ -226,7 +254,9 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
                     return ["success": false, "error": "Missing url for HTTP server"]
                 }
                 let desc = params["description"] as? String ?? ""
-                try router.addHTTPServer(name: name, url: url, description: desc)
+                let headers = params["headers"] as? [String: String]
+                let config = MCPServerConfig.http(name: name, url: url, headers: headers, description: desc)
+                try router.addServer(config)
             } else if type == "stdio" {
                 guard let command = params["command"] as? String else {
                     return ["success": false, "error": "Missing command for stdio server"]
@@ -235,7 +265,10 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
                 let env = params["env"] as? [String: String] ?? [:]
                 let config = MCPServerConfig.stdio(name: name, command: command, args: args, env: env)
                 try router.addServer(config)
+            } else {
+                return ["success": false, "error": "Unknown server type: \(type)"]
             }
+            saveServerConfigs()
             updateUI()
             return ["success": true]
         } catch {
@@ -249,6 +282,7 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
         }
         do {
             try router.removeServer(name: name)
+            saveServerConfigs()
             updateUI()
             return ["success": true]
         } catch {
@@ -278,6 +312,7 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
         }
         do {
             try router.setServerEnabled(name: name, enabled: enabled)
+            saveServerConfigs()
             updateUI()
             return ["success": true]
         } catch {
@@ -291,6 +326,7 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
         }
         do {
             try router.setServerFlattenMode(name: name, flatten: flatten)
+            saveServerConfigs()
             updateUI()
             return ["success": true]
         } catch {
@@ -359,7 +395,21 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
     private func loadServerConfigs() {
         guard let router = router else { return }
 
-        // 从 Claude 配置加载服务器
+        // 1. 首先尝试从我们自己的配置文件加载
+        let ourConfigPath = NSHomeDirectory() + "/.eterm/plugins/MCPRouter/servers.json"
+        if FileManager.default.fileExists(atPath: ourConfigPath),
+           let data = FileManager.default.contents(atPath: ourConfigPath) {
+            do {
+                let servers = try JSONDecoder().decode([MCPServerConfig].self, from: data)
+                try router.loadServers(servers)
+                print("[MCPRouterLogic] Loaded \(servers.count) servers from \(ourConfigPath)")
+                return  // 成功加载，不需要继续
+            } catch {
+                print("[MCPRouterLogic] Failed to load from our config: \(error)")
+            }
+        }
+
+        // 2. 如果没有我们的配置，从 Claude 配置加载（首次迁移）
         let claudeConfigPath = NSHomeDirectory() + "/.claude.json"
 
         if FileManager.default.fileExists(atPath: claudeConfigPath),
@@ -396,13 +446,46 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
                     print("[MCPRouterLogic] Failed to add server \(name): \(error)")
                 }
             }
+
+            // 保存到我们自己的配置文件
+            saveServerConfigs()
+        }
+    }
+
+    /// 保存服务器配置到文件
+    private func saveServerConfigs() {
+        guard let router = router,
+              let servers = try? router.listServers() else {
+            return
+        }
+
+        let configPath = NSHomeDirectory() + "/.eterm/plugins/MCPRouter/servers.json"
+        let pluginDir = NSHomeDirectory() + "/.eterm/plugins/MCPRouter"
+
+        do {
+            try FileManager.default.createDirectory(atPath: pluginDir, withIntermediateDirectories: true)
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(servers)
+            try data.write(to: URL(fileURLWithPath: configPath))
+            print("[MCPRouterLogic] Saved \(servers.count) servers to \(configPath)")
+        } catch {
+            print("[MCPRouterLogic] Failed to save servers: \(error)")
         }
     }
 
     // MARK: - Control
 
     private func start() {
-        guard let router = router, !isRunning else { return }
+        guard let router = router else {
+            print("[MCPRouterLogic] start() failed: router is nil")
+            return
+        }
+        guard !isRunning else {
+            print("[MCPRouterLogic] start() skipped: already running")
+            return
+        }
 
         do {
             try router.startServer(port: currentPort)
@@ -416,7 +499,14 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
     }
 
     private func stop() {
-        guard let router = router, isRunning else { return }
+        guard let router = router else {
+            print("[MCPRouterLogic] stop() failed: router is nil")
+            return
+        }
+        guard isRunning else {
+            print("[MCPRouterLogic] stop() skipped: not running")
+            return
+        }
 
         do {
             try router.stopServer()
@@ -456,7 +546,10 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
                     "flattenMode": server.flattenMode,
                     "description": server.description ?? "",
                     "url": server.url ?? "",
-                    "command": server.command ?? ""
+                    "headers": server.headers ?? [:],
+                    "command": server.command ?? "",
+                    "args": server.args ?? [],
+                    "env": server.env ?? [:]
                 ]
             }
         }
@@ -470,11 +563,24 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
             statusMessage = "Stopped"
         }
 
+        // 准备 workspaces 数据
+        let workspacesData = workspaces.map { ws -> [String: Any] in
+            [
+                "token": ws.token,
+                "name": ws.name,
+                "projectPath": ws.projectPath,
+                "isDefault": ws.isDefault,
+                "serverOverrides": ws.serverOverrides,
+                "flattenOverrides": ws.flattenOverrides
+            ]
+        }
+
         host?.updateViewModel(Self.id, data: [
             "isRunning": isRunning,
             "port": Int(currentPort),
             "serverCount": servers.count,
             "servers": servers,
+            "workspaces": workspacesData,
             "statusMessage": statusMessage,
             "version": MCPRouterBridge.version,
             "exposeManagementTools": router?.getExposeManagementTools() ?? false
@@ -552,6 +658,7 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
 
         workspaces[index].serverOverrides[serverName] = enabled
         saveWorkspaces()
+        updateUI()
         return ["success": true]
     }
 
@@ -562,6 +669,7 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
 
         workspaces[index].flattenOverrides[serverName] = flatten
         saveWorkspaces()
+        updateUI()
         return ["success": true]
     }
 
@@ -573,6 +681,81 @@ public final class MCPRouterLogic: NSObject, PluginLogic {
         workspaces[index].serverOverrides.removeAll()
         workspaces[index].flattenOverrides.removeAll()
         saveWorkspaces()
+        updateUI()
         return ["success": true]
+    }
+
+    // MARK: - WorkspaceKit Integration
+
+    /// 从 WorkspaceKit 同步工作区列表
+    private func syncWorkspacesFromWorkspaceKit() {
+        // 直接读取 WorkspaceKit 的存储文件
+        let workspaceKitPath = NSHomeDirectory() + "/.eterm/plugins/WorkspaceKit/folders.json"
+
+        guard FileManager.default.fileExists(atPath: workspaceKitPath),
+              let data = FileManager.default.contents(atPath: workspaceKitPath) else {
+            print("[MCPRouterLogic] WorkspaceKit folders.json not found")
+            return
+        }
+
+        struct WorkspaceFolder: Codable {
+            let path: String
+            let addedAt: Date
+        }
+
+        do {
+            let folders = try JSONDecoder().decode([WorkspaceFolder].self, from: data)
+            print("[MCPRouterLogic] Syncing \(folders.count) folders from WorkspaceKit")
+
+            for folder in folders {
+                // 检查是否已存在
+                if !workspaces.contains(where: { $0.projectPath == folder.path }) {
+                    addWorkspaceForFolder(folder.path)
+                }
+            }
+        } catch {
+            print("[MCPRouterLogic] Failed to decode WorkspaceKit folders: \(error)")
+        }
+    }
+
+    /// 为文件夹添加工作区
+    private func addWorkspaceForFolder(_ path: String) {
+        // 检查是否已存在
+        if workspaces.contains(where: { $0.projectPath == path }) {
+            print("[MCPRouterLogic] Workspace already exists for: \(path)")
+            return
+        }
+
+        // 生成名称（使用文件夹名）
+        let name = (path as NSString).lastPathComponent
+
+        // 生成 token
+        let token = UUID().uuidString.prefix(8).lowercased().description
+
+        let workspace = WorkspaceConfig(
+            token: token,
+            name: name,
+            projectPath: path,
+            isDefault: false
+        )
+
+        workspaces.append(workspace)
+        saveWorkspaces()
+        updateUI()
+
+        print("[MCPRouterLogic] Added workspace: \(name) (\(token)) for \(path)")
+    }
+
+    /// 移除文件夹对应的工作区
+    private func removeWorkspaceForFolder(_ path: String) {
+        guard let index = workspaces.firstIndex(where: { $0.projectPath == path }) else {
+            return
+        }
+
+        let removed = workspaces.remove(at: index)
+        saveWorkspaces()
+        updateUI()
+
+        print("[MCPRouterLogic] Removed workspace: \(removed.name) for \(path)")
     }
 }

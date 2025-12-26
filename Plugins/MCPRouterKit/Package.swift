@@ -1,18 +1,18 @@
 // swift-tools-version: 6.0
-// MCPRouterSDK - MCP Router 插件 (SDK 架构版本)
+// MCPRouterKit - MCP Router 插件
 
 import PackageDescription
 
 let package = Package(
-    name: "MCPRouterSDK",
+    name: "MCPRouterKit",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .library(
-            name: "MCPRouterSDK",
+            name: "MCPRouterKit",
             type: .dynamic,
-            targets: ["MCPRouterSDK"]
+            targets: ["MCPRouterKit"]
         ),
     ],
     dependencies: [
@@ -20,7 +20,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MCPRouterSDK",
+            name: "MCPRouterKit",
             dependencies: ["ETermKit"],
             swiftSettings: [
                 .swiftLanguageMode(.v5)

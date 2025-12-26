@@ -81,6 +81,19 @@ fi
 cp "$SWIFT_PRODUCT" "${BUNDLE_PATH}/Contents/MacOS/"
 log_success "Copied $(basename "$SWIFT_PRODUCT")"
 
+# 修复 ETermKit 链接路径：SPM dylib -> Xcode framework
+# SPM 构建的是 libETermKit.dylib，但 app bundle 里是 ETermKit.framework
+DYLIB_PATH="${BUNDLE_PATH}/Contents/MacOS/$(basename "$SWIFT_PRODUCT")"
+log_info "Fixing ETermKit link path..."
+install_name_tool -change \
+    "@rpath/libETermKit.dylib" \
+    "@rpath/ETermKit.framework/Versions/A/ETermKit" \
+    "$DYLIB_PATH" 2>/dev/null || true
+
+# 重新签名
+codesign -f -s - "$DYLIB_PATH" 2>/dev/null || true
+log_success "Fixed ETermKit link path"
+
 # 复制 Libs/ 目录下的预编译 dylib（如果存在）
 if [ -d "${KIT_DIR}/Libs" ]; then
     mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"
