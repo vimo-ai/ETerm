@@ -288,6 +288,8 @@ final class MCPServerCoordinator: @unchecked Sendable {
             return (result, newSessionId)
 
         case "tools/list":
+            // TODO: 改为从 ToolRegistry.shared.allTools() 获取，支持插件动态注册
+            // 当前是硬编码的核心 tools，见 ToolRegistry.swift 的集成说明
             let tools: [[String: Any]] = [
                 [
                     "name": "list_sessions",
@@ -323,6 +325,20 @@ final class MCPServerCoordinator: @unchecked Sendable {
                             "text": ["type": "string", "description": "Text to send (use \\n for Enter key)"]
                         ],
                         "required": ["terminalId", "text"]
+                    ]
+                ],
+                [
+                    "name": "open_terminal",
+                    "description": "Open a new terminal tab. Default opens in current panel.",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "workingDirectory": ["type": "string", "description": "Working directory for the new terminal"],
+                            "target": ["type": "string", "enum": ["current_panel", "split_horizontal", "split_vertical", "new_window"], "description": "Where to open the terminal (default: current_panel)"],
+                            "windowNumber": ["type": "integer", "description": "Target window number (default: active window)"],
+                            "panelId": ["type": "string", "description": "Target panel UUID (default: active panel)"]
+                        ],
+                        "required": []
                     ]
                 ]
             ]
@@ -372,6 +388,27 @@ final class MCPServerCoordinator: @unchecked Sendable {
             return await MainActor.run {
                 let response = SendInputTool.execute(terminalId: terminalId, text: text)
                 return SendInputTool.responseToJSON(response)
+            }
+
+        case "open_terminal":
+            let workingDirectory = arguments["workingDirectory"] as? String
+            let targetStr = arguments["target"] as? String ?? "current_panel"
+            let windowNumber = arguments["windowNumber"] as? Int
+            let panelId = arguments["panelId"] as? String
+
+            guard let target = OpenTerminalTool.Target(rawValue: targetStr) else {
+                throw MCPServerError.invalidParams("Invalid 'target' value: \(targetStr)")
+            }
+
+            // 需要操作 UI，在主线程执行
+            return await MainActor.run {
+                let response = OpenTerminalTool.execute(
+                    workingDirectory: workingDirectory,
+                    target: target,
+                    windowNumber: windowNumber,
+                    panelId: panelId
+                )
+                return OpenTerminalTool.responseToJSON(response)
             }
 
         default:
