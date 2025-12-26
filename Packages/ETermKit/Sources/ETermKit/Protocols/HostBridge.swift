@@ -208,4 +208,135 @@ public protocol HostBridge: AnyObject, Sendable {
     ///
     /// - Returns: 窗口 frame，无法获取时返回 nil
     func getKeyWindowFrame() -> CGRect?
+
+    // MARK: - 嵌入终端
+
+    /// 创建嵌入式终端
+    ///
+    /// 创建一个可嵌入插件视图的终端实例。插件使用返回的 terminalId
+    /// 配合 `TerminalPlaceholder` 视图组件来显示终端。
+    ///
+    /// 需要 capability: `terminal.embed`
+    ///
+    /// - Parameter cwd: 终端工作目录
+    /// - Returns: 终端 ID，创建失败返回 -1
+    func createEmbeddedTerminal(cwd: String) -> Int
+
+    /// 关闭嵌入式终端
+    ///
+    /// 需要 capability: `terminal.embed`
+    ///
+    /// - Parameter terminalId: 终端 ID
+    func closeEmbeddedTerminal(terminalId: Int)
+
+    // MARK: - AI 服务
+
+    /// 调用 AI 对话（非流式）
+    ///
+    /// 需要 capability: `ai.chat`
+    ///
+    /// - Parameters:
+    ///   - model: 模型名称
+    ///   - system: 系统提示词（可选）
+    ///   - user: 用户消息
+    ///   - extraBody: 额外请求参数（如 translation_options）
+    /// - Returns: AI 回复内容
+    func aiChat(
+        model: String,
+        system: String?,
+        user: String,
+        extraBody: [String: Any]?
+    ) async throws -> String
+
+    /// 调用 AI 对话（流式）
+    ///
+    /// 需要 capability: `ai.chat`
+    ///
+    /// - Parameters:
+    ///   - model: 模型名称
+    ///   - system: 系统提示词（可选）
+    ///   - user: 用户消息
+    ///   - onChunk: 流式回调，每次收到增量内容时调用
+    func aiStreamChat(
+        model: String,
+        system: String?,
+        user: String,
+        onChunk: @escaping @MainActor (String) -> Void
+    ) async throws
+
+    // MARK: - 选中操作注册
+
+    /// 注册选中文本操作
+    ///
+    /// 在终端选中文本时显示的 Popover 菜单中添加一个 Action。
+    ///
+    /// 需要 capability: `selection.registerAction`
+    ///
+    /// - Parameter action: Action 配置
+    func registerSelectionAction(_ action: SelectionAction)
+
+    /// 取消注册选中操作
+    ///
+    /// 需要 capability: `selection.registerAction`
+    ///
+    /// - Parameter actionId: Action ID
+    func unregisterSelectionAction(actionId: String)
+
+    // MARK: - 命令注册
+
+    /// 注册命令
+    ///
+    /// 需要 capability: `command.register`
+    ///
+    /// - Parameter command: 命令配置
+    func registerCommand(_ command: PluginCommand)
+
+    /// 取消注册命令
+    ///
+    /// 需要 capability: `command.register`
+    ///
+    /// - Parameter commandId: 命令 ID
+    func unregisterCommand(commandId: String)
+
+    // MARK: - 快捷键绑定
+
+    /// 绑定快捷键
+    ///
+    /// 需要 capability: `keyboard.bind`
+    ///
+    /// - Parameters:
+    ///   - shortcut: 快捷键配置
+    ///   - commandId: 绑定的命令 ID
+    func bindKeyboard(_ shortcut: KeyboardShortcut, to commandId: String)
+
+    /// 解绑快捷键
+    ///
+    /// 需要 capability: `keyboard.bind`
+    ///
+    /// - Parameter shortcut: 快捷键配置
+    func unbindKeyboard(_ shortcut: KeyboardShortcut)
+
+    // MARK: - Composer 控制
+
+    /// 显示 Composer
+    ///
+    /// 需要 capability: `ui.composer`
+    func showComposer()
+
+    /// 隐藏 Composer
+    ///
+    /// 需要 capability: `ui.composer`
+    func hideComposer()
+
+    /// 切换 Composer 显示状态
+    ///
+    /// 需要 capability: `ui.composer`
+    func toggleComposer()
+
+    // MARK: - 终端操作扩展
+
+    /// 获取当前活跃终端 ID
+    ///
+    /// - Returns: 当前活跃终端的 ID，无活跃终端时返回 nil
+    func getActiveTerminalId() -> Int?
 }

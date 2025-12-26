@@ -44,6 +44,14 @@ final class SDKEventBridge {
             object: nil
         )
 
+        // 监听命令调用事件，转发给对应插件
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleCommandInvoked(_:)),
+            name: NSNotification.Name("ETerm.CommandInvoked"),
+            object: nil
+        )
+
         print("[SDKEventBridge] Setup complete")
     }
 
@@ -61,6 +69,26 @@ final class SDKEventBridge {
             if let plugin = SDKPluginLoader.shared.getMainModePlugin(pluginId) {
                 plugin.handleEvent(eventName, payload: payload)
             }
+        }
+    }
+
+    @objc private func handleCommandInvoked(_ notification: Notification) {
+        guard let pluginId = notification.userInfo?["pluginId"] as? String,
+              let commandId = notification.userInfo?["commandId"] as? String else {
+            return
+        }
+
+        let terminalId = notification.userInfo?["terminalId"] as? Int
+
+        // 构建 payload
+        var payload: [String: Any] = ["commandId": commandId]
+        if let tid = terminalId {
+            payload["terminalId"] = tid
+        }
+
+        // 转发给对应插件
+        if let plugin = SDKPluginLoader.shared.getMainModePlugin(pluginId) {
+            plugin.handleEvent("command.invoked", payload: payload)
         }
     }
 
@@ -87,50 +115,59 @@ final class SDKEventBridge {
             "text": text
         ]
 
-        // 查找订阅了 terminal.didEndSelection 的 SDK 插件
+        // 1. 转发原始事件给订阅的插件（用于数据记录等）
         let subscribingPlugins = findSubscribingPlugins(for: "terminal.didEndSelection")
-
-        if subscribingPlugins.isEmpty {
-            // 没有 SDK 插件订阅，使用内置逻辑（兼容模式）
-            handleSelectionWithBuiltin(text: text, rect: event.screenRect, view: view)
-            return
-        }
-
-        // 有 SDK 插件订阅，转发事件
-        Task {
-            for pluginId in subscribingPlugins {
-                await ExtensionHostManager.shared.sendEvent(
-                    name: "terminal.didEndSelection",
-                    payload: payload,
-                    targetPluginId: pluginId
-                )
+        for pluginId in subscribingPlugins {
+            if let mainPlugin = SDKPluginLoader.shared.getMainModePlugin(pluginId) {
+                mainPlugin.handleEvent("terminal.didEndSelection", payload: payload)
+            } else {
+                Task {
+                    await ExtensionHostManager.shared.sendEvent(
+                        name: "terminal.didEndSelection",
+                        payload: payload,
+                        targetPluginId: pluginId
+                    )
+                }
             }
         }
 
-        // 显示 hint（如果翻译模式开启，则直接展开）
-        let isTranslationMode = TranslationModeStore.shared.isEnabled
-        let controller = TranslationController.shared
+        // 2. 检查是否有注册的 Actions
+        let allActions = SelectionActionRegistry.shared.getAllActions()
+        guard !allActions.isEmpty else {
+            // 没有注册任何 Action，不显示 Popover
+            print("[SDKEventBridge] No selection actions registered")
+            return
+        }
 
-        if isTranslationMode {
-            // 翻译模式：直接展开
-            controller.show(text: text, at: event.screenRect, in: view)
-            controller.state.expand()
-        } else {
-            // 普通模式：显示 hint
-            controller.show(text: text, at: event.screenRect, in: view)
+        // 3. 检查激活模式，自动触发匹配的 Action
+        var autoTriggeredIds: Set<String> = []
+        if let activeMode = getActiveMode(),
+           let autoAction = SelectionActionRegistry.shared.getActionForMode(activeMode) {
+            // 自动触发
+            SelectionPopoverController.shared.triggerAction(autoAction.id, text: text)
+            autoTriggeredIds.insert(autoAction.id)
+        }
+
+        // 4. 过滤掉已自动触发的 Action
+        let remainingActions = SelectionActionRegistry.shared.getActions(excluding: autoTriggeredIds)
+
+        // 5. 如果剩余 Actions > 0，显示 Popover
+        if !remainingActions.isEmpty {
+            SelectionPopoverController.shared.show(
+                text: text,
+                at: event.screenRect,
+                in: view,
+                actions: remainingActions
+            )
         }
     }
 
-    /// 内置逻辑处理（兼容模式）
-    private func handleSelectionWithBuiltin(text: String, rect: NSRect, view: NSView) {
-        let isTranslationMode = TranslationModeStore.shared.isEnabled
-        let controller = TranslationController.shared
-
-        if isTranslationMode {
-            controller.translateImmediately(text: text, at: rect, in: view)
-        } else {
-            controller.show(text: text, at: rect, in: view)
+    /// 获取当前激活的模式
+    private func getActiveMode() -> String? {
+        if TranslationModeStore.shared.isEnabled {
+            return "translation"
         }
+        return nil
     }
 
     /// 查找订阅了指定事件的 SDK 插件

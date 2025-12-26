@@ -40,6 +40,18 @@ public typealias _TerminalInfo = TerminalInfo
 // 插件错误
 public typealias _PluginError = PluginError
 
+// 嵌入式终端占位视图
+public typealias _TerminalPlaceholder = TerminalPlaceholder
+
+// 选中操作
+public typealias _SelectionAction = SelectionAction
+
+// 插件命令
+public typealias _PluginCommand = PluginCommand
+
+// 快捷键配置
+public typealias _KeyboardShortcut = KeyboardShortcut
+
 // MARK: - Events
 
 // 核心事件名称

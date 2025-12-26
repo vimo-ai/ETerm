@@ -144,6 +144,42 @@ public struct IPCMessage: Sendable, Codable, Equatable {
         /// 隐藏气泡
         case hideBubble
 
+        /// 注册选中操作
+        case registerSelectionAction
+
+        /// 取消注册选中操作
+        case unregisterSelectionAction
+
+        // MARK: - 命令与快捷键 (Plugin → Host)
+
+        /// 注册命令
+        case registerCommand
+
+        /// 取消注册命令
+        case unregisterCommand
+
+        /// 绑定快捷键
+        case bindKeyboard
+
+        /// 解绑快捷键
+        case unbindKeyboard
+
+        // MARK: - Composer 控制 (Plugin → Host)
+
+        /// 显示 Composer
+        case showComposer
+
+        /// 隐藏 Composer
+        case hideComposer
+
+        /// 切换 Composer
+        case toggleComposer
+
+        // MARK: - 终端查询 (Plugin → Host)
+
+        /// 获取当前活跃终端 ID
+        case getActiveTerminalId
+
         // MARK: - 双向
 
         /// 握手消息（连接建立后发送，单向通知）

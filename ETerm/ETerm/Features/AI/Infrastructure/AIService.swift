@@ -441,7 +441,7 @@ final class AIService {
         return .translation(wrapper.pure_english, wrapper.translations)
     }
 
-    private func chatText(model: String, system: String?, user: String, temperature: Double? = nil, extraBody: [String: Any]? = nil) async throws -> String {
+    func chatText(model: String, system: String?, user: String, temperature: Double? = nil, extraBody: [String: Any]? = nil) async throws -> String {
         guard let client else { throw AIServiceError.missingClient }
 
         var messages: [DashScopeMessage] = []
@@ -465,7 +465,7 @@ final class AIService {
         return content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func streamText(model: String, system: String?, user: String, onChunk: @escaping (String) -> Void) async throws {
+    func streamText(model: String, system: String?, user: String, onChunk: @escaping (String) -> Void) async throws {
         guard let client else { throw AIServiceError.missingClient }
 
         var messages: [DashScopeMessage] = []
