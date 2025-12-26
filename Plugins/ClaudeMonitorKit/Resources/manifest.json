@@ -1,0 +1,37 @@
+{
+    "id": "com.eterm.claude-monitor",
+    "name": "Claude 监控",
+    "version": "1.0.0",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "dependencies": [],
+    "capabilities": [
+        "ui.infoPanel"
+    ],
+    "principalClass": "ClaudeMonitorKit.ClaudeMonitorPlugin",
+    "sidebarTabs": [
+        {
+            "id": "claude-monitor-settings",
+            "title": "监控设置",
+            "icon": "gearshape.fill",
+            "viewClass": "ClaudeMonitorSettingsView"
+        }
+    ],
+    "infoPanelContents": [
+        {
+            "id": "claude-monitor-dashboard",
+            "title": "Claude 监控",
+            "viewClass": "ClaudeMonitorDashboardView"
+        }
+    ],
+    "pageBarItems": [
+        {
+            "id": "claude-usage-tab",
+            "viewClass": "ClaudeUsageTabView"
+        }
+    ],
+    "commands": [],
+    "subscribes": [],
+    "emits": []
+}
