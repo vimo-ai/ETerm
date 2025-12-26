@@ -1,0 +1,47 @@
+{
+    "id": "com.eterm.translation",
+    "name": "翻译",
+    "version": "0.0.1-beta.1",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "dependencies": [],
+    "capabilities": [
+        "ui.sidebar",
+        "ui.infoPanel",
+        "selection.registerAction"
+    ],
+    "principalClass": "TranslationKit.TranslationPlugin",
+    "sidebarTabs": [
+        {
+            "id": "translation-settings",
+            "title": "翻译配置",
+            "icon": "gearshape.fill",
+            "viewClass": "TranslationSettingsView"
+        },
+        {
+            "id": "vocabulary",
+            "title": "单词本",
+            "icon": "book.fill",
+            "viewClass": "VocabularyView"
+        },
+        {
+            "id": "grammar-archive",
+            "title": "语法档案",
+            "icon": "doc.text.fill",
+            "viewClass": "GrammarArchiveView"
+        }
+    ],
+    "infoPanelContents": [
+        {
+            "id": "translation",
+            "title": "翻译",
+            "viewClass": "TranslationContentView"
+        }
+    ],
+    "commands": [],
+    "subscribes": [
+        "terminal.didEndSelection"
+    ],
+    "emits": []
+}
