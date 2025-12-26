@@ -97,6 +97,11 @@ public struct PluginManifest: Sendable, Codable, Equatable {
     /// 选中气泡配置（可选）
     public let bubble: BubbleConfig?
 
+    /// PageBar 组件注册
+    ///
+    /// 显示在 PageBar 右侧的组件（如用量监控）
+    public let pageBarItems: [PageBarItem]
+
     /// 插件发出的事件列表
     public let emits: [String]
 
@@ -121,6 +126,7 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         bottomDock: BottomDockConfig? = nil,
         infoPanelContents: [InfoPanelContent] = [],
         bubble: BubbleConfig? = nil,
+        pageBarItems: [PageBarItem] = [],
         emits: [String] = []
     ) {
         self.id = id
@@ -141,6 +147,7 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         self.bottomDock = bottomDock
         self.infoPanelContents = infoPanelContents
         self.bubble = bubble
+        self.pageBarItems = pageBarItems
         self.emits = emits
     }
 }
@@ -315,6 +322,22 @@ extension PluginManifest {
             self.trigger = trigger
         }
     }
+
+    /// PageBar 组件配置
+    ///
+    /// 显示在 PageBar 右侧的组件
+    public struct PageBarItem: Sendable, Codable, Equatable {
+        /// 组件标识符
+        public let id: String
+
+        /// 视图类名
+        public let viewClass: String
+
+        public init(id: String, viewClass: String) {
+            self.id = id
+            self.viewClass = viewClass
+        }
+    }
 }
 
 // MARK: - Decodable（为新字段提供默认值）
@@ -325,7 +348,7 @@ extension PluginManifest {
         case dependencies, capabilities, principalClass
         case viewModelClass, viewProviderClass
         case sidebarTabs, commands, subscribes
-        case menuBar, bottomDock, infoPanelContents, bubble, emits
+        case menuBar, bottomDock, infoPanelContents, bubble, pageBarItems, emits
     }
 
     public init(from decoder: Decoder) throws {
@@ -352,6 +375,7 @@ extension PluginManifest {
         bottomDock = try container.decodeIfPresent(BottomDockConfig.self, forKey: .bottomDock)
         infoPanelContents = try container.decodeIfPresent([InfoPanelContent].self, forKey: .infoPanelContents) ?? []
         bubble = try container.decodeIfPresent(BubbleConfig.self, forKey: .bubble)
+        pageBarItems = try container.decodeIfPresent([PageBarItem].self, forKey: .pageBarItems) ?? []
         emits = try container.decodeIfPresent([String].self, forKey: .emits) ?? []
     }
 }

@@ -70,6 +70,20 @@ final class SDKPluginLoader {
         setupRequestHandler()
     }
 
+    /// 注入嵌入终端工厂
+    private func setupEmbeddedTerminalFactory() {
+        EmbeddedTerminalFactory.createView = { terminalId, cwd in
+            // 创建 EmbeddedTerminalMetalView
+            let view = EmbeddedTerminalMetalView()
+            view.workingDirectory = cwd
+            view.onTerminalCreated = { id in
+                // 更新 terminalId 映射（可选，用于后续控制）
+                print("[SDKPluginLoader] Embedded terminal created: \(id) for placeholder: \(terminalId)")
+            }
+            return view
+        }
+    }
+
     /// 设置请求处理器，监听 View 发送的插件请求
     private func setupRequestHandler() {
         NotificationCenter.default.addObserver(
@@ -109,6 +123,9 @@ final class SDKPluginLoader {
 
     /// 加载所有 SDK 插件
     func loadAllPlugins() async {
+        // 0. 注入嵌入终端工厂
+        setupEmbeddedTerminalFactory()
+
         // 1. 扫描插件目录
         let pluginPaths = scanPluginDirectories()
 
@@ -416,6 +433,7 @@ final class SDKPluginLoader {
         registerInfoPanelContents(for: manifest)
         registerBottomDock(for: manifest)
         registerBubble(for: manifest)
+        registerPageBarItems(for: manifest)
     }
 
     /// 加载隔离模式插件
@@ -479,6 +497,7 @@ final class SDKPluginLoader {
             registerInfoPanelContents(for: manifest)
             registerBottomDock(for: manifest)
             registerBubble(for: manifest)
+            registerPageBarItems(for: manifest)
         } catch {
             print("[SDKPluginLoader] Failed to activate \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: error.localizedDescription)
@@ -784,6 +803,14 @@ final class SDKPluginLoader {
                 id: content.id,
                 title: content.title
             ) { [weak self] in
+                // 先检查 main mode 插件
+                if let mainPlugin = self?.mainModePlugins[pluginId] {
+                    return mainPlugin.infoPanelView(for: content.id) ?? AnyView(
+                        Text("InfoPanel view not provided")
+                            .foregroundColor(.secondary)
+                    )
+                }
+                // 再检查 isolated mode 插件
                 if let provider = self?.viewProviders[pluginId] {
                     return provider.createInfoPanelView(id: content.id) ?? AnyView(
                         Text("InfoPanel view not provided")
@@ -791,7 +818,7 @@ final class SDKPluginLoader {
                     )
                 }
                 return AnyView(
-                    Text("ViewProvider not loaded")
+                    Text("Plugin not loaded")
                         .foregroundColor(.secondary)
                 )
             }
@@ -928,5 +955,36 @@ final class SDKPluginLoader {
     func getBubbleContentView(pluginId: String, bubbleId: String) -> AnyView? {
         guard let provider = viewProviders[pluginId] else { return nil }
         return provider.createBubbleContentView(id: bubbleId)
+    }
+
+    // MARK: - PageBar Registration
+
+    /// 注册 SDK 插件的 pageBarItems 到 PageBarItemRegistry
+    private func registerPageBarItems(for manifest: PluginManifest) {
+        guard !manifest.pageBarItems.isEmpty else { return }
+
+        let pluginId = manifest.id
+        let isMainMode = manifest.runMode == .main
+
+        for itemConfig in manifest.pageBarItems {
+            PageBarItemRegistry.shared.registerItem(
+                for: pluginId,
+                id: itemConfig.id
+            ) { [weak self] in
+                self?.getPageBarView(pluginId: pluginId, itemId: itemConfig.id, isMainMode: isMainMode)
+                    ?? AnyView(Text("PageBar view not available").font(.caption))
+            }
+        }
+    }
+
+    /// 获取 PageBar 视图（区分 main/isolated 模式）
+    private func getPageBarView(pluginId: String, itemId: String, isMainMode: Bool) -> AnyView? {
+        if isMainMode {
+            // main mode: 使用 Plugin.pageBarView(for:)
+            return mainModePlugins[pluginId]?.pageBarView(for: itemId)
+        } else {
+            // isolated mode: 使用 ViewProvider（暂不支持）
+            return nil
+        }
     }
 }
