@@ -1,0 +1,42 @@
+{
+    "id": "com.eterm.claude",
+    "name": "Claude Integration",
+    "version": "1.0.0",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "dependencies": [],
+    "capabilities": [
+        "ui.tabDecoration",
+        "ui.tabTitle",
+        "terminal.write"
+    ],
+    "principalClass": "ClaudeKit.ClaudePlugin",
+    "sidebarTabs": [],
+    "infoPanelContents": [],
+    "commands": [],
+    "subscribes": [
+        "claude.sessionStart",
+        "claude.promptSubmit",
+        "claude.waitingInput",
+        "claude.responseComplete",
+        "claude.sessionEnd",
+        "tab.didActivate",
+        "terminal.didCreate",
+        "terminal.didClose"
+    ],
+    "pageSlots": [
+        {
+            "id": "claude-stats",
+            "position": "trailing"
+        }
+    ],
+    "sockets": ["claude"],
+    "emits": [
+        "claude.sessionStart",
+        "claude.promptSubmit",
+        "claude.waitingInput",
+        "claude.responseComplete",
+        "claude.sessionEnd"
+    ]
+}
