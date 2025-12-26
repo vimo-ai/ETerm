@@ -53,7 +53,23 @@ pub fn compute_state_hash_for_line(screen_line: usize, state: &TerminalState) ->
         hasher.write_u8(state.cursor.shape as u8);
     }
 
-    // 2. 搜索覆盖本行？（使用绝对行号比较）
+    // 2. 选区覆盖本行？（使用绝对行号比较）
+    if let Some(sel) = &state.selection {
+        // 检查选区是否覆盖本行
+        let sel_start = sel.start.line;
+        let sel_end = sel.end.line;
+        if abs_line >= sel_start && abs_line <= sel_end {
+            // 本行在选区范围内，计算覆盖的列范围
+            let start_col = if abs_line == sel_start { sel.start.col } else { 0 };
+            let end_col = if abs_line == sel_end { sel.end.col } else { usize::MAX };
+            hasher.write_usize(start_col);
+            hasher.write_usize(end_col);
+            hasher.write_u8(sel.ty as u8);
+            hasher.write_u8(3); // 标记有选区
+        }
+    }
+
+    // 3. 搜索覆盖本行？（使用绝对行号比较）
     // 🚀 性能优化：使用按行索引的 HashMap，避免遍历所有匹配
     if let Some(search) = &state.search {
         // 先通过行号快速查找该行的匹配索引（usize 类型）

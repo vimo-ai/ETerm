@@ -159,6 +159,9 @@ pub struct Terminal {
 
     /// 运行模式（Active/Background）
     mode: TerminalMode,
+
+    /// 缓存的 GridData（COW 优化：增量更新时复用未变化的行）
+    cached_grid_data: Option<Arc<GridData>>,
 }
 
 /// 事件监听器类型
@@ -238,6 +241,7 @@ impl Terminal {
             cached_search_view: None,
             hyperlink_hover: None,
             mode: TerminalMode::Active,
+            cached_grid_data: None,
         }
     }
 
@@ -289,6 +293,7 @@ impl Terminal {
             cached_search_view: None,
             hyperlink_hover: None,
             mode: TerminalMode::Active,
+            cached_grid_data: None,
         }
     }
 
@@ -448,10 +453,143 @@ impl Terminal {
         }
     }
 
-    /// 获取终端状态快照
+    /// 获取终端状态快照（增量更新版，COW 优化）
+    ///
+    /// 使用缓存的 GridData，只更新变化的行
+    pub fn state_incremental(&mut self) -> TerminalState {
+        let (grid_data, base_state) = if let Some(ref cw) = self.crosswords_ffi {
+            let crosswords = cw.read();
+            self.build_state_with_cache(&crosswords)
+        } else if let Some(ref cw) = self.crosswords_test {
+            let crosswords = cw.read();
+            self.build_state_with_cache(&crosswords)
+        } else {
+            unreachable!("Terminal must have either crosswords_ffi or crosswords_test")
+        };
+
+        // 更新缓存
+        self.cached_grid_data = Some(grid_data);
+
+        self.finalize_state(base_state)
+    }
+
+    /// 构建带缓存的状态（内部方法）
+    fn build_state_with_cache<T: rio_backend::event::EventListener>(
+        &self,
+        crosswords: &Crosswords<T>,
+    ) -> (Arc<GridData>, TerminalState) {
+        use rio_backend::event::TerminalDamage;
+
+        // 1. 获取脏行信息
+        let damaged_lines: Vec<usize> = match crosswords.peek_damage_event() {
+            Some(TerminalDamage::Full) => (0..crosswords.grid.screen_lines()).collect(),
+            Some(TerminalDamage::Partial(lines)) => {
+                lines.iter()
+                    .filter(|l| l.damaged)
+                    .map(|l| l.line)
+                    .collect()
+            }
+            Some(TerminalDamage::CursorOnly) | None => Vec::new(),
+        };
+
+        // 2. 增量构建 GridData（COW）
+        let grid_data = if let Some(ref prev) = self.cached_grid_data {
+            if damaged_lines.is_empty() {
+                // 无变化，直接复用
+                prev.clone()
+            } else {
+                // 增量更新
+                Arc::new(GridData::incremental_from_crosswords(crosswords, prev, &damaged_lines))
+            }
+        } else {
+            // 首次，全量构建
+            Arc::new(GridData::from_crosswords(crosswords))
+        };
+
+        let grid = GridView::new(grid_data.clone());
+
+        // 3. 构建其他状态
+        let base_state = self.build_base_state(crosswords, grid);
+
+        (grid_data, base_state)
+    }
+
+    /// 构建基础状态（光标、选区等）
+    fn build_base_state<T: rio_backend::event::EventListener>(
+        &self,
+        crosswords: &Crosswords<T>,
+        grid: GridView,
+    ) -> TerminalState {
+        use crate::domain::primitives::AbsolutePoint;
+        use crate::domain::views::SelectionType;
+        use rio_backend::config::colors::NamedColor;
+
+        // 光标
+        let cursor_pos = {
+            let cursor = &crosswords.grid.cursor;
+            let pos = cursor.pos;
+            let display_offset = crosswords.grid.display_offset();
+            let history_size = crosswords.grid.history_size();
+            let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
+            AbsolutePoint::new(absolute_line, pos.col.0 as usize)
+        };
+        let cursor_state = crosswords.cursor();
+        let cursor_shape = cursor_state.content;
+        let cursor_color = crosswords.colors[NamedColor::Cursor as usize]
+            .unwrap_or(crate::domain::views::cursor::DEFAULT_CURSOR_COLOR);
+        let cursor = CursorView::with_color(cursor_pos, cursor_shape, cursor_color);
+
+        // 选区
+        let selection = crosswords.selection.as_ref().and_then(|sel| {
+            sel.to_range(&crosswords).map(|sel_range| {
+                let history_size = crosswords.grid.history_size();
+                let start_line = (sel_range.start.row.0 + history_size as i32) as usize;
+                let end_line = (sel_range.end.row.0 + history_size as i32) as usize;
+                let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
+                let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
+                let ty = match sel.ty {
+                    rio_backend::selection::SelectionType::Simple => SelectionType::Simple,
+                    rio_backend::selection::SelectionType::Block => SelectionType::Block,
+                    rio_backend::selection::SelectionType::Lines => SelectionType::Lines,
+                    rio_backend::selection::SelectionType::Semantic => SelectionType::Simple,
+                };
+                crate::domain::views::SelectionView::new(start, end, ty)
+            })
+        });
+
+        if let Some(sel) = selection {
+            TerminalState::with_selection(grid, cursor, sel)
+        } else {
+            TerminalState::new(grid, cursor)
+        }
+    }
+
+    /// 最终化状态（添加搜索、超链接悬停）
+    fn finalize_state(&self, base_state: TerminalState) -> TerminalState {
+        let mut result = if let Some(ref search_view) = self.cached_search_view {
+            TerminalState {
+                grid: base_state.grid,
+                cursor: base_state.cursor,
+                selection: base_state.selection,
+                search: Some(search_view.clone()),
+                hyperlink_hover: None,
+                ime: None,
+            }
+        } else {
+            base_state
+        };
+
+        if let Some(ref hover) = self.hyperlink_hover {
+            result.hyperlink_hover = Some(hover.clone());
+        }
+
+        result
+    }
+
+    /// 获取终端状态快照（兼容旧接口，不使用缓存）
     pub fn state(&self) -> TerminalState {
         let base_state = with_crosswords!(self, crosswords, {
-            // 1. 转换 Grid
+            // 1. 转换 Grid（全量构建）
             let grid_data = GridData::from_crosswords(&*crosswords);
             let grid = GridView::new(Arc::new(grid_data));
 
@@ -672,6 +810,46 @@ impl Terminal {
         with_crosswords!(self, crosswords, {
             render_state.sync_from_crosswords(&*crosswords)
         })
+    }
+
+    /// 同步叠加层视图到 RenderState
+    ///
+    /// 包括：选区、搜索、超链接悬停
+    /// 应在 sync_render_state 之后调用
+    pub fn sync_overlays_to_render_state(&self, render_state: &mut crate::domain::aggregates::render_state::RenderState) {
+        use crate::domain::primitives::AbsolutePoint;
+        use crate::domain::views::SelectionType;
+
+        // 同步选区
+        let selection = with_crosswords!(self, crosswords, {
+            crosswords.selection.as_ref().and_then(|sel| {
+                sel.to_range(&crosswords).map(|sel_range| {
+                    let history_size = crosswords.grid.history_size();
+
+                    let start_line = (sel_range.start.row.0 + history_size as i32) as usize;
+                    let end_line = (sel_range.end.row.0 + history_size as i32) as usize;
+
+                    let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
+                    let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
+
+                    let ty = match sel.ty {
+                        rio_backend::selection::SelectionType::Simple => SelectionType::Simple,
+                        rio_backend::selection::SelectionType::Block => SelectionType::Block,
+                        rio_backend::selection::SelectionType::Lines => SelectionType::Lines,
+                        rio_backend::selection::SelectionType::Semantic => SelectionType::Simple,
+                    };
+
+                    crate::domain::views::SelectionView::new(start, end, ty)
+                })
+            })
+        });
+        render_state.set_selection(selection);
+
+        // 同步搜索视图
+        render_state.set_search(self.cached_search_view.clone());
+
+        // 同步超链接悬停
+        render_state.set_hyperlink_hover(self.hyperlink_hover.clone());
     }
 
     // ==================== Step 5: Selection ====================

@@ -12,7 +12,7 @@ pub mod hyperlink;
 pub mod ime;
 
 
-pub use grid::{GridView, RowView, GridData};
+pub use grid::{GridView, RowView, GridData, RowData, UrlRange, CellData};
 
 pub use cursor::CursorView;
 
