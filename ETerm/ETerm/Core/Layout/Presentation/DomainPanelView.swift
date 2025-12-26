@@ -142,9 +142,14 @@ final class DomainPanelView: NSView {
 
         // Content 区域：检查是否有 View Tab 内容
         if let hostingView = viewTabHostingView, !hostingView.isHidden {
-            // View Tab：直接返回 NSHostingView，让它自己处理内部事件分发
+            // View Tab：调用 NSHostingView 的 hitTest 让它正确处理 SwiftUI 视图的事件分发
             let hostingPoint = convert(point, to: hostingView)
             if hostingView.bounds.contains(hostingPoint) {
+                // 调用 hostingView.hitTest 来获取实际应该接收事件的视图
+                if let hitView = hostingView.hitTest(hostingPoint) {
+                    return hitView
+                }
+                // 如果 hitTest 返回 nil，返回 hostingView 自己
                 return hostingView
             }
         }

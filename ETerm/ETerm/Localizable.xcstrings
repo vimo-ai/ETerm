@@ -210,6 +210,12 @@
     "Ollama 地址" : {
 
     },
+    "PageBar view not available" : {
+
+    },
+    "Plugin not loaded" : {
+
+    },
     "Plugin: %@" : {
 
     },
@@ -253,9 +259,6 @@
 
     },
     "viewId: %@" : {
-
-    },
-    "ViewProvider not loaded" : {
 
     },
     "上下文" : {
