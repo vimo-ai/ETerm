@@ -30,15 +30,20 @@ class ClaudeSocketServer {
 
     /// 启动 Socket Server
     func start() {
-        // 确保 /tmp/eterm 目录存在
-        let etermDir = "/tmp/eterm"
-        try? FileManager.default.createDirectory(atPath: etermDir, withIntermediateDirectories: true)
+        // 使用新的 socket 路径：~/.eterm/run/sockets/claude.sock
+        let path = ETermPaths.socketPath(for: "claude")
 
-        // Socket 路径：/tmp/eterm/eterm-{pid}.sock
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let path = "\(etermDir)/eterm-\(pid).sock"
+        // 确保目录存在（权限 0700）
+        let socketDir = ETermPaths.sockets
+        if !FileManager.default.fileExists(atPath: socketDir) {
+            try? FileManager.default.createDirectory(
+                atPath: socketDir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
 
-        // 清理旧的 socket 文件
+        // 清理旧的 socket 文件（崩溃恢复）
         unlink(path)
 
         // 创建 Unix Domain Socket
@@ -85,8 +90,8 @@ class ClaudeSocketServer {
 
         socketPath = path
 
-        // 设置环境变量，供子进程继承
-        setenv("ETERM_SOCKET_PATH", path, 1)
+        // 环境变量由 ETermPaths.createDirectories() 统一设置
+        // ETERM_SOCKET_DIR 指向 ~/.eterm/run/sockets
 
         // 开始接受连接
         startAcceptingConnections()
@@ -104,7 +109,6 @@ class ClaudeSocketServer {
 
         if let path = socketPath {
             unlink(path)
-            unsetenv("ETERM_SOCKET_PATH")
         }
 
         socketPath = nil

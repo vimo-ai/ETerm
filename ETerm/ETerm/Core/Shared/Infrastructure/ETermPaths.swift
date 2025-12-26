@@ -72,8 +72,9 @@ enum ETermPaths {
     /// English Learning 插件目录: ~/.eterm/plugins/english-learning
     static let englishLearningPlugin = plugins + "/english-learning"
 
-    /// 翻译插件配置: ~/.eterm/plugins/english-learning/translation.json
-    static let translationConfig = englishLearningPlugin + "/translation.json"
+    /// 翻译插件配置: ~/.eterm/config/translation.json
+    /// 与 SDK 插件 (TranslationKit/WritingKit) 共享配置
+    static let translationConfig = config + "/translation.json"
 
     /// MCP Router 插件目录: ~/.eterm/plugins/mcp-router
     static let mcpRouterPlugin = plugins + "/mcp-router"
@@ -89,12 +90,33 @@ enum ETermPaths {
     /// 剪贴板临时目录: ~/.eterm/tmp/clipboard
     static let clipboard = tmp + "/clipboard"
 
-    // MARK: - Socket 路径（保持传统位置）
+    // MARK: - 运行时目录
+
+    /// 运行时目录: ~/.eterm/run
+    static let run = root + "/run"
+
+    /// 插件 Socket 目录: ~/.eterm/run/sockets
+    ///
+    /// 插件在此目录创建 Unix Domain Socket。
+    /// 环境变量 ETERM_SOCKET_DIR 指向此目录。
+    static let sockets = run + "/sockets"
+
+    /// 获取插件 socket 路径
+    ///
+    /// - Parameter namespace: socket namespace（如 "claude"）
+    /// - Returns: `~/.eterm/run/sockets/{namespace}.sock`
+    static func socketPath(for namespace: String) -> String {
+        return "\(sockets)/\(namespace).sock"
+    }
+
+    // MARK: - Socket 路径（传统位置，逐步废弃）
 
     /// Socket 路径: /tmp/eterm
+    @available(*, deprecated, message: "Use ETermPaths.sockets instead")
     static let socket = "/tmp/eterm"
 
     /// Socket 文件路径: /tmp/eterm/eterm-{pid}.sock
+    @available(*, deprecated, message: "Use ETermPaths.socketPath(for:) instead")
     static func socketFile(pid: Int32) -> String {
         return "\(socket)/eterm-\(pid).sock"
     }
@@ -116,6 +138,9 @@ enum ETermPaths {
 
     /// 创建所有必要的目录
     static func createDirectories() throws {
+        let fileManager = FileManager.default
+
+        // 普通目录（默认权限）
         let directories = [
             root,
             config,
@@ -128,11 +153,9 @@ enum ETermPaths {
             englishLearningPlugin,
             mcpRouterPlugin,
             clipboard,
-            socket,
+            run,
             debugExports
         ]
-
-        let fileManager = FileManager.default
 
         for directory in directories {
             if !fileManager.fileExists(atPath: directory) {
@@ -143,6 +166,18 @@ enum ETermPaths {
                 )
             }
         }
+
+        // Socket 目录（权限 0700，防止其他用户访问）
+        if !fileManager.fileExists(atPath: sockets) {
+            try fileManager.createDirectory(
+                atPath: sockets,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        }
+
+        // 设置环境变量（供子进程使用）
+        setenv("ETERM_SOCKET_DIR", sockets, 1)
     }
 
     /// 确保目录存在（自动创建）
