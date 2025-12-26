@@ -341,14 +341,7 @@ final class CoreCommandsBootstrap {
         // 辅助功能
         // ─────────────────────────────────────────
 
-        commands.register(Command(
-            id: "translation.toggle",
-            title: "切换翻译模式",
-            icon: "text.bubble"
-        ) { context in
-            TranslationModeStore.shared.toggle()
-        })
-        keyboard.bind(.cmdShift("y"), to: "translation.toggle", when: nil)
+        // translation.toggle 已迁移到 TranslationKit 插件
 
         commands.register(Command(
             id: "sidebar.toggle",

@@ -7,6 +7,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import ETermKit
 
 /// 插件信息（给 UI 用）
 struct PluginInfo: Identifiable {
@@ -90,11 +91,11 @@ final class PluginManager: ObservableObject {
     /// 使用 Kahn 算法按依赖关系拓扑排序后加载
     func loadBuiltinPlugins() {
         // 1. 注册所有插件类型
-        registerPluginType(EnglishLearningPlugin.self)
+        // EnglishLearningPlugin 已迁移到 SDK 插件 (TranslationKit)
+        // ClaudePlugin 已迁移到 SDK 插件 (ClaudeKit)
         registerPluginType(WritingAssistantPlugin.self)
         registerPluginType(OneLineCommandPlugin.self)
         registerPluginType(ClaudeMonitorPlugin.self)
-        registerPluginType(ClaudePlugin.self)
         registerPluginType(VlaudePlugin.self)
         registerPluginType(DevHelperPlugin.self)
         registerPluginType(WorkspacePlugin.self)
