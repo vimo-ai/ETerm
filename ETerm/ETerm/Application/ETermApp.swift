@@ -88,12 +88,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 先创建窗口（快速响应）
         if let session = SessionManager.shared.load(), !session.windows.isEmpty {
-            // 恢复每个窗口
             for windowState in session.windows {
                 restoreWindow(from: windowState)
             }
         } else {
-            // 没有 Session，创建默认窗口
             WindowManager.shared.createWindow()
         }
 
@@ -103,7 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             await MainActor.run {
                 // 设置事件桥接
                 SDKEventBridge.shared.setup()
-                // 通知插件加载完成，触发 Claude resume 等操作
+                // 通知插件加载完成
                 NotificationCenter.default.post(
                     name: NSNotification.Name("ETerm.PluginsLoaded"),
                     object: nil

@@ -11,7 +11,7 @@
     "capabilities": [
         "ui.sidebar"
     ],
-    "principalClass": "MCPRouterKit.MCPRouterPlugin",
+    "principalClass": "MCPRouterPlugin",
     "sidebarTabs": [
         {
             "id": "mcp-router-settings",

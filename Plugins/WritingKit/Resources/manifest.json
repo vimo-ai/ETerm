@@ -12,7 +12,7 @@
         "ui.composer",
         "ui.sidebar"
     ],
-    "principalClass": "WritingKit.WritingPlugin",
+    "principalClass": "WritingPlugin",
     "sidebarTabs": [
         {
             "id": "grammar-archive",

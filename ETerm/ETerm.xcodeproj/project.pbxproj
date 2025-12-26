@@ -97,6 +97,8 @@
 		48260BBF2ED71F8100BF7A18 /* Exceptions for "ETerm" folder in "ETerm" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				".vlaude/last-session-id",
+				"Features/Plugins/.vlaude/last-session-id",
 				Info.plist,
 				Libs/MCPRouter/libmcp_router_core.dylib,
 			);
@@ -211,6 +213,7 @@
 				4825DE282EFD2E56003AE32C /* Embed Frameworks */,
 				4825DE3E2EFD3284003AE32C /* CopyFiles */,
 				4825E2762EFDBF41003AE32C /* ShellScript */,
+				4825F3122EFF116D003AE32C /* ShellScript */,
 			);
 			buildRules = (
 			);
@@ -396,6 +399,23 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
 			shellScript = "  # Package Builtin Plugins\n  set -euo pipefail\n\n  SCRIPT_DIR=\"${SRCROOT}/Scripts\"\n  PLUGINS_DIR=\"${SRCROOT}/../Plugins\"\n  OUTPUT_DIR=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/BuiltinPlugins\"\n\n  echo \"=== Packaging Builtin Plugins ===\"\n  echo \"Output: ${OUTPUT_DIR}\"\n\n  mkdir -p \"${OUTPUT_DIR}\"\n\n  export BUNDLE_OUTPUT_DIR=\"${OUTPUT_DIR}\"\n  export CONFIGURATION=\"${CONFIGURATION}\"\n\n  \"${SCRIPT_DIR}/build_all_plugins.sh\" \"${OUTPUT_DIR}\"\n\n  echo \"=== Done ===\"\n";
+		};
+		4825F3122EFF116D003AE32C /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# 清理 DerivedData 的 rpath（动态获取）\nif [[ \"$CONFIGURATION\" == \"Debug\" ]]; then\n    APP_BINARY=\"${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}\"\n    DYLIB_BINARY=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/MacOS/${PRODUCT_NAME}.debug.dylib\"\n    \n    # 从 otool 输出中提取包含 DerivedData 的 rpath 并删除\n    for binary in \"$APP_BINARY\" \"$DYLIB_BINARY\"; do\n        if [[ -f \"$binary\" ]]; then\n            DERIVED_RPATH=$(otool -l \"$binary\" 2>/dev/null | grep -A2 LC_RPATH | grep DerivedData | awk '{print $2}')\n            if [[ -n \"$DERIVED_RPATH\" ]]; then\n                echo \"Removing DerivedData rpath from $binary\"\n                install_name_tool -delete_rpath \"$DERIVED_RPATH\" \"$binary\" 2>/dev/null || true\n            fi\n        fi\n    done\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -598,10 +618,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ETerm/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/ETerm",
@@ -657,10 +674,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ETerm/Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/ETerm",
