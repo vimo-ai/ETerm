@@ -23,16 +23,10 @@ struct RioTerminalView: View {
     /// Coordinator 由 WindowManager 创建和管理，这里只是观察
     @ObservedObject var coordinator: TerminalWindowCoordinator
 
-    // MARK: - Inline AI Composer State (View-owned)
+    // MARK: - Bottom Overlay (来自 SDK 插件)
 
-    /// 是否显示 AI 辅助输入框
-    @State private var showInlineComposer = false
-
-    /// AI 辅助输入框的位置（屏幕坐标）
-    @State private var composerPosition: CGPoint = .zero
-
-    /// AI 辅助输入框的输入区高度（不含结果区）
-    @State private var composerInputHeight: CGFloat = 0
+    /// 底部 Overlay 注册表
+    @ObservedObject private var overlayRegistry = BottomOverlayRegistry.shared
 
     // MARK: - Terminal Search State (View-owned)
 
@@ -53,26 +47,23 @@ struct RioTerminalView: View {
             // 渲染层（PageBar 已在 SwiftUI 层，这里不需要 ignoresSafeArea）
             RioRenderView(
                 coordinator: coordinator,
-                showInlineComposer: showInlineComposer,
-                composerInputHeight: composerInputHeight
+                showInlineComposer: overlayRegistry.isVisible,
+                composerInputHeight: 0
             )
 
-            // Inline Writing Assistant Overlay (Cmd+K)
-            if showInlineComposer {
+            // Bottom Overlay 区域（来自 SDK 插件）
+            if overlayRegistry.isVisible {
                 VStack {
                     Spacer()
 
-                    InlineComposerView(
-                        isShowing: $showInlineComposer,
-                        inputHeight: $composerInputHeight,
-                        onCancel: {
-                            showInlineComposer = false
-                            coordinator.isComposerShowing = false
-                        },
-                        coordinator: coordinator
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 20)
+                    // 按显示顺序渲染所有 overlay
+                    ForEach(overlayRegistry.visibleIds, id: \.self) { overlayId in
+                        if let view = SDKPluginLoader.shared.getWindowBottomOverlayView(for: overlayId) {
+                            view
+                                .frame(maxWidth: .infinity)
+                                .padding(.bottom, 20)
+                        }
+                    }
                 }
             }
 
@@ -89,8 +80,8 @@ struct RioTerminalView: View {
         .onReceive(coordinator.uiEventPublisher) { event in
             handleUIEvent(event)
         }
-        // 同步 Composer 状态到 Coordinator（用于 KeyableWindow 检查）
-        .onChange(of: showInlineComposer) { _, newValue in
+        // 同步 Bottom Overlay 状态到 Coordinator（用于 KeyableWindow 检查）
+        .onChange(of: overlayRegistry.isVisible) { _, newValue in
             coordinator.isComposerShowing = newValue
         }
     }
@@ -99,24 +90,10 @@ struct RioTerminalView: View {
 
     private func handleUIEvent(_ event: UIEvent) {
         switch event {
-        case .showComposer(let position):
-            composerPosition = position
-            showInlineComposer = true
-            coordinator.isComposerShowing = true
-
-        case .hideComposer:
-            showInlineComposer = false
-            coordinator.isComposerShowing = false
-
-        case .toggleComposer(let position):
-            if showInlineComposer {
-                showInlineComposer = false
-                coordinator.isComposerShowing = false
-            } else {
-                composerPosition = position
-                showInlineComposer = true
-                coordinator.isComposerShowing = true
-            }
+        // Composer 事件已迁移到 SDK 插件，通过 BottomOverlayRegistry 控制
+        case .showComposer, .hideComposer, .toggleComposer:
+            // 保留 case 以避免编译错误，实际由 SDK 通过 showBottomOverlay 控制
+            break
 
         case .showSearch(let panelId):
             searchPanelId = panelId
