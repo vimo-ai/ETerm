@@ -126,6 +126,39 @@ public protocol Plugin: AnyObject {
     /// - Parameter itemId: pageBarItem 的 id（manifest.json 中定义）
     /// - Returns: PageBar 组件视图；返回 nil 表示不提供
     func pageBarView(for itemId: String) -> AnyView?
+
+    /// 窗口底部 Overlay 视图
+    ///
+    /// 返回显示在终端窗口底部的 Overlay 视图。
+    /// 用于 Composer、搜索等需要覆盖在终端上方的 UI。
+    ///
+    /// - Parameter id: overlay 的 id（manifest.json 中定义）
+    /// - Returns: Overlay 视图；返回 nil 表示不提供
+    func windowBottomOverlayView(for id: String) -> AnyView?
+
+    // MARK: - Slot 视图
+
+    /// Tab Slot 视图
+    ///
+    /// 在 Tab 标题旁边注入自定义视图（如状态图标、徽章）。
+    /// 每个 Tab 渲染时都会调用此方法，返回 nil 表示该 Tab 不显示此 Slot。
+    ///
+    /// - Parameters:
+    ///   - slotId: Slot 的 id（manifest.json 中定义）
+    ///   - tab: Tab 上下文，包含 id、terminalId、decoration 等信息
+    /// - Returns: Slot 视图；返回 nil 表示不显示
+    func tabSlotView(for slotId: String, tab: any TabSlotContext) -> AnyView?
+
+    /// Page Slot 视图
+    ///
+    /// 在 Page 标题旁边注入自定义视图（如统计信息）。
+    /// 每个 Page 渲染时都会调用此方法，返回 nil 表示该 Page 不显示此 Slot。
+    ///
+    /// - Parameters:
+    ///   - slotId: Slot 的 id（manifest.json 中定义）
+    ///   - page: Page 上下文，包含 id、allTabs 等信息
+    /// - Returns: Slot 视图；返回 nil 表示不显示
+    func pageSlotView(for slotId: String, page: any PageSlotContext) -> AnyView?
 }
 
 // MARK: - Default Implementation
@@ -165,6 +198,18 @@ public extension Plugin {
     }
 
     func pageBarView(for itemId: String) -> AnyView? {
+        return nil
+    }
+
+    func windowBottomOverlayView(for id: String) -> AnyView? {
+        return nil
+    }
+
+    func tabSlotView(for slotId: String, tab: any TabSlotContext) -> AnyView? {
+        return nil
+    }
+
+    func pageSlotView(for slotId: String, page: any PageSlotContext) -> AnyView? {
         return nil
     }
 }
