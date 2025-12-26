@@ -57,6 +57,7 @@ struct AnalysisPlan: Codable {
     let needFixes: Bool
     let needIdiomatic: Bool
     let needTranslation: Bool
+    let needExplanation: Bool
     let reasoning: String
 
     enum CodingKeys: String, CodingKey {
@@ -64,6 +65,7 @@ struct AnalysisPlan: Codable {
         case needFixes = "need_fixes"
         case needIdiomatic = "need_idiomatic"
         case needTranslation = "need_translation"
+        case needExplanation = "need_explanation"
         case reasoning
     }
 }
@@ -73,6 +75,7 @@ struct AnalysisResult {
     var idiomaticSuggestions: [IdiomaticSuggestion]?
     var pureEnglish: String?
     var translations: [Translation]?
+    var grammarPoints: [GrammarPoint]?
 }
 
 struct GrammarFix: Codable {
@@ -110,6 +113,7 @@ private enum AnalysisTask {
     case fixes([GrammarFix])
     case idiomatic([IdiomaticSuggestion])
     case translation(String, [Translation])
+    case explanation([GrammarPoint])
 }
 
 // MARK: - Theme (Shuimo-inspired)
@@ -1018,6 +1022,11 @@ struct InlineComposerView: View {
                 self.analysisResult = result
                 self.isLoading = false
                 self.hasChecked = true  // 标记检查完成
+
+                // 保存语法错误到档案
+                if let fixes = result.fixes, !fixes.isEmpty {
+                    saveGrammarErrors(fixes, context: text)
+                }
             } catch {
                 self.isLoading = false
                 self.hasChecked = true  // 即使失败也标记完成，允许发送
@@ -1035,7 +1044,8 @@ struct InlineComposerView: View {
         - need_grammar_check (boolean)
         - need_fixes (boolean)
         - need_idiomatic (boolean)
-        - need_translation (boolean, true if contains Chinese)
+        - need_translation (boolean)
+        - need_explanation (boolean, default false if unsure)
         - reasoning (string, concise)
 
         Text:
@@ -1063,6 +1073,9 @@ struct InlineComposerView: View {
             if plan.needTranslation {
                 group.addTask { try await self.translateChineseToEnglish(text, model: model, host: host) }
             }
+            if plan.needExplanation {
+                group.addTask { try await .explanation(self.getDetailedExplanation(text, model: model, host: host)) }
+            }
 
             for try await task in group {
                 guard let task else { continue }
@@ -1074,6 +1087,8 @@ struct InlineComposerView: View {
                 case .translation(let pure, let trs):
                     result.pureEnglish = pure
                     result.translations = trs
+                case .explanation(let points):
+                    result.grammarPoints = points
                 }
             }
         }
@@ -1084,13 +1099,38 @@ struct InlineComposerView: View {
     private func getFixes(_ text: String, model: String, host: HostBridge) async throws -> [GrammarFix] {
         let system = """
         你是语法检查专家。请返回 JSON 格式的语法错误修正。
-        分类规则（category 必须从以下选择一个）：tense, article, preposition, subject_verb_agreement, word_order, singular_plural, punctuation, spelling, word_choice, sentence_structure, other
-        """
-        let user = """
-        文本：\(text)
 
-        返回 JSON：{"fixes": [{"original": "...", "corrected": "...", "error_type": "...", "category": "..."}]}
-        如果没有语法错误，返回：{"fixes": []}
+        分类规则（category 必须从以下选择一个）：
+        - tense (时态)
+        - article (冠词)
+        - preposition (介词)
+        - subject_verb_agreement (主谓一致)
+        - word_order (词序)
+        - singular_plural (单复数)
+        - punctuation (标点)
+        - spelling (拼写)
+        - word_choice (用词)
+        - sentence_structure (句子结构)
+        - other (其他)
+        """
+
+        let user = """
+        文本：
+        \(text)
+
+        返回 JSON：
+        {
+          "fixes": [
+            {
+              "original": "错误的文本片段",
+              "corrected": "修正后的文本",
+              "error_type": "错误类型的中文描述",
+              "category": "分类标识（从上面列表选择，必须是英文）"
+            }
+          ]
+        }
+
+        如果没有语法错误，返回空数组：{"fixes": []}
         """
 
         let json = try await host.aiChat(model: model, system: system, user: user, extraBody: nil)
@@ -1102,9 +1142,11 @@ struct InlineComposerView: View {
     private func getIdiomaticSuggestions(_ text: String, model: String, host: HostBridge) async throws -> [IdiomaticSuggestion] {
         let system = "你是英语写作教练。提供更自然、地道的表达建议，中文解释原因。"
         let user = """
-        文本：\(text)
-        返回 JSON：{"suggestions": [{"current": "...", "idiomatic": "...", "explanation": "..."}]}
-        如果已经足够地道，返回：{"suggestions": []}
+        文本：
+        \(text)
+
+        返回 JSON：
+        { "suggestions": [ { "current": "...", "idiomatic": "...", "explanation": "..." } ] }
         """
 
         let json = try await host.aiChat(model: model, system: system, user: user, extraBody: nil)
@@ -1114,10 +1156,16 @@ struct InlineComposerView: View {
     }
 
     private func translateChineseToEnglish(_ text: String, model: String, host: HostBridge) async throws -> AnalysisTask {
-        let system = "You are a translator. Convert Chinese parts to English. Only output JSON."
+        let system = "You are a translator. Convert Chinese parts to English and also give a mapping list. Only output JSON."
         let user = """
-        Text: \(text)
-        Return JSON: {"pure_english": "<full English text>", "translations": [{"chinese": "...", "english": "..."}]}
+        Text:
+        \(text)
+
+        Return JSON:
+        {
+          "pure_english": "<full English text>",
+          "translations": [ { "chinese": "...", "english": "..." } ]
+        }
         """
 
         let json = try await host.aiChat(model: model, system: system, user: user, extraBody: nil)
@@ -1165,14 +1213,34 @@ struct InlineComposerView: View {
     private func getDetailedExplanation(_ text: String, model: String, host: HostBridge) async throws -> [GrammarPoint] {
         let system = "你是一位英语语法老师，请用中文给出重要语法点的条目化解释，严格 JSON。"
         let user = """
-        文本：\(text)
-        请返回 JSON: {"grammar_points": [{"rule": "...", "explanation": "...", "examples": ["...", "..."]}]}
+        文本：
+        \(text)
+
+        请返回 JSON:
+        {
+          "grammar_points": [
+            { "rule": "...", "explanation": "...", "examples": ["...", "..."] }
+          ]
+        }
         """
 
         let json = try await host.aiChat(model: model, system: system, user: user, extraBody: nil)
         guard let data = json.data(using: .utf8) else { throw WritingError.emptyResponse }
         struct Wrapper: Decodable { let grammar_points: [GrammarPoint] }
         return try JSONDecoder().decode(Wrapper.self, from: data).grammar_points
+    }
+
+    /// 保存语法错误到档案
+    private func saveGrammarErrors(_ fixes: [GrammarFix], context: String) {
+        for fix in fixes {
+            WritingDataStore.saveGrammarError(
+                original: fix.original,
+                corrected: fix.corrected,
+                errorType: fix.errorType,
+                category: fix.category,
+                context: context
+            )
+        }
     }
 
 }
