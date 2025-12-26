@@ -2,12 +2,12 @@
 //  EnglishLearningDataStore.swift
 //  TranslationKit
 //
-//  SwiftData 容器 - 管理单词本和语法错误记录
+//  SwiftData 容器 - 管理单词本
 
 import SwiftData
 import Foundation
 
-/// EnglishLearning 专用的 ModelContainer
+/// TranslationKit 专用的 ModelContainer
 public enum EnglishLearningDataStore {
     /// 数据库路径
     private static let databasePath: String = {
@@ -17,11 +17,11 @@ public enum EnglishLearningDataStore {
             atPath: dataDir,
             withIntermediateDirectories: true
         )
-        return dataDir + "/english-learning.db"
+        return dataDir + "/translation.db"
     }()
 
     public static let shared: ModelContainer = {
-        let schema = Schema([WordEntry.self, GrammarErrorRecord.self])
+        let schema = Schema([WordEntry.self])
 
         do {
             // 使用自定义路径

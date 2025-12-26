@@ -9,6 +9,7 @@
     "capabilities": [
         "ui.sidebar",
         "ui.infoPanel",
+        "ui.pageBar",
         "selection.registerAction"
     ],
     "principalClass": "TranslationKit.TranslationPlugin",
@@ -24,12 +25,6 @@
             "title": "单词本",
             "icon": "book.fill",
             "viewClass": "VocabularyView"
-        },
-        {
-            "id": "grammar-archive",
-            "title": "语法档案",
-            "icon": "doc.text.fill",
-            "viewClass": "GrammarArchiveView"
         }
     ],
     "infoPanelContents": [
@@ -39,7 +34,20 @@
             "viewClass": "TranslationContentView"
         }
     ],
-    "commands": [],
+    "pageBarItems": [
+        {
+            "id": "translation-mode-toggle",
+            "viewClass": "TranslationModeToggleView"
+        }
+    ],
+    "commands": [
+        {
+            "id": "translation.toggle",
+            "title": "切换翻译模式",
+            "handler": "handleTranslationToggle",
+            "keyBinding": "Cmd+Shift+Y"
+        }
+    ],
     "subscribes": [
         "terminal.didEndSelection"
     ],

@@ -442,6 +442,7 @@ final class AIService {
 
     private func chatText(model: String, system: String?, user: String, temperature: Double? = nil, extraBody: [String: Any]? = nil) async throws -> String {
         guard let host else { throw AIServiceError.missingClient }
+        print("[TranslationKit.AIService] chatText 调用, model=\(model)")
 
         // DashScope 的翻译模型（qwen-mt-flash）不接受 system 角色，只允许 user/assistant。
         // 检查模型名称包含 "mt" 来判断是否为翻译模型
