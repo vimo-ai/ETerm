@@ -1,5 +1,9 @@
 #!/bin/bash
 # 极简插件构建系统 - 调用每个 Kit 的 build.sh
+#
+# 用法:
+#   ./build_all_plugins.sh                    # 默认输出到 ~/.eterm/plugins/
+#   ./build_all_plugins.sh /path/to/output    # 指定输出目录
 
 set -euo pipefail
 
@@ -7,8 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PLUGINS_DIR="$(cd "${PROJECT_ROOT}/../Plugins" && pwd)"
 
-# 输出目录：统一输出到 ~/.eterm/plugins/
-BUNDLE_OUTPUT_DIR="$HOME/.eterm/plugins"
+# 输出目录：参数 > 环境变量 > 默认值
+BUNDLE_OUTPUT_DIR="${1:-${BUNDLE_OUTPUT_DIR:-$HOME/.eterm/plugins}}"
 mkdir -p "$BUNDLE_OUTPUT_DIR"
 
 # 导出环境变量供 build.sh 使用
@@ -41,7 +45,8 @@ main() {
     local success_count=0
     local fail_count=0
 
-    for kit in "${PLUGINS_DIR}"/*Kit; do
+    # 扫描 *Kit 和 *SDK 目录
+    for kit in "${PLUGINS_DIR}"/*Kit "${PLUGINS_DIR}"/*SDK; do
         [[ ! -d "$kit" ]] && continue
 
         local kit_name=$(basename "$kit")
