@@ -1,0 +1,19 @@
+{
+    "id": "com.eterm.writing",
+    "name": "写作助手",
+    "version": "0.0.1-beta.1",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "dependencies": [],
+    "capabilities": [
+        "command.register",
+        "keyboard.bind",
+        "ui.composer"
+    ],
+    "principalClass": "WritingKit.WritingPlugin",
+    "sidebarTabs": [],
+    "commands": [],
+    "subscribes": [],
+    "emits": []
+}
