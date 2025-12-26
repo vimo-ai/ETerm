@@ -12,20 +12,73 @@ import AppKit
 import Combine
 import ETermKit
 
+// MARK: - Translation Mode Notifications
+
+private extension NSNotification.Name {
+    /// 翻译模式状态已改变（由主程序发送，value: Bool）
+    static let translationModeDidChange = NSNotification.Name("ETerm.TranslationModeDidChange")
+    /// 请求切换翻译模式（由插件发送）
+    static let translationModeToggleRequest = NSNotification.Name("ETerm.TranslationModeToggleRequest")
+}
+
 // MARK: - Translation Mode
 
 @MainActor
-final class TranslationModeStore: ObservableObject {
-    static let shared = TranslationModeStore()
+public final class TranslationModeStore: ObservableObject {
+    public static let shared = TranslationModeStore()
 
-    @Published var isEnabled: Bool = false
+    @Published public private(set) var isEnabled: Bool = false
 
-    var statusText: String {
+    public var statusText: String {
         isEnabled ? "翻译模式：开" : "翻译模式：关"
     }
 
-    func toggle() {
-        isEnabled.toggle()
+    private init() {
+        // 监听主程序的状态变化
+        NotificationCenter.default.addObserver(
+            forName: .translationModeDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let isEnabled = notification.userInfo?["isEnabled"] as? Bool else { return }
+            Task { @MainActor in
+                self?.isEnabled = isEnabled
+            }
+        }
+    }
+
+    /// 请求切换翻译模式（通知主程序处理）
+    public func toggle() {
+        NotificationCenter.default.post(name: .translationModeToggleRequest, object: nil)
+    }
+}
+
+// MARK: - Translation Mode Toggle View (PageBar)
+
+/// 翻译模式开关视图（显示在 PageBar 右侧）
+public struct TranslationModeToggleView: View {
+    @ObservedObject private var store = TranslationModeStore.shared
+
+    public init() {}
+
+    public var body: some View {
+        Button(action: { store.toggle() }) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(store.isEnabled ? Color.green : Color.gray.opacity(0.6))
+                    .frame(width: 8, height: 8)
+                Text(store.statusText)
+                    .font(.caption)
+                    .foregroundColor(store.isEnabled ? .primary : .secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(store.isEnabled ? Color.green.opacity(0.15) : Color.gray.opacity(0.12))
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 

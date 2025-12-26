@@ -2,7 +2,7 @@
 //  TranslationPlugin.swift
 //  TranslationKit
 //
-//  划词翻译插件 - 提供翻译、单词本、语法档案功能 (SDK main 模式)
+//  划词翻译插件 - 提供翻译、单词本功能 (SDK main 模式)
 
 import Foundation
 import SwiftUI
@@ -81,11 +81,6 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
                 VocabularyView()
                     .modelContainer(EnglishLearningDataStore.shared)
             )
-        case "grammar-archive":
-            return AnyView(
-                GrammarArchiveView()
-                    .modelContainer(EnglishLearningDataStore.shared)
-            )
         default:
             return nil
         }
@@ -99,6 +94,24 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
             )
         default:
             return nil
+        }
+    }
+
+    public func pageBarView(for itemId: String) -> AnyView? {
+        switch itemId {
+        case "translation-mode-toggle":
+            return AnyView(TranslationModeToggleView())
+        default:
+            return nil
+        }
+    }
+
+    public func handleCommand(_ commandId: String) {
+        switch commandId {
+        case "translation.toggle":
+            TranslationModeStore.shared.toggle()
+        default:
+            break
         }
     }
 
