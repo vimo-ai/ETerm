@@ -2,8 +2,13 @@
 //  ExtensionHostManager.swift
 //  ETerm
 //
-//  Extension Host 进程管理器
-//  负责启动、监控和重启 Extension Host 进程
+//  Extension Host 进程管理器（客户端模式）
+//
+//  改造后的架构：
+//  - Extension Host 作为服务端常驻运行
+//  - ETerm 作为客户端连接到 Host
+//  - 检测 Host 是否存活，如果不存活则启动
+//  - 支持 Host 常驻，ETerm 退出后 Host 继续运行
 
 import Foundation
 import ETermKit
@@ -12,6 +17,7 @@ import ETermKit
 enum ExtensionHostState: Equatable {
     case stopped
     case starting
+    case connecting
     case running
     case crashed(exitCode: Int32)
     case restarting
@@ -20,9 +26,9 @@ enum ExtensionHostState: Equatable {
 /// Extension Host 管理器
 ///
 /// 职责：
-/// - 启动 Extension Host 可执行文件
-/// - 监控进程状态
-/// - 崩溃后自动重启
+/// - 检测 Extension Host 是否已在运行
+/// - 如果不在运行，启动 Host 进程
+/// - 作为客户端连接到 Host
 /// - 管理 IPC 连接
 actor ExtensionHostManager {
 
@@ -43,9 +49,19 @@ actor ExtensionHostManager {
     /// 最大重启次数（1分钟内）
     private let maxRestartsPerMinute = 5
 
-    /// Socket 路径
+    /// 是否正在运行
+    var isRunning: Bool {
+        state == .running
+    }
+
+    /// Socket 路径（固定路径，所有 ETerm 实例共享）
     private var socketPath: String {
-        "/tmp/eterm-extension-host.sock"
+        NSHomeDirectory() + "/.eterm/run/extension-host.sock"
+    }
+
+    /// PID 文件路径
+    private var pidPath: String {
+        NSHomeDirectory() + "/.eterm/run/extension-host.pid"
     }
 
     /// Extension Host 可执行文件路径
@@ -92,7 +108,7 @@ actor ExtensionHostManager {
         return state
     }
 
-    /// 启动 Extension Host
+    /// 启动/连接 Extension Host
     func start() async throws {
         guard state == .stopped || state.isCrashed else {
             return
@@ -100,39 +116,58 @@ actor ExtensionHostManager {
 
         state = .starting
 
-        // 1. 启动 IPC 服务端
+        // 1. 检测 Host 是否已在运行
+        if isHostAlive() {
+            print("[ExtensionHostManager] Host already running, connecting...")
+            state = .connecting
+        } else {
+            // 2. Host 未运行，启动它
+            print("[ExtensionHostManager] Host not running, starting...")
+            try startHostProcess()
+
+            // 等待 Host 启动
+            try await waitForHostReady(timeout: 10.0)
+            state = .connecting
+        }
+
+        // 3. 作为客户端连接到 Host
         let bridge = PluginIPCBridge(socketPath: socketPath)
-        try await bridge.start()
+        try await bridge.connectAsClient()
         self.ipcBridge = bridge
-
-        // 2. 启动 Host 进程
-        try startHostProcess()
-
-        // 3. 等待握手完成
-        try await bridge.waitForHandshake(timeout: 10.0)
 
         state = .running
         restartCount = 0
 
-        print("[ExtensionHostManager] Extension Host started successfully")
+        print("[ExtensionHostManager] Connected to Extension Host successfully")
     }
 
     /// 停止 Extension Host
+    ///
+    /// 注意：这只是断开连接，不会终止 Host 进程（Host 有自己的生命周期管理）
     func stop() async {
         state = .stopped
 
-        // 1. 停止 IPC 服务端
+        // 断开 IPC 连接
         await ipcBridge?.stop()
         ipcBridge = nil
 
-        // 2. 终止进程
-        hostProcess?.terminate()
-        hostProcess = nil
+        print("[ExtensionHostManager] Disconnected from Extension Host")
+    }
 
-        // 3. 清理 socket 文件
+    /// 强制终止 Host 进程（用于热重载）
+    func terminateHost() async {
+        await stop()
+
+        // 读取 PID 并发送终止信号
+        if let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8),
+           let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            kill(pid, SIGTERM)
+            print("[ExtensionHostManager] Sent SIGTERM to Host (PID: \(pid))")
+        }
+
+        // 清理 socket 文件
         try? FileManager.default.removeItem(atPath: socketPath)
-
-        print("[ExtensionHostManager] Extension Host stopped")
+        try? FileManager.default.removeItem(atPath: pidPath)
     }
 
     /// 获取 IPC Bridge（供其他组件调用）
@@ -160,14 +195,43 @@ actor ExtensionHostManager {
 
     // MARK: - Private
 
+    /// 检测 Host 是否存活
+    private func isHostAlive() -> Bool {
+        // 1. 检查 PID 文件
+        guard let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8),
+              let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return false
+        }
+
+        // 2. 检查进程是否存在
+        let result = kill(pid, 0)
+        if result != 0 {
+            // 进程不存在，清理旧文件
+            try? FileManager.default.removeItem(atPath: pidPath)
+            try? FileManager.default.removeItem(atPath: socketPath)
+            return false
+        }
+
+        // 3. 检查 socket 文件是否存在
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            return false
+        }
+
+        return true
+    }
+
     /// 启动 Host 进程
     private func startHostProcess() throws {
         let execPath = hostExecutablePath
-        print("[ExtensionHostManager] Launching: \(execPath)")
+        print("[ExtensionHostManager] Launching Host: \(execPath)")
+
+        // 确保目录存在
+        let runDir = (socketPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: runDir, withIntermediateDirectories: true)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: execPath)
-        process.arguments = ["--socket", socketPath]
+        process.arguments = ["--socket", socketPath, "--lifecycle", "persist1Hour"]
 
         // 设置环境变量
         var environment = ProcessInfo.processInfo.environment
@@ -189,72 +253,55 @@ actor ExtensionHostManager {
             }
         }
 
-        // 设置终止处理
-        process.terminationHandler = { [weak self] proc in
-            Task {
-                await self?.handleProcessTermination(exitCode: proc.terminationStatus)
-            }
-        }
-
-        // 启动进程
+        // 启动进程（不设置 terminationHandler，让 Host 自己管理生命周期）
         try process.run()
         self.hostProcess = process
 
         print("[ExtensionHostManager] Started Extension Host process (PID: \(process.processIdentifier))")
     }
 
-    /// 处理进程终止
-    private func handleProcessTermination(exitCode: Int32) async {
-        print("[ExtensionHostManager] Extension Host terminated with exit code: \(exitCode)")
+    /// 等待 Host 就绪
+    private func waitForHostReady(timeout: TimeInterval) async throws {
+        let startTime = Date()
 
-        hostProcess = nil
+        while Date().timeIntervalSince(startTime) < timeout {
+            // 检查 socket 文件是否存在
+            if FileManager.default.fileExists(atPath: socketPath) {
+                print("[ExtensionHostManager] Host socket ready")
+                return
+            }
 
-        // 正常退出不重启
-        if exitCode == 0 {
-            state = .stopped
-            return
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
         }
 
-        // 崩溃处理
-        state = .crashed(exitCode: exitCode)
+        throw IPCConnectionError.timeout
+    }
 
-        // 检查是否需要重启
-        if shouldRestart() {
-            await attemptRestart()
+    /// 处理连接断开（自动重连）
+    func handleDisconnect() async {
+        print("[ExtensionHostManager] Connection lost, attempting to reconnect...")
+
+        state = .stopped
+        ipcBridge = nil
+
+        // 尝试重连
+        if restartCount < maxRestartsPerMinute {
+            restartCount += 1
+            lastRestartTime = Date()
+
+            let delay = Double(restartCount) * 0.5
+            print("[ExtensionHostManager] Reconnecting in \(delay)s (attempt \(restartCount))")
+
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+            do {
+                try await start()
+            } catch {
+                print("[ExtensionHostManager] Reconnect failed: \(error)")
+                state = .crashed(exitCode: -1)
+            }
         } else {
-            print("[ExtensionHostManager] Too many restarts, giving up")
-        }
-    }
-
-    /// 判断是否应该重启
-    private func shouldRestart() -> Bool {
-        let now = Date()
-
-        // 如果距离上次重启超过 1 分钟，重置计数器
-        if let lastRestart = lastRestartTime,
-           now.timeIntervalSince(lastRestart) > 60 {
-            restartCount = 0
-        }
-
-        return restartCount < maxRestartsPerMinute
-    }
-
-    /// 尝试重启
-    private func attemptRestart() async {
-        state = .restarting
-        restartCount += 1
-        lastRestartTime = Date()
-
-        // 退避延迟：随重启次数增加
-        let delay = Double(restartCount) * 0.5
-        print("[ExtensionHostManager] Restarting in \(delay)s (attempt \(restartCount))")
-
-        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-
-        do {
-            try await start()
-        } catch {
-            print("[ExtensionHostManager] Restart failed: \(error)")
+            print("[ExtensionHostManager] Too many reconnect attempts, giving up")
             state = .crashed(exitCode: -1)
         }
     }

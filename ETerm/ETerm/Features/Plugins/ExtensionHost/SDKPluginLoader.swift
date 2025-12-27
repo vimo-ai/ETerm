@@ -121,48 +121,92 @@ final class SDKPluginLoader {
 
     // MARK: - Public API
 
-    /// 加载所有 SDK 插件
-    func loadAllPlugins() async {
-        logInfo("[SDKPluginLoader] Starting plugin loading...")
+    /// 缓存的待加载 Manifest（扫描后保存，供分阶段加载使用）
+    private var pendingManifests: [PluginManifest] = []
 
-        // 0. 注入嵌入终端工厂
+    /// 扫描并解析所有插件 Manifest（第一步，必须先调用）
+    func scanAndParseManifests() {
+        let start = CFAbsoluteTimeGetCurrent()
+
+        // 注入嵌入终端工厂
         setupEmbeddedTerminalFactory()
 
-        // 1. 扫描插件目录
+        // 扫描外部插件目录
         let pluginPaths = scanPluginDirectories()
-        logInfo("[SDKPluginLoader] Found \(pluginPaths.count) plugin bundles: \(pluginPaths.map { ($0 as NSString).lastPathComponent })")
 
-        // 2. 读取所有 Manifest
-        var pendingManifests: [PluginManifest] = []
+        // 读取 Manifest
+        pendingManifests = []
         for path in pluginPaths {
             if let manifest = loadManifest(from: path) {
                 pendingManifests.append(manifest)
-                logInfo("[SDKPluginLoader] Parsed manifest: \(manifest.id) (v\(manifest.version), mode: \(manifest.runMode))")
             }
         }
 
-        // 3. 检查是否有 isolated 模式插件，按需启动 Extension Host
-        let hasIsolatedPlugins = pendingManifests.contains { $0.runMode == .isolated }
+        logInfo("[SDKPluginLoader] Total plugins: \(pendingManifests.count)")
+    }
+
+    /// 加载 immediate 优先级的插件（窗口创建前同步调用）
+    func loadImmediatePlugins() async {
+        let immediateManifests = pendingManifests.filter { $0.loadPriority == .immediate }
+        guard !immediateManifests.isEmpty else { return }
+
+        // 检查是否有 isolated 模式插件
+        let hasIsolatedPlugins = immediateManifests.contains { $0.runMode == .isolated }
         if hasIsolatedPlugins {
             do {
                 try await ExtensionHostManager.shared.start()
             } catch {
-                logError("[SDKPluginLoader] Failed to start Extension Host: \(error)")
-                // 继续加载 main 模式插件
+                logError("[SDKPluginLoader] Extension Host FAILED: \(error)")
             }
         }
 
-        // 4. 拓扑排序
-        let sortedManifests = topologicalSort(pendingManifests)
+        // 拓扑排序并加载
+        let layers = topologicalSortLayered(immediateManifests)
+        for layer in layers {
+            await withTaskGroup(of: Void.self) { group in
+                for manifest in layer {
+                    group.addTask {
+                        await self.loadPlugin(manifest)
+                    }
+                }
+            }
+        }
+    }
 
-        // 5. 按顺序加载
-        for manifest in sortedManifests {
-            await loadPlugin(manifest)
+    /// 加载 background 优先级的插件（窗口创建后异步调用）
+    func loadBackgroundPlugins() async {
+        let backgroundManifests = pendingManifests.filter { $0.loadPriority == .background }
+        guard !backgroundManifests.isEmpty else { return }
+
+        // 检查是否有 isolated 模式插件需要启动 Extension Host
+        let hasIsolatedPlugins = backgroundManifests.contains { $0.runMode == .isolated }
+        let hostRunning = await ExtensionHostManager.shared.isRunning
+        if hasIsolatedPlugins && !hostRunning {
+            do {
+                try await ExtensionHostManager.shared.start()
+            } catch {
+                logError("[SDKPluginLoader] Extension Host FAILED: \(error)")
+            }
         }
 
-        let mainCount = mainModePlugins.count
-        let isolatedCount = viewProviders.count
-        logInfo("[SDKPluginLoader] Loaded \(manifests.count) plugins (main: \(mainCount), isolated: \(isolatedCount)), \(failedPlugins.count) failed, \(skippedPlugins.count) skipped")
+        // 拓扑排序（分层）并发加载
+        let layers = topologicalSortLayered(backgroundManifests)
+        for layer in layers {
+            await withTaskGroup(of: Void.self) { group in
+                for manifest in layer {
+                    group.addTask {
+                        await self.loadPlugin(manifest)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 加载所有 SDK 插件（兼容接口，一次性加载所有插件）
+    func loadAllPlugins() async {
+        scanAndParseManifests()
+        await loadImmediatePlugins()
+        await loadBackgroundPlugins()
     }
 
     /// 获取所有已加载的插件信息
@@ -283,8 +327,8 @@ final class SDKPluginLoader {
         }
     }
 
-    /// 拓扑排序（Kahn 算法）
-    private func topologicalSort(_ manifests: [PluginManifest]) -> [PluginManifest] {
+    /// 拓扑排序（Kahn 算法）- 返回分层结构，每层可并发加载
+    private func topologicalSortLayered(_ manifests: [PluginManifest]) -> [[PluginManifest]] {
         // 构建 ID -> Manifest 映射
         var manifestMap: [String: PluginManifest] = [:]
         for m in manifests {
@@ -303,35 +347,48 @@ final class SDKPluginLoader {
             }
         }
 
-        // BFS
-        var queue = manifests.filter { inDegree[$0.id] == 0 }.map { $0.id }
-        var result: [PluginManifest] = []
+        // 分层 BFS
+        var currentLayer = manifests.filter { inDegree[$0.id] == 0 }.map { $0.id }
+        var layers: [[PluginManifest]] = []
+        var processed = Set<String>()
 
-        while !queue.isEmpty {
-            let id = queue.removeFirst()
+        while !currentLayer.isEmpty {
+            // 当前层的 Manifest
+            let layerManifests = currentLayer.compactMap { manifestMap[$0] }
+            if !layerManifests.isEmpty {
+                layers.append(layerManifests)
+            }
 
-            if let m = manifestMap[id] {
-                result.append(m)
+            // 标记已处理
+            for id in currentLayer {
+                processed.insert(id)
+            }
 
+            // 找下一层
+            var nextLayer: [String] = []
+            for id in currentLayer {
                 for depId in dependents[id, default: []] {
                     inDegree[depId]! -= 1
-                    if inDegree[depId] == 0 {
-                        queue.append(depId)
+                    if inDegree[depId] == 0 && !processed.contains(depId) {
+                        nextLayer.append(depId)
                     }
                 }
             }
+
+            currentLayer = nextLayer
         }
 
         // 检查循环依赖
-        if result.count != manifests.count {
-            let stuck = manifests.filter { !result.map { $0.id }.contains($0.id) }
+        let totalProcessed = layers.flatMap { $0 }.count
+        if totalProcessed != manifests.count {
+            let stuck = manifests.filter { !processed.contains($0.id) }
             for m in stuck {
                 logError("[SDKPluginLoader] Circular dependency detected: \(m.id)")
                 failedPlugins[m.id] = .circularDependency(pluginIds: [m.id])
             }
         }
 
-        return result
+        return layers
     }
 
     /// 加载单个插件
@@ -367,7 +424,12 @@ final class SDKPluginLoader {
     /// 加载主进程模式插件
     private func loadMainModePlugin(_ manifest: PluginManifest) async {
         let pluginId = manifest.id
+        let start = CFAbsoluteTimeGetCurrent()
+        func elapsed() -> String {
+            String(format: "%.0fms", (CFAbsoluteTimeGetCurrent() - start) * 1000)
+        }
 
+        // 加载 Bundle
         guard let bundlePath = bundlePaths[pluginId] else {
             logError("[SDKPluginLoader] Missing bundlePath for \(pluginId)")
             failedPlugins[pluginId] = .activationFailed(reason: "Missing bundlePath")
@@ -380,11 +442,9 @@ final class SDKPluginLoader {
             failedPlugins[pluginId] = .activationFailed(reason: "Failed to create bundle")
             return
         }
-
         do {
             try bundle.loadAndReturnError()
             loadedBundles[pluginId] = bundle
-            logInfo("[SDKPluginLoader] Bundle loaded: \(bundlePath), isLoaded=\(bundle.isLoaded), executablePath=\(bundle.executablePath ?? "nil")")
         } catch {
             logError("[SDKPluginLoader] Failed to load bundle for \(pluginId): \(error)")
             failedPlugins[pluginId] = .activationFailed(reason: "Failed to load bundle: \(error.localizedDescription)")
@@ -392,26 +452,15 @@ final class SDKPluginLoader {
         }
 
         // 获取 Plugin 类
-        // manifest.principalClass 应与 @objc(ClassName) 一致，不带模块前缀
         let className = manifest.principalClass
-
-        // 通过 bundle.classNamed 或 NSClassFromString 获取类
         var pluginClass: NSObject.Type?
 
-        // 方式 1: bundle.classNamed
         if let cls = bundle.classNamed(className) as? NSObject.Type {
             pluginClass = cls
-            logInfo("[SDKPluginLoader] Found class via bundle.classNamed: \(className)")
-        }
-        // 方式 2: NSClassFromString
-        else if let cls = NSClassFromString(className) as? NSObject.Type {
+        } else if let cls = NSClassFromString(className) as? NSObject.Type {
             pluginClass = cls
-            logInfo("[SDKPluginLoader] Found class via NSClassFromString: \(className)")
-        }
-        // 方式 3: bundle.principalClass (Info.plist 的 NSPrincipalClass)
-        else if let cls = bundle.principalClass as? NSObject.Type {
+        } else if let cls = bundle.principalClass as? NSObject.Type {
             pluginClass = cls
-            logInfo("[SDKPluginLoader] Found class via bundle.principalClass: \(cls)")
         }
 
         guard let cls = pluginClass else {
@@ -422,11 +471,9 @@ final class SDKPluginLoader {
 
         // 创建实例
         let instance = cls.init()
-        logInfo("[SDKPluginLoader] Created instance: \(type(of: instance)), conforms to Plugin: \(instance is any ETermKit.Plugin)")
 
         guard let plugin = instance as? any ETermKit.Plugin else {
             logError("[SDKPluginLoader] Instance '\(type(of: instance))' does not conform to ETermKit.Plugin for \(pluginId)")
-            logError("[SDKPluginLoader] Instance protocols: \(String(describing: Mirror(reflecting: instance).subjectType))")
             failedPlugins[pluginId] = .activationFailed(reason: "Plugin does not conform to ETermKit.Plugin")
             return
         }
@@ -435,12 +482,10 @@ final class SDKPluginLoader {
         let hostBridge = MainProcessHostBridge(pluginId: pluginId, manifest: manifest)
         plugin.activate(host: hostBridge)
 
-        // 存储（hostBridge 必须被强引用保持，否则插件的 weak var host 会变成 nil）
+        // 存储
         hostBridges[pluginId] = hostBridge
         mainModePlugins[pluginId] = plugin
         manifests[pluginId] = manifest
-
-        logInfo("[SDKPluginLoader] Activated main-mode plugin: \(pluginId)")
 
         // 创建 PluginHost
         let pluginHost = MainModePluginHost(plugin: plugin, manifest: manifest)

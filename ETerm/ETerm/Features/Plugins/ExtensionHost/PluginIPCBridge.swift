@@ -35,6 +35,19 @@ actor PluginIPCBridge {
     /// 能力检查器
     private let capabilityChecker = CapabilityChecker()
 
+    // MARK: - 统一服务目录
+
+    /// 服务条目：记录服务位于哪个插件、运行模式是什么
+    struct ServiceEntry {
+        let pluginId: String
+        let serviceName: String
+        let runMode: PluginRunMode
+    }
+
+    /// 服务目录：serviceKey -> ServiceEntry
+    /// serviceKey = "{pluginId}.{serviceName}"
+    private var serviceDirectory: [String: ServiceEntry] = [:]
+
     /// ViewModel 状态缓存（解决时序问题：view 出现时能获取到最新状态）
     private var viewModelCache: [String: [String: Any]] = [:]
 
@@ -51,7 +64,7 @@ actor PluginIPCBridge {
 
     // MARK: - Public API
 
-    /// 启动 IPC 服务端
+    /// 启动 IPC 服务端（旧模式，保留兼容）
     func start() async throws {
         guard !isRunning else { return }
 
@@ -66,7 +79,44 @@ actor PluginIPCBridge {
             await acceptConnectionLoop()
         }
 
-        print("[PluginIPCBridge] IPC server started on \(socketPath)")
+    }
+
+    /// 作为客户端连接到 Extension Host（新模式）
+    ///
+    /// 在这个模式下，Extension Host 作为服务端常驻运行，
+    /// ETerm 作为客户端连接到 Host。
+    func connectAsClient() async throws {
+        guard !isRunning else { return }
+
+        let config = IPCConnectionConfig(socketPath: socketPath)
+        let conn = IPCConnection(config: config)
+
+        // 连接到服务端
+        try await conn.connect()
+        self.connection = conn
+        isRunning = true
+
+        // 设置消息处理器
+        await conn.setMessageHandler { [weak self] message in
+            await self?.handleMessage(message)
+        }
+
+        // 启动接收循环
+        await conn.startReceiving()
+
+        // 等待握手响应（Host 会在接受连接后发送 handshake）
+        do {
+            try await waitForHandshake(timeout: 10.0)
+        } catch {
+            // 握手失败，清理状态
+            print("[PluginIPCBridge] Handshake failed: \(error)")
+            await conn.disconnect()
+            self.connection = nil
+            isRunning = false
+            throw error
+        }
+
+        print("[PluginIPCBridge] Connected to Extension Host as client")
     }
 
     /// 停止 IPC 服务端
@@ -78,8 +128,6 @@ actor PluginIPCBridge {
 
         await server?.stop()
         server = nil
-
-        print("[PluginIPCBridge] IPC server stopped")
     }
 
     /// 等待握手完成
@@ -209,8 +257,6 @@ actor PluginIPCBridge {
                 let conn = try await srv.acceptConnection()
                 self.connection = conn
 
-                print("[PluginIPCBridge] Extension Host connected")
-
                 // 设置消息处理器
                 await conn.setMessageHandler { [weak self] message in
                     await self?.handleMessage(message)
@@ -304,8 +350,6 @@ actor PluginIPCBridge {
         handshakeReceived = true
         handshakeCompletion?.resume()
         handshakeCompletion = nil
-
-        print("[PluginIPCBridge] Handshake received from Extension Host")
     }
 
     private func handleUpdateViewModel(_ message: IPCMessage) async {
@@ -314,7 +358,6 @@ actor PluginIPCBridge {
         // 权限检查（updateViewModel 不需要特殊权限）
 
         let data = message.rawPayload
-        print("[PluginIPCBridge] updateViewModel for \(pluginId): \(data)")
 
         // 缓存状态（解决时序问题）
         viewModelCache[pluginId] = data
@@ -513,25 +556,42 @@ actor PluginIPCBridge {
     }
 
     private func handleRegisterService(_ message: IPCMessage) async {
-        guard let pluginId = message.pluginId else { return }
+        guard let pluginId = message.pluginId else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing pluginId")
+            return
+        }
 
         guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "service.register") else {
             await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: service.register")
             return
         }
 
-        // TODO: 实现跨进程服务注册
-        // 当前 ServiceRegistry 基于静态实例，不支持函数式服务
-        // 需要设计新的跨进程服务代理机制
-        await sendError(to: message, code: "NOT_IMPLEMENTED", message: "Cross-process service registration not yet implemented")
+        guard let serviceName = message.rawPayload["name"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing service name")
+            return
+        }
+
+        // 获取插件的运行模式
+        let runMode = pluginManifests[pluginId]?.runMode ?? .isolated
+
+        // 注册到服务目录
+        let serviceKey = "\(pluginId).\(serviceName)"
+        serviceDirectory[serviceKey] = ServiceEntry(
+            pluginId: pluginId,
+            serviceName: serviceName,
+            runMode: runMode
+        )
+
+        await sendResponse(to: message)
     }
 
     private func handleCallService(_ message: IPCMessage) async {
-        guard let pluginId = message.pluginId else { return }
-
-        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "service.call") else {
-            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: service.call")
-            return
+        // pluginId 可以为 nil（兼容旧消息格式），但如果有的话用于权限检查
+        if let callerPluginId = message.pluginId {
+            guard capabilityChecker.hasCapability(pluginId: callerPluginId, capability: "service.call") else {
+                await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: service.call")
+                return
+            }
         }
 
         guard let targetPluginId = message.rawPayload["targetPluginId"] as? String,
@@ -542,25 +602,87 @@ actor PluginIPCBridge {
 
         let params = message.rawPayload["params"] as? [String: Any] ?? [:]
 
-        // 核心服务特殊处理（eterm.* 命名空间）
+        // 1. 核心服务特殊处理（eterm.* 命名空间）
         if targetPluginId == "eterm" {
             let result = await handleCoreService(name: serviceName, params: params)
             await sendResponse(to: message, payload: result)
             return
         }
 
-        // 其他插件服务
-        let hasService = await MainActor.run {
-            ServiceRegistry.shared.hasService(pluginId: targetPluginId, name: serviceName)
+        let serviceKey = "\(targetPluginId).\(serviceName)"
+
+        // 2. 查找统一服务目录
+        if let entry = serviceDirectory[serviceKey] {
+            switch entry.runMode {
+            case .main:
+                // main 模式：调用 MainProcessHostBridge.globalServiceHandlers
+                let result = await MainActor.run {
+                    MainProcessHostBridge.callGlobalService(pluginId: targetPluginId, name: serviceName, params: params)
+                }
+                if let result = result {
+                    await sendResponse(to: message, payload: ["result": result])
+                } else {
+                    await sendError(to: message, code: "SERVICE_ERROR", message: "Service returned nil")
+                }
+                return
+
+            case .isolated:
+                // isolated 模式：转发到子进程
+                await forwardServiceCallToExtensionHost(
+                    targetPluginId: targetPluginId,
+                    serviceName: serviceName,
+                    params: params,
+                    originalMessage: message
+                )
+                return
+            }
         }
 
-        if !hasService {
-            await sendError(to: message, code: "SERVICE_NOT_FOUND", message: "Service \(targetPluginId).\(serviceName) not found")
+        // 3. 兼容：查找 MainProcessHostBridge.globalServiceHandlers（main 模式 SDK 插件）
+        let mainResult = await MainActor.run {
+            MainProcessHostBridge.callGlobalService(pluginId: targetPluginId, name: serviceName, params: params)
+        }
+        if let result = mainResult {
+            await sendResponse(to: message, payload: ["result": result])
             return
         }
 
-        // TODO: 实现其他插件的跨进程服务调用
-        await sendError(to: message, code: "NOT_IMPLEMENTED", message: "Cross-process service call for plugins not yet implemented")
+        // 4. 未找到服务
+        await sendError(to: message, code: "SERVICE_NOT_FOUND", message: "Service \(serviceKey) not found")
+    }
+
+    /// 转发服务调用到 Extension Host
+    private func forwardServiceCallToExtensionHost(
+        targetPluginId: String,
+        serviceName: String,
+        params: [String: Any],
+        originalMessage: IPCMessage
+    ) async {
+        guard let conn = connection else {
+            await sendError(to: originalMessage, code: "NOT_CONNECTED", message: "Extension Host not connected")
+            return
+        }
+
+        do {
+            let response = try await conn.request(IPCMessage(
+                type: .serviceCall,
+                payload: [
+                    "targetPluginId": targetPluginId,
+                    "name": serviceName,
+                    "params": params
+                ]
+            ))
+
+            if response.type == .response {
+                await sendResponse(to: originalMessage, payload: response.rawPayload)
+            } else if response.type == .error {
+                let code = response.rawPayload["code"] as? String ?? "UNKNOWN"
+                let msg = response.rawPayload["message"] as? String ?? "Unknown error"
+                await sendError(to: originalMessage, code: code, message: msg)
+            }
+        } catch {
+            await sendError(to: originalMessage, code: "IPC_ERROR", message: error.localizedDescription)
+        }
     }
 
     // MARK: - Core Services
@@ -683,10 +805,16 @@ actor PluginIPCBridge {
             return
         }
 
-        // TODO: 实现动态事件发射
-        // 当前 EventBus 使用泛型和 DomainEvent 协议
-        // 需要设计动态事件类型或专门的插件事件通道
-        print("[PluginIPCBridge] Plugin event emitted: \(eventName)")
+        let payload = message.rawPayload["payload"] as? [String: Any] ?? [:]
+
+        // 发送 PluginEvent 通知，SDKEventBridge 会分发给订阅者
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("ETerm.PluginEvent"),
+                object: nil,
+                userInfo: ["eventName": eventName, "payload": payload]
+            )
+        }
 
         await sendResponse(to: message)
     }
@@ -706,8 +834,9 @@ actor PluginIPCBridge {
             return
         }
 
-        // TODO: 实现 BottomDockRegistry
-        print("[PluginIPCBridge] showBottomDock: \(dockId) (not implemented)")
+        await MainActor.run {
+            BottomOverlayRegistry.shared.show(dockId)
+        }
         await sendResponse(to: message)
     }
 
@@ -724,8 +853,9 @@ actor PluginIPCBridge {
             return
         }
 
-        // TODO: 实现 BottomDockRegistry
-        print("[PluginIPCBridge] hideBottomDock: \(dockId) (not implemented)")
+        await MainActor.run {
+            BottomOverlayRegistry.shared.hide(dockId)
+        }
         await sendResponse(to: message)
     }
 
@@ -742,8 +872,9 @@ actor PluginIPCBridge {
             return
         }
 
-        // TODO: 实现 BottomDockRegistry
-        print("[PluginIPCBridge] toggleBottomDock: \(dockId) (not implemented)")
+        await MainActor.run {
+            BottomOverlayRegistry.shared.toggle(dockId)
+        }
         await sendResponse(to: message)
     }
 
@@ -802,10 +933,7 @@ actor PluginIPCBridge {
         let position = message.rawPayload["position"] as? [String: Double]
 
         await MainActor.run {
-            // 使用 TranslationController 显示 bubble（保持与内置逻辑一致）
-            // 由于没有 view 上下文，这里记录日志即可
-            // 实际 bubble 显示由 SDKEventBridge 处理
-            print("[PluginIPCBridge] showBubble: text=\(text), position=\(String(describing: position))")
+            // Bubble 显示由 SDKEventBridge 处理
         }
         await sendResponse(to: message)
     }

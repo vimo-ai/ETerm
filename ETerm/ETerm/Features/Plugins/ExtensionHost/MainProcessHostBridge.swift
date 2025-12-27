@@ -22,6 +22,21 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
     private static var globalServiceHandlers: [String: @Sendable ([String: Any]) -> [String: Any]?] = [:]
     private static let lock = NSLock()
 
+    /// 调用全局服务（供 PluginIPCBridge 使用）
+    ///
+    /// - Parameters:
+    ///   - pluginId: 目标插件 ID
+    ///   - name: 服务名称
+    ///   - params: 调用参数
+    /// - Returns: 服务返回结果
+    static func callGlobalService(pluginId: String, name: String, params: [String: Any]) -> [String: Any]? {
+        let key = "\(pluginId).\(name)"
+        lock.lock()
+        let handler = globalServiceHandlers[key]
+        lock.unlock()
+        return handler?(params)
+    }
+
     init(pluginId: String, manifest: PluginManifest) {
         self.pluginId = pluginId
         self.manifest = manifest
@@ -76,6 +91,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
     }
 
     func setTabTitle(terminalId: Int, title: String) {
+
         let termId = terminalId
         let t = title
 
@@ -134,7 +150,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
                             tabId: tab.tabId.uuidString,
                             panelId: panel.panelId.uuidString,
                             cwd: cwd,
-                            columns: 80,  // TODO: 从终端池获取实际尺寸
+                            columns: 80,
                             rows: 24,
                             isActive: activeTerminalId == terminalId,
                             pid: nil
@@ -197,7 +213,6 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         Self.lock.lock()
         Self.globalServiceHandlers[key] = handler
         Self.lock.unlock()
-        print("[MainProcessHostBridge] Registered service: \(key)")
     }
 
     func callService(
@@ -262,7 +277,6 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         let panelId = id
         Task { @Sendable in
             await MainActor.run {
-                print("[MainProcessHostBridge] showInfoPanel: \(panelId)")
                 InfoWindowRegistry.shared.showContent(id: panelId)
             }
         }
@@ -272,7 +286,6 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         let panelId = id
         Task { @Sendable in
             await MainActor.run {
-                print("[MainProcessHostBridge] hideInfoPanel: \(panelId)")
                 InfoWindowRegistry.shared.hideContent(id: panelId)
             }
         }
@@ -493,7 +506,6 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
                     )
                 }
                 CommandRegistry.shared.register(internalCommand)
-                print("[MainProcessHostBridge] Registered command: \(cmd.id)")
             }
         }
     }
@@ -503,7 +515,6 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         Task { @Sendable in
             await MainActor.run {
                 CommandRegistry.shared.unregister(cmdId)
-                print("[MainProcessHostBridge] Unregistered command: \(cmdId)")
             }
         }
     }
@@ -519,7 +530,6 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
                 // 将 SDK KeyboardShortcut 转换为内部 KeyStroke
                 let keyStroke = Self.toKeyStroke(sc)
                 KeyboardServiceImpl.shared.bind(keyStroke, to: cmdId, when: nil)
-                print("[MainProcessHostBridge] Bound shortcut \(keyStroke.displayString) to \(cmdId)")
             }
         }
     }
@@ -531,7 +541,6 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
             await MainActor.run {
                 let keyStroke = Self.toKeyStroke(sc)
                 KeyboardServiceImpl.shared.unbind(keyStroke)
-                print("[MainProcessHostBridge] Unbound shortcut \(keyStroke.displayString)")
             }
         }
     }
