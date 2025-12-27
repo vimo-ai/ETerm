@@ -62,10 +62,10 @@ final class Tab: Pane {
 
     // MARK: - 初始化
 
-    init(tabId: UUID = UUID(), title: String, content: TabContent, userTitle: String? = nil) {
+    init(tabId: UUID = UUID(), title: String, content: TabContent, userTitle: String? = nil, pluginTitle: String? = nil) {
         self.tabId = tabId
         self.systemTitle = title
-        self.pluginTitle = nil
+        self.pluginTitle = pluginTitle
         self.userTitle = userTitle
         self.isActive = false
         self.content = content
@@ -88,12 +88,22 @@ final class Tab: Pane {
     func setPluginTitle(_ title: String?) {
         guard pluginTitle != title else { return }
         pluginTitle = title
+        NotificationCenter.default.post(
+            name: .tabTitleChanged,
+            object: nil,
+            userInfo: ["tabId": id, "title": self.title]
+        )
     }
 
     /// 清除插件标题（恢复显示系统标题）
     func clearPluginTitle() {
         guard pluginTitle != nil else { return }
         pluginTitle = nil
+        NotificationCenter.default.post(
+            name: .tabTitleChanged,
+            object: nil,
+            userInfo: ["tabId": id, "title": self.title]
+        )
     }
 
     /// 设置用户标题（用户手动重命名，最高优先级）

@@ -21,6 +21,9 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
     private var host: HostBridge?
     private var actionObserver: NSObjectProtocol?
 
+    /// 翻译防抖任务
+    private var translationDebounce: DispatchWorkItem?
+
     public override init() {
         super.init()
     }
@@ -53,13 +56,18 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleActionTriggered(notification)
+            Task { @MainActor in
+                self?.handleActionTriggered(notification)
+            }
         }
 
-        print("[TranslationKit] Plugin activated")
     }
 
     public func deactivate() {
+        // 取消防抖任务
+        translationDebounce?.cancel()
+        translationDebounce = nil
+
         // 取消注册 Action
         host?.unregisterSelectionAction(actionId: Self.translateActionId)
 
@@ -68,8 +76,6 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
             NotificationCenter.default.removeObserver(observer)
             actionObserver = nil
         }
-
-        print("[TranslationKit] Plugin deactivated")
     }
 
     public func sidebarView(for tabId: String) -> AnyView? {
@@ -117,13 +123,7 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
 
     /// 处理终端选中事件（用于数据记录等）
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        if eventName == "terminal.didEndSelection" {
-            guard let text = payload["text"] as? String else { return }
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return }
-
-            print("[TranslationKit] Received selection: \(trimmed.prefix(50))...")
-        }
+        // Selection 事件在此处理（如需要）
     }
 
     // MARK: - Private
@@ -136,11 +136,22 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
         }
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
 
-        print("[TranslationKit] Translate action triggered: \(trimmed.prefix(50))...")
+        // 忽略空文本和单字符
+        guard trimmed.count > 1 else { return }
 
-        // 执行翻译
-        TranslationController.shared.handleTranslate(text: trimmed)
+        // 获取位置信息
+        let screenRect = notification.userInfo?["screenRect"] as? NSRect ?? .zero
+
+        // 取消之前的防抖任务
+        translationDebounce?.cancel()
+
+        // 2 秒防抖延迟
+        let workItem = DispatchWorkItem { [weak self] in
+            guard self != nil else { return }
+            TranslationController.shared.handleTranslate(text: trimmed, at: screenRect)
+        }
+        translationDebounce = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: workItem)
     }
 }

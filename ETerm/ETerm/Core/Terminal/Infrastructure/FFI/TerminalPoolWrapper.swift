@@ -702,7 +702,7 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     func getInputRow(terminalId: Int) -> UInt16? {
-        // TODO: 需要在 Rust 侧添加此 API
+        // 预留接口，需要 Rust 侧支持
         return nil
     }
 

@@ -107,11 +107,19 @@ extension SelectionPopoverController {
     /// - Parameters:
     ///   - actionId: Action ID
     ///   - text: 选中的文本
-    func triggerAction(_ actionId: String, text: String) {
-        let payload: [String: Any] = [
+    ///   - rect: 选中文本的屏幕坐标（可选，用于定位弹窗）
+    func triggerAction(_ actionId: String, text: String, at rect: NSRect? = nil) {
+        // 优先使用传入的 rect，否则使用保存的 sourceRect
+        let effectiveRect = rect ?? sourceRect
+
+        var payload: [String: Any] = [
             "actionId": actionId,
             "text": text
         ]
+
+        if effectiveRect != .zero {
+            payload["screenRect"] = effectiveRect
+        }
 
         NotificationCenter.default.post(
             name: NSNotification.Name("ETerm.SelectionActionTriggered"),
@@ -119,7 +127,7 @@ extension SelectionPopoverController {
             userInfo: payload
         )
 
-        print("[SelectionPopoverController] Triggered action: \(actionId)")
+        print("[SelectionPopoverController] Triggered action: \(actionId), rect: \(effectiveRect)")
     }
 }
 

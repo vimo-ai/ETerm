@@ -198,18 +198,6 @@ final class MCPRouterViewState: ObservableObject {
         }
     }
 
-    func setWorkspaceServerEnabled(token: String, serverName: String, enabled: Bool) {
-        // TODO: 需要 Bridge 支持
-    }
-
-    func setWorkspaceFlattenMode(token: String, serverName: String, flatten: Bool) {
-        // TODO: 需要 Bridge 支持
-    }
-
-    func resetWorkspaceOverrides(token: String) {
-        // TODO: 需要 Bridge 支持
-    }
-
     func setExposeManagementTools(_ expose: Bool) {
         do {
             try bridge.setExposeManagementTools(expose)
@@ -1222,14 +1210,6 @@ private struct MCPWorkspaceDetailView: View {
                     .font(.headline)
 
                 Spacer()
-
-                if !workspace.isDefault && (!workspace.serverOverrides.isEmpty || !workspace.flattenOverrides.isEmpty) {
-                    Button("重置") {
-                        viewModel.resetWorkspaceOverrides(token: workspace.token)
-                        dismiss()
-                    }
-                    .foregroundColor(.orange)
-                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -1315,24 +1295,33 @@ private struct MCPWorkspaceDetailView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
+                        // 非默认工作区：显示只读提示
+                        if !workspace.isDefault {
+                            HStack(spacing: 6) {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(.secondary)
+                                Text("工作区级别配置暂不支持，请在「服务器」Tab 中修改全局配置")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity)
+                            .background(Color.secondary.opacity(0.1))
+                            .cornerRadius(6)
+                        }
+
                         ForEach(servers) { server in
                             ServerToggleCardView(
                                 server: server,
                                 workspace: workspace,
                                 defaultWorkspace: defaultWorkspace,
+                                isEditable: workspace.isDefault,
                                 onToggle: { enabled in
-                                    viewModel.setWorkspaceServerEnabled(
-                                        token: workspace.token,
-                                        serverName: server.name,
-                                        enabled: enabled
-                                    )
+                                    // 只有默认工作区才能编辑，使用全局配置
+                                    viewModel.setServerEnabled(server.name, enabled: enabled)
                                 },
                                 onFlattenToggle: { flatten in
-                                    viewModel.setWorkspaceFlattenMode(
-                                        token: workspace.token,
-                                        serverName: server.name,
-                                        flatten: flatten
-                                    )
+                                    viewModel.setServerFlattenMode(server.name, flatten: flatten)
                                 }
                             )
                         }
@@ -1348,6 +1337,7 @@ private struct ServerToggleCardView: View {
     let server: MCPServerConfigDTO
     let workspace: MCPWorkspaceDTO
     let defaultWorkspace: MCPWorkspaceDTO?
+    let isEditable: Bool
     let onToggle: (Bool) -> Void
     let onFlattenToggle: (Bool) -> Void
 
@@ -1386,6 +1376,7 @@ private struct ServerToggleCardView: View {
                 ))
                 .toggleStyle(.switch)
                 .controlSize(.mini)
+                .disabled(!isEditable)
             }
 
             if let url = server.url {
@@ -1414,6 +1405,7 @@ private struct ServerToggleCardView: View {
                     ))
                     .toggleStyle(.switch)
                     .controlSize(.mini)
+                    .disabled(!isEditable)
                 }
                 .padding(.vertical, 4)
                 .padding(.horizontal, 8)

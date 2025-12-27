@@ -84,7 +84,7 @@ cat > "${BUNDLE_PATH}/Contents/Info.plist" <<EOF
     <key>CFBundleName</key>
     <string>${PLUGIN_NAME}</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>0.0.1-beta.1</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleExecutable</key>

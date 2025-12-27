@@ -86,8 +86,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动会话录制器
         SessionRecorder.shared.setupIntegration()
 
-        // 先创建窗口（快速响应）
-        if let session = SessionManager.shared.load(), !session.windows.isEmpty {
+        // 扫描并解析插件 manifest
+        SDKPluginLoader.shared.scanAndParseManifests()
+
+        // 同步加载 immediate 插件（用 RunLoop 等待，允许 @MainActor 回调）
+        var immediateLoaded = false
+        Task {
+            await SDKPluginLoader.shared.loadImmediatePlugins()
+            immediateLoaded = true
+        }
+        while !immediateLoaded {
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+        }
+
+        // 设置事件桥接（immediate 插件加载后立即设置，以便拦截窗口创建事件）
+        SDKEventBridge.shared.setup()
+
+        // 读取 Session
+        let session = SessionManager.shared.load()
+
+        // 创建/恢复窗口
+        if let session = session, !session.windows.isEmpty {
             for windowState in session.windows {
                 restoreWindow(from: windowState)
             }
@@ -95,13 +114,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             WindowManager.shared.createWindow()
         }
 
-        // 后台加载插件，完成后再触发需要插件的操作
+        // 后台加载 background 插件
         Task.detached(priority: .userInitiated) {
-            await SDKPluginLoader.shared.loadAllPlugins()
+            await SDKPluginLoader.shared.loadBackgroundPlugins()
+
             await MainActor.run {
-                // 设置事件桥接
-                SDKEventBridge.shared.setup()
-                // 通知插件加载完成
                 NotificationCenter.default.post(
                     name: NSNotification.Name("ETerm.PluginsLoaded"),
                     object: nil

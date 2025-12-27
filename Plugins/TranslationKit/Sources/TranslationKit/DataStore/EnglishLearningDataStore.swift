@@ -29,11 +29,9 @@ public enum EnglishLearningDataStore {
             let config = ModelConfiguration(url: dbURL)
 
             let container = try ModelContainer(for: schema, configurations: [config])
-            print("[TranslationKit] DataStore initialized at: \(databasePath)")
             return container
         } catch {
             // 如果自定义路径失败，回退到默认路径
-            print("[TranslationKit] 使用自定义路径初始化数据库失败，回退到默认路径: \(error)")
 
             do {
                 let config = ModelConfiguration("EnglishLearning", schema: schema)

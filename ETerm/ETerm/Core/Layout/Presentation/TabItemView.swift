@@ -75,6 +75,7 @@ final class TabItemView: DraggableItemView {
         setupUI()
         setupDecorationNotifications()
         setupSlotNotifications()
+        setupTitleNotifications()
     }
 
     // 注意：macOS 10.11+ 会自动移除 NotificationCenter 观察者
@@ -339,6 +340,33 @@ extension TabItemView {
 
     @objc private func handleSlotChanged(_ notification: Notification) {
         // Slot 注册变化，刷新视图
+        updateItemView()
+    }
+}
+
+// MARK: - Tab 标题通知处理
+
+extension TabItemView {
+    /// 设置标题通知监听
+    private func setupTitleNotifications() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleTitleChanged(_:)),
+            name: .tabTitleChanged,
+            object: nil
+        )
+    }
+
+    @objc private func handleTitleChanged(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let notificationTabId = userInfo["tabId"] as? UUID,
+              notificationTabId == tabId,
+              let newTitle = userInfo["title"] as? String else {
+            return
+        }
+
+        // 同步标题到视图
+        title = newTitle
         updateItemView()
     }
 }

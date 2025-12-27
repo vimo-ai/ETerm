@@ -27,6 +27,11 @@ final class WindowManager: NSObject {
     /// 默认窗口尺寸
     private let defaultSize = NSSize(width: 900, height: 650)
 
+    /// Session 保存节流定时器
+    private var saveDebounceTimer: Timer?
+    /// Session 保存节流延迟（毫秒）
+    private let saveDebounceDelay: TimeInterval = 0.5
+
     private override init() {
         super.init()
     }
@@ -223,7 +228,13 @@ final class WindowManager: NSObject {
                         tabId: tabId,
                         workingDirectory: .restored(path: tabState.cwd)
                     )
-                    let tab = Tab(tabId: tabId, title: tabState.title, content: .terminal(terminalTab), userTitle: tabState.userTitle)
+                    let tab = Tab(
+                        tabId: tabId,
+                        title: tabState.title,
+                        content: .terminal(terminalTab),
+                        userTitle: tabState.userTitle,
+                        pluginTitle: tabState.pluginTitle  // 恢复插件设置的标题
+                    )
                     tabs.append(tab)
 
                 case .view:
@@ -237,7 +248,13 @@ final class WindowManager: NSObject {
                         viewId: viewId,
                         pluginId: tabState.pluginId
                     )
-                    let tab = Tab(tabId: tabId, title: tabState.title, content: .view(viewContent), userTitle: tabState.userTitle)
+                    let tab = Tab(
+                        tabId: tabId,
+                        title: tabState.title,
+                        content: .view(viewContent),
+                        userTitle: tabState.userTitle,
+                        pluginTitle: tabState.pluginTitle  // 恢复插件设置的标题
+                    )
                     tabs.append(tab)
                 }
             }
@@ -588,8 +605,8 @@ final class WindowManager: NSObject {
         // 显示窗口
         window.makeKeyAndOrderFront(nil)
 
-        // 保存 Session
-        saveSession()
+        // 保存 Session（新建窗口，需要备份）
+        saveSessionWithBackup()
 
         return window
     }
@@ -693,8 +710,8 @@ final class WindowManager: NSObject {
             targetWindow.makeKeyAndOrderFront(nil)
         }
 
-        // 6. 保存 Session
-        saveSession()
+        // 6. 保存 Session（跨窗口移动，需要备份）
+        saveSessionWithBackup()
 
         return true
     }
@@ -898,19 +915,21 @@ final class WindowManager: NSObject {
                     )
                     tabState = TabState(
                         tabId: tab.tabId.uuidString,
-                        title: tab.title,
+                        title: tab.systemTitle,  // 保存 systemTitle（非显示 title）
                         cwd: workingDirectory.path,
-                        userTitle: tab.userTitle  // 保存用户手动设置的标题
+                        userTitle: tab.userTitle,
+                        pluginTitle: tab.pluginTitle  // 保存插件设置的标题
                     )
 
                 case .view(let viewContent):
                     // View Tab：保存 viewId 和 pluginId
                     tabState = TabState(
                         tabId: tab.tabId.uuidString,
-                        title: tab.title,
+                        title: tab.systemTitle,  // 保存 systemTitle（非显示 title）
                         viewId: viewContent.viewId,
                         pluginId: viewContent.pluginId,
-                        userTitle: tab.userTitle  // 保存用户手动设置的标题
+                        userTitle: tab.userTitle,
+                        pluginTitle: tab.pluginTitle  // 保存插件设置的标题
                     )
                 }
 
@@ -970,23 +989,51 @@ extension WindowManager: NSWindowDelegate {
     }
 
     func windowDidMove(_ notification: Notification) {
-        // 窗口移动时自动保存 session
-        saveSession()
+        // 窗口移动时节流保存 session
+        saveSessionDebounced()
     }
 
     func windowDidResize(_ notification: Notification) {
-        // 窗口调整大小时自动保存 session
-        saveSession()
+        // 窗口调整大小时节流保存 session
+        saveSessionDebounced()
     }
 
-    /// 保存当前所有窗口的 session
-    func saveSession() {
-        let windowStates = captureAllWindowStates()
-        for (index, state) in windowStates.enumerated() {
-            for (pageIndex, page) in state.pages.enumerated() {
-            }
+    /// 节流保存 Session（延迟执行，合并频繁调用）
+    ///
+    /// 用于窗口移动/调整等高频操作，避免频繁写入磁盘
+    private func saveSessionDebounced() {
+        // 取消之前的定时器
+        saveDebounceTimer?.invalidate()
+
+        // 创建新的延迟定时器
+        saveDebounceTimer = Timer.scheduledTimer(withTimeInterval: saveDebounceDelay, repeats: false) { [weak self] _ in
+            self?.saveSession()
         }
-        SessionManager.shared.save(windows: windowStates)
+    }
+
+    /// 保存当前所有窗口的 session（立即执行，不创建备份）
+    ///
+    /// 用于位置调整等不需要备份的保存。
+    /// 对于窗口移动/调整等高频操作，应使用 saveSessionDebounced()
+    func saveSession() {
+        // 取消待执行的节流保存（避免重复保存）
+        saveDebounceTimer?.invalidate()
+        saveDebounceTimer = nil
+
+        let windowStates = captureAllWindowStates()
+        SessionManager.shared.save(windows: windowStates, createBackup: false)
+    }
+
+    /// 保存当前所有窗口的 session（立即执行，创建备份）
+    ///
+    /// 用于有意义的变化：新增/删除 tab/panel/page/window、应用关闭前等。
+    func saveSessionWithBackup() {
+        // 取消待执行的节流保存（避免重复保存）
+        saveDebounceTimer?.invalidate()
+        saveDebounceTimer = nil
+
+        let windowStates = captureAllWindowStates()
+        SessionManager.shared.save(windows: windowStates, createBackup: true)
     }
 
     // MARK: - Tab 查找

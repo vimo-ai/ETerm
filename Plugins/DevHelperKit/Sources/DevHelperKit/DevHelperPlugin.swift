@@ -42,6 +42,35 @@ public final class DevHelperPlugin: NSObject, ETermKit.Plugin {
 
     public func activate(host: HostBridge) {
         self.host = host
+
+        // 主动加载工作区数据（解决事件时序问题）
+        loadWorkspacesFromService(host: host)
+    }
+
+    /// 从 WorkspaceKit 服务加载工作区
+    private func loadWorkspacesFromService(host: HostBridge) {
+        // 调用 WorkspaceKit 的 getWorkspaces 服务
+        guard let result = host.callService(
+            pluginId: "com.eterm.workspace",
+            name: "getWorkspaces",
+            params: [:]
+        ) else {
+            print("[DevHelperKit] Failed to call getWorkspaces service")
+            return
+        }
+
+        guard let workspaces = result["workspaces"] as? [[String: Any]] else {
+            if let error = result["error"] as? String {
+                print("[DevHelperKit] getWorkspaces error: \(error)")
+            }
+            return
+        }
+
+        if !workspaces.isEmpty {
+            let paths = workspaces.compactMap { $0["path"] as? String }
+            WorkspaceStore.shared.workspacePaths = paths
+            print("[DevHelperKit] Loaded \(paths.count) workspaces from service")
+        }
     }
 
     public func deactivate() {

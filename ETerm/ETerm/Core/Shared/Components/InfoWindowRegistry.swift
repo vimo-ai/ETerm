@@ -30,6 +30,9 @@ final class InfoWindowRegistry: ObservableObject {
     /// 当前可见的内容 ID 列表
     @Published private(set) var visibleContentIds: [String] = []
 
+    /// 期望的窗口位置（选中文本的屏幕坐标）
+    @Published var targetRect: NSRect = .zero
+
     /// 信息窗口实例（懒加载）
     private var infoWindow: InfoWindow?
 
@@ -39,6 +42,7 @@ final class InfoWindowRegistry: ObservableObject {
 
     private init() {
         setupObservers()
+        setupNotificationObservers()
     }
 
     private func setupObservers() {
@@ -49,6 +53,18 @@ final class InfoWindowRegistry: ObservableObject {
                 self?.handleVisibleContentChange(ids)
             }
             .store(in: &cancellables)
+    }
+
+    private func setupNotificationObservers() {
+        // 监听插件发来的位置设置请求
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("ETerm.InfoPanelSetPosition"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let rect = notification.userInfo?["rect"] as? NSRect else { return }
+            self?.targetRect = rect
+        }
     }
 
     // MARK: - Public API

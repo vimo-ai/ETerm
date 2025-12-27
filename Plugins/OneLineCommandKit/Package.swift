@@ -9,6 +9,7 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        // 动态库：SDK 插件格式
         .library(
             name: "OneLineCommandKit",
             type: .dynamic,

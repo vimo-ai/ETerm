@@ -7,6 +7,7 @@
 import Combine
 import SwiftUI
 import SwiftData
+import SQLite3
 import UniformTypeIdentifiers
 import AppKit
 import ETermKit
@@ -70,8 +71,53 @@ public final class WorkspacePlugin: NSObject, ETermKit.Plugin {
         self.host = host
         WorkspaceEventEmitter.shared.setHost(host)
 
+        // 注册 getWorkspaces 服务供其他插件查询
+        registerServices()
+
         // 激活时发射初始工作区数据
         emitInitialWorkspaces()
+    }
+
+    /// 注册服务
+    private func registerServices() {
+        guard let host = host else { return }
+
+        // getWorkspaces 服务 - 返回当前工作区列表
+        // 注意：直接读取 SQLite 避免 SwiftData 线程问题
+        host.registerService(name: "getWorkspaces") { _ in
+            let dbPath = NSHomeDirectory() + "/.eterm/data/workspace.db"
+            guard FileManager.default.fileExists(atPath: dbPath) else {
+                return ["workspaces": []]
+            }
+
+            var workspaces: [[String: Any]] = []
+
+            // 使用 SQLite 直接读取（线程安全）
+            var db: OpaquePointer?
+            guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+                return ["error": "Failed to open database"]
+            }
+            defer { sqlite3_close(db) }
+
+            var stmt: OpaquePointer?
+            let sql = "SELECT ZPATH FROM ZWORKSPACEFOLDER ORDER BY ZADDEDAT DESC"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                return ["error": "Failed to prepare SQL"]
+            }
+            defer { sqlite3_finalize(stmt) }
+
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let cString = sqlite3_column_text(stmt, 0) {
+                    let path = String(cString: cString)
+                    workspaces.append([
+                        "path": path,
+                        "name": (path as NSString).lastPathComponent
+                    ])
+                }
+            }
+
+            return ["workspaces": workspaces]
+        }
     }
 
     /// 从数据库加载并发射初始工作区数据

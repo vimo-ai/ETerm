@@ -734,8 +734,8 @@ final class UIServiceImpl: UIService {
         coordinator.objectWillChange.send()
         coordinator.updateTrigger = UUID()
 
-        // 保存 Session
-        WindowManager.shared.saveSession()
+        // 保存 Session（分栏创建 View Tab，需要备份）
+        WindowManager.shared.saveSessionWithBackup()
 
         return tab
     }
@@ -865,11 +865,15 @@ final class UIServiceImpl: UIService {
             for page in coordinator.terminalWindow.pages.all {
                 for panel in page.allPanels {
                     if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                        // 如果用户已设置标题，不允许插件覆盖
+                        guard tab.userTitle == nil else { return }
+
                         tab.setPluginTitle(title)
 
-                        // 通知视图刷新
+                        // 通知视图刷新（同时设置 updateTrigger 确保 AppKit 视图刷新）
                         DispatchQueue.main.async {
                             coordinator.objectWillChange.send()
+                            coordinator.updateTrigger = UUID()
                         }
                         return
                     }
