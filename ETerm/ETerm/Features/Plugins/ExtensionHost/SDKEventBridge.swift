@@ -78,8 +78,6 @@ final class SDKEventBridge {
             name: NSNotification.Name("ETerm.CommandInvoked"),
             object: nil
         )
-
-        print("[SDKEventBridge] Setup complete")
     }
 
     // MARK: - Terminal Events
@@ -195,35 +193,14 @@ final class SDKEventBridge {
             }
         }
 
-        // 2. 检查是否有注册的 Actions
-        let allActions = SelectionActionRegistry.shared.getAllActions()
-        guard !allActions.isEmpty else {
-            // 没有注册任何 Action，不显示 Popover
-            print("[SDKEventBridge] No selection actions registered")
-            return
-        }
-
-        // 3. 检查激活模式，自动触发匹配的 Action
-        var autoTriggeredIds: Set<String> = []
+        // 2. 检查激活模式，自动触发匹配的 Action（如翻译模式）
         if let activeMode = getActiveMode(),
            let autoAction = SelectionActionRegistry.shared.getActionForMode(activeMode) {
-            // 自动触发
-            SelectionPopoverController.shared.triggerAction(autoAction.id, text: text)
-            autoTriggeredIds.insert(autoAction.id)
+            // 自动触发（传递位置信息）
+            SelectionPopoverController.shared.triggerAction(autoAction.id, text: text, at: event.screenRect)
         }
 
-        // 4. 过滤掉已自动触发的 Action
-        let remainingActions = SelectionActionRegistry.shared.getActions(excluding: autoTriggeredIds)
-
-        // 5. 如果剩余 Actions > 0，显示 Popover
-        if !remainingActions.isEmpty {
-            SelectionPopoverController.shared.show(
-                text: text,
-                at: event.screenRect,
-                in: view,
-                actions: remainingActions
-            )
-        }
+        // 注：其他 Actions 通过右键菜单触发，不再自动显示 Popover
     }
 
     /// 获取当前激活的模式

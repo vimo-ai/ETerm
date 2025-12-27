@@ -12,7 +12,7 @@ import ETermKit
 /// 将插件的调用通过 IPC 转发到主进程执行
 final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
 
-    private let connection: IPCConnection
+    private var connection: IPCConnection
     private var _hostInfo: HostInfo?
 
     /// 已注册的服务处理器
@@ -21,6 +21,13 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
 
     init(connection: IPCConnection) {
         self.connection = connection
+    }
+
+    /// 更新连接（当新客户端连接时调用）
+    func updateConnection(_ newConnection: IPCConnection) {
+        lock.lock()
+        self.connection = newConnection
+        lock.unlock()
     }
 
     // MARK: - HostBridge
@@ -164,14 +171,28 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         name: String,
         handler: @escaping @Sendable ([String: Any]) -> [String: Any]?
     ) {
+        // 无调用方信息的版本（兼容性保留，但消息格式不完整）
+        registerServiceWithCaller(callerPluginId: nil, name: name, handler: handler)
+    }
+
+    /// 带调用方信息的服务注册
+    func registerServiceWithCaller(
+        callerPluginId: String?,
+        name: String,
+        handler: @escaping @Sendable ([String: Any]) -> [String: Any]?
+    ) {
+        // 存储时使用完整 key: pluginId.name
+        let storageKey = callerPluginId.map { "\($0).\(name)" } ?? name
         lock.lock()
-        serviceHandlers[name] = handler
+        serviceHandlers[storageKey] = handler
         lock.unlock()
 
         let n = name
+        let callerId = callerPluginId
         Task { @Sendable in
             try? await self.connection.send(IPCMessage(
                 type: .registerService,
+                pluginId: callerId,
                 payload: ["name": n]
             ))
         }
@@ -182,9 +203,21 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         name: String,
         params: [String: Any]
     ) -> [String: Any]? {
+        // 无调用方信息的版本（兼容性保留，但消息格式不完整）
+        callServiceWithCaller(callerPluginId: nil, targetPluginId: pluginId, name: name, params: params)
+    }
+
+    /// 带调用方信息的服务调用
+    func callServiceWithCaller(
+        callerPluginId: String?,
+        targetPluginId: String,
+        name: String,
+        params: [String: Any]
+    ) -> [String: Any]? {
         let semaphore = DispatchSemaphore(value: 0)
         var result: [String: Any]?
-        let pid = pluginId
+        let callerId = callerPluginId
+        let targetId = targetPluginId
         let n = name
         let p = copyDictionary(params)
 
@@ -192,8 +225,9 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
             do {
                 let response = try await self.connection.request(IPCMessage(
                     type: .callService,
-                    pluginId: pid,
+                    pluginId: callerId,  // 调用方 ID（用于权限检查）
                     payload: [
+                        "targetPluginId": targetId,  // 目标插件 ID
                         "name": n,
                         "params": p
                     ]
@@ -547,9 +581,17 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         _hostInfo = info
     }
 
-    func handleServiceCall(name: String, params: [String: Any]) -> [String: Any]? {
+    /// 处理来自主进程的服务调用（用于 isolated 模式插件提供的服务）
+    ///
+    /// - Parameters:
+    ///   - pluginId: 目标插件 ID
+    ///   - name: 服务名称
+    ///   - params: 调用参数
+    /// - Returns: 服务返回结果
+    func handleServiceCall(pluginId: String, name: String, params: [String: Any]) -> [String: Any]? {
+        let key = "\(pluginId).\(name)"
         lock.lock()
-        let handler = serviceHandlers[name]
+        let handler = serviceHandlers[key]
         lock.unlock()
         return handler?(params)
     }
