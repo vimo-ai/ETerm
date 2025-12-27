@@ -50,7 +50,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << EOF
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>0.0.1-beta.1</string>
 </dict>
 </plist>
 EOF

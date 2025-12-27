@@ -53,6 +53,10 @@ public final class ClaudePlugin: NSObject, Plugin {
     /// Session 映射 (terminalId -> sessionId)
     private var sessionMap: [Int: String] = [:]
 
+    /// 启动阶段标志：false 表示启动阶段（由 checkExistingTerminalsForResume 统一处理）
+    /// true 表示运行阶段（由 handleTerminalCreated 处理新建终端）
+    private var hasCheckedForResume = false
+
     public override required init() {
         super.init()
     }
@@ -64,7 +68,6 @@ public final class ClaudePlugin: NSObject, Plugin {
 
         // 强制初始化 SessionMapper（触发迁移）
         _ = ClaudeSessionMapper.shared
-        print("[ClaudeKit] SessionMapper initialized, \(ClaudeSessionMapper.shared.sessionCount) sessions")
 
         // 启动 Socket Server
         socketServer = ClaudeSocketServer()
@@ -85,43 +88,39 @@ public final class ClaudePlugin: NSObject, Plugin {
             self?.checkExistingTerminalsForResume()
         }
 
-        // 如果插件加载时终端已存在，立即检查
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.checkExistingTerminalsForResume()
-        }
+        // 已移除：asyncAfter fallback（使用单一触发机制）
+        // DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        //     self?.checkExistingTerminalsForResume()
+        // }
     }
 
     /// 检查已存在的终端是否需要恢复 Claude 会话
     private func checkExistingTerminalsForResume() {
+        // 防止重复执行
+        guard !hasCheckedForResume else { return }
+        hasCheckedForResume = true
+
         guard let host = host else { return }
 
-        // 获取所有终端信息
+        // 获取所有终端信息并过滤出需要恢复的
         let terminals = host.getAllTerminals()
-        print("[ClaudeKit] Checking \(terminals.count) existing terminals for resume")
+        let sessionsToResume = terminals.compactMap { info -> (Int, String, String)? in
+            guard let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(info.tabId) else { return nil }
+            return (info.terminalId, info.tabId, sessionId)
+        }
 
-        for info in terminals {
-            let tabId = info.tabId
+        guard !sessionsToResume.isEmpty else { return }
+        print("[ClaudeKit] Resuming \(sessionsToResume.count) sessions")
 
-            // 检查是否需要恢复
-            guard let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId) else {
-                continue
-            }
-
-            print("[ClaudeKit] Found session \(sessionId) for existing terminal \(info.terminalId), will resume...")
-
-            let terminalId = info.terminalId
-
+        for (terminalId, tabId, sessionId) in sessionsToResume {
             // 延迟恢复
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self = self else { return }
 
                 // 验证 session 仍然有效
                 guard let currentSessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId),
-                      currentSessionId == sessionId else {
-                    return
-                }
+                      currentSessionId == sessionId else { return }
 
-                print("[ClaudeKit] Executing: claude --resume \(sessionId)")
                 self.host?.writeToTerminal(
                     terminalId: terminalId,
                     data: "claude --resume \(sessionId)\n"
@@ -167,6 +166,20 @@ public final class ClaudePlugin: NSObject, Plugin {
 
     // MARK: - Hook Event Handling
 
+    /// 构造事件广播的基础 payload
+    private func makePayload(_ event: ClaudeHookEvent, extra: [String: Any] = [:]) -> [String: Any] {
+        var payload: [String: Any] = [
+            "terminalId": event.terminal_id,
+            "sessionId": event.session_id,
+            "transcriptPath": event.transcript_path ?? "",
+            "cwd": event.cwd ?? ""
+        ]
+        for (key, value) in extra {
+            payload[key] = value
+        }
+        return payload
+    }
+
     private func handleHookEvent(_ event: ClaudeHookEvent) {
         let eventType = event.event_type ?? "stop"
         let terminalId = event.terminal_id
@@ -184,22 +197,25 @@ public final class ClaudePlugin: NSObject, Plugin {
                     tabId: tabId
                 )
             }
+            host?.emit(eventName: "claude.sessionStart", payload: makePayload(event))
 
         case "user_prompt_submit":
-            // 用户提交问题，Claude 开始思考
             handlePromptSubmit(terminalId: terminalId, prompt: event.prompt)
+            host?.emit(eventName: "claude.promptSubmit", payload: makePayload(event, extra: [
+                "prompt": event.prompt ?? ""
+            ]))
 
         case "notification":
-            // 等待用户输入
             handleWaitingInput(terminalId: terminalId)
+            host?.emit(eventName: "claude.waitingInput", payload: makePayload(event))
 
         case "stop":
-            // 响应完成
             handleResponseComplete(terminalId: terminalId)
+            host?.emit(eventName: "claude.responseComplete", payload: makePayload(event))
 
         case "session_end":
-            // Session 结束
             handleSessionEnd(terminalId: terminalId)
+            host?.emit(eventName: "claude.sessionEnd", payload: makePayload(event))
 
         default:
             break
@@ -214,13 +230,16 @@ public final class ClaudePlugin: NSObject, Plugin {
         // 设置临时标题
         host?.setTabTitle(terminalId: terminalId, title: "Claude")
 
-        // 如果 prompt 足够短，直接使用
+        // 智能标题生成：根据 prompt 生成简短标题
         if let prompt = prompt, !prompt.isEmpty {
-            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.count <= 15 {
-                host?.setTabTitle(terminalId: terminalId, title: trimmed)
+            // 异步生成智能标题
+            Task { [weak self] in
+                if let title = await ClaudeTitleGenerator.shared.generateTitle(from: prompt) {
+                    await MainActor.run {
+                        self?.host?.setTabTitle(terminalId: terminalId, title: title)
+                    }
+                }
             }
-            // TODO: 使用 AI 生成智能标题
         }
     }
 
@@ -282,15 +301,11 @@ public final class ClaudePlugin: NSObject, Plugin {
 
     /// 处理终端创建 → 检查并恢复 Claude 会话
     private func handleTerminalCreated(terminalId: Int, tabId: String) {
-        print("[ClaudeKit] terminal.didCreate: terminalId=\(terminalId), tabId=\(tabId)")
+        // 启动阶段跳过，由 checkExistingTerminalsForResume 统一处理
+        guard hasCheckedForResume else { return }
 
         // 检查是否需要恢复
-        guard let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId) else {
-            print("[ClaudeKit] No session found for tabId: \(tabId)")
-            return
-        }
-
-        print("[ClaudeKit] Found session \(sessionId) for tabId \(tabId), will resume...")
+        guard let sessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId) else { return }
 
         // 延迟恢复，等待终端完全启动
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -298,20 +313,13 @@ public final class ClaudePlugin: NSObject, Plugin {
 
             // 重新验证：确保 tab 仍然对应同一个 sessionId
             guard let currentSessionId = ClaudeSessionMapper.shared.getSessionIdForTab(tabId),
-                  currentSessionId == sessionId else {
-                print("[ClaudeKit] Session changed, skip resume")
-                return
-            }
+                  currentSessionId == sessionId else { return }
 
             // 重新验证：确保 terminalId 仍然属于这个 tabId
-            let currentTabId = self.getTabId(for: terminalId)
-            print("[ClaudeKit] Verifying: currentTabId=\(currentTabId ?? "nil"), expected=\(tabId)")
-            guard let currentTabId = currentTabId, currentTabId == tabId else {
-                print("[ClaudeKit] Terminal changed, skip resume (current=\(currentTabId ?? "nil"), expected=\(tabId))")
-                return
-            }
+            guard let currentTabId = self.getTabId(for: terminalId),
+                  currentTabId == tabId else { return }
 
-            print("[ClaudeKit] Executing: claude --resume \(sessionId)")
+            print("[ClaudeKit] Resuming session \(sessionId)")
             self.host?.writeToTerminal(
                 terminalId: terminalId,
                 data: "claude --resume \(sessionId)\n"
