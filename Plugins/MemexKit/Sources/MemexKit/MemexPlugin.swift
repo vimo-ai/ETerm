@@ -50,8 +50,22 @@ public final class MemexPlugin: NSObject, Plugin {
     // MARK: - Event Handling
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        // 暂时不处理事件，依赖 memex 的 file watcher
-        // 以后可以优化为精确索引
+        // 处理 Claude 响应完成事件，触发精确索引
+        guard eventName == "claude.responseComplete" else { return }
+        guard let transcriptPath = payload["transcriptPath"] as? String else {
+            print("[MemexKit] Missing transcriptPath in responseComplete event")
+            return
+        }
+
+        // 异步调用索引 API（静默失败，不阻断主流程）
+        Task {
+            do {
+                try await MemexService.shared.indexSession(path: transcriptPath)
+                print("[MemexKit] Indexed session: \(transcriptPath)")
+            } catch {
+                print("[MemexKit] Failed to index session: \(error.localizedDescription)")
+            }
+        }
     }
 
     public func handleCommand(_ commandId: String) {

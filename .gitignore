@@ -45,3 +45,4 @@ TESTING_GUIDE.md
 # Plugin build artifacts
 Plugins/*/.build/
 Plugins/*/build/
+Plugins/MemexKit/Lib/memex

@@ -232,6 +232,25 @@ extension MemexService {
             throw MemexServiceError.requestFailed
         }
     }
+
+    /// 索引指定会话（精确索引，替代 file watcher 轮询）
+    /// - Parameter path: JSONL 会话文件路径
+    public func indexSession(path: String) async throws {
+        let url = baseURL.appendingPathComponent("api/index")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = ["path": path]
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw MemexServiceError.requestFailed
+        }
+    }
 }
 
 // MARK: - Public Types
