@@ -34,18 +34,53 @@ ETerm 版本:
 │              │    MemexKit     │   │   VlaudeKit     │          │
 │              │   (SDK 插件)    │   │   (SDK 插件)    │          │
 │              │                 │   │                 │          │
-│              │  libmemex.dylib │   │ libvlaude.dylib │          │
+│              │  HTTP 服务模式  │   │  HTTP 服务模式  │          │
 │              │                 │   │                 │          │
 │              │  - 索引会话     │   │  - 直连 server  │          │
 │              │  - 搜索         │   │  - 状态同步     │          │
-│              │  - MCP 能力     │   │  - 远程注入     │          │
-│              └─────────────────┘   └─────────────────┘          │
-│                       │                     │                   │
+│              │  - Web UI       │   │  - 远程注入     │          │
+│              │  - MCP 能力     │   │                 │          │
+│              └────────┬────────┘   └────────┬────────┘          │
+│                       │ HTTP                │ WebSocket         │
 │                       ▼                     ▼                   │
 │              ┌─────────────────┐   ┌─────────────────┐          │
-│              │  ~/memex-data/  │   │  vlaude-server  │          │
-│              │  (本地存储)     │   │  (远端)         │          │
+│              │  memex 进程     │   │  vlaude-server  │          │
+│              │  localhost:10013│   │  (NAS 远端)     │          │
 │              └─────────────────┘   └─────────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## 方案选择：HTTP 服务模式 vs FFI 模式
+
+### 为什么选择 HTTP 服务模式
+
+| 考虑因素 | FFI 模式 | HTTP 服务模式 |
+|----------|----------|---------------|
+| Web UI 支持 | ❌ 无法提供 | ✅ 内嵌 WebView |
+| MCP 服务 | ❌ 需要额外实现 | ✅ 原生支持 |
+| 外部工具调用 | ❌ 仅限 ETerm | ✅ curl/浏览器 |
+| 实现复杂度 | 高（FFI 层） | 低（HTTP API） |
+| 性能 | 最优 | 略有开销（可接受） |
+
+**结论**：为了支持沉浸式 Web UI 体验和 MCP 能力，选择 HTTP 服务模式。
+
+### 优化点：事件驱动索引
+
+虽然使用 HTTP 模式，但通过事件驱动实现精确索引，去掉 file watcher 的延迟：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ClaudePlugin                                                    │
+│      │                                                          │
+│      │ emit("claude.responseComplete", { transcriptPath: ... }) │
+│      ▼                                                          │
+│  MemexKit.handleEvent()                                         │
+│      │                                                          │
+│      │ POST /api/index { path: transcriptPath }                 │
+│      ▼                                                          │
+│  memex 进程                                                      │
+│      │                                                          │
+│      └── 精确索引该 JSONL 文件（无需扫描整个目录）               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -54,19 +89,21 @@ ETerm 版本:
 ### ClaudePlugin 广播的事件
 
 ```swift
-// 已有事件 (ETerm/ETerm/Features/Plugins/Claude/)
+// ETerm/ETerm/Features/Plugins/Claude/
 struct ClaudeEvents {
 
     struct SessionStart: Event {
         let sessionId: String
         let terminalId: Int
         let projectPath: String
+        let transcriptPath: String  // JSONL 文件路径
     }
 
     struct ResponseComplete: Event {
         let sessionId: String
         let terminalId: Int
         let projectPath: String
+        let transcriptPath: String  // JSONL 文件路径
     }
 
     struct SessionEnd: Event {
@@ -76,30 +113,12 @@ struct ClaudeEvents {
 }
 ```
 
-### 扩展事件数据
-
-MemexKit 需要的额外信息:
-
-```swift
-extension ClaudeEvents {
-    struct SessionUpdate: Event {
-        let sessionId: String
-        let terminalId: Int
-        let projectPath: String
-        let jsonlPath: String      // JSONL 文件路径，直接索引
-        let encodedDirName: String // Claude 编码目录名
-    }
-}
-```
-
-### 事件传递方式
-
-**方案: SDK 事件系统**
+### SDK 事件订阅
 
 ```json
 // MemexKit/manifest.json
 {
-    "subscribes": ["claude.sessionStart", "claude.responseComplete", "claude.sessionEnd"]
+    "subscribes": ["claude.responseComplete"]
 }
 
 // VlaudeKit/manifest.json
@@ -108,99 +127,76 @@ extension ClaudeEvents {
 }
 ```
 
-ClaudePlugin 通过 HostBridge 发射事件:
-
-```swift
-// ClaudePlugin
-host.emit("claude.responseComplete", payload: [
-    "sessionId": sessionId,
-    "terminalId": terminalId,
-    "projectPath": projectPath,
-    "jsonlPath": jsonlPath
-])
-```
-
-SDK 插件通过 handleEvent 接收:
+### 事件处理
 
 ```swift
 // MemexKit
 public func handleEvent(_ eventName: String, payload: [String: Any]) {
+    guard eventName == "claude.responseComplete" else { return }
+    guard let transcriptPath = payload["transcriptPath"] as? String else { return }
+
+    Task {
+        // 调用 HTTP API 触发精确索引
+        try? await MemexService.shared.indexSession(path: transcriptPath)
+    }
+}
+
+// VlaudeKit
+public func handleEvent(_ eventName: String, payload: [String: Any]) {
     switch eventName {
+    case "claude.sessionStart":
+        // 上报 session 可用
+        let sessionId = payload["sessionId"] as? String
+        vlaudeClient.reportSessionAvailable(sessionId: sessionId, ...)
+
     case "claude.responseComplete":
-        let jsonlPath = payload["jsonlPath"] as? String
-        memexBridge.indexSession(jsonlPath)
-    // ...
+        // 更新 session 状态
+        vlaudeClient.reportSessionUpdate(...)
+
+    case "claude.sessionEnd":
+        // 上报 session 不可用
+        vlaudeClient.reportSessionUnavailable(...)
     }
 }
 ```
 
 ## MemexKit 设计
 
-### Rust Core (libmemex.dylib)
+### 架构
 
 ```
-memex-core/
-├── 依赖 ai-cli-session-collector
-├── 不包含:
-│   ├── file watcher (ETerm 不需要)
-│   ├── HTTP server (ETerm 不需要)
-│   └── 定时任务 (ETerm 不需要)
-└── 包含:
-    ├── SQLite + FTS5
-    ├── Ollama embedding
-    ├── LanceDB 向量
-    └── 搜索引擎
+MemexKit (SDK 插件)
+    │
+    ├── MemexPlugin.swift      # 插件入口，handleEvent 触发索引
+    ├── MemexService.swift     # HTTP 客户端，管理 memex 进程
+    ├── MemexView.swift        # 原生状态仪表盘
+    └── MemexWebView.swift     # 内嵌 Web UI
+            │
+            │ HTTP (localhost:10013)
+            ▼
+    memex 进程 (Rust 二进制)
+        ├── HTTP API (/api/search, /api/index, /api/stats)
+        ├── Web UI (静态文件服务)
+        ├── MCP Server (/api/mcp)
+        └── SQLite + LanceDB (本地存储)
 ```
 
-### FFI 接口
+### memex-rs 需要添加的 API
 
 ```rust
-// memex-core/src/ffi.rs
+// POST /api/index
+// 精确索引单个 JSONL 文件
+#[derive(Deserialize)]
+struct IndexRequest {
+    path: String,  // JSONL 文件路径
+}
 
-#[no_mangle]
-pub extern "C" fn memex_init(data_dir: *const c_char) -> *mut MemexHandle;
-
-#[no_mangle]
-pub extern "C" fn memex_index_session(
-    handle: *mut MemexHandle,
-    jsonl_path: *const c_char,
-    project_path: *const c_char,
-) -> i32;
-
-#[no_mangle]
-pub extern "C" fn memex_search(
-    handle: *mut MemexHandle,
-    query: *const c_char,
-    mode: *const c_char,  // "fts" | "vector" | "hybrid"
-    limit: u32,
-) -> *mut SearchResults;
-
-#[no_mangle]
-pub extern "C" fn memex_get_session(
-    handle: *mut MemexHandle,
-    session_id: *const c_char,
-) -> *mut SessionDetail;
-
-#[no_mangle]
-pub extern "C" fn memex_free(handle: *mut MemexHandle);
-```
-
-### Swift SDK 插件
-
-```
-Plugins/MemexKit/
-├── Package.swift
-├── Sources/MemexKit/
-│   ├── MemexPlugin.swift       # 插件入口
-│   ├── MemexBridge.swift       # FFI 桥接
-│   ├── MemexBridge.h           # C Header
-│   └── Views/
-│       └── MemexSearchView.swift
-├── Resources/
-│   ├── manifest.json
-│   └── Libs/
-│       └── libmemex.dylib
-└── build.sh
+async fn index_session(Json(req): Json<IndexRequest>) -> Result<Json<IndexResponse>> {
+    // 1. 解析 JSONL 文件
+    // 2. 更新 SQLite (FTS5)
+    // 3. 更新向量索引 (LanceDB)
+    // 4. 返回索引结果
+}
 ```
 
 ### manifest.json
@@ -210,24 +206,20 @@ Plugins/MemexKit/
     "id": "com.eterm.memex",
     "name": "Memex",
     "version": "1.0.0",
-    "entry": "MemexPlugin",
-    "subscribes": [
-        "claude.sessionStart",
-        "claude.responseComplete",
-        "claude.sessionEnd"
-    ],
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "loadPriority": "immediate",
+    "dependencies": [{"id": "com.eterm.claude", "minVersion": "1.0.0"}],
+    "principalClass": "MemexPlugin",
+    "subscribes": ["claude.responseComplete"],
     "sidebarTabs": [
         {
-            "id": "memex-search",
-            "title": "搜索历史",
-            "icon": "magnifyingglass"
-        }
-    ],
-    "commands": [
-        {
-            "id": "memex.search",
-            "title": "搜索会话历史",
-            "shortcut": "cmd+shift+f"
+            "id": "memex",
+            "title": "Memex",
+            "icon": "brain.head.profile",
+            "viewClass": "MemexView",
+            "renderMode": "tab"
         }
     ]
 }
@@ -235,79 +227,21 @@ Plugins/MemexKit/
 
 ## VlaudeKit 设计
 
-### Rust Core (libvlaude.dylib)
+### 架构
 
 ```
-vlaude-core/
-├── 依赖 ai-cli-session-collector
-├── WebSocket 客户端 (tokio-tungstenite)
-├── 直连 vlaude-server
-└── 功能:
-    ├── connect(server_url)
-    ├── report_session_available(session_id, terminal_id, project_path)
-    ├── report_session_unavailable(session_id)
-    └── on_inject(callback)  // 接收注入请求
-```
-
-### FFI 接口
-
-```rust
-// vlaude-core/src/ffi.rs
-
-#[no_mangle]
-pub extern "C" fn vlaude_init(server_url: *const c_char) -> *mut VlaudeHandle;
-
-#[no_mangle]
-pub extern "C" fn vlaude_connect(handle: *mut VlaudeHandle) -> i32;
-
-#[no_mangle]
-pub extern "C" fn vlaude_report_available(
-    handle: *mut VlaudeHandle,
-    session_id: *const c_char,
-    terminal_id: i32,
-    project_path: *const c_char,
-) -> i32;
-
-#[no_mangle]
-pub extern "C" fn vlaude_report_unavailable(
-    handle: *mut VlaudeHandle,
-    session_id: *const c_char,
-) -> i32;
-
-// 回调注册
-pub type InjectCallback = extern "C" fn(
-    session_id: *const c_char,
-    terminal_id: i32,
-    text: *const c_char,
-);
-
-#[no_mangle]
-pub extern "C" fn vlaude_set_inject_callback(
-    handle: *mut VlaudeHandle,
-    callback: InjectCallback,
-);
-
-#[no_mangle]
-pub extern "C" fn vlaude_disconnect(handle: *mut VlaudeHandle);
-
-#[no_mangle]
-pub extern "C" fn vlaude_free(handle: *mut VlaudeHandle);
-```
-
-### Swift SDK 插件
-
-```
-Plugins/VlaudeKit/
-├── Package.swift
-├── Sources/VlaudeKit/
-│   ├── VlaudePlugin.swift      # 插件入口
-│   ├── VlaudeBridge.swift      # FFI 桥接
-│   └── VlaudeBridge.h          # C Header
-├── Resources/
-│   ├── manifest.json
-│   └── Libs/
-│       └── libvlaude.dylib
-└── build.sh
+VlaudeKit (SDK 插件)
+    │
+    ├── VlaudePlugin.swift     # 插件入口，handleEvent 上报状态
+    ├── VlaudeClient.swift     # WebSocket 客户端
+    └── (无 UI，仅 Tab Slot)
+            │
+            │ WebSocket (wss://...)
+            ▼
+    vlaude-server (NAS)
+        ├── 管理 session 状态
+        ├── 转发远程注入请求
+        └── 推送 Mobile 查看状态
 ```
 
 ### manifest.json
@@ -317,7 +251,11 @@ Plugins/VlaudeKit/
     "id": "com.eterm.vlaude",
     "name": "Vlaude Remote",
     "version": "1.0.0",
-    "entry": "VlaudePlugin",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "dependencies": [{"id": "com.eterm.claude", "minVersion": "1.0.0"}],
+    "principalClass": "VlaudePlugin",
     "subscribes": [
         "claude.sessionStart",
         "claude.responseComplete",
@@ -334,58 +272,55 @@ Plugins/VlaudeKit/
 
 ## 实施路线
 
-### Phase 1: 事件协议
+### Phase 1: 事件协议 ✅ 已完成
 
-1. 确认 ClaudePlugin 现有事件
-2. 扩展事件 payload (添加 jsonlPath)
-3. 确保 SDK 插件能订阅和接收
+1. ✅ ClaudePlugin 事件已包含 transcriptPath
+2. ✅ SDK 事件系统已支持 subscribes + handleEvent
 
-### Phase 2: MemexKit
+### Phase 2: MemexKit 精确索引 🔄 进行中
 
-1. memex-rs 添加 FFI 层
-2. 编译为 dylib (去掉 watcher/http)
-3. 创建 MemexKit SDK 插件
-4. 实现事件订阅 + 索引触发
-5. 侧边栏搜索 UI
-6. MCP 集成
+1. [x] MemexKit 基础框架（Plugin、Service、UI）
+2. [x] Web UI 内嵌（MemexWebView）
+3. [ ] **memex-rs 添加 `POST /api/index` 接口**
+4. [ ] **MemexKit handleEvent 调用索引 API**
+5. [ ] 测试事件驱动索引
 
 ### Phase 3: VlaudeKit
 
-1. 创建 vlaude-core (Rust)
-2. 实现 WebSocket 直连 server
-3. 创建 VlaudeKit SDK 插件
-4. 实现事件订阅 + 状态上报
-5. 实现注入回调 + 写入终端
-6. Tab Slot (需要 slot 支持)
+1. [ ] 创建 VlaudeKit SDK 插件
+2. [ ] WebSocket 客户端（直连 server，不经过 daemon）
+3. [ ] 实现 handleEvent 上报 session 状态
+4. [ ] 实现远程注入回调
+5. [ ] Tab Slot（显示 Mobile 查看图标）
 
 ### Phase 4: 清理
 
-1. 删除内嵌 VlaudePlugin
-2. 更新文档
-3. daemon 标记为可选 (非 ETerm 用户)
+1. [ ] 删除内嵌 VlaudePlugin
+2. [ ] 更新文档
+3. [ ] daemon 标记为可选（非 ETerm 用户仍可使用）
 
 ## 相关文件
 
 ### 现有代码
 
 - ClaudePlugin: `ETerm/ETerm/Features/Plugins/Claude/`
-- VlaudePlugin: `ETerm/ETerm/Features/Plugins/Vlaude/`
-- SDK 插件示例: `Plugins/TranslationKit/`
+- VlaudePlugin (待迁移): `ETerm/ETerm/Features/Plugins/Vlaude/`
+- MemexKit: `Plugins/MemexKit/`
 
 ### 外部依赖
 
-- ai-cli-session-collector: `/Users/higuaifan/Desktop/vimo/ai-cli-session-collector`
 - memex-rs: `/Users/higuaifan/Desktop/vimo/memex/memex-rs`
-- vlaude-daemon: `/Users/higuaifan/Desktop/hi/小工具/claude/packages/vlaude-daemon`
+- ai-cli-session-collector: `/Users/higuaifan/Desktop/vimo/ai-cli-session-collector`
 - vlaude-server: `/Users/higuaifan/Desktop/hi/小工具/claude/packages/vlaude-server`
 
 ## 对比: ETerm vs 独立版本
 
 | 能力 | 独立版本 | ETerm 版本 |
 |------|----------|------------|
-| 索引触发 | file watcher 轮询 | ClaudePlugin 事件驱动 |
-| 延迟 | 秒级 | 实时 |
-| 资源消耗 | 持续监听 | 按需触发 |
+| 索引触发 | file watcher 轮询 | **事件驱动精确索引** |
+| 延迟 | 秒级 | **实时** |
+| 资源消耗 | 持续监听 | **按需触发** |
 | 配置 | 需要安装/配置 | 零配置内置 |
-| 进程 | 独立进程 | 插件 dylib |
-| daemon | 需要 | 不需要 |
+| Web UI | 浏览器访问 | **内嵌沉浸式** |
+| MCP | 需要配置 | 自动可用 |
+| daemon | 需要运行 | **不需要** |
