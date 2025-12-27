@@ -76,6 +76,16 @@ final class InfoWindow: NSPanel {
                 }
             }
             .store(in: &cancellables)
+
+        // 监听目标位置变化
+        registry.$targetRect
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] rect in
+                if rect != .zero {
+                    self?.positionNear(rect: rect)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     private func centerWindow() {
@@ -86,6 +96,35 @@ final class InfoWindow: NSPanel {
             let y = screenRect.midY - windowRect.height / 2
             setFrameOrigin(NSPoint(x: x, y: y))
         }
+    }
+
+    /// 定位窗口在选中文本上方
+    private func positionNear(rect: NSRect) {
+        guard let screen = NSScreen.main else {
+            centerWindow()
+            return
+        }
+
+        let screenRect = screen.visibleFrame
+        let windowRect = frame
+        let margin: CGFloat = 10
+
+        // X: 居中于选中文本，但不超出屏幕
+        var x = rect.midX - windowRect.width / 2
+        x = max(screenRect.minX + margin, min(x, screenRect.maxX - windowRect.width - margin))
+
+        // Y: 优先显示在选中文本上方
+        var y = rect.maxY + margin
+
+        // 如果上方空间不够，显示在下方
+        if y + windowRect.height > screenRect.maxY {
+            y = rect.minY - windowRect.height - margin
+        }
+
+        // 确保不超出屏幕底部
+        y = max(screenRect.minY + margin, y)
+
+        setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     // MARK: - Window Behavior

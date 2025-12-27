@@ -16,6 +16,16 @@ import Combine
 import Metal
 import QuartzCore
 import PanelLayoutKit
+import ETermKit
+
+// MARK: - Selection Action Context
+
+/// 右键菜单选项的上下文信息
+private struct SelectionActionContext {
+    let actionId: String
+    let text: String
+    let screenRect: NSRect
+}
 
 // MARK: - RioTerminalView
 
@@ -865,6 +875,8 @@ class RioMetalView: NSView, RenderViewProtocol {
     private var selectionPanelId: UUID?
     /// 当前选择所在的 Tab
     private weak var selectionTab: Tab?
+    /// 当前选择所在的终端 ID（mouseDown 时快照，避免 activeTab 变化导致坐标错位）
+    private var selectionTerminalId: Int?
 
     // MARK: - 超链接悬停状态
 
@@ -1577,7 +1589,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 转换为网格坐标
-        let gridPos = screenToGrid(location: location, panelId: panelId)
+        let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: Int(terminalId))
 
         // 查询超链接
         if let hyperlink = pool.getHyperlinkAt(
@@ -1700,7 +1712,7 @@ class RioMetalView: NSView, RenderViewProtocol {
                let activeTab = panel.activeTab,
                let terminalId = activeTab.rustTerminalId,
                let pool = terminalPool {
-                let gridPos = screenToGrid(location: location, panelId: panelId)
+                let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: Int(terminalId))
                 if let url = pool.getUrlAt(
                     terminalId: Int(terminalId),
                     screenRow: Int(gridPos.row),
@@ -1741,8 +1753,8 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 设置激活的 Panel
         coordinator.setActivePanel(panelId)
 
-        // 转换为网格坐标
-        let gridPos = screenToGrid(location: location, panelId: panelId)
+        // 转换为网格坐标（使用当前 terminalId，确保坐标与终端绑定）
+        let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: Int(terminalId))
 
         // 双击选中单词
         if event.clickCount == 2 {
@@ -1778,10 +1790,11 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 触发渲染
         requestRender()
 
-        // 记录选中状态
+        // 记录选中状态（快照 terminalId，避免后续 activeTab 变化导致坐标错位）
         isDraggingSelection = true
         selectionPanelId = panelId
         selectionTab = activeTab
+        selectionTerminalId = Int(terminalId)
     }
 
     // MARK: - 双击选中单词
@@ -1831,6 +1844,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         isDraggingSelection = false
         selectionPanelId = panelId
         selectionTab = activeTab
+        selectionTerminalId = terminalId
 
         // 发布选中结束事件（双击选中）
         let trimmed = boundary.text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
@@ -1847,10 +1861,11 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        // 使用 mouseDown 时快照的 selectionTerminalId，避免 activeTab 变化导致坐标错位
         guard isDraggingSelection,
               let panelId = selectionPanelId,
               let activeTab = selectionTab,
-              let terminalId = activeTab.rustTerminalId,
+              let terminalId = selectionTerminalId,
               let pool = terminalPool else {
             super.mouseDragged(with: event)
             return
@@ -1859,12 +1874,12 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 获取鼠标位置
         let location = convert(event.locationInWindow, from: nil)
 
-        // 转换为网格坐标
-        let gridPos = screenToGrid(location: location, panelId: panelId)
+        // 转换为网格坐标（使用快照的 terminalId，确保坐标与 mouseDown 时一致）
+        let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: terminalId)
 
         // 将 Screen 坐标转换为真实行号（新架构：使用 terminalPool）
         guard let (absoluteRow, col) = pool.screenToAbsolute(
-            terminalId: Int(terminalId),
+            terminalId: terminalId,
             screenRow: Int(gridPos.row),
             screenCol: Int(gridPos.col)
         ) else {
@@ -1878,7 +1893,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 通知 Rust 层渲染高亮（新架构：使用 terminalPool）
         if let selection = activeTab.textSelection {
             _ = pool.setSelection(
-                terminalId: Int(terminalId),
+                terminalId: terminalId,
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
                 endAbsoluteRow: selection.endAbsoluteRow,
@@ -1899,10 +1914,11 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 完成选区（业务逻辑在 Rust 端处理）
         // - 如果选区全是空白，Rust 会自动清除选区并返回 nil
         // - 如果有内容，返回选中的文本
+        // 使用 mouseDown 时快照的 selectionTerminalId，避免多终端场景下错终端 finalize
         if let activeTab = selectionTab,
-           let terminalId = activeTab.rustTerminalId,
+           let terminalId = selectionTerminalId,
            let pool = terminalPool {
-            if let text = pool.finalizeSelection(terminalId: Int(terminalId)) {
+            if let text = pool.finalizeSelection(terminalId: terminalId) {
                 // 有有效选区，发布选中结束事件
                 let mouseLoc = self.convert(event.locationInWindow, from: nil)
                 let rect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
@@ -1926,10 +1942,98 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 注意：不清除 selectionPanelId 和 selectionTab，保持选中状态用于 Cmd+C 复制
     }
 
+    // MARK: - 右键菜单
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.allowsContextMenuPlugIns = false  // 禁用系统自动添加的项目（如"自动填充"）
+
+        // 获取选中文本
+        guard let activeTab = selectionTab,
+              let terminalId = activeTab.rustTerminalId,
+              let pool = terminalPool,
+              let selectedText = pool.getSelectionText(terminalId: Int(terminalId)),
+              !selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            // 没有选中文本，返回基础菜单
+            menu.addItem(withTitle: "粘贴", action: #selector(pasteFromClipboard(_:)), keyEquivalent: "v")
+            return menu
+        }
+
+        let trimmedText = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 获取鼠标位置（屏幕坐标）
+        let mouseLoc = self.convert(event.locationInWindow, from: nil)
+        let viewRect = NSRect(origin: mouseLoc, size: NSSize(width: 1, height: 1))
+        let screenRect = window?.convertToScreen(convert(viewRect, to: nil)) ?? viewRect
+
+        // 添加复制选项
+        let copyItem = NSMenuItem(title: "复制", action: #selector(copySelection(_:)), keyEquivalent: "c")
+        menu.addItem(copyItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // 添加插件注册的 SelectionActions
+        let actions = SelectionActionRegistry.shared.getAllActions()
+        for action in actions {
+            let item = NSMenuItem(
+                title: action.title,
+                action: #selector(handleSelectionAction(_:)),
+                keyEquivalent: ""
+            )
+            item.representedObject = SelectionActionContext(
+                actionId: action.id,
+                text: trimmedText,
+                screenRect: screenRect
+            )
+            item.image = NSImage(systemSymbolName: action.icon, accessibilityDescription: nil)
+            menu.addItem(item)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(withTitle: "粘贴", action: #selector(pasteFromClipboard(_:)), keyEquivalent: "v")
+
+        return menu
+    }
+
+    @objc private func pasteFromClipboard(_ sender: Any?) {
+        guard let text = NSPasteboard.general.string(forType: .string),
+              let terminalId = coordinator?.getActiveTerminalId(),
+              let pool = terminalPool else {
+            return
+        }
+        _ = pool.writeInput(terminalId: Int(terminalId), data: text)
+    }
+
+    @objc private func copySelection(_ sender: Any?) {
+        guard let activeTab = selectionTab,
+              let terminalId = activeTab.rustTerminalId,
+              let pool = terminalPool,
+              let text = pool.getSelectionText(terminalId: Int(terminalId)) else {
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    @objc private func handleSelectionAction(_ sender: NSMenuItem) {
+        guard let context = sender.representedObject as? SelectionActionContext else { return }
+
+        // 触发 action
+        SelectionPopoverController.shared.triggerAction(
+            context.actionId,
+            text: context.text,
+            at: context.screenRect
+        )
+    }
+
     // MARK: - 坐标转换
 
     /// 将屏幕坐标转换为网格坐标
-    private func screenToGrid(location: CGPoint, panelId: UUID) -> CursorPosition {
+    /// - Parameters:
+    ///   - location: 屏幕坐标
+    ///   - panelId: Panel ID
+    ///   - terminalId: 终端 ID（用于查找 contentBounds，避免依赖 activeTab 导致多终端场景下坐标错位）
+    private func screenToGrid(location: CGPoint, panelId: UUID, terminalId: Int) -> CursorPosition {
         guard let coordinator = coordinator,
               let mapper = coordinateMapper else {
             return CursorPosition(col: 0, row: 0)
@@ -1941,9 +2045,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             headerHeight: 30.0  // 与 coordinator 中的 headerHeight 一致
         )
 
-        // 获取 Panel 对应的 contentBounds
-        guard let panel = coordinator.terminalWindow.getPanel(panelId),
-              let contentBounds = tabsToRender.first(where: { $0.0 == panel.activeTab?.rustTerminalId })?.1 else {
+        // 获取 Panel 对应的 contentBounds（使用传入的 terminalId，避免 activeTab 变化导致错位）
+        guard let contentBounds = tabsToRender.first(where: { $0.0 == terminalId })?.1 else {
             return CursorPosition(col: 0, row: 0)
         }
 

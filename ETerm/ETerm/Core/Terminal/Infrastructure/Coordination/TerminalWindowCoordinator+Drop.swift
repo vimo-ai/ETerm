@@ -77,7 +77,8 @@ extension TerminalWindowCoordinator {
             objectWillChange.send()
             updateTrigger = UUID()
             scheduleRender()
-            WindowManager.shared.saveSession()
+            // 分割/布局变化，需要备份
+            WindowManager.shared.saveSessionWithBackup()
         }
     }
 

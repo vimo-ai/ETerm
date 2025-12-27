@@ -125,13 +125,8 @@ public struct DropZoneCalculator {
             )
         }
 
-        // TODO: 这里需要根据 Tab 的位置计算插入索引
-        // 目前简化处理：总是插入到末尾
-        // 完整实现需要：
-        // 1. 获取每个 Tab 的边界
-        // 2. 根据鼠标位置判断插入位置（左半部分还是右半部分）
-        // 3. 返回正确的 insertIndex
-
+        // 简化版：总是插入到末尾
+        // 如需精确计算插入位置，使用 calculateDropZoneWithTabBounds
         let insertIndex = panel.tabs.count
 
         return DropZone(

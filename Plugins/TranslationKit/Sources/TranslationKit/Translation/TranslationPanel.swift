@@ -171,8 +171,11 @@ final class TranslationController: NSObject {
 
     /// 处理翻译触发（来自 SelectionAction）
     ///
-    /// 不需要位置信息，直接展开 InfoPanel 显示翻译结果
-    func handleTranslate(text: String) {
+    /// - Parameters:
+    ///   - text: 选中的文本
+    ///   - rect: 选中文本的屏幕坐标（用于定位 InfoPanel）
+    func handleTranslate(text: String, at rect: NSRect = .zero) {
+        sourceRect = rect
         state.show(text: text, at: .zero)
         state.expand()
     }
@@ -210,7 +213,17 @@ final class TranslationController: NSObject {
     }
 
     private func showTranslationWindow() {
-        print("[TranslationController] showTranslationWindow called, host: \(host != nil ? "exists" : "nil")")
+        print("[TranslationController] showTranslationWindow called, host: \(host != nil ? "exists" : "nil"), rect: \(sourceRect)")
+
+        // 先通知主程序设置 InfoPanel 位置
+        if sourceRect != .zero {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("ETerm.InfoPanelSetPosition"),
+                object: nil,
+                userInfo: ["rect": sourceRect]
+            )
+        }
+
         host?.showInfoPanel("translation")
     }
 

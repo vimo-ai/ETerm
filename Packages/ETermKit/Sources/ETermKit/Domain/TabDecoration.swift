@@ -173,4 +173,5 @@ public struct TabDecoration: Equatable, @unchecked Sendable {
 /// - "decoration": TabDecoration? - 装饰状态，nil 表示清除
 extension Notification.Name {
     public static let tabDecorationChanged = Notification.Name("tabDecorationChanged")
+    public static let tabTitleChanged = Notification.Name("tabTitleChanged")
 }

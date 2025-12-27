@@ -1,0 +1,29 @@
+{
+    "id": "com.eterm.memex",
+    "name": "Memex",
+    "version": "1.0.0",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "loadPriority": "immediate",
+    "dependencies": [{"id": "com.eterm.claude", "minVersion": "1.0.0"}],
+    "capabilities": [],
+    "principalClass": "MemexPlugin",
+    "sidebarTabs": [
+        {
+            "id": "memex",
+            "title": "Memex",
+            "icon": "brain.head.profile",
+            "viewClass": "MemexView",
+            "renderMode": "tab"
+        }
+    ],
+    "infoPanelContents": [],
+    "commands": [],
+    "subscribes": [
+        "claude.responseComplete"
+    ],
+    "pageSlots": [],
+    "sockets": [],
+    "emits": []
+}

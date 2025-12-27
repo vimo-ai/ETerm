@@ -33,10 +33,7 @@ final class SelectionActionRegistry {
     /// - Parameter action: Action 配置
     func register(_ action: SelectionAction) {
         // 检查是否已存在
-        if actions.contains(where: { $0.id == action.id }) {
-            print("[SelectionActionRegistry] Action already registered: \(action.id)")
-            return
-        }
+        guard !actions.contains(where: { $0.id == action.id }) else { return }
 
         // 添加并按优先级排序（高优先级在前）
         actions.append(action)
@@ -46,8 +43,6 @@ final class SelectionActionRegistry {
         if let mode = action.autoTriggerOnMode {
             modeMap[mode] = action
         }
-
-        print("[SelectionActionRegistry] Registered: \(action.id) (priority: \(action.priority))")
     }
 
     /// 取消注册
@@ -59,7 +54,6 @@ final class SelectionActionRegistry {
             if let mode = action.autoTriggerOnMode {
                 modeMap.removeValue(forKey: mode)
             }
-            print("[SelectionActionRegistry] Unregistered: \(actionId)")
         }
     }
 

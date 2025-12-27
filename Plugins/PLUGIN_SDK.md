@@ -39,14 +39,13 @@ cd Plugins
 ### 2. 生成的目录结构
 
 ```
-MyPluginKit/
+MyPlugin/
 ├── Package.swift              # SPM 配置
 ├── build.sh                   # 构建脚本
 ├── Resources/
 │   └── manifest.json          # 插件清单（核心配置）
-└── Sources/MyPluginKit/
-    ├── MyPluginLogic.swift    # 业务逻辑（Extension Host 进程）
-    └── MyPluginViewProvider.swift  # 视图提供（主进程，可选）
+└── Sources/MyPlugin/
+    └── MyPluginPlugin.swift   # 插件入口（main 模式）
 ```
 
 ### 3. 构建安装
@@ -66,22 +65,17 @@ cd MyPluginKit
 
 | 组件 | 运行位置 | 职责 |
 |------|----------|------|
-| `*Logic.swift` | Extension Host | 业务逻辑、数据处理、与主进程通信 |
-| `*ViewProvider.swift` | 主进程 | 提供 SwiftUI 视图 |
+| `*Plugin.swift` | 主进程 | 业务逻辑 + 视图提供（实现 `Plugin` 协议）|
 | `manifest.json` | - | 插件配置、能力声明 |
 
-### 通信机制
+### 运行模式
 
-```
-Logic (Extension Host)          View (主进程)
-        │                              │
-        │ host.updateViewModel()       │
-        ├─────────────────────────────►│
-        │                              │ NotificationCenter
-        │ handleRequest()              │    监听更新
-        │◄─────────────────────────────┤
-        │                              │
-```
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| `main` | 在主进程运行，可直接返回 SwiftUI 视图 | 推荐，适合大多数插件 |
+| `isolated` | 逻辑运行在独立进程，通过 IPC 通信 | 需要崩溃隔离时使用 |
+
+> **注意**: 当前所有内置插件都使用 `main` 模式。
 
 ---
 
@@ -152,169 +146,82 @@ Logic (Extension Host)          View (主进程)
 
 ## 代码示例
 
-### Logic 层（Extension Host 进程）
-
-```swift
-import Foundation
-import ETermKit
-
-@objc(MyPluginLogic)
-public final class MyPluginLogic: NSObject, PluginLogic, @unchecked Sendable {
-
-    public static var id: String { "com.eterm.my-plugin" }
-
-    // 串行队列保护可变状态
-    private let stateQueue = DispatchQueue(label: "com.eterm.my-plugin.state")
-    private var _host: HostBridge?
-
-    private var host: HostBridge? {
-        get { stateQueue.sync { _host } }
-        set { stateQueue.sync { _host = newValue } }
-    }
-
-    public required override init() {
-        super.init()
-    }
-
-    public func activate(host: HostBridge) {
-        self.host = host
-        // 发送初始状态到 View
-        updateUI()
-    }
-
-    public func deactivate() {
-        host = nil
-    }
-
-    public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        // 处理订阅的事件
-    }
-
-    public func handleCommand(_ commandId: String) {
-        switch commandId {
-        case "my-plugin.refresh":
-            updateUI()
-        default:
-            break
-        }
-    }
-
-    public func handleRequest(_ requestId: String, params: [String: Any]) -> [String: Any] {
-        // 处理 View 发来的请求
-        switch requestId {
-        case "getData":
-            return ["success": true, "data": "Hello"]
-        default:
-            return ["success": false, "error": "Unknown request"]
-        }
-    }
-
-    private func updateUI() {
-        host?.updateViewModel(Self.id, data: [
-            "message": "Hello from Logic",
-            "count": 42
-        ])
-    }
-}
-```
-
-### ViewProvider 层（主进程）
+### Plugin 入口（main 模式）
 
 ```swift
 import Foundation
 import SwiftUI
 import ETermKit
 
-@objc(MyPluginViewProvider)
-public final class MyPluginViewProvider: NSObject, PluginViewProvider {
+@objc(MyPluginPlugin)
+@MainActor
+public final class MyPluginPlugin: NSObject, ETermKit.Plugin {
 
-    public required override init() {
+    public static var id = "com.eterm.my-plugin"
+
+    private var host: HostBridge?
+    @Published private var items: [String] = []
+
+    public override init() {
         super.init()
     }
 
-    @MainActor
-    public func createSidebarView(tabId: String, viewModel: Any?) -> AnyView {
-        switch tabId {
-        case "my-plugin-tab":
-            return AnyView(MyPluginView())
+    // MARK: - Lifecycle
+
+    public func activate(host: HostBridge) {
+        self.host = host
+        print("[MyPluginPlugin] Activated")
+    }
+
+    public func deactivate() {
+        print("[MyPluginPlugin] Deactivated")
+    }
+
+    // MARK: - Event Handling
+
+    public func handleEvent(_ eventName: String, payload: [String: Any]) {
+        switch eventName {
+        case "terminal.didCreate":
+            if let terminalId = payload["terminalId"] as? Int {
+                print("Terminal created: \(terminalId)")
+            }
         default:
-            return AnyView(Text("Unknown tab"))
+            break
         }
     }
+
+    public func handleCommand(_ commandId: String) {
+        switch commandId {
+        case "my-plugin.refresh":
+            items = ["Item 1", "Item 2"]
+        default:
+            break
+        }
+    }
+
+    // MARK: - View Providers
+
+    public func sidebarView(for tabId: String) -> AnyView? {
+        switch tabId {
+        case "my-plugin-tab":
+            return AnyView(MyPluginSidebarView(items: $items))
+        default:
+            return nil
+        }
+    }
+
+    // 其他视图方法使用默认实现（返回 nil）
 }
 
 // MARK: - View
 
-struct MyPluginView: View {
-    @StateObject private var state = MyPluginViewState()
+struct MyPluginSidebarView: View {
+    @Binding var items: [String]
 
     var body: some View {
-        VStack {
-            Text(state.message)
-            Text("Count: \(state.count)")
-
-            Button("Refresh") {
-                state.sendRequest("getData", params: [:])
-            }
+        List(items, id: \.self) { item in
+            Text(item)
         }
-        .onAppear { state.startListening() }
-        .onDisappear { state.stopListening() }
-    }
-}
-
-// MARK: - View State
-
-final class MyPluginViewState: ObservableObject {
-    @Published var message: String = ""
-    @Published var count: Int = 0
-
-    private var observer: Any?
-
-    func startListening() {
-        observer = NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("ETerm.UpdateViewModel"),
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            self?.handleUpdate(notification)
-        }
-
-        // 请求初始数据
-        sendRequest("getData", params: [:])
-    }
-
-    func stopListening() {
-        if let observer = observer {
-            NotificationCenter.default.removeObserver(observer)
-        }
-    }
-
-    private func handleUpdate(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let pluginId = userInfo["pluginId"] as? String,
-              pluginId == "com.eterm.my-plugin",
-              let data = userInfo["data"] as? [String: Any] else {
-            return
-        }
-
-        if let msg = data["message"] as? String {
-            message = msg
-        }
-        if let cnt = data["count"] as? Int {
-            count = cnt
-        }
-    }
-
-    func sendRequest(_ requestId: String, params: [String: Any]) {
-        NotificationCenter.default.post(
-            name: NSNotification.Name("ETerm.PluginRequest"),
-            object: nil,
-            userInfo: [
-                "pluginId": "com.eterm.my-plugin",
-                "requestId": requestId,
-                "params": params
-            ]
-        )
     }
 }
 ```

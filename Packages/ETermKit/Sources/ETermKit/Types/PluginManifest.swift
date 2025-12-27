@@ -13,6 +13,16 @@ public enum PluginRunMode: String, Sendable, Codable {
     case isolated
 }
 
+/// 插件加载优先级
+public enum PluginLoadPriority: String, Sendable, Codable {
+    /// 立即加载（窗口创建前同步加载，用于需要拦截启动事件的插件）
+    case immediate
+    /// 后台加载（窗口创建后异步加载，默认值）
+    case background
+    /// 延迟加载（用户首次使用时才加载）
+    case lazy
+}
+
 /// 插件清单
 ///
 /// 对应 manifest.json 的结构，声明插件的元信息、依赖、能力和注册项。
@@ -44,6 +54,13 @@ public struct PluginManifest: Sendable, Codable, Equatable {
     /// - `main`: 全部在主进程运行（默认，推荐内置插件用）
     /// - `isolated`: Logic 在子进程运行（进程隔离）
     public let runMode: PluginRunMode
+
+    /// 加载优先级
+    ///
+    /// - `immediate`: 窗口创建前同步加载（用于需要拦截启动事件的插件，如 Claude resume）
+    /// - `background`: 窗口创建后异步加载（默认）
+    /// - `lazy`: 用户首次使用时才加载
+    public let loadPriority: PluginLoadPriority
 
     // MARK: - 依赖
 
@@ -135,6 +152,7 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         minHostVersion: String,
         sdkVersion: String,
         runMode: PluginRunMode = .main,
+        loadPriority: PluginLoadPriority = .background,
         dependencies: [Dependency] = [],
         capabilities: [String] = [],
         principalClass: String,
@@ -159,6 +177,7 @@ public struct PluginManifest: Sendable, Codable, Equatable {
         self.minHostVersion = minHostVersion
         self.sdkVersion = sdkVersion
         self.runMode = runMode
+        self.loadPriority = loadPriority
         self.dependencies = dependencies
         self.capabilities = capabilities
         self.principalClass = principalClass
@@ -403,7 +422,7 @@ extension PluginManifest {
 
 extension PluginManifest {
     enum CodingKeys: String, CodingKey {
-        case id, name, version, minHostVersion, sdkVersion, runMode
+        case id, name, version, minHostVersion, sdkVersion, runMode, loadPriority
         case dependencies, capabilities, principalClass
         case viewModelClass, viewProviderClass
         case sidebarTabs, commands, subscribes
@@ -424,6 +443,7 @@ extension PluginManifest {
 
         // 可选字段（有默认值）
         runMode = try container.decodeIfPresent(PluginRunMode.self, forKey: .runMode) ?? .main
+        loadPriority = try container.decodeIfPresent(PluginLoadPriority.self, forKey: .loadPriority) ?? .background
         dependencies = try container.decodeIfPresent([Dependency].self, forKey: .dependencies) ?? []
         capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities) ?? []
         viewModelClass = try container.decodeIfPresent(String.self, forKey: .viewModelClass)

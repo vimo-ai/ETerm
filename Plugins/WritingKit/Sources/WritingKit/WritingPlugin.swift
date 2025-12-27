@@ -60,8 +60,6 @@ public final class WritingPlugin: NSObject, ETermKit.Plugin {
 
         // 绑定快捷键 Cmd+K 到切换命令
         host.bindKeyboard(.cmd("k"), to: Self.toggleCommandId)
-
-        print("[WritingKit] Plugin activated, Cmd+K bound to toggleComposer")
     }
 
     public func deactivate() {
@@ -73,8 +71,6 @@ public final class WritingPlugin: NSObject, ETermKit.Plugin {
         host?.unregisterCommand(commandId: Self.showCommandId)
         host?.unregisterCommand(commandId: Self.hideCommandId)
         host?.unregisterCommand(commandId: Self.showArchiveId)
-
-        print("[WritingKit] Plugin deactivated")
     }
 
     public func sidebarView(for tabId: String) -> AnyView? {

@@ -30,6 +30,9 @@ hook_event_name=$(echo "$input" | jq -r '.hook_event_name // "Stop"')
 source=$(echo "$input" | jq -r '.source // "unknown"')
 # 提取 prompt（用于生成智能标题）
 prompt=$(echo "$input" | jq -r '.prompt // ""')
+# 提取 transcript_path 和 cwd（用于 MemexKit 索引）
+transcript_path=$(echo "$input" | jq -r '.transcript_path // ""')
+cwd=$(echo "$input" | jq -r '.cwd // ""')
 
 # 读取环境变量
 terminal_id="${ETERM_TERMINAL_ID}"
@@ -80,7 +83,7 @@ case "$hook_event_name" in
         # 转义 prompt 中的特殊字符（双引号、反斜杠、换行）
         escaped_prompt=$(echo "$prompt" | jq -Rs '.')
         # 异步发送，不阻塞 Claude Code
-        (echo "{\"event_type\": \"$event_type\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"prompt\": $escaped_prompt}" | nc -w 2 -U "$socket_path") &
+        (echo "{\"event_type\": \"$event_type\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"prompt\": $escaped_prompt, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}" | nc -w 2 -U "$socket_path") &
         echo "✅ [$event_type] Notification sent async with prompt (${#prompt} chars)" >> "$LOG_FILE"
         exit 0
         ;;
@@ -106,5 +109,5 @@ case "$hook_event_name" in
 esac
 
 # 异步发送 JSON 到 ETerm Socket Server，不阻塞 Claude Code
-(echo "{\"event_type\": \"$event_type\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id}" | nc -w 2 -U "$socket_path") &
+(echo "{\"event_type\": \"$event_type\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}" | nc -w 2 -U "$socket_path") &
 echo "✅ [$event_type] Notification sent async" >> "$LOG_FILE"

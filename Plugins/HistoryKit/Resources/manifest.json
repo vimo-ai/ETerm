@@ -1,0 +1,30 @@
+{
+    "id": "com.eterm.history",
+    "name": "历史快照",
+    "version": "0.0.1-beta.1",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "dependencies": [
+        { "id": "com.eterm.workspace", "minVersion": "0.0.1-beta.1" }
+    ],
+    "capabilities": [
+        "service.register",
+        "ui.sidebar"
+    ],
+    "principalClass": "HistoryPlugin",
+    "sidebarTabs": [
+        {
+            "id": "history-panel",
+            "title": "历史",
+            "icon": "clock.arrow.circlepath",
+            "viewClass": "HistoryPanelView",
+            "renderMode": "tab"
+        }
+    ],
+    "commands": [],
+    "subscribes": [
+        "plugin.com.eterm.workspace.didUpdate"
+    ],
+    "emits": []
+}

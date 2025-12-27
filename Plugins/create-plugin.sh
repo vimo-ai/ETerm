@@ -60,7 +60,7 @@ validate_name "$PLUGIN_NAME"
 
 KEBAB_NAME=$(to_kebab_case "$PLUGIN_NAME")
 PLUGIN_ID="${2:-com.eterm.${KEBAB_NAME}}"
-PRINCIPAL_CLASS="${PLUGIN_NAME}Logic"
+PRINCIPAL_CLASS="${PLUGIN_NAME}Plugin"
 DISPLAY_NAME=$(echo "$PLUGIN_NAME" | sed 's/\([A-Z]\)/ \1/g' | sed 's/^ //')
 
 PLUGIN_DIR="${SCRIPT_DIR}/${PLUGIN_NAME}"
@@ -90,11 +90,8 @@ cp -r "$TEMPLATE_DIR" "$PLUGIN_DIR"
 mv "${PLUGIN_DIR}/Sources/__PLUGIN_NAME__" "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}"
 
 # Rename source files
-mv "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/__PLUGIN_NAME__Logic.swift" \
+mv "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/__PLUGIN_NAME__Plugin.swift" \
    "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/${PRINCIPAL_CLASS}.swift"
-
-mv "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/__PLUGIN_NAME__ViewProvider.swift" \
-   "${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/${PLUGIN_NAME}ViewProvider.swift"
 
 # Replace placeholders in all files
 log_info "Replacing placeholders..."
@@ -113,6 +110,7 @@ log_success "Plugin created: ${PLUGIN_DIR}"
 echo ""
 echo "Next steps:"
 echo "  1. Edit ${PLUGIN_DIR}/Sources/${PLUGIN_NAME}/${PRINCIPAL_CLASS}.swift"
-echo "  2. Edit ${PLUGIN_DIR}/Resources/manifest.json (add capabilities, commands, etc.)"
-echo "  3. Build: cd ${PLUGIN_DIR} && ./build.sh"
+echo "  2. Edit ${PLUGIN_DIR}/Resources/manifest.json (add capabilities, sidebarTabs, commands, etc.)"
+echo "  3. Build and install: cd ${PLUGIN_DIR} && ./build.sh"
+echo "  4. Restart ETerm to load the plugin"
 echo ""
