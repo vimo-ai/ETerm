@@ -5,6 +5,7 @@
     "minHostVersion": "0.0.1-beta.1",
     "sdkVersion": "0.0.1-beta.1",
     "runMode": "main",
+    "loadPriority": "immediate",
     "dependencies": [],
     "capabilities": [
         "ui.tabDecoration",

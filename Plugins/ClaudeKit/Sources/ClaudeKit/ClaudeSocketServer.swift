@@ -13,6 +13,8 @@ struct ClaudeHookEvent: Codable {
     let session_id: String
     let terminal_id: Int
     let prompt: String?  // 用户提交的问题（仅 user_prompt_submit 事件）
+    let transcript_path: String?  // JSONL 文件路径（用于 MemexKit 索引）
+    let cwd: String?  // 工作目录
 }
 
 /// Socket Server - 接收来自 Claude Hook 的调用
