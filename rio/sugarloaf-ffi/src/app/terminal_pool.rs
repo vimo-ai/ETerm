@@ -1090,15 +1090,34 @@ impl TerminalPool {
     /// 设置选区
     ///
     /// 使用 try_lock 避免阻塞主线程
+    /// 自动修正宽字符边界，确保选中整个宽字符：
+    /// - start 在 spacer 上 → 向左修正到宽字符
+    /// - end 在宽字符上 → 向右扩展到 spacer
     pub fn set_selection(&self, id: usize, start_row: usize, start_col: usize, end_row: usize, end_col: usize) -> bool {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            // 直接操作 SelectionOverlay，无需 Terminal 锁
+            // 尝试修正宽字符边界（如果能获取锁）
+            let (adjusted_start_col, adjusted_end_col) = if let Some(terminal) = entry.terminal.try_lock() {
+                let state = terminal.state();
+                let grid = &state.grid;
+
+                // 修正 start：spacer 向左到宽字符
+                let adj_start = Self::adjust_start_for_wide_char(start_row, start_col, grid);
+                // 修正 end：宽字符向右扩展到 spacer
+                let adj_end = Self::adjust_end_for_wide_char(end_row, end_col, grid);
+
+                (adj_start, adj_end)
+            } else {
+                // 获取不到锁时保持原样（极少情况）
+                (start_col, end_col)
+            };
+
+            // 操作 SelectionOverlay
             entry.selection_overlay.update(
                 start_row as i32,
-                start_col as u32,
+                adjusted_start_col as u32,
                 end_row as i32,
-                end_col as u32,
+                adjusted_end_col as u32,
                 crate::infra::SelectionType::Simple,
             );
 
@@ -1108,6 +1127,45 @@ impl TerminalPool {
         } else {
             false
         }
+    }
+
+    /// 修正选区起点：如果在 spacer 上，向左移到宽字符
+    fn adjust_start_for_wide_char(
+        absolute_row: usize,
+        col: usize,
+        grid: &crate::domain::views::GridView,
+    ) -> usize {
+        const WIDE_CHAR_SPACER: u16 = 0b0000_0000_0100_0000;
+
+        if let Some(screen_row) = grid.absolute_to_screen(absolute_row) {
+            if let Some(row) = grid.row(screen_row) {
+                let cells = row.cells();
+                if col < cells.len() && cells[col].flags & WIDE_CHAR_SPACER != 0 && col > 0 {
+                    return col - 1;
+                }
+            }
+        }
+        col
+    }
+
+    /// 修正选区终点：如果在宽字符上，向右扩展到 spacer
+    fn adjust_end_for_wide_char(
+        absolute_row: usize,
+        col: usize,
+        grid: &crate::domain::views::GridView,
+    ) -> usize {
+        const WIDE_CHAR: u16 = 0b0000_0000_0010_0000;
+
+        if let Some(screen_row) = grid.absolute_to_screen(absolute_row) {
+            if let Some(row) = grid.row(screen_row) {
+                let cells = row.cells();
+                // 如果在宽字符上，向右扩展到包含 spacer
+                if col < cells.len() && cells[col].flags & WIDE_CHAR != 0 && col + 1 < cells.len() {
+                    return col + 1;
+                }
+            }
+        }
+        col
     }
 
     /// 清除选区
@@ -1413,7 +1471,7 @@ impl TerminalPool {
         // 解决：快速获取 Arc 引用后立即释放读锁，耗时操作在锁外执行
 
         // 阶段 1：快速获取 Arc 引用（读锁只持有几微秒）
-        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, _selection_overlay, ime_state_arc) = {
+        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, selection_overlay, ime_state_arc) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
                 Some(entry) => {
@@ -1440,6 +1498,10 @@ impl TerminalPool {
                     // 检查 DEC Synchronized Update (mode 2026)
                     // 如果正在 sync 中（收到 BSU 但未收到 ESU），跳过渲染以避免闪烁
                     if terminal.is_syncing() {
+                        // 渲染被跳过，如果选区脏标记已清除，需要重新标记确保下帧继续渲染
+                        if sel_dirty_cleared {
+                            selection_overlay.mark_dirty();
+                        }
                         return true;
                     }
 
@@ -1465,6 +1527,10 @@ impl TerminalPool {
                 },
                 None => {
                     // 锁被占用，跳过这一帧
+                    // 渲染被跳过，如果选区脏标记已清除，需要重新标记确保下帧继续渲染
+                    if sel_dirty_cleared {
+                        selection_overlay.mark_dirty();
+                    }
                     return true;
                 }
             }
@@ -1556,6 +1622,10 @@ impl TerminalPool {
                 }
             } else {
                 // 写锁被占用，跳过这一帧，下一帧重试
+                // 渲染被跳过，如果选区脏标记已清除，需要重新标记确保下帧继续渲染
+                if sel_dirty_cleared {
+                    selection_overlay.mark_dirty();
+                }
                 return true;
             }
         }
@@ -1647,6 +1717,10 @@ impl TerminalPool {
                 }
             } else {
                 // 写锁被占用，跳过这一帧，下一帧重试
+                // 渲染被跳过，如果选区脏标记已清除，需要重新标记确保下帧继续渲染
+                if sel_dirty_cleared {
+                    selection_overlay.mark_dirty();
+                }
                 return true;
             }
         }
@@ -1892,15 +1966,6 @@ impl TerminalPool {
             //     n, frame_time, render_time, hits, layout_hits, misses, layout.len());
 
             // renderer.print_frame_stats("render_all");
-        }
-
-        // [MemDebug] 定期输出内存报告（每 600 帧 = ~10 秒 @ 60fps）
-        {
-            static FRAME_COUNTER: AtomicU64 = AtomicU64::new(0);
-            let frame = FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
-            if frame % 600 == 0 {
-                self.report_memory_stats();
-            }
         }
     }
 
@@ -2640,99 +2705,6 @@ impl TerminalPool {
         cursor_paint.set_style(skia_safe::PaintStyle::Fill);
         let cursor_rect = skia_safe::Rect::from_xywh(ime_cursor_x, ime_y + 2.0, 2.0, line_height.value - 4.0);
         canvas.draw_rect(cursor_rect, &cursor_paint);
-    }
-
-    /// [MemDebug] 输出全面的内存使用报告
-    ///
-    /// 统计所有主要内存消耗组件：
-    /// 1. LineCache - 行渲染缓存（Images）
-    /// 2. Terminal Grids - 每个终端的 scrollback buffer
-    /// 3. Render Caches - 每个终端的渲染缓存（Images）
-    /// 4. Surface Caches - GPU Surface 缓存
-    pub fn report_memory_stats(&self) {
-        // 1. LineCache 内存
-        let (line_cache_entries, line_cache_images, line_cache_max, line_cache_bytes) = {
-            let renderer = self.renderer.lock();
-            renderer.cache.memory_stats()
-        };
-        let line_cache_mb = line_cache_bytes / (1024 * 1024);
-
-        // 2. 终端 Grid 内存
-        let mut total_grid_bytes: usize = 0;
-        let mut terminal_count = 0;
-        let mut total_history_lines: usize = 0;
-        let mut total_grid_lines: usize = 0;
-
-        // 3. 渲染缓存内存
-        let mut total_render_cache_bytes: usize = 0;
-        let mut render_cache_count = 0;
-
-        // 4. Surface 缓存内存
-        let mut total_surface_bytes: usize = 0;
-        let mut surface_count = 0;
-
-        // 遍历所有终端
-        if let Some(terminals) = self.terminals.try_read() {
-            terminal_count = terminals.len();
-
-            for (_id, entry) in terminals.iter() {
-                // Grid 内存
-                if let Some(terminal) = entry.terminal.try_lock() {
-                    let (history_size, total_lines, _cols, grid_bytes) = terminal.grid_memory_stats();
-                    total_grid_bytes += grid_bytes;
-                    total_history_lines += history_size;
-                    total_grid_lines += total_lines;
-                }
-
-                // 渲染缓存内存
-                if let Some(ref cache) = entry.render_cache {
-                    let cache_bytes = (cache.width * cache.height * 4) as usize;
-                    total_render_cache_bytes += cache_bytes;
-                    render_cache_count += 1;
-                }
-
-                // Surface 缓存内存
-                if let Some(ref surface) = entry.surface_cache {
-                    let surface_bytes = (surface.width * surface.height * 4) as usize;
-                    total_surface_bytes += surface_bytes;
-                    surface_count += 1;
-                }
-            }
-        }
-
-        let grid_mb = total_grid_bytes / (1024 * 1024);
-        let render_cache_mb = total_render_cache_bytes / (1024 * 1024);
-        let surface_mb = total_surface_bytes / (1024 * 1024);
-
-        // 5. Skia GPU 资源缓存
-        let (skia_cache_bytes, skia_cache_limit, skia_purgeable) = {
-            let sugarloaf = self.sugarloaf.lock();
-            let context = sugarloaf.get_context();
-            let mut skia_ctx = context.skia_context.clone();
-            let usage = skia_ctx.resource_cache_usage();
-            let limit = skia_ctx.resource_cache_limit();
-            let purgeable = skia_ctx.resource_cache_purgeable_bytes();
-            (usage.resource_bytes, limit, purgeable)
-        };
-        let skia_cache_mb = skia_cache_bytes / (1024 * 1024);
-        let skia_limit_mb = skia_cache_limit / (1024 * 1024);
-        let skia_purgeable_mb = skia_purgeable / (1024 * 1024);
-
-        // 总计（去重：LineCache 和 SkiaGPU 指向同一块 GPU 内存，只计 SkiaGPU）
-        // LineCache 统计的是理论值 (width*height*4)，SkiaGPU 是实际 GPU 占用
-        let total_tracked_bytes = total_grid_bytes + total_render_cache_bytes + total_surface_bytes + skia_cache_bytes;
-        let total_mb = total_tracked_bytes / (1024 * 1024);
-
-        // 输出报告
-        crate::rust_log_info!(
-            "[MemDebug] REPORT: total={}MB (dedup) | LineCache={}MB ({}/{} entries, {} images, theoretical) | Grid={}MB ({} terminals, {} history) | RenderCache={}MB | Surface={}MB | SkiaGPU={}MB (limit={}MB)",
-            total_mb,
-            line_cache_mb, line_cache_entries, line_cache_max, line_cache_images,
-            grid_mb, terminal_count, total_history_lines,
-            render_cache_mb,
-            surface_mb,
-            skia_cache_mb, skia_limit_mb
-        );
     }
 }
 

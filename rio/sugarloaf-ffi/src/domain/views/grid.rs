@@ -302,9 +302,17 @@ fn detect_urls(text: &str) -> Vec<UrlRange> {
         let byte_start = mat.start();
         let byte_end = mat.end() - trimmed_chars;
 
-        // 转换为字符位置（处理 UTF-8 多字节字符）
-        let char_start = text[..byte_start].chars().count();
-        let char_end = char_start + text[byte_start..byte_end].chars().count() - 1;
+        // 安全地获取切片（处理 UTF-8 字符边界）
+        let Some(prefix) = text.get(..byte_start) else {
+            continue;
+        };
+        let Some(url_slice) = text.get(byte_start..byte_end) else {
+            continue;
+        };
+
+        // 转换为字符位置
+        let char_start = prefix.chars().count();
+        let char_end = char_start + url_slice.chars().count() - 1;
 
         urls.push(UrlRange {
             start_col: char_start,

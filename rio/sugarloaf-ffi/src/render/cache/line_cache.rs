@@ -20,8 +20,6 @@ const MAX_STATE_ENTRIES_PER_LINE: usize = 8;
 /// 两层缓存（带 LRU 淘汰）
 pub struct LineCache {
     cache: LruCache<u64, LineCacheEntry>,
-    /// [MemDebug] 累计总内存占用（字节）
-    total_memory_bytes: usize,
 }
 
 /// 缓存条目（每个文本内容一个）
@@ -106,7 +104,6 @@ impl LineCache {
     pub fn new() -> Self {
         Self {
             cache: LruCache::new(NonZeroUsize::new(MAX_TEXT_ENTRIES).unwrap()),
-            total_memory_bytes: 0,
         }
     }
 
@@ -160,130 +157,23 @@ impl LineCache {
         layout: GlyphLayout,
         image: skia_safe::Image,
     ) {
-        // [MemDebug] 计算新 Image 内存占用
-        let image_width = image.width();
-        let image_height = image.height();
-        let new_image_bytes = (image_width * image_height * 4) as usize; // BGRA8888
-
-        // 先检查是否已存在
-        let exists = self.cache.contains(&text_hash);
-
-        if exists {
-            let entry = self.cache.get_mut(&text_hash).unwrap();
+        if let Some(entry) = self.cache.get_mut(&text_hash) {
+            // 已存在，更新布局和内层缓存
             entry.layout = layout;
-
-            // 检查内层是否会淘汰
-            let inner_will_evict = entry.renders.len() >= MAX_STATE_ENTRIES_PER_LINE
-                && !entry.renders.contains(&state_hash);
-
-            // 如果内层会淘汰，先计算被淘汰 Image 的内存
-            let evicted_inner_bytes = if inner_will_evict {
-                entry.renders.peek_lru()
-                    .map(|(_, img)| (img.width() * img.height() * 4) as usize)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
-            // 检查是否覆盖已存在的 state_hash
-            let replaced_bytes = if entry.renders.contains(&state_hash) {
-                entry.renders.peek(&state_hash)
-                    .map(|img| (img.width() * img.height() * 4) as usize)
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
             entry.renders.put(state_hash, image);
-
-            // 更新总内存
-            self.total_memory_bytes = self.total_memory_bytes
-                .saturating_sub(evicted_inner_bytes)
-                .saturating_sub(replaced_bytes)
-                .saturating_add(new_image_bytes);
-
         } else {
-            // 检查外层是否会淘汰
-            let outer_will_evict = self.cache.len() >= MAX_TEXT_ENTRIES;
-
-            // 如果外层会淘汰，计算被淘汰条目的所有 Image 内存
-            let evicted_outer_bytes = if outer_will_evict {
-                self.cache.peek_lru()
-                    .map(|(_, entry)| {
-                        entry.renders.iter()
-                            .map(|(_, img)| (img.width() * img.height() * 4) as usize)
-                            .sum::<usize>()
-                    })
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
             // 新建条目
             let mut renders = LruCache::new(
                 NonZeroUsize::new(MAX_STATE_ENTRIES_PER_LINE).unwrap()
             );
             renders.put(state_hash, image);
-
-            self.cache.put(text_hash, LineCacheEntry {
-                layout,
-                renders,
-            });
-
-            // 更新总内存
-            self.total_memory_bytes = self.total_memory_bytes
-                .saturating_sub(evicted_outer_bytes)
-                .saturating_add(new_image_bytes);
-
-            // [MemDebug] 记录（每 100 条或缓存满时）
-            let entries = self.cache.len();
-            if entries % 100 == 0 || outer_will_evict {
-                let total_images = self.count_total_images();
-                let total_mem_mb = self.total_memory_bytes / (1024 * 1024);
-                crate::rust_log_info!(
-                    "[MemDebug] INSERT entries={}/{} total_images={} img={}x{} total_mem={}MB evicted={}KB",
-                    entries,
-                    MAX_TEXT_ENTRIES,
-                    total_images,
-                    image_width,
-                    image_height,
-                    total_mem_mb,
-                    evicted_outer_bytes / 1024
-                );
-            }
+            self.cache.put(text_hash, LineCacheEntry { layout, renders });
         }
-    }
-
-    /// [MemDebug] 统计所有 Image 总数
-    fn count_total_images(&self) -> usize {
-        self.cache.iter().map(|(_, entry)| entry.renders.len()).sum()
     }
 
     /// 清空缓存（窗口 resize 时调用）
     pub fn clear(&mut self) {
-        let old_entries = self.cache.len();
-        let old_images = self.count_total_images();
-        let old_mem_mb = self.total_memory_bytes / (1024 * 1024);
         self.cache.clear();
-        self.total_memory_bytes = 0;
-        crate::rust_log_info!(
-            "[MemDebug] CLEAR old_entries={} old_images={} freed_mem={}MB",
-            old_entries,
-            old_images,
-            old_mem_mb
-        );
-    }
-
-    /// [MemDebug] 获取内存统计
-    pub fn memory_stats(&self) -> (usize, usize, usize, usize) {
-        let entries = self.cache.len();
-        let total_images = self.count_total_images();
-        (entries, total_images, MAX_TEXT_ENTRIES, self.total_memory_bytes)
-    }
-
-    /// [MemDebug] 获取累计内存（字节）
-    pub fn total_memory(&self) -> usize {
-        self.total_memory_bytes
     }
 
     /// 获取当前缓存条目数（用于调试）
