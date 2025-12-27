@@ -71,6 +71,7 @@ enum TabContentType: String, Codable {
 /// - 旧 session 无此字段时默认为 terminal
 /// - cwd 仅对 terminal 类型有意义
 /// - userTitle 用于保存用户手动重命名的标题（最高优先级）
+/// - pluginTitle 用于保存插件设置的标题（次优先级，如 Claude 会话标题）
 struct TabState: Codable {
     let tabId: String  // UUID string（用于持久化，确保重启后 ID 一致）
     let title: String
@@ -80,6 +81,12 @@ struct TabState: Codable {
     ///
     /// 向后兼容：旧 session 无此字段时为 nil
     let userTitle: String?
+
+    /// 插件设置的标题（次优先级，可选）
+    ///
+    /// 用于保存插件设置的标题，如 Claude 会话标题。
+    /// 向后兼容：旧 session 无此字段时为 nil
+    let pluginTitle: String?
 
     /// Tab 内容类型
     ///
@@ -93,22 +100,24 @@ struct TabState: Codable {
     // MARK: - 便捷构造器
 
     /// 创建终端 Tab 状态
-    init(tabId: String, title: String, cwd: String, userTitle: String? = nil) {
+    init(tabId: String, title: String, cwd: String, userTitle: String? = nil, pluginTitle: String? = nil) {
         self.tabId = tabId
         self.title = title
         self.cwd = cwd
         self.userTitle = userTitle
+        self.pluginTitle = pluginTitle
         self.contentType = .terminal
         self.viewId = nil
         self.pluginId = nil
     }
 
     /// 创建 View Tab 状态
-    init(tabId: String, title: String, viewId: String, pluginId: String? = nil, userTitle: String? = nil) {
+    init(tabId: String, title: String, viewId: String, pluginId: String? = nil, userTitle: String? = nil, pluginTitle: String? = nil) {
         self.tabId = tabId
         self.title = title
         self.cwd = ""  // View Tab 不需要 cwd
         self.userTitle = userTitle
+        self.pluginTitle = pluginTitle
         self.contentType = .view
         self.viewId = viewId
         self.pluginId = pluginId
@@ -160,14 +169,21 @@ struct CodableRect: Codable {
 /// - 启动时恢复窗口状态
 /// - 窗口关闭时从 session 移除
 /// - 管理插件数据的存取
+/// - 提供备份和恢复保护机制
 final class SessionManager {
     static let shared = SessionManager()
 
     private let sessionFilePath = ETermPaths.sessionConfig
 
+    /// 备份文件保留数量
+    private let maxBackupCount = 5
+
     /// 插件数据缓存（内存中，保存时合并）
     private var pluginDataCache: [String: String] = [:]
     private let pluginLock = NSLock()
+
+    /// 上次成功保存的窗口数量（用于检测异常）
+    private var lastSavedWindowCount: Int = 0
 
     private init() {
         // 启动时加载插件数据到缓存
@@ -183,10 +199,35 @@ final class SessionManager {
 
     // MARK: - Session 保存和加载
 
-    /// 保存 Session
+    /// 保存 Session（带备份和保护机制）
     ///
-    /// - Parameter windows: 窗口状态数组
-    func save(windows: [WindowState]) {
+    /// - Parameters:
+    ///   - windows: 窗口状态数组
+    ///   - createBackup: 是否创建备份（默认 false）
+    ///
+    /// 备份时机说明：
+    /// - `true`: 有意义的变化（新增/删除 tab/panel/page/window、应用启动/关闭）
+    /// - `false`: 位置调整（窗口移动/调整大小、panel 分隔比例变化）
+    ///
+    /// 保护机制：
+    /// 1. 空数据保护：如果 windows 为空且文件已存在，拒绝覆盖
+    /// 2. 原子写入：使用临时文件+重命名确保写入完整性
+    func save(windows: [WindowState], createBackup: Bool = false) {
+        let fileManager = FileManager.default
+        let fileExists = fileManager.fileExists(atPath: sessionFilePath)
+
+        // 空数据保护：如果 windows 为空且文件已存在，拒绝覆盖
+        if windows.isEmpty && fileExists {
+            logWarn("Session 保存被阻止：windows 为空，拒绝覆盖现有 session 文件")
+            return
+        }
+
+        // 异常检测：窗口数量骤降可能是异常
+        if lastSavedWindowCount > 0 && windows.count == 0 {
+            logWarn("Session 保存被阻止：窗口数量从 \(lastSavedWindowCount) 骤降到 0，可能是异常")
+            return
+        }
+
         pluginLock.lock()
         let plugins = pluginDataCache.isEmpty ? nil : pluginDataCache
         pluginLock.unlock()
@@ -201,9 +242,104 @@ final class SessionManager {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(session)
 
-            try data.write(to: URL(fileURLWithPath: sessionFilePath))
+            // 只在有意义的变化时创建备份
+            if createBackup && fileExists {
+                try self.createBackup()
+            }
+
+            // 使用原子写入
+            let tempPath = sessionFilePath + ".tmp"
+            try data.write(to: URL(fileURLWithPath: tempPath))
+
+            // 原子替换
+            if fileExists {
+                try fileManager.removeItem(atPath: sessionFilePath)
+            }
+            try fileManager.moveItem(atPath: tempPath, toPath: sessionFilePath)
+
+            // 更新上次保存的窗口数量
+            lastSavedWindowCount = windows.count
         } catch {
             logError("保存 Session 失败: \(error)")
+        }
+    }
+
+    // MARK: - 备份机制
+
+    /// 创建备份（轮转机制）
+    ///
+    /// 保留最近 N 个备份，格式：session.json.bak.1, session.json.bak.2, ...
+    /// 数字越小越新
+    private func createBackup() throws {
+        let fileManager = FileManager.default
+
+        // 删除最旧的备份（如果超过限制）
+        let oldestPath = "\(sessionFilePath).bak.\(maxBackupCount)"
+        if fileManager.fileExists(atPath: oldestPath) {
+            try fileManager.removeItem(atPath: oldestPath)
+        }
+
+        // 轮转备份：N-1 -> N, N-2 -> N-1, ..., 1 -> 2
+        for i in stride(from: maxBackupCount - 1, through: 1, by: -1) {
+            let sourcePath = "\(sessionFilePath).bak.\(i)"
+            let destPath = "\(sessionFilePath).bak.\(i + 1)"
+            if fileManager.fileExists(atPath: sourcePath) {
+                try fileManager.moveItem(atPath: sourcePath, toPath: destPath)
+            }
+        }
+
+        // 当前文件 -> bak.1
+        let latestBackupPath = "\(sessionFilePath).bak.1"
+        try fileManager.copyItem(atPath: sessionFilePath, toPath: latestBackupPath)
+    }
+
+    /// 获取所有备份文件路径（按时间从新到旧）
+    func listBackups() -> [String] {
+        var backups: [String] = []
+        for i in 1...maxBackupCount {
+            let backupPath = "\(sessionFilePath).bak.\(i)"
+            if FileManager.default.fileExists(atPath: backupPath) {
+                backups.append(backupPath)
+            }
+        }
+        return backups
+    }
+
+    /// 从备份恢复
+    ///
+    /// - Parameter backupIndex: 备份索引（1 = 最新，5 = 最旧）
+    /// - Returns: 是否恢复成功
+    @discardableResult
+    func restoreFromBackup(index: Int) -> Bool {
+        guard index >= 1 && index <= maxBackupCount else {
+            logError("无效的备份索引: \(index)")
+            return false
+        }
+
+        let backupPath = "\(sessionFilePath).bak.\(index)"
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(atPath: backupPath) else {
+            logError("备份文件不存在: \(backupPath)")
+            return false
+        }
+
+        do {
+            // 先验证备份文件是否有效
+            let data = try Data(contentsOf: URL(fileURLWithPath: backupPath))
+            let _ = try JSONDecoder().decode(SessionState.self, from: data)
+
+            // 验证通过，执行恢复
+            if fileManager.fileExists(atPath: sessionFilePath) {
+                try fileManager.removeItem(atPath: sessionFilePath)
+            }
+            try fileManager.copyItem(atPath: backupPath, toPath: sessionFilePath)
+
+            logInfo("从备份恢复成功: \(backupPath)")
+            return true
+        } catch {
+            logError("从备份恢复失败: \(error)")
+            return false
         }
     }
 
@@ -239,11 +375,17 @@ final class SessionManager {
         pluginLock.unlock()
     }
 
-    /// 加载 Session
+    /// 加载 Session（带自动恢复机制）
     ///
     /// - Returns: Session 状态，如果不存在或解析失败返回 nil
+    ///
+    /// 恢复机制：
+    /// 1. 尝试加载主文件
+    /// 2. 如果主文件损坏，自动尝试从最新备份恢复
+    /// 3. 记录详细日志便于排查问题
     func load() -> SessionState? {
         guard FileManager.default.fileExists(atPath: sessionFilePath) else {
+            logInfo("Session 文件不存在，将创建新 session")
             return nil
         }
 
@@ -251,11 +393,60 @@ final class SessionManager {
             let data = try Data(contentsOf: URL(fileURLWithPath: sessionFilePath))
             let decoder = JSONDecoder()
             let session = try decoder.decode(SessionState.self, from: data)
+
+            // 记录成功加载的信息
+            logInfo("Session 加载成功：\(session.windows.count) 个窗口")
+            lastSavedWindowCount = session.windows.count
+
             return session
         } catch {
             logError("加载 Session 失败: \(error)")
+
+            // 尝试从备份恢复
+            logWarn("主 Session 文件损坏，尝试从备份恢复...")
+            if let restoredSession = tryLoadFromBackup() {
+                logInfo("从备份恢复成功：\(restoredSession.windows.count) 个窗口")
+                return restoredSession
+            }
+
+            logError("所有备份恢复尝试均失败，将创建新 session")
             return nil
         }
+    }
+
+    /// 尝试从备份加载 Session
+    ///
+    /// 按顺序尝试每个备份，直到成功或全部失败
+    private func tryLoadFromBackup() -> SessionState? {
+        for index in 1...maxBackupCount {
+            let backupPath = "\(sessionFilePath).bak.\(index)"
+
+            guard FileManager.default.fileExists(atPath: backupPath) else {
+                continue
+            }
+
+            do {
+                let data = try Data(contentsOf: URL(fileURLWithPath: backupPath))
+                let session = try JSONDecoder().decode(SessionState.self, from: data)
+
+                // 验证 session 有效性（至少有一个窗口）
+                if session.windows.isEmpty {
+                    logWarn("备份 \(index) 为空，跳过")
+                    continue
+                }
+
+                // 成功恢复，将备份复制回主文件
+                logInfo("从备份 \(index) 恢复成功")
+                try? FileManager.default.copyItem(atPath: backupPath, toPath: sessionFilePath)
+
+                return session
+            } catch {
+                logWarn("备份 \(index) 加载失败: \(error)")
+                continue
+            }
+        }
+
+        return nil
     }
 
     /// 清除 Session
