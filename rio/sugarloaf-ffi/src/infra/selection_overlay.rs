@@ -109,6 +109,11 @@ impl SelectionOverlay {
         self.dirty.swap(false, Ordering::AcqRel)
     }
 
+    /// 标记为脏（渲染失败时重新标记，确保下帧继续渲染）
+    pub fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::Release);
+    }
+
     /// 检查是否脏（不清除）
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Acquire)
@@ -197,5 +202,49 @@ mod tests {
 
         overlay.update(0, 0, 10, 10, SelectionType::Simple);
         assert_eq!(overlay.snapshot().unwrap().ty, SelectionType::Simple);
+    }
+
+    #[test]
+    fn test_mark_dirty() {
+        let overlay = SelectionOverlay::new();
+
+        // 初始状态不脏
+        assert!(!overlay.is_dirty());
+
+        // mark_dirty 设置脏标记
+        overlay.mark_dirty();
+        assert!(overlay.is_dirty());
+
+        // check_and_clear_dirty 返回 true 并清除
+        assert!(overlay.check_and_clear_dirty());
+        assert!(!overlay.is_dirty());
+
+        // 再次 mark_dirty
+        overlay.mark_dirty();
+        assert!(overlay.is_dirty());
+    }
+
+    #[test]
+    fn test_render_skip_recovery() {
+        // 模拟渲染跳过后重新标记的场景
+        let overlay = SelectionOverlay::new();
+
+        // 1. 更新选区，标记为脏
+        overlay.update(10, 5, 20, 15, SelectionType::Simple);
+        assert!(overlay.is_dirty());
+
+        // 2. 渲染开始前检查并清除脏标记（模拟 render_terminal 开头的行为）
+        let sel_dirty_cleared = overlay.check_and_clear_dirty();
+        assert!(sel_dirty_cleared);
+        assert!(!overlay.is_dirty());
+
+        // 3. 模拟渲染被跳过（try_lock 失败等），重新标记脏
+        if sel_dirty_cleared {
+            overlay.mark_dirty();
+        }
+
+        // 4. 验证脏标记被恢复，下一帧会继续渲染
+        assert!(overlay.is_dirty());
+        assert!(overlay.check_and_clear_dirty());
     }
 }
