@@ -307,6 +307,11 @@ pub struct TerminalPool {
     /// 待处理的终端 resize (terminal_id, cols, rows, width, height)
     /// 当 CVDisplayLink 线程无法获取 terminals 写锁时，将 resize 排队
     pending_terminal_resizes: Mutex<Vec<(usize, u16, u16, f32, f32)>>,
+
+    /// 缓存的字体度量 (cell_width, cell_height, line_height)
+    /// 启动时计算一次，只在字体大小/scale 变化时更新
+    /// 使用原子读写避免锁争用
+    cached_font_metrics: std::sync::RwLock<(f32, f32, f32)>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -396,7 +401,15 @@ impl TerminalPool {
         );
 
         // 创建渲染器
-        let renderer = Renderer::new(font_context.clone(), render_config.clone());
+        let mut renderer = Renderer::new(font_context.clone(), render_config.clone());
+
+        // 启动时计算一次 font metrics 并缓存
+        let metrics = renderer.get_font_metrics();
+        let initial_font_metrics = (
+            metrics.cell_width.value,
+            metrics.cell_height.value,
+            metrics.cell_height.value * config.line_height,
+        );
 
         // 创建 Sugarloaf（使用共享的 font_library）
         let sugarloaf = Self::create_sugarloaf(&config, &font_library, &render_config)?;
@@ -419,6 +432,8 @@ impl TerminalPool {
             pending_scale: Mutex::new(None),
             pending_font_size: Mutex::new(None),
             pending_terminal_resizes: Mutex::new(Vec::new()),
+            // 缓存初始 font metrics
+            cached_font_metrics: std::sync::RwLock::new(initial_font_metrics),
         })
     }
 
@@ -1854,6 +1869,15 @@ impl TerminalPool {
             {
                 let mut renderer = self.renderer.lock();
                 renderer.set_scale(scale);
+                // 更新 font metrics 缓存（scale 变化会影响物理像素值）
+                let metrics = renderer.get_font_metrics();
+                let new_metrics = (
+                    metrics.cell_width.value,
+                    metrics.cell_height.value,
+                    metrics.cell_height.value * self.config.line_height,
+                );
+                drop(renderer);  // 先释放 renderer 锁
+                *self.cached_font_metrics.write().unwrap() = new_metrics;
             }
         }
 
@@ -1862,6 +1886,15 @@ impl TerminalPool {
         if let Some(font_size) = pending_font_size {
             let mut renderer = self.renderer.lock();
             renderer.set_font_size(LogicalPixels::new(font_size));
+            // 更新 font metrics 缓存
+            let metrics = renderer.get_font_metrics();
+            let new_metrics = (
+                metrics.cell_width.value,
+                metrics.cell_height.value,
+                metrics.cell_height.value * self.config.line_height,
+            );
+            drop(renderer);  // 先释放 renderer 锁
+            *self.cached_font_metrics.write().unwrap() = new_metrics;
         }
 
         // 4. 应用待处理的终端 resize
@@ -2289,24 +2322,28 @@ impl TerminalPool {
     /// - cell_width: 单元格宽度（物理像素）
     /// - cell_height: 基础单元格高度（物理像素，不含 line_height_factor）
     /// - line_height: 实际行高（物理像素，= cell_height * line_height_factor）
-    /// 获取字体度量
     ///
-    /// 使用 try_lock 避免阻塞主线程
-    /// 如果锁被占用，返回缓存的默认值（基于 config）
+    /// 直接返回缓存值，无锁争用。缓存在以下时机更新：
+    /// - 启动时初始化
+    /// - Cmd+/- 调整字体大小
+    /// - DPI/scale 变化
     pub fn get_font_metrics(&self) -> (f32, f32, f32) {
+        // 直接读取缓存，无锁争用（RwLock 读锁极快）
+        *self.cached_font_metrics.read().unwrap()
+    }
+
+    /// 更新 font metrics 缓存（内部方法）
+    ///
+    /// 在字体大小或 scale 变化后调用
+    fn update_font_metrics_cache(&self) {
         if let Some(mut renderer) = self.renderer.try_lock() {
             let metrics = renderer.get_font_metrics();
-            let cell_width = metrics.cell_width.value;
-            let cell_height = metrics.cell_height.value;
-            let line_height = cell_height * self.config.line_height;
-            (cell_width, cell_height, line_height)
-        } else {
-            // 锁被占用，返回基于 config 的估算值
-            // 假设每个字符宽度约为字体大小的 0.6 倍（等宽字体）
-            let estimated_width = self.config.font_size * 0.6;
-            let estimated_height = self.config.font_size * 1.2;
-            let line_height = estimated_height * self.config.line_height;
-            (estimated_width, estimated_height, line_height)
+            let new_metrics = (
+                metrics.cell_width.value,
+                metrics.cell_height.value,
+                metrics.cell_height.value * self.config.line_height,
+            );
+            *self.cached_font_metrics.write().unwrap() = new_metrics;
         }
     }
 
@@ -2344,6 +2381,8 @@ impl TerminalPool {
         if updated {
             // 成功时清除待处理队列（避免旧值被回滚）
             self.pending_font_size.lock().take();
+            // 更新 font metrics 缓存
+            self.update_font_metrics_cache();
         } else {
             // 锁被占用，排队待处理更新
             *self.pending_font_size.lock() = Some(new_font_size);
