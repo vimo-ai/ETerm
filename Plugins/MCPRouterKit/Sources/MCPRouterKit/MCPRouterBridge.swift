@@ -6,6 +6,7 @@
 
 import Foundation
 import MCPRouterCore
+import ETermKit
 
 // MARK: - DTO Types
 

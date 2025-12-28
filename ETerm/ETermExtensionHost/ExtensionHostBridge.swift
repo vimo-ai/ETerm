@@ -568,11 +568,19 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         if let dir = ProcessInfo.processInfo.environment["ETERM_SOCKET_DIR"] {
             return dir
         }
-        return NSHomeDirectory() + "/.eterm/run/sockets"
+        // 支持 ETERM_HOME 环境变量
+        let etermHome = ProcessInfo.processInfo.environment["ETERM_HOME"]
+            ?? NSHomeDirectory() + "/.eterm"
+        return etermHome + "/run/sockets"
     }
 
     func socketPath(for namespace: String) -> String {
         return "\(socketDirectory)/\(namespace).sock"
+    }
+
+    var socketService: SocketServiceProtocol? {
+        // isolated 模式不支持 SocketService（SocketIO 库只在主应用链接）
+        nil
     }
 
     // MARK: - Internal

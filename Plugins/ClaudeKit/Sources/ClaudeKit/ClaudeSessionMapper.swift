@@ -7,9 +7,10 @@
 //  设计原则：
 //  - 运行时映射：terminalId ↔ sessionId（快速查询）
 //  - 持久化映射：tabId → sessionId（重启恢复）
-//  - 使用本地文件存储（~/.eterm/plugins/claude/sessions.json）
+//  - 使用本地文件存储（$ETERM_HOME/plugins/claude/sessions.json）
 
 import Foundation
+import ETermKit
 
 /// Claude 插件状态（用于持久化）
 struct ClaudePluginState: Codable {
@@ -28,10 +29,9 @@ final class ClaudeSessionMapper {
     static let shared = ClaudeSessionMapper()
 
     /// 持久化文件路径
-    private let storagePath: String = {
-        let home = NSHomeDirectory()
-        return "\(home)/.eterm/plugins/claude/sessions.json"
-    }()
+    private var storagePath: String {
+        return ETermPaths.plugins + "/claude/sessions.json"
+    }
 
     // MARK: - 运行时映射
 
@@ -61,8 +61,7 @@ final class ClaudeSessionMapper {
 
     /// 老版本 session.json 路径
     private var legacySessionPath: String {
-        let home = NSHomeDirectory()
-        return "\(home)/.eterm/config/session.json"
+        return ETermPaths.config + "/session.json"
     }
 
     /// 从老版本 SessionManager 迁移数据
