@@ -7,13 +7,14 @@
 //
 
 import Foundation
+import ETermKit
 
 /// Ollama 配置（与主程序 OllamaSettings 保持一致）
 private struct OllamaConfig: Codable {
     var baseURL: String = "http://localhost:11434"
     var model: String = "qwen3:0.6b"
 
-    static let configPath = NSHomeDirectory() + "/.eterm/config/ollama.json"
+    static let configPath = ETermPaths.config + "/ollama.json"
 
     static func load() -> OllamaConfig {
         guard let data = FileManager.default.contents(atPath: configPath),

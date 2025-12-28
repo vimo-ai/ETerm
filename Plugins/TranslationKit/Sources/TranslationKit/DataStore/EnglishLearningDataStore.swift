@@ -6,18 +6,14 @@
 
 import SwiftData
 import Foundation
+import ETermKit
 
 /// TranslationKit 专用的 ModelContainer
 public enum EnglishLearningDataStore {
     /// 数据库路径
     private static let databasePath: String = {
-        let dataDir = NSHomeDirectory() + "/.eterm/data"
-        // 确保目录存在
-        try? FileManager.default.createDirectory(
-            atPath: dataDir,
-            withIntermediateDirectories: true
-        )
-        return dataDir + "/translation.db"
+        try? ETermPaths.ensureDirectory(ETermPaths.data)
+        return ETermPaths.data + "/translation.db"
     }()
 
     public static let shared: ModelContainer = {

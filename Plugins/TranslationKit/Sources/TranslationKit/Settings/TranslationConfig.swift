@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import ETermKit
 
 // MARK: - 翻译插件配置
 
@@ -30,9 +31,8 @@ public final class TranslationPluginConfigManager: ObservableObject {
     public static let shared = TranslationPluginConfigManager()
 
     private static let configFilePath: String = {
-        let configDir = NSHomeDirectory() + "/.eterm/config"
-        try? FileManager.default.createDirectory(atPath: configDir, withIntermediateDirectories: true)
-        return configDir + "/translation.json"
+        try? ETermPaths.ensureDirectory(ETermPaths.config)
+        return ETermPaths.config + "/translation.json"
     }()
 
     private let configFilePath = TranslationPluginConfigManager.configFilePath
