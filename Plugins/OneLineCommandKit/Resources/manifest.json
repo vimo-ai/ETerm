@@ -1,5 +1,5 @@
 {
-    "id": "one-line-command",
+    "id": "com.eterm.one-line-command",
     "name": "一行命令",
     "version": "1.0.0",
     "minHostVersion": "1.0.0",
