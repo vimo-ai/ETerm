@@ -398,7 +398,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "  # Package Builtin Plugins\n  set -euo pipefail\n\n  SCRIPT_DIR=\"${SRCROOT}/Scripts\"\n  PLUGINS_DIR=\"${SRCROOT}/../Plugins\"\n  OUTPUT_DIR=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/BuiltinPlugins\"\n\n  echo \"=== Packaging Builtin Plugins ===\"\n  echo \"Output: ${OUTPUT_DIR}\"\n\n  mkdir -p \"${OUTPUT_DIR}\"\n\n  export BUNDLE_OUTPUT_DIR=\"${OUTPUT_DIR}\"\n  export CONFIGURATION=\"${CONFIGURATION}\"\n\n  \"${SCRIPT_DIR}/build_all_plugins.sh\" \"${OUTPUT_DIR}\"\n\n  echo \"=== Done ===\"\n";
+			shellScript = "  # Package Builtin Plugins (使用 swiftc 直接编译，共享 ETermKit)\n  set -euo pipefail\n\n  SCRIPT_DIR=\"${SRCROOT}/Scripts\"\n  OUTPUT_DIR=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/BuiltinPlugins\"\n\n  echo \"=== Packaging Builtin Plugins ===\"\n  echo \"Output: ${OUTPUT_DIR}\"\n\n  mkdir -p \"${OUTPUT_DIR}\"\n\n  export BUILT_PRODUCTS_DIR\n  export CONFIGURATION=\"${CONFIGURATION}\"\n\n  \"${SCRIPT_DIR}/build_plugins_swiftc.sh\" \"${OUTPUT_DIR}\"\n\n  echo \"=== Done ===\"\n";
 		};
 		4825F3122EFF116D003AE32C /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;
