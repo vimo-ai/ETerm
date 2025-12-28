@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import ETermKit
 
 // MARK: - MemexService
 
@@ -54,9 +55,9 @@ public final class MemexService: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
 
-        // 数据目录（统一在 ~/.eterm/memex 下，不污染 ~ 目录）
-        let dataDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".eterm/memex")
+        // 数据目录（统一在 $ETERM_HOME/memex 下，不污染 ~ 目录）
+        let dataDir = URL(fileURLWithPath: ETermPaths.root)
+            .appendingPathComponent("memex")
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
         // 设置环境变量（通过 MEMEX_DATA_DIR 告诉 memex-rs 数据目录位置）
@@ -117,9 +118,8 @@ public final class MemexService: @unchecked Sendable {
             return devLibPath
         }
 
-        // 3. ~/.eterm/bin
-        let etermBin = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".eterm/bin/memex").path
+        // 3. $ETERM_HOME/bin
+        let etermBin = ETermPaths.root + "/bin/memex"
         if FileManager.default.isExecutableFile(atPath: etermBin) {
             return etermBin
         }
@@ -316,7 +316,7 @@ public enum MemexServiceError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .binaryNotFound:
-            return "Memex binary not found. Please install memex or place it in ~/.eterm/bin/"
+            return "Memex binary not found. Please install memex or place it in $ETERM_HOME/bin/"
         case .requestFailed:
             return "HTTP request failed"
         case .serviceNotRunning:

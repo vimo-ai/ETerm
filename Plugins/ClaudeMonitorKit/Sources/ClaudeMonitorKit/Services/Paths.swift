@@ -5,13 +5,13 @@
 //  插件路径工具
 
 import Foundation
+import ETermKit
 
 /// 插件路径工具
 enum ClaudeMonitorPaths {
     /// 插件数据目录
     static var dataDirectory: String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.eterm/plugins/claude-monitor"
+        return ETermPaths.plugins + "/claude-monitor"
     }
 
     /// 用量历史存储路径

@@ -6,13 +6,14 @@
 
 import Foundation
 import Compression
+import ETermKit
 
 // MARK: - FileSnapshotStore
 
 /// 基于文件系统的快照存储
 public actor FileSnapshotStore: SnapshotStore {
 
-    /// 历史数据根目录 (~/.eterm/history/)
+    /// 历史数据根目录 ($ETERM_HOME/history/)
     private let historyRoot: URL
 
     /// 目录扫描器
@@ -25,9 +26,7 @@ public actor FileSnapshotStore: SnapshotStore {
     private let debounceInterval: TimeInterval = 30
 
     public init() {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        self.historyRoot = homeDir
-            .appendingPathComponent(".eterm")
+        self.historyRoot = URL(fileURLWithPath: ETermPaths.root)
             .appendingPathComponent("history")
         self.scanner = DirectoryScanner()
 
