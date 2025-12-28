@@ -205,9 +205,21 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
     }
 
     private func runScheduledSnapshots() async {
-        guard let service = service else { return }
+        guard let service = service, let host = host else { return }
 
-        for workspace in state.workspaces {
+        // 获取所有终端的 cwd
+        let terminals = host.getAllTerminals()
+        let activeCwds = Set(terminals.map { $0.cwd })
+
+        // 过滤出有活跃终端的工作区
+        let activeWorkspaces = state.workspaces.filter { workspace in
+            activeCwds.contains { cwd in
+                cwd == workspace || cwd.hasPrefix(workspace + "/")
+            }
+        }
+
+        // 只对活跃工作区创建快照
+        for workspace in activeWorkspaces {
             do {
                 _ = try await service.snapshot(cwd: workspace, label: "scheduled")
             } catch {
