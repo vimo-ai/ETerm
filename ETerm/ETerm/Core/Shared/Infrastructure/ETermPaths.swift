@@ -13,8 +13,13 @@ enum ETermPaths {
 
     // MARK: - 根目录
 
-    /// ETerm 主目录: ~/.eterm
-    static let root = NSHomeDirectory() + "/.eterm"
+    /// ETerm 主目录: ~/.eterm (可通过 ETERM_HOME 环境变量覆盖)
+    static let root: String = {
+        if let customPath = ProcessInfo.processInfo.environment["ETERM_HOME"] {
+            return customPath
+        }
+        return NSHomeDirectory() + "/.eterm"
+    }()
 
     // MARK: - 一级目录
 

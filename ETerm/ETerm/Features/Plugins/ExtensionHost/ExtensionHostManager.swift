@@ -56,12 +56,12 @@ actor ExtensionHostManager {
 
     /// Socket 路径（固定路径，所有 ETerm 实例共享）
     private var socketPath: String {
-        NSHomeDirectory() + "/.eterm/run/extension-host.sock"
+        ETermPaths.run + "/extension-host.sock"
     }
 
     /// PID 文件路径
     private var pidPath: String {
-        NSHomeDirectory() + "/.eterm/run/extension-host.pid"
+        ETermPaths.run + "/extension-host.pid"
     }
 
     /// Extension Host 可执行文件路径
@@ -89,7 +89,7 @@ actor ExtensionHostManager {
         }
 
         // 4. ~/.eterm/bin/（开发环境安装位置）
-        let etermBinPath = NSHomeDirectory() + "/.eterm/bin/ETermExtensionHost"
+        let etermBinPath = ETermPaths.root + "/bin/ETermExtensionHost"
         if fm.fileExists(atPath: etermBinPath) {
             return etermBinPath
         }
