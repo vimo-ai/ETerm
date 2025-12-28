@@ -190,6 +190,7 @@ public actor FileSnapshotStore: SnapshotStore {
         for file in manifest.files {
             let content = try loadFileContent(
                 projectHash: hash,
+                snapshotId: snapshotId,
                 file: file
             )
 
@@ -328,7 +329,7 @@ public actor FileSnapshotStore: SnapshotStore {
         try data.write(to: manifestURL)
     }
 
-    /// 存储文件（压缩）
+    /// 存储文件（压缩，失败时 fallback 到原始存储）
     private func storeFile(
         projectHash: String,
         snapshotId: String,
@@ -337,16 +338,17 @@ public actor FileSnapshotStore: SnapshotStore {
         // 读取文件内容
         let data = try Data(contentsOf: file.absolutePath)
 
-        // 压缩
-        let compressed = try compress(data)
+        // 尝试压缩，失败时 fallback
+        let (storedData, isCompressed) = compressWithFallback(data)
 
-        // 构建存储路径
+        // 构建存储路径（根据是否压缩选择后缀）
         let encodedPath = file.path.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? file.path
+        let suffix = isCompressed ? ".gz" : ".raw"
         let storePath = projectDir(for: projectHash)
             .appendingPathComponent("snapshots")
             .appendingPathComponent(snapshotId)
             .appendingPathComponent("files")
-            .appendingPathComponent(encodedPath + ".gz")
+            .appendingPathComponent(encodedPath + suffix)
 
         // 确保目录存在
         try FileManager.default.createDirectory(
@@ -355,9 +357,20 @@ public actor FileSnapshotStore: SnapshotStore {
         )
 
         // 写入文件
-        try compressed.write(to: storePath)
+        try storedData.write(to: storePath)
 
-        return Int64(compressed.count)
+        return Int64(storedData.count)
+    }
+
+    /// 压缩数据，失败时返回原始数据
+    private func compressWithFallback(_ data: Data) -> (Data, Bool) {
+        do {
+            let compressed = try compress(data)
+            return (compressed, true)
+        } catch {
+            // 压缩失败，返回原始数据
+            return (data, false)
+        }
     }
 
     /// 加载文件内容（解压）
@@ -387,7 +400,7 @@ public actor FileSnapshotStore: SnapshotStore {
         return try decompress(compressed)
     }
 
-    /// 从快照恢复文件内容（需要快照 ID）
+    /// 从快照恢复文件内容（需要快照 ID，支持 .gz 和 .raw 格式）
     private func loadFileContent(
         projectHash: String,
         snapshotId: String,
@@ -397,25 +410,39 @@ public actor FileSnapshotStore: SnapshotStore {
         let actualSnapshotId = file.stored ? snapshotId : (file.reference ?? snapshotId)
 
         let encodedPath = file.path.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? file.path
-        let storePath = projectDir(for: projectHash)
+        let baseStorePath = projectDir(for: projectHash)
             .appendingPathComponent("snapshots")
             .appendingPathComponent(actualSnapshotId)
             .appendingPathComponent("files")
-            .appendingPathComponent(encodedPath + ".gz")
+            .appendingPathComponent(encodedPath)
 
-        let compressed = try Data(contentsOf: storePath)
-        return try decompress(compressed)
+        // 优先尝试 .gz（压缩格式）
+        let gzPath = baseStorePath.appendingPathExtension("gz")
+        if FileManager.default.fileExists(atPath: gzPath.path) {
+            let compressed = try Data(contentsOf: gzPath)
+            return try decompress(compressed)
+        }
+
+        // 再尝试 .raw（未压缩格式）
+        let rawPath = baseStorePath.appendingPathExtension("raw")
+        if FileManager.default.fileExists(atPath: rawPath.path) {
+            return try Data(contentsOf: rawPath)
+        }
+
+        throw HistoryError.fileNotFound(file.path)
     }
 
     // MARK: - Compression
 
-    /// 压缩数据
+    /// 压缩数据（动态分配缓冲区）
     private func compress(_ data: Data) throws -> Data {
-        let pageSize = 128 * 1024 // 128KB
+        // zlib 最坏情况：源数据 + 0.1% + 12 字节
+        // 使用更保守的估算：源数据 * 1.01 + 1024
+        let destinationSize = Int(Double(data.count) * 1.01) + 1024
         var compressedData = Data()
 
         let sourceBuffer = [UInt8](data)
-        var destinationBuffer = [UInt8](repeating: 0, count: pageSize)
+        var destinationBuffer = [UInt8](repeating: 0, count: destinationSize)
 
         let algorithm = COMPRESSION_ZLIB
         let compressedSize = compression_encode_buffer(
@@ -435,30 +462,39 @@ public actor FileSnapshotStore: SnapshotStore {
         return compressedData
     }
 
-    /// 解压数据
+    /// 解压数据（动态分配缓冲区，支持重试扩容）
     private func decompress(_ data: Data) throws -> Data {
-        let pageSize = 1024 * 1024 // 1MB 初始大小
-        var decompressedData = Data()
-
         let sourceBuffer = [UInt8](data)
-        var destinationBuffer = [UInt8](repeating: 0, count: pageSize)
-
         let algorithm = COMPRESSION_ZLIB
-        let decompressedSize = compression_decode_buffer(
-            &destinationBuffer,
-            destinationBuffer.count,
-            sourceBuffer,
-            sourceBuffer.count,
-            nil,
-            algorithm
-        )
 
-        guard decompressedSize > 0 else {
-            throw HistoryError.decompressionFailed
+        // 从保守估算开始，失败时扩容重试
+        var multiplier = 10
+        let maxMultiplier = 100  // 最大 100 倍（10MB 压缩数据 → 1GB 解压上限）
+
+        while multiplier <= maxMultiplier {
+            let estimatedSize = max(data.count * multiplier, 1024 * 1024)
+            var destinationBuffer = [UInt8](repeating: 0, count: estimatedSize)
+
+            let decompressedSize = compression_decode_buffer(
+                &destinationBuffer,
+                destinationBuffer.count,
+                sourceBuffer,
+                sourceBuffer.count,
+                nil,
+                algorithm
+            )
+
+            if decompressedSize > 0 {
+                var decompressedData = Data()
+                decompressedData.append(contentsOf: destinationBuffer.prefix(decompressedSize))
+                return decompressedData
+            }
+
+            // 缓冲区可能不够，扩容重试
+            multiplier *= 2
         }
 
-        decompressedData.append(contentsOf: destinationBuffer.prefix(decompressedSize))
-        return decompressedData
+        throw HistoryError.decompressionFailed
     }
 }
 
