@@ -163,12 +163,8 @@ public final class MCPRouterBridge {
 
     /// 配置文件路径
     private static let configPath: String = {
-        let dataDir = NSHomeDirectory() + "/.eterm/data"
-        try? FileManager.default.createDirectory(
-            atPath: dataDir,
-            withIntermediateDirectories: true
-        )
-        return dataDir + "/mcp_router_servers.json"
+        try? ETermPaths.ensureDirectory(ETermPaths.data)
+        return ETermPaths.data + "/mcp_router_servers.json"
     }()
 
     private init() {

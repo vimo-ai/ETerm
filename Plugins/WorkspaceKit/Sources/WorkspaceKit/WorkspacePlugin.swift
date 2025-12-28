@@ -85,7 +85,7 @@ public final class WorkspacePlugin: NSObject, ETermKit.Plugin {
         // getWorkspaces 服务 - 返回当前工作区列表
         // 注意：直接读取 SQLite 避免 SwiftData 线程问题
         host.registerService(name: "getWorkspaces") { _ in
-            let dbPath = NSHomeDirectory() + "/.eterm/data/workspace.db"
+            let dbPath = ETermPaths.data + "/workspace.db"
             guard FileManager.default.fileExists(atPath: dbPath) else {
                 return ["workspaces": []]
             }
@@ -186,13 +186,8 @@ final class PathTreeNode: Identifiable, ObservableObject {
 enum WorkspaceDataStore {
     /// 数据库路径（与主程序保持一致以兼容数据）
     private static let databasePath: String = {
-        let dataDir = NSHomeDirectory() + "/.eterm/data"
-        // 确保目录存在
-        try? FileManager.default.createDirectory(
-            atPath: dataDir,
-            withIntermediateDirectories: true
-        )
-        return dataDir + "/workspace.db"
+        try? ETermPaths.ensureDirectory(ETermPaths.data)
+        return ETermPaths.data + "/workspace.db"
     }()
 
     static let shared: ModelContainer = {
