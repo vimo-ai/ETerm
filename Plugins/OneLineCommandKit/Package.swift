@@ -25,6 +25,9 @@ let package = Package(
             dependencies: ["ETermKit"],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
+            ],
+            plugins: [
+                .plugin(name: "ValidateManifest", package: "ETermKit")
             ]
         ),
     ]

@@ -14,6 +14,10 @@ let package = Package(
             type: .dynamic,  // 动态库，避免类重复
             targets: ["ETermKit"]
         ),
+        .plugin(
+            name: "ValidateManifest",
+            targets: ["ValidateManifest"]
+        ),
     ],
     targets: [
         .target(
@@ -24,6 +28,11 @@ let package = Package(
             name: "ETermKitTests",
             dependencies: ["ETermKit"],
             path: "Tests/ETermKitTests"
+        ),
+        .plugin(
+            name: "ValidateManifest",
+            capability: .buildTool(),
+            path: "Plugins/ValidateManifest"
         ),
     ]
 )
