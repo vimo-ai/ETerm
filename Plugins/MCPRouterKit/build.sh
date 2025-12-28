@@ -11,8 +11,8 @@ BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.eterm/plugins}"
 BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
 
-# MCP Router Core dylib
-CORE_DYLIB="${SCRIPT_DIR}/Lib/libmcp_router_core.dylib"
+# MCP Router Core library (no extension, like memex)
+CORE_LIB="${SCRIPT_DIR}/Lib/mcp_router_core"
 
 # Colors
 GREEN='\033[0;32m'
@@ -24,10 +24,10 @@ log_info() { echo -e "${BLUE}[${PLUGIN_NAME}]${NC} $*"; }
 log_success() { echo -e "${GREEN}[${PLUGIN_NAME}]${NC} $*"; }
 log_error() { echo -e "${RED}[${PLUGIN_NAME}]${NC} $*"; }
 
-# Check core dylib exists
-if [ ! -f "$CORE_DYLIB" ]; then
-    log_error "Core dylib not found: $CORE_DYLIB"
-    log_error "Please build mcp-router core first and copy libmcp_router_core.dylib to Lib/"
+# Check core library exists
+if [ ! -f "$CORE_LIB" ]; then
+    log_error "Core library not found: $CORE_LIB"
+    log_error "Please build mcp-router core first and copy mcp_router_core to Lib/"
     exit 1
 fi
 
@@ -35,9 +35,8 @@ fi
 log_info "Building Swift package..."
 cd "$SCRIPT_DIR"
 
-# Use absolute path for Lib directory
-LIB_PATH="${SCRIPT_DIR}/Lib"
-swift build -Xlinker -L"${LIB_PATH}" -Xlinker -lmcp_router_core
+# Link directly to the core library (no extension, like memex)
+swift build -Xlinker "${CORE_LIB}"
 
 # Create Bundle structure
 log_info "Creating bundle..."
@@ -49,8 +48,8 @@ mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"
 # Copy plugin dylib
 cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 
-# Copy MCP Router Core dylib to Frameworks
-cp "$CORE_DYLIB" "${BUNDLE_PATH}/Contents/Frameworks/"
+# Copy MCP Router Core library to Frameworks (no extension, like memex)
+cp "$CORE_LIB" "${BUNDLE_PATH}/Contents/Frameworks/mcp_router_core"
 
 # Fix ETermKit link path: SPM dylib -> Xcode framework
 log_info "Fixing link paths..."
@@ -59,16 +58,16 @@ install_name_tool -change \
     "@executable_path/../Frameworks/ETermKit.framework/ETermKit" \
     "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
-# Fix MCP Router Core link path
+# Fix MCP Router Core link path (no extension)
 install_name_tool -change \
-    "@rpath/libmcp_router_core.dylib" \
-    "@loader_path/../Frameworks/libmcp_router_core.dylib" \
+    "mcp_router_core" \
+    "@loader_path/../Frameworks/mcp_router_core" \
     "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
 # Re-sign after modification
 log_info "Re-signing..."
 codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
-codesign -f -s - "${BUNDLE_PATH}/Contents/Frameworks/libmcp_router_core.dylib"
+codesign -f -s - "${BUNDLE_PATH}/Contents/Frameworks/mcp_router_core"
 
 # Copy manifest.json
 cp "Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"
