@@ -277,12 +277,12 @@ VlaudeKit (SDK 插件)
 1. ✅ ClaudePlugin 事件已包含 transcriptPath
 2. ✅ SDK 事件系统已支持 subscribes + handleEvent
 
-### Phase 2: MemexKit 精确索引 🔄 进行中
+### Phase 2: MemexKit 精确索引 ✅ 已完成
 
 1. [x] MemexKit 基础框架（Plugin、Service、UI）
 2. [x] Web UI 内嵌（MemexWebView）
-3. [ ] **memex-rs 添加 `POST /api/index` 接口**
-4. [ ] **MemexKit handleEvent 调用索引 API**
+3. [x] **memex-rs 添加 `POST /api/index` 接口**
+4. [x] **MemexKit handleEvent 调用索引 API**
 5. [ ] 测试事件驱动索引
 
 ### Phase 3: VlaudeKit

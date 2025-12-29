@@ -46,3 +46,4 @@ TESTING_GUIDE.md
 Plugins/*/.build/
 Plugins/*/build/
 Plugins/MemexKit/Lib/memex
+**/.swiftpm/
