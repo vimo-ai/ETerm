@@ -125,9 +125,16 @@ final class PanelHeaderHostingView: NSView {
     /// Tab 模型注册表（弱引用，用于传递给 TabItemView）
     private var tabRegistry: [UUID: Tab] = [:]
 
-    // Tab 标签容器
+    // 滚动容器
+    private let scrollView = NSScrollView()
+    // Tab 标签容器（作为 scrollView 的 documentView）
     private let tabContainer = NSView()
     private var tabItemViews: [TabItemView] = []
+
+    // 渐变遮罩层
+    private let leftFadeLayer = CAGradientLayer()
+    private let rightFadeLayer = CAGradientLayer()
+    private let fadeWidth: CGFloat = 16
 
     // 所属 Panel ID
     var panelId: UUID?
@@ -153,7 +160,8 @@ final class PanelHeaderHostingView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHostingView()
-        setupTabContainer()
+        setupScrollView()
+        setupFadeLayers()
         setupDragDestination()
     }
 
@@ -177,9 +185,95 @@ final class PanelHeaderHostingView: NSView {
         hostingView = hosting
     }
 
-    private func setupTabContainer() {
+    private func setupScrollView() {
+        // 配置 scrollView
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.horizontalScrollElasticity = .allowed
+        scrollView.verticalScrollElasticity = .none
+        scrollView.drawsBackground = false
+        scrollView.contentView.drawsBackground = false
+
+        // 设置 documentView
         tabContainer.wantsLayer = true
-        addSubview(tabContainer)
+        scrollView.documentView = tabContainer
+
+        addSubview(scrollView)
+
+        // 监听滚动位置变化
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewDidScroll(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+    }
+
+    private func setupFadeLayers() {
+        wantsLayer = true
+
+        // 使用深色背景色（匹配终端背景）
+        let fadeColor = NSColor(calibratedWhite: 0.1, alpha: 1.0)
+
+        // 左侧渐变（从不透明到透明）
+        leftFadeLayer.colors = [
+            fadeColor.cgColor,
+            fadeColor.withAlphaComponent(0).cgColor
+        ]
+        leftFadeLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        leftFadeLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        leftFadeLayer.opacity = 0
+        leftFadeLayer.zPosition = 100  // 确保在最上层
+
+        // 右侧渐变（从透明到不透明）
+        rightFadeLayer.colors = [
+            fadeColor.withAlphaComponent(0).cgColor,
+            fadeColor.cgColor
+        ]
+        rightFadeLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        rightFadeLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        rightFadeLayer.opacity = 0
+        rightFadeLayer.zPosition = 100  // 确保在最上层
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // 确保 layer 创建后再添加渐变层
+        if let layer = self.layer {
+            if leftFadeLayer.superlayer == nil {
+                layer.addSublayer(leftFadeLayer)
+            }
+            if rightFadeLayer.superlayer == nil {
+                layer.addSublayer(rightFadeLayer)
+            }
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // 将滚轮事件转发给 scrollView
+        scrollView.scrollWheel(with: event)
+    }
+
+    @objc private func scrollViewDidScroll(_ notification: Notification) {
+        updateFadeVisibility()
+    }
+
+    private func updateFadeVisibility() {
+        let contentWidth = tabContainer.frame.width
+        let visibleWidth = scrollView.bounds.width
+        let scrollOffset = scrollView.contentView.bounds.origin.x
+
+        // 左侧渐变：有内容被滚动到左边时显示
+        let showLeftFade = scrollOffset > 1
+        // 右侧渐变：有内容在右边时显示
+        let showRightFade = contentWidth - scrollOffset > visibleWidth + 1
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.15)
+        leftFadeLayer.opacity = showLeftFade ? 1.0 : 0.0
+        rightFadeLayer.opacity = showRightFade ? 1.0 : 0.0
+        CATransaction.commit()
     }
 
     private func setupDragDestination() {
@@ -252,9 +346,8 @@ final class PanelHeaderHostingView: NSView {
     }
 
     private func layoutTabItems() {
-        let leftPadding: CGFloat = 4
         let spacing: CGFloat = 4
-        var x: CGFloat = leftPadding
+        var x: CGFloat = 0  // scrollView 内部从 0 开始
 
         for tabView in tabItemViews {
             let size = tabView.fittingSize
@@ -263,13 +356,39 @@ final class PanelHeaderHostingView: NSView {
             tabView.layout()
             x += size.width + spacing
         }
+
+        // 更新 tabContainer 的尺寸以适应内容
+        let contentWidth = max(x, scrollView.bounds.width)
+        tabContainer.frame = CGRect(x: 0, y: 0, width: contentWidth, height: bounds.height)
+
+        // 更新渐变显示状态
+        updateFadeVisibility()
     }
 
     override func layout() {
         super.layout()
         hostingView?.frame = bounds
-        tabContainer.frame = bounds
+
+        // scrollView 布局：左侧留出 padding，右侧留出按钮空间
+        let leftPadding: CGFloat = 4
+        let rightPadding: CGFloat = 60  // 右侧按钮区域
+        let scrollWidth = bounds.width - leftPadding - rightPadding
+        scrollView.frame = CGRect(x: leftPadding, y: 0, width: max(0, scrollWidth), height: bounds.height)
+
         layoutTabItems()
+        layoutFadeLayers()
+    }
+
+    private func layoutFadeLayers() {
+        let leftPadding: CGFloat = 4
+        let rightPadding: CGFloat = 60
+        let scrollWidth = bounds.width - leftPadding - rightPadding
+
+        // 左侧渐变位置（紧贴 scrollView 左边缘）
+        leftFadeLayer.frame = CGRect(x: leftPadding, y: 0, width: fadeWidth, height: bounds.height)
+
+        // 右侧渐变位置（紧贴 scrollView 右边缘）
+        rightFadeLayer.frame = CGRect(x: leftPadding + scrollWidth - fadeWidth, y: 0, width: fadeWidth, height: bounds.height)
     }
 
     /// 右侧按钮区域宽度（两个按钮 24x2 + padding 4x2 + 间距）
@@ -281,20 +400,7 @@ final class PanelHeaderHostingView: NSView {
             return nil
         }
 
-        // 优先检查 tabContainer 中的 TabItemView（Tab 关闭按钮优先级最高）
-        let pointInTabContainer = convert(point, to: tabContainer)
-        for tabView in tabItemViews {
-            let pointInTab = tabContainer.convert(pointInTabContainer, to: tabView)
-            if tabView.bounds.contains(pointInTab) {
-                // 直接调用 TabItemView 的 hitTest
-                if let hitView = tabView.hitTest(pointInTab) {
-                    return hitView
-                }
-                return tabView
-            }
-        }
-
-        // 然后检查右侧按钮区域（Split/Add 按钮）
+        // 检查是否在右侧按钮区域（Split/Add 按钮）
         if point.x > bounds.width - Self.controlsAreaWidth {
             if let hosting = hostingView {
                 let pointInHosting = convert(point, to: hosting)
@@ -304,6 +410,28 @@ final class PanelHeaderHostingView: NSView {
                     return swiftUIHit
                 }
             }
+        }
+
+        // 检查是否在 scrollView 区域内
+        if scrollView.frame.contains(point) {
+            // 转换到 tabContainer 坐标
+            let pointInScrollView = convert(point, to: scrollView)
+            let pointInTabContainer = scrollView.convert(pointInScrollView, to: tabContainer)
+
+            for tabView in tabItemViews {
+                let pointInTab = tabContainer.convert(pointInTabContainer, to: tabView)
+                if tabView.bounds.contains(pointInTab) {
+                    // 直接调用 TabItemView 的 hitTest
+                    if let hitView = tabView.hitTest(pointInTab) {
+                        return hitView
+                    }
+                    return tabView
+                }
+            }
+
+            // 点击在 scrollView 内的空白区域，返回 self
+            // （滚动通过 scrollWheel 事件转发处理）
+            return self
         }
 
         // 其他区域返回 nil，让事件穿透
@@ -523,17 +651,20 @@ extension PanelHeaderHostingView {
 
     /// 根据位置计算插入索引
     private func indexForInsertionAt(location: NSPoint) -> Int? {
-        let leftPadding: CGFloat = 4
         let spacing: CGFloat = 4
 
-        if location.x < leftPadding {
+        // 将位置转换到 scrollView/tabContainer 坐标系
+        let scrollOffset = scrollView.contentView.bounds.origin.x
+        let locationInContainer = location.x - scrollView.frame.origin.x + scrollOffset
+
+        if locationInContainer < 0 {
             return 0
         }
 
-        var x: CGFloat = leftPadding
+        var x: CGFloat = 0
         for (index, tabView) in tabItemViews.enumerated() {
             let midpoint = x + tabView.fittingSize.width / 2
-            if location.x < midpoint {
+            if locationInContainer < midpoint {
                 return index
             }
             x += tabView.fittingSize.width + spacing
