@@ -197,9 +197,16 @@ final class PageBarHostingView: NSView {
     /// Page 模型注册表（用于传递给 PageItemView）
     private var pageRegistry: [UUID: Page] = [:]
 
-    // Page 标签容器（使用穿透容器）
+    // 滚动容器
+    private let scrollView = NSScrollView()
+    // Page 标签容器（使用穿透容器，作为 scrollView 的 documentView）
     private let pageContainer = PassthroughContainerView()
     private var pageItemViews: [PageItemView] = []
+
+    // 渐变遮罩层
+    private let leftFadeLayer = CAGradientLayer()
+    private let rightFadeLayer = CAGradientLayer()
+    private let fadeWidth: CGFloat = 20
 
     // 拖拽相关
     private var draggingPageId: UUID?
@@ -221,7 +228,8 @@ final class PageBarHostingView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHostingView()
-        setupPageContainer()
+        setupScrollView()
+        setupFadeLayers()
         setupDragDestination()
         setupNotificationObservers()
     }
@@ -267,9 +275,90 @@ final class PageBarHostingView: NSView {
         hostingView = hosting
     }
 
-    private func setupPageContainer() {
+    private func setupScrollView() {
+        // 配置 scrollView
+        scrollView.hasHorizontalScroller = false
+        scrollView.hasVerticalScroller = false
+        scrollView.horizontalScrollElasticity = .allowed
+        scrollView.verticalScrollElasticity = .none
+        scrollView.drawsBackground = false
+        scrollView.contentView.drawsBackground = false
+
+        // 设置 documentView
         pageContainer.wantsLayer = true
-        addSubview(pageContainer)
+        scrollView.documentView = pageContainer
+
+        addSubview(scrollView)
+
+        // 监听滚动位置变化
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewDidScroll(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+    }
+
+    private func setupFadeLayers() {
+        wantsLayer = true
+
+        // 使用深色背景色（匹配终端背景）
+        let fadeColor = NSColor(calibratedWhite: 0.1, alpha: 1.0)
+
+        // 左侧渐变（从不透明到透明）
+        leftFadeLayer.colors = [
+            fadeColor.cgColor,
+            fadeColor.withAlphaComponent(0).cgColor
+        ]
+        leftFadeLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        leftFadeLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        leftFadeLayer.opacity = 0
+        leftFadeLayer.zPosition = 100  // 确保在最上层
+
+        // 右侧渐变（从透明到不透明）
+        rightFadeLayer.colors = [
+            fadeColor.withAlphaComponent(0).cgColor,
+            fadeColor.cgColor
+        ]
+        rightFadeLayer.startPoint = CGPoint(x: 0, y: 0.5)
+        rightFadeLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        rightFadeLayer.opacity = 0
+        rightFadeLayer.zPosition = 100  // 确保在最上层
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // 确保 layer 创建后再添加渐变层
+        if let layer = self.layer {
+            if leftFadeLayer.superlayer == nil {
+                layer.addSublayer(leftFadeLayer)
+            }
+            if rightFadeLayer.superlayer == nil {
+                layer.addSublayer(rightFadeLayer)
+            }
+        }
+    }
+
+    @objc private func scrollViewDidScroll(_ notification: Notification) {
+        updateFadeVisibility()
+    }
+
+    private func updateFadeVisibility() {
+        let contentWidth = pageContainer.frame.width
+        let visibleWidth = scrollView.bounds.width
+        let scrollOffset = scrollView.contentView.bounds.origin.x
+
+        // 左侧渐变：有内容被滚动到左边时显示
+        let showLeftFade = scrollOffset > 1
+        // 右侧渐变：有内容在右边时显示
+        let showRightFade = contentWidth - scrollOffset > visibleWidth + 1
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.15)
+        leftFadeLayer.opacity = showLeftFade ? 1.0 : 0.0
+        rightFadeLayer.opacity = showRightFade ? 1.0 : 0.0
+        CATransaction.commit()
     }
 
     private func setupDragDestination() {
@@ -338,23 +427,47 @@ final class PageBarHostingView: NSView {
     }
 
     private func layoutPageItems() {
-        let leftPadding: CGFloat = 88  // 红绿灯按钮宽度 + 间距
         let spacing: CGFloat = 2
-        var x: CGFloat = leftPadding
+        var x: CGFloat = 0  // scrollView 内部从 0 开始
 
         for pageView in pageItemViews {
             let size = pageView.fittingSize
             pageView.frame = CGRect(x: x, y: 3, width: size.width, height: size.height)
             x += size.width + spacing
         }
+
+        // 更新 pageContainer 的尺寸以适应内容
+        let contentWidth = max(x, scrollView.bounds.width)
+        pageContainer.frame = CGRect(x: 0, y: 0, width: contentWidth, height: bounds.height)
+
+        // 更新渐变显示状态
+        updateFadeVisibility()
     }
 
     override func layout() {
         super.layout()
         hostingView?.frame = bounds
-        // pageContainer 占满整个区域，但通过 hitTest 让点击穿透到下层
-        pageContainer.frame = bounds
+
+        // scrollView 布局：左侧留出红绿灯空间，右侧留出按钮空间
+        let leftPadding: CGFloat = 88   // 红绿灯按钮宽度 + 间距
+        let rightPadding: CGFloat = 80  // 右侧按钮区域
+        let scrollWidth = bounds.width - leftPadding - rightPadding
+        scrollView.frame = CGRect(x: leftPadding, y: 0, width: max(0, scrollWidth), height: bounds.height)
+
         layoutPageItems()
+        layoutFadeLayers()
+    }
+
+    private func layoutFadeLayers() {
+        let leftPadding: CGFloat = 88
+        let rightPadding: CGFloat = 80
+        let scrollWidth = bounds.width - leftPadding - rightPadding
+
+        // 左侧渐变位置（紧贴 scrollView 左边缘）
+        leftFadeLayer.frame = CGRect(x: leftPadding, y: 0, width: fadeWidth, height: bounds.height)
+
+        // 右侧渐变位置（紧贴 scrollView 右边缘）
+        rightFadeLayer.frame = CGRect(x: leftPadding + scrollWidth - fadeWidth, y: 0, width: fadeWidth, height: bounds.height)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -362,33 +475,38 @@ final class PageBarHostingView: NSView {
             return nil
         }
 
-        // 优先检查 pageContainer 中的 PageItemView
-        let pointInPageContainer = convert(point, to: pageContainer)
-        for pageView in pageItemViews {
-            let pointInPage = pageContainer.convert(pointInPageContainer, to: pageView)
-            if pageView.bounds.contains(pointInPage) {
-                if let hitView = pageView.hitTest(pointInPage) {
-                    return hitView
-                }
-                return pageView
+        let rightPadding: CGFloat = 80
+
+        // 检查是否在右侧按钮区域
+        if point.x > bounds.width - rightPadding, let hosting = hostingView {
+            let pointInHosting = convert(point, to: hosting)
+            if let hitView = hosting.hitTest(pointInHosting) {
+                return hitView
             }
         }
 
-        // 检查是否在右侧按钮区域（PageItemView 右边的区域）
-        // 计算 PageItemView 区域的右边界
-        let leftPadding: CGFloat = 88
-        let spacing: CGFloat = 2
-        var pageAreaRightEdge = leftPadding
-        for pageView in pageItemViews {
-            pageAreaRightEdge += pageView.fittingSize.width + spacing
+        // 检查是否在 scrollView 区域内
+        if scrollView.frame.contains(point) {
+            // 转换到 pageContainer 坐标
+            let pointInScrollView = convert(point, to: scrollView)
+            let pointInPageContainer = scrollView.convert(pointInScrollView, to: pageContainer)
+
+            for pageView in pageItemViews {
+                let pointInPage = pageContainer.convert(pointInPageContainer, to: pageView)
+                if pageView.bounds.contains(pointInPage) {
+                    if let hitView = pageView.hitTest(pointInPage) {
+                        return hitView
+                    }
+                    return pageView
+                }
+            }
+
+            // 点击在 scrollView 内的空白区域，返回 self 允许窗口拖动
+            // （滚动通过 scrollWheel 事件处理，不需要 hitTest 返回 scrollView）
+            return self
         }
 
-        // 如果点击位置在 PageItemView 区域右侧，让 SwiftUI hostingView 处理
-        if point.x > pageAreaRightEdge, let hosting = hostingView {
-            return hosting
-        }
-
-        // 其他区域（PageItemView 左侧空白和间隙）返回自己，用于窗口拖动
+        // 点击在左侧红绿灯区域或其他空白区域，返回自己用于窗口拖动
         return self
     }
 
@@ -439,20 +557,24 @@ final class PageBarHostingView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // 只在空白区域（非 PageItemView）启动窗口拖动
+        // 检查点击位置
         let point = convert(event.locationInWindow, from: nil)
 
         // 检查是否点击在 PageItemView 上
-        let pointInPageContainer = convert(point, to: pageContainer)
-        for pageView in pageItemViews {
-            let pointInPage = pageContainer.convert(pointInPageContainer, to: pageView)
-            if pageView.bounds.contains(pointInPage) {
-                // 点击在 Page 标签上，不拖动窗口
-                return
+        if scrollView.frame.contains(point) {
+            let pointInScrollView = convert(point, to: scrollView)
+            let pointInPageContainer = scrollView.convert(pointInScrollView, to: pageContainer)
+
+            for pageView in pageItemViews {
+                let pointInPage = pageContainer.convert(pointInPageContainer, to: pageView)
+                if pageView.bounds.contains(pointInPage) {
+                    // 点击在 Page 标签上，不拖动窗口
+                    return
+                }
             }
         }
 
-        // 点击在空白区域
+        // 点击在空白区域（包括 scrollView 内的空白）
         if event.clickCount == 2 {
             // 双击全屏/还原
             window?.zoom(nil)
@@ -460,6 +582,11 @@ final class PageBarHostingView: NSView {
             // 单击启动窗口拖动
             window?.performDrag(with: event)
         }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        // 将滚轮事件转发给 scrollView
+        scrollView.scrollWheel(with: event)
     }
 }
 
@@ -563,17 +690,20 @@ extension PageBarHostingView {
 
     /// 根据位置计算插入索引
     private func indexForInsertionAt(location: NSPoint) -> Int? {
-        let leftPadding: CGFloat = 88
         let spacing: CGFloat = 2
 
-        if location.x < leftPadding {
+        // 将位置转换到 scrollView/pageContainer 坐标系
+        let scrollOffset = scrollView.contentView.bounds.origin.x
+        let locationInContainer = location.x - scrollView.frame.origin.x + scrollOffset
+
+        if locationInContainer < 0 {
             return 0
         }
 
-        var x: CGFloat = leftPadding
+        var x: CGFloat = 0
         for (index, pageView) in pageItemViews.enumerated() {
             let midpoint = x + pageView.fittingSize.width / 2
-            if location.x < midpoint {
+            if locationInContainer < midpoint {
                 return index
             }
             x += pageView.fittingSize.width + spacing
