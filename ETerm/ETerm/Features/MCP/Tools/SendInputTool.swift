@@ -14,6 +14,7 @@ enum SendInputTool {
     struct Input: Codable {
         let terminalId: Int
         let text: String
+        let pressEnter: Bool?
     }
 
     struct Response: Codable {
@@ -22,8 +23,12 @@ enum SendInputTool {
     }
 
     /// Execute send_input
+    /// - Parameters:
+    ///   - terminalId: Terminal ID
+    ///   - text: Text to send
+    ///   - pressEnter: If true, send Enter key after a 50ms delay (like VlaudePlugin)
     @MainActor
-    static func execute(terminalId: Int, text: String) -> Response {
+    static func execute(terminalId: Int, text: String, pressEnter: Bool = false) async -> Response {
         let windowManager = WindowManager.shared
 
         // Find the coordinator that owns this terminal
@@ -39,6 +44,13 @@ enum SendInputTool {
                         if tab.rustTerminalId == terminalId {
                             // Found the terminal, send input
                             coordinator.writeInput(terminalId: terminalId, data: text)
+
+                            // If pressEnter, wait 50ms then send Enter
+                            if pressEnter {
+                                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+                                coordinator.writeInput(terminalId: terminalId, data: "\r")
+                            }
+
                             return Response(success: true, message: "Input sent to terminal \(terminalId)")
                         }
                     }
