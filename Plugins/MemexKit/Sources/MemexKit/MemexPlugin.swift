@@ -41,10 +41,8 @@ public final class MemexPlugin: NSObject, Plugin {
     }
 
     public func deactivate() {
-        // 停止服务
-        Task { @MainActor in
-            MemexService.shared.stop()
-        }
+        // 同步停止服务（不能用 Task，否则 app 退出时可能来不及执行）
+        MemexService.shared.stop()
     }
 
     // MARK: - Event Handling
