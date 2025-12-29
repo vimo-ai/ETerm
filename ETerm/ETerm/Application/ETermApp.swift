@@ -65,6 +65,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动 MCP Server（HTTP 模式，端口 11218）
         MCPServerCoordinator.shared.start()
 
+        // 启动事件网关（供外部进程订阅事件）
+        EventGateway.shared.start()
+
         // 初始化翻译模式状态（注册通知监听）
         _ = TranslationModeStore.shared
 
@@ -144,6 +147,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 停止 MCP Server
         MCPServerCoordinator.shared.stop()
+
+        // 停止事件网关
+        EventGateway.shared.stop()
 
         // 停止会话录制并导出（用于调试）
         SessionRecorder.shared.stopRecording()
