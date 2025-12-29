@@ -568,6 +568,12 @@ pub fn create_pty_with_spawn(
     builder.env("TERM", "xterm-256color");
     builder.env("COLORTERM", "truecolor");
 
+    // Fix locale settings to ensure proper UTF-8 handling
+    // Claude Code crashes when LC_CTYPE is "C.UTF-8" instead of "UTF-8"
+    // See: byte index panic in Chinese character handling
+    builder.env("LC_CTYPE", "UTF-8");
+    builder.env("LANG", "en_US.UTF-8");
+
     // ETerm Shell Integration
     // Set ETERM_SHELL_INTEGRATION to enable shell enhancements
     builder.env("ETERM_SHELL_INTEGRATION", "1");
