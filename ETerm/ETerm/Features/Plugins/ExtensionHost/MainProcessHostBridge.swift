@@ -614,6 +614,14 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         ETermPaths.socketPath(for: namespace)
     }
 
+    var socketService: SocketServiceProtocol? {
+        // 检查是否有 socket.client capability
+        guard manifest.capabilities.contains("socket.client") else {
+            return nil
+        }
+        return SocketIOBridge.shared
+    }
+
     // MARK: - 终端操作扩展
 
     func getActiveTerminalId() -> Int? {

@@ -246,4 +246,8 @@ final class PluginHostBridgeWrapper: HostBridge, @unchecked Sendable {
     func socketPath(for namespace: String) -> String {
         bridge.socketPath(for: namespace)
     }
+
+    var socketService: SocketServiceProtocol? {
+        bridge.socketService
+    }
 }
