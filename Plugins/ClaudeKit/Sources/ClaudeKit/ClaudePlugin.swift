@@ -50,12 +50,30 @@ public final class ClaudePlugin: NSObject, Plugin {
     /// 每个终端的装饰状态集合
     private var decorationStates: [Int: Set<DecorationState>] = [:]
 
-    /// Session 映射 (terminalId -> sessionId)
-    private var sessionMap: [Int: String] = [:]
+    /// Session 映射 (terminalId -> sessionId)，线程安全访问
+    private nonisolated(unsafe) var sessionMap: [Int: String] = [:]
+    private let sessionMapLock = NSLock()
 
     /// 启动阶段标志：false 表示启动阶段（由 checkExistingTerminalsForResume 统一处理）
     /// true 表示运行阶段（由 handleTerminalCreated 处理新建终端）
     private var hasCheckedForResume = false
+
+    // MARK: - Waiting Services (for MCP call_plugin_service)
+
+    /// 通用等待请求结构
+    private struct Waiter: Sendable {
+        let terminalId: Int
+        let semaphore: DispatchSemaphore
+        var result: [String: Any]?
+    }
+
+    /// Session 等待队列
+    private nonisolated(unsafe) var sessionWaiters: [UUID: Waiter] = [:]
+    private let sessionWaiterLock = NSLock()
+
+    /// Response 等待队列
+    private nonisolated(unsafe) var responseWaiters: [UUID: Waiter] = [:]
+    private let responseWaiterLock = NSLock()
 
     public override required init() {
         super.init()
@@ -78,6 +96,16 @@ public final class ClaudePlugin: NSObject, Plugin {
         let socketPath = host.socketPath(for: "claude")
         socketServer?.start(at: socketPath)
         print("[ClaudeKit] Plugin activated, socket: \(socketPath)")
+
+        // 注册 waitForSession 服务（供 MCP call_plugin_service 调用）
+        host.registerService(name: "waitForSession") { [weak self] params in
+            self?.handleWaitForSession(params: params)
+        }
+
+        // 注册 waitForResponse 服务（等待 Claude 响应完成）
+        host.registerService(name: "waitForResponse") { [weak self] params in
+            self?.handleWaitForResponse(params: params)
+        }
 
         // 监听插件加载完成通知，检查已有终端是否需要恢复
         NotificationCenter.default.addObserver(
@@ -184,8 +212,10 @@ public final class ClaudePlugin: NSObject, Plugin {
         let eventType = event.event_type ?? "stop"
         let terminalId = event.terminal_id
 
-        // 更新 session 映射
+        // 更新 session 映射（线程安全）
+        sessionMapLock.lock()
         sessionMap[terminalId] = event.session_id
+        sessionMapLock.unlock()
 
         switch eventType {
         case "session_start":
@@ -198,6 +228,9 @@ public final class ClaudePlugin: NSObject, Plugin {
                 )
             }
             host?.emit(eventName: "claude.sessionStart", payload: makePayload(event))
+
+            // 通知等待者（for waitForSession service）
+            notifySessionWaiters(terminalId: terminalId, sessionId: event.session_id)
 
         case "user_prompt_submit":
             handlePromptSubmit(terminalId: terminalId, prompt: event.prompt)
@@ -212,6 +245,9 @@ public final class ClaudePlugin: NSObject, Plugin {
         case "stop":
             handleResponseComplete(terminalId: terminalId)
             host?.emit(eventName: "claude.responseComplete", payload: makePayload(event))
+
+            // 通知等待者（for waitForResponse service）
+            notifyResponseWaiters(terminalId: terminalId)
 
         case "session_end":
             handleSessionEnd(terminalId: terminalId)
@@ -500,5 +536,151 @@ public final class ClaudePlugin: NSObject, Plugin {
                 }
             }
         )
+    }
+
+    // MARK: - waitForSession Service (nonisolated for @Sendable handler)
+
+    /// 处理 waitForSession 服务调用
+    ///
+    /// 参数：
+    /// - terminalId: 要等待的终端 ID
+    /// - timeout: 超时时间（秒），默认 30
+    ///
+    /// 返回：
+    /// - success: true/false
+    /// - sessionId: Claude session ID（成功时）
+    /// - error: 错误信息（失败时）
+    private nonisolated func handleWaitForSession(params: [String: Any]) -> [String: Any]? {
+        guard let terminalId = params["terminalId"] as? Int else {
+            return ["success": false, "error": "Missing 'terminalId' parameter"]
+        }
+
+        let timeout = params["timeout"] as? Int ?? 30
+
+        // 检查是否已有 session（快速路径，线程安全）
+        sessionMapLock.lock()
+        let existingSessionId = sessionMap[terminalId]
+        sessionMapLock.unlock()
+
+        if let existingSessionId = existingSessionId {
+            return [
+                "success": true,
+                "sessionId": existingSessionId,
+                "terminalId": terminalId
+            ]
+        }
+
+        // 创建等待请求
+        let waiterId = UUID()
+        let semaphore = DispatchSemaphore(value: 0)
+
+        sessionWaiterLock.lock()
+        sessionWaiters[waiterId] = Waiter(
+            terminalId: terminalId,
+            semaphore: semaphore,
+            result: nil
+        )
+        sessionWaiterLock.unlock()
+
+        // 阻塞等待（带超时）
+        let waitResult = semaphore.wait(timeout: .now() + .seconds(timeout))
+
+        // 获取结果并清理
+        sessionWaiterLock.lock()
+        let waiter = sessionWaiters.removeValue(forKey: waiterId)
+        sessionWaiterLock.unlock()
+
+        if waitResult == .timedOut {
+            return ["success": false, "error": "Timeout waiting for session"]
+        }
+
+        if let result = waiter?.result {
+            return result
+        }
+
+        return ["success": false, "error": "Session not received"]
+    }
+
+    /// 通知等待者 session 已启动
+    private nonisolated func notifySessionWaiters(terminalId: Int, sessionId: String) {
+        sessionWaiterLock.lock()
+        for (waiterId, var waiter) in sessionWaiters {
+            if waiter.terminalId == terminalId {
+                waiter.result = [
+                    "success": true,
+                    "sessionId": sessionId,
+                    "terminalId": terminalId
+                ]
+                sessionWaiters[waiterId] = waiter
+                waiter.semaphore.signal()
+            }
+        }
+        sessionWaiterLock.unlock()
+    }
+
+    // MARK: - waitForResponse Service
+
+    /// 处理 waitForResponse 服务调用
+    ///
+    /// 参数：
+    /// - terminalId: 要等待的终端 ID
+    /// - timeout: 超时时间（秒），默认 300（5分钟，Claude 响应可能较长）
+    ///
+    /// 返回：
+    /// - success: true/false
+    /// - terminalId: 终端 ID
+    /// - error: 错误信息（失败时）
+    private nonisolated func handleWaitForResponse(params: [String: Any]) -> [String: Any]? {
+        guard let terminalId = params["terminalId"] as? Int else {
+            return ["success": false, "error": "Missing 'terminalId' parameter"]
+        }
+
+        let timeout = params["timeout"] as? Int ?? 300
+
+        // 创建等待请求
+        let waiterId = UUID()
+        let semaphore = DispatchSemaphore(value: 0)
+
+        responseWaiterLock.lock()
+        responseWaiters[waiterId] = Waiter(
+            terminalId: terminalId,
+            semaphore: semaphore,
+            result: nil
+        )
+        responseWaiterLock.unlock()
+
+        // 阻塞等待（带超时）
+        let waitResult = semaphore.wait(timeout: .now() + .seconds(timeout))
+
+        // 获取结果并清理
+        responseWaiterLock.lock()
+        let waiter = responseWaiters.removeValue(forKey: waiterId)
+        responseWaiterLock.unlock()
+
+        if waitResult == .timedOut {
+            return ["success": false, "error": "Timeout waiting for response"]
+        }
+
+        if let result = waiter?.result {
+            return result
+        }
+
+        return ["success": false, "error": "Response not received"]
+    }
+
+    /// 通知等待者响应已完成
+    private nonisolated func notifyResponseWaiters(terminalId: Int) {
+        responseWaiterLock.lock()
+        for (waiterId, var waiter) in responseWaiters {
+            if waiter.terminalId == terminalId {
+                waiter.result = [
+                    "success": true,
+                    "terminalId": terminalId
+                ]
+                responseWaiters[waiterId] = waiter
+                waiter.semaphore.signal()
+            }
+        }
+        responseWaiterLock.unlock()
     }
 }
