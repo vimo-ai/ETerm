@@ -446,11 +446,19 @@ final class PageBarHostingView: NSView {
 
     override func layout() {
         super.layout()
-        hostingView?.frame = bounds
 
-        // scrollView 布局：左侧留出红绿灯空间，右侧留出按钮空间
+        // hostingView 根据内容自适应大小，放在右侧
+        if let hosting = hostingView {
+            // 让 SwiftUI 计算内容的 intrinsic size
+            let fittingSize = hosting.fittingSize
+            let hostingWidth = max(fittingSize.width, 60)  // 最小 60px
+            let hostingX = bounds.width - hostingWidth
+            hosting.frame = CGRect(x: hostingX, y: 0, width: hostingWidth, height: bounds.height)
+        }
+
+        // scrollView 布局：左侧留出红绿灯空间，右侧留出 hostingView 空间
         let leftPadding: CGFloat = 88   // 红绿灯按钮宽度 + 间距
-        let rightPadding: CGFloat = 80  // 右侧按钮区域
+        let rightPadding: CGFloat = hostingView?.frame.width ?? 80  // 动态获取右侧按钮区域宽度
         let scrollWidth = bounds.width - leftPadding - rightPadding
         scrollView.frame = CGRect(x: leftPadding, y: 0, width: max(0, scrollWidth), height: bounds.height)
 
@@ -460,7 +468,7 @@ final class PageBarHostingView: NSView {
 
     private func layoutFadeLayers() {
         let leftPadding: CGFloat = 88
-        let rightPadding: CGFloat = 80
+        let rightPadding: CGFloat = hostingView?.frame.width ?? 80  // 动态获取
         let scrollWidth = bounds.width - leftPadding - rightPadding
 
         // 左侧渐变位置（紧贴 scrollView 左边缘）
@@ -475,17 +483,13 @@ final class PageBarHostingView: NSView {
             return nil
         }
 
-        let rightPadding: CGFloat = 80
-
-        // 检查是否在右侧按钮区域
-        if point.x > bounds.width - rightPadding, let hosting = hostingView {
-            let pointInHosting = convert(point, to: hosting)
-            if let hitView = hosting.hitTest(pointInHosting) {
-                return hitView
-            }
+        // 1. 检查是否在 hostingView（右侧按钮区域）的 frame 内
+        // hostingView 现在只覆盖右侧按钮区域，点击在这个区域就交给 SwiftUI 处理
+        if let hosting = hostingView, hosting.frame.contains(point) {
+            return hosting
         }
 
-        // 检查是否在 scrollView 区域内
+        // 2. 检查是否在 scrollView 区域内（Page 标签）
         if scrollView.frame.contains(point) {
             // 转换到 pageContainer 坐标
             let pointInScrollView = convert(point, to: scrollView)
@@ -506,7 +510,7 @@ final class PageBarHostingView: NSView {
             return self
         }
 
-        // 点击在左侧红绿灯区域或其他空白区域，返回自己用于窗口拖动
+        // 3. 点击在左侧红绿灯区域或其他空白区域，返回自己用于窗口拖动
         return self
     }
 
@@ -715,18 +719,13 @@ extension PageBarHostingView {
 
 // MARK: - PageBarControlsView (SwiftUI)
 
-/// 只包含红绿灯和添加按钮的控制栏
+/// 只包含右侧按钮的控制栏（不包含 Spacer，由 AppKit 控制位置）
 struct PageBarControlsView: View {
     @ObservedObject private var pageBarItems = PageBarItemRegistry.shared
     var onAddPage: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 0) {
-            // 系统红绿灯预留空间（系统窗口 .titled 样式自带原生红绿灯）
-            Spacer().frame(width: 78)
-
-            Spacer()
-
+        HStack(spacing: 6) {
             // 添加按钮
             Button(action: { onAddPage?() }) {
                 Image(systemName: "plus")
@@ -734,7 +733,6 @@ struct PageBarControlsView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 6)
 
             // 侧边栏按钮（原设置按钮）
             Button(action: {
@@ -746,14 +744,13 @@ struct PageBarControlsView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 6)
 
             // 插件注册的 PageBar 组件（包括翻译模式开关等）
             ForEach(pageBarItems.items) { item in
                 item.viewProvider()
-                    .padding(.trailing, 6)
             }
         }
+        .padding(.trailing, 6)
         .frame(height: kPageBarHeight)
     }
 }
