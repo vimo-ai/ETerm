@@ -322,7 +322,8 @@ final class MCPServerCoordinator: @unchecked Sendable {
                         "type": "object",
                         "properties": [
                             "terminalId": ["type": "integer", "description": "Terminal ID (from list_sessions)"],
-                            "text": ["type": "string", "description": "Text to send (use \\n for Enter key)"]
+                            "text": ["type": "string", "description": "Text to send"],
+                            "pressEnter": ["type": "boolean", "description": "If true, automatically press Enter after 50ms delay (recommended for commands)"]
                         ],
                         "required": ["terminalId", "text"]
                     ]
@@ -339,6 +340,19 @@ final class MCPServerCoordinator: @unchecked Sendable {
                             "panelId": ["type": "string", "description": "Target panel UUID (default: active panel)"]
                         ],
                         "required": []
+                    ]
+                ],
+                [
+                    "name": "call_plugin_service",
+                    "description": "Call a service registered by an ETerm plugin. Use this to interact with plugin-specific features like waiting for Claude sessions.",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [
+                            "pluginId": ["type": "string", "description": "Plugin ID (e.g., 'com.eterm.claude')"],
+                            "service": ["type": "string", "description": "Service name (e.g., 'waitForSession')"],
+                            "args": ["type": "object", "description": "Service arguments (varies by service)"]
+                        ],
+                        "required": ["pluginId", "service"]
                     ]
                 ]
             ]
@@ -384,11 +398,10 @@ final class MCPServerCoordinator: @unchecked Sendable {
             guard let text = arguments["text"] as? String else {
                 throw MCPServerError.invalidParams("Missing or invalid 'text'")
             }
+            let pressEnter = arguments["pressEnter"] as? Bool ?? false
             // 需要操作 UI，在主线程执行
-            return await MainActor.run {
-                let response = SendInputTool.execute(terminalId: terminalId, text: text)
-                return SendInputTool.responseToJSON(response)
-            }
+            let response = await SendInputTool.execute(terminalId: terminalId, text: text, pressEnter: pressEnter)
+            return SendInputTool.responseToJSON(response)
 
         case "open_terminal":
             let workingDirectory = arguments["workingDirectory"] as? String
@@ -409,6 +422,33 @@ final class MCPServerCoordinator: @unchecked Sendable {
                     panelId: panelId
                 )
                 return OpenTerminalTool.responseToJSON(response)
+            }
+
+        case "call_plugin_service":
+            guard let pluginId = arguments["pluginId"] as? String else {
+                throw MCPServerError.invalidParams("Missing or invalid 'pluginId'")
+            }
+            guard let service = arguments["service"] as? String else {
+                throw MCPServerError.invalidParams("Missing or invalid 'service'")
+            }
+            let args = arguments["args"] as? [String: Any] ?? [:]
+
+            // 调用插件服务
+            let result = MainProcessHostBridge.callGlobalService(
+                pluginId: pluginId,
+                name: service,
+                params: args
+            )
+
+            if let result = result {
+                // 将结果转为 JSON
+                if let jsonData = try? JSONSerialization.data(withJSONObject: result),
+                   let jsonString = String(data: jsonData, encoding: .utf8) {
+                    return jsonString
+                }
+                return "{\"success\": true}"
+            } else {
+                return "{\"success\": false, \"error\": \"Service not found or returned nil\"}"
             }
 
         default:
