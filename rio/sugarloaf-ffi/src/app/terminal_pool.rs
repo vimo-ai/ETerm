@@ -2035,11 +2035,18 @@ impl TerminalPool {
         // 更新 config 中的 scale
         self.config.scale = scale;
 
-        // 尝试立即更新渲染器和 Sugarloaf
-        let renderer_updated = self.renderer.try_lock().map(|mut r| {
+        // 尝试立即更新渲染器和 Sugarloaf，同时获取新的 font metrics
+        let (renderer_updated, new_metrics) = self.renderer.try_lock().map(|mut r| {
             r.set_scale(scale);
-            true
-        }).unwrap_or(false);
+            // 获取更新后的 font metrics（scale 变化会影响物理像素值）
+            let metrics = r.get_font_metrics();
+            let cached = (
+                metrics.cell_width.value,
+                metrics.cell_height.value,
+                metrics.cell_height.value * self.config.line_height,
+            );
+            (true, Some(cached))
+        }).unwrap_or((false, None));
 
         let sugarloaf_updated = self.sugarloaf.try_lock().map(|mut s| {
             s.rescale(scale);
@@ -2049,8 +2056,14 @@ impl TerminalPool {
         if renderer_updated && sugarloaf_updated {
             // 全部成功时清除待处理队列（避免旧值被回滚）
             self.pending_scale.lock().take();
+            // 更新 font metrics 缓存，确保 Swift 侧获取到新的物理像素值
+            // 修复：之前遗漏了这一步，导致 DPI 切换后选区坐标计算使用旧的 cell 尺寸
+            if let Some(metrics) = new_metrics {
+                *self.cached_font_metrics.write().unwrap() = metrics;
+            }
         } else {
             // 如果任一更新失败，排队待处理
+            // apply_pending_updates 会负责更新 cached_font_metrics
             *self.pending_scale.lock() = Some(scale);
         }
 
