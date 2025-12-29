@@ -22,8 +22,8 @@ public final class MemexService: @unchecked Sendable {
     /// 服务端口
     public let port: UInt16 = 10013
 
-    /// 服务进程
-    private var process: Process?
+    /// 服务进程（nonisolated 以支持 stop() 跨线程调用）
+    private nonisolated(unsafe) var process: Process?
 
     /// 是否正在运行
     public var isRunning: Bool {
@@ -85,9 +85,9 @@ public final class MemexService: @unchecked Sendable {
         }
     }
 
-    /// 停止服务
-    public func stop() {
-        guard let process = process, process.isRunning else { return }
+    /// 停止服务（同步版本，用于 app 退出时调用）
+    public nonisolated func stop() {
+        guard let process = self.process, process.isRunning else { return }
         process.terminate()
         process.waitUntilExit()
         self.process = nil
