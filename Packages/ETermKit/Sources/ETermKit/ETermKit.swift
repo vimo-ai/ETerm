@@ -80,6 +80,20 @@ public typealias _IPCConnectionConfig = IPCConnectionConfig
 // IPC 协议版本
 public let ETermKitIPCProtocolVersion = IPCProtocolVersion
 
+// MARK: - Socket Service
+
+// Socket 服务协议
+public typealias _SocketServiceProtocol = SocketServiceProtocol
+
+// Socket 客户端协议
+public typealias _SocketClientProtocol = SocketClientProtocol
+
+// Socket 客户端事件
+public typealias _SocketClientEvent = SocketClientEvent
+
+// Socket 客户端配置
+public typealias _SocketClientConfig = SocketClientConfig
+
 // MARK: - SDK Version
 
 /// ETermKit SDK 版本

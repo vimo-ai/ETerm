@@ -381,4 +381,16 @@ public protocol HostBridge: AnyObject, Sendable {
     /// - Parameter namespace: socket namespace（如 "claude"）
     /// - Returns: Socket 文件的绝对路径
     func socketPath(for namespace: String) -> String
+
+    // MARK: - Socket Service
+
+    /// Socket 服务
+    ///
+    /// 提供 Socket.IO 客户端创建能力，插件可通过此服务
+    /// 复用主应用的 SocketIO 库，避免重复链接。
+    ///
+    /// 需要 capability: `socket.client`
+    ///
+    /// - Returns: Socket 服务实例，主应用未提供时返回 nil
+    var socketService: SocketServiceProtocol? { get }
 }
