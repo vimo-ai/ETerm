@@ -30,8 +30,9 @@ struct MemexView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部安全区域
+            // 顶部安全区域（Tab 栏区域，必须允许点击穿透）
             Color.clear.frame(height: 52)
+                .allowsHitTesting(false)
 
             // 标题栏（带模式切换）
             MemexHeaderView(
@@ -124,7 +125,10 @@ private struct WebUIContentView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
 
-                Button(action: onStartService) {
+                Button {
+                    print("[MemexKit] 🔘 启动按钮被点击")
+                    onStartService()
+                } label: {
                     Label("启动服务", systemImage: "play.fill")
                         .padding(.horizontal, 20)
                         .padding(.vertical, 10)
@@ -162,12 +166,15 @@ final class MemexViewModel: ObservableObject {
     }
 
     func startService() async {
+        print("[MemexKit] 🚀 startService() 被调用")
         do {
             try MemexService.shared.start()
+            print("[MemexKit] ✅ MemexService.start() 成功")
             // 等待服务启动
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await refresh()
         } catch {
+            print("[MemexKit] ❌ MemexService.start() 失败: \(error)")
             errorMessage = error.localizedDescription
         }
     }
@@ -200,14 +207,25 @@ private struct MemexHeaderView: View {
 
             Spacer()
 
-            // 中间：模式切换
-            Picker("", selection: $viewMode) {
+            // 中间：模式切换（使用自定义按钮替代 segmented Picker）
+            HStack(spacing: 0) {
                 ForEach(MemexViewMode.allCases, id: \.self) { mode in
-                    Label(mode.rawValue, systemImage: mode.icon)
-                        .tag(mode)
+                    Button {
+                        viewMode = mode
+                    } label: {
+                        Label(mode.rawValue, systemImage: mode.icon)
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .background(viewMode == mode ? Color.accentColor.opacity(0.2) : Color.clear)
+                    .contentShape(Rectangle())
                 }
             }
-            .pickerStyle(.segmented)
+            .background(Color.primary.opacity(0.05))
+            .cornerRadius(6)
             .frame(width: 160)
 
             Spacer()

@@ -22,14 +22,41 @@ final class ClickableWKWebView: WKWebView {
         return true
     }
 
-    /// 确保 hit test 返回自己（而不是 nil）
+    /// 顶部排除区域高度（安全区 52 + header ~45 + divider 1）
+    private static let topExcludedHeight: CGFloat = 100
+
+    /// 重写 hitTest：排除顶部区域，让 SwiftUI 视图能接收点击
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // 首先检查点是否在 bounds 内
-        guard bounds.contains(point) else {
-            return nil
+        let inBounds = bounds.contains(point)
+
+        // 获取 superview 信息
+        var distanceFromTop: CGFloat = -1
+        var shouldExclude = false
+
+        if let sv = superview {
+            let svPoint = convert(point, to: sv)
+            distanceFromTop = sv.bounds.height - svPoint.y
+            shouldExclude = distanceFromTop < Self.topExcludedHeight
+
+            print("[WKWebView.hitTest] point=\(point), inBounds=\(inBounds), distanceFromTop=\(distanceFromTop), excluded=\(shouldExclude)")
+
+            // 如果点击在顶部排除区域内，返回 superview 让 NSHostingView 处理 SwiftUI 事件
+            if shouldExclude {
+                // 向上查找 NSHostingView
+                var current: NSView? = sv
+                while let view = current {
+                    if String(describing: type(of: view)).contains("NSHostingView") {
+                        print("[WKWebView.hitTest] → 返回 NSHostingView，让 SwiftUI 处理")
+                        return view
+                    }
+                    current = view.superview
+                }
+                print("[WKWebView.hitTest] → 返回 nil（未找到 NSHostingView）")
+                return nil
+            }
         }
-        // 让默认实现处理，如果返回 nil 则返回自己
-        return super.hitTest(point) ?? self
+
+        return super.hitTest(point)
     }
 }
 
@@ -62,6 +89,10 @@ struct MemexWebView: NSViewRepresentable {
 
         let webView = ClickableWKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+
+        // 确保 WebView 在正确的 layer 层级，不会覆盖 SwiftUI 视图
+        webView.wantsLayer = true
+        webView.layer?.masksToBounds = true
 
         // 允许后退/前进手势
         webView.allowsBackForwardNavigationGestures = true
@@ -162,13 +193,14 @@ struct MemexWebContainer: View {
 
     var body: some View {
         ZStack {
-            // WebView
+            // WebView - 添加 clipped 确保不会渲染到边界之外
             MemexWebView(
                 url: webURL,
                 onLoadingChange: { isLoading = $0 },
                 onTitleChange: { pageTitle = $0 },
                 onError: { error = $0 }
             )
+            .clipped()
 
             // 加载指示器
             if isLoading {
