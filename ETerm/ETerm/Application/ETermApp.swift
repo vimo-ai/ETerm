@@ -108,6 +108,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 读取 Session
         let session = SessionManager.shared.load()
 
+        // DEBUG: 屏幕恢复调试
+        logInfo("[ScreenDebug] NSScreen.screens.count: \(NSScreen.screens.count)")
+        for (i, screen) in NSScreen.screens.enumerated() {
+            let screenId = SessionManager.screenIdentifier(for: screen)
+            logInfo("[ScreenDebug] Screen[\(i)]: id=\(screenId) frame=\(screen.frame)")
+        }
+        logInfo("[ScreenDebug] NSScreen.main: \(NSScreen.main.map { SessionManager.screenIdentifier(for: $0) } ?? "nil")")
+        if let session = session {
+            for (i, ws) in session.windows.enumerated() {
+                logInfo("[ScreenDebug] SavedWindow[\(i)]: screenId=\(ws.screenIdentifier ?? "nil") frame=\(ws.frame.cgRect)")
+            }
+        }
+
         // 创建/恢复窗口
         if let session = session, !session.windows.isEmpty {
             for windowState in session.windows {
