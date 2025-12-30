@@ -7,8 +7,55 @@ final class PluginLoader {
 
     private var loadedPlugins: [String: Bundle] = [:]
 
+    /// 所有扫描到的插件 URL（包括禁用的）
+    private var scannedPlugins: [String: URL] = [:]
+
+    /// 禁用的插件 ID 集合（持久化）
+    private var disabledPluginIds: Set<String> {
+        get { loadDisabledPlugins() }
+        set { saveDisabledPlugins(newValue) }
+    }
+
+    /// 配置文件路径
+    private let configFilePath = ETermPaths.bundlePluginsConfig
+
     private init() {
         setupNotificationObservers()
+    }
+
+    // MARK: - 持久化
+
+    private struct BundlePluginsConfig: Codable {
+        var disabledPlugins: [String]
+    }
+
+    private func loadDisabledPlugins() -> Set<String> {
+        guard FileManager.default.fileExists(atPath: configFilePath) else {
+            return []
+        }
+
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: configFilePath))
+            let config = try JSONDecoder().decode(BundlePluginsConfig.self, from: data)
+            return Set(config.disabledPlugins)
+        } catch {
+            return []
+        }
+    }
+
+    private func saveDisabledPlugins(_ disabledPlugins: Set<String>) {
+        do {
+            try ETermPaths.ensureParentDirectory(for: configFilePath)
+
+            let config = BundlePluginsConfig(disabledPlugins: Array(disabledPlugins).sorted())
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(config)
+
+            try data.write(to: URL(fileURLWithPath: configFilePath))
+        } catch {
+            // Ignore save errors
+        }
     }
 
     private func setupNotificationObservers() {
@@ -42,12 +89,12 @@ final class PluginLoader {
         // 确保插件目录存在
         try? FileManager.default.createDirectory(at: pluginsURL, withIntermediateDirectories: true)
 
-        loadPluginsFrom(directory: pluginsURL, type: "plugin")
+        scanAndLoadPlugins(from: pluginsURL)
     }
 
-    /// 从指定目录加载插件
+    /// 扫描并加载插件
     /// 新结构：plugins/{PluginName}/{PluginName}.bundle
-    private func loadPluginsFrom(directory: URL, type: String) {
+    private func scanAndLoadPlugins(from directory: URL) {
         do {
             // 扫描每个插件目录
             let pluginDirs = try FileManager.default.contentsOfDirectory(
@@ -59,17 +106,31 @@ final class PluginLoader {
 
             var bundles: [URL] = []
 
-            // 在每个插件目录中查找 .bundle
+            // 在每个插件目录中查找 .bundle（排除 SDK 插件，它们有 manifest.json）
             for pluginDir in pluginDirs {
                 let pluginBundles = try FileManager.default.contentsOfDirectory(
                     at: pluginDir,
                     includingPropertiesForKeys: nil
-                ).filter { $0.pathExtension == "bundle" }
+                ).filter { url in
+                    guard url.pathExtension == "bundle" else { return false }
+                    // 检查是否有 manifest.json（SDK 插件标志）
+                    let manifestPath = url.appendingPathComponent("Contents/Resources/manifest.json")
+                    return !FileManager.default.fileExists(atPath: manifestPath.path)
+                }
 
                 bundles.append(contentsOf: pluginBundles)
             }
 
-            bundles.forEach { loadPlugin(at: $0) }
+            // 保存扫描结果并加载
+            for bundleURL in bundles {
+                let identifier = bundleURL.deletingPathExtension().lastPathComponent
+                scannedPlugins[identifier] = bundleURL
+
+                // 只加载未禁用的插件
+                if !disabledPluginIds.contains(identifier) {
+                    loadPlugin(at: bundleURL)
+                }
+            }
 
         } catch {
             // Scanning error, silently ignore
@@ -136,23 +197,72 @@ final class PluginLoader {
         loadAllPlugins()
     }
 
-    /// 获取所有已加载的 Bundle 插件信息（给 UI 用）
+    /// 获取所有 Bundle 插件信息（包括已禁用的）
     func allPluginInfos() -> [PluginInfo] {
-        loadedPlugins.map { (identifier, bundle) in
-            let name = bundle.infoDictionary?["CFBundleDisplayName"] as? String
-                ?? bundle.infoDictionary?["CFBundleName"] as? String
+        scannedPlugins.map { (identifier, url) in
+            let bundle = loadedPlugins[identifier]
+            let name = bundle?.infoDictionary?["CFBundleDisplayName"] as? String
+                ?? bundle?.infoDictionary?["CFBundleName"] as? String
                 ?? identifier
-            let version = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "1.0.0"
+            let version = bundle?.infoDictionary?["CFBundleVersion"] as? String ?? "1.0.0"
+            let isEnabled = !disabledPluginIds.contains(identifier)
+            let isLoaded = loadedPlugins[identifier] != nil
 
             return PluginInfo(
                 id: identifier,
                 name: name,
                 version: version,
                 dependencies: [],
-                isLoaded: true,
-                isEnabled: true,
+                isLoaded: isLoaded,
+                isEnabled: isEnabled,
                 dependents: []
             )
         }.sorted { $0.name < $1.name }
+    }
+
+    // MARK: - 热插拔 API
+
+    /// 检查插件是否启用
+    func isPluginEnabled(_ pluginId: String) -> Bool {
+        !disabledPluginIds.contains(pluginId)
+    }
+
+    /// 检查插件是否已加载
+    func isPluginLoaded(_ pluginId: String) -> Bool {
+        loadedPlugins[pluginId] != nil
+    }
+
+    /// 启用插件（热加载）
+    /// - Parameter pluginId: 插件 ID
+    /// - Returns: 是否成功
+    @discardableResult
+    func enablePlugin(_ pluginId: String) -> Bool {
+        guard let url = scannedPlugins[pluginId] else {
+            return false
+        }
+
+        // 从禁用列表移除
+        var disabled = disabledPluginIds
+        disabled.remove(pluginId)
+        disabledPluginIds = disabled
+
+        // 加载插件
+        return loadPlugin(at: url)
+    }
+
+    /// 禁用插件（热卸载）
+    /// - Parameter pluginId: 插件 ID
+    /// - Returns: 是否成功
+    @discardableResult
+    func disablePlugin(_ pluginId: String) -> Bool {
+        // 卸载插件
+        unloadPlugin(identifier: pluginId)
+
+        // 加入禁用列表
+        var disabled = disabledPluginIds
+        disabled.insert(pluginId)
+        disabledPluginIds = disabled
+
+        return true
     }
 }
