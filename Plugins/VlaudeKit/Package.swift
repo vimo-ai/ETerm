@@ -23,11 +23,16 @@ let package = Package(
             name: "SessionReaderFFI",
             path: "Libs"
         ),
+        .systemLibrary(
+            name: "SharedDbFFI",
+            path: "Libs/SharedDB"
+        ),
         .target(
             name: "VlaudeKit",
             dependencies: [
                 "ETermKit",
-                "SessionReaderFFI"
+                "SessionReaderFFI",
+                "SharedDbFFI"
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
@@ -35,7 +40,9 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags([
                     "Libs/session_reader_ffi",
-                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs"
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs",
+                    "Libs/SharedDB/libclaude_session_db.dylib",
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SharedDB"
                 ])
             ],
             plugins: [

@@ -71,6 +71,16 @@ if [ -f "$MEMEX_BINARY" ]; then
     log_info "Memex binary copied"
 fi
 
+# Copy SharedDB (claude-session-db FFI)
+log_info "Copying SharedDB..."
+mkdir -p "${BUNDLE_PATH}/Contents/Libs"
+if [ -f "Libs/SharedDB/libclaude_session_db.dylib" ]; then
+    cp "Libs/SharedDB/libclaude_session_db.dylib" "${BUNDLE_PATH}/Contents/Libs/"
+    log_info "Copied libclaude_session_db.dylib"
+else
+    log_warn "libclaude_session_db.dylib not found - SharedDb features will be disabled"
+fi
+
 # Copy Web UI if exists
 if [ -d "$MEMEX_WEB_DIR" ]; then
     cp -r "$MEMEX_WEB_DIR" "${BUNDLE_PATH}/Contents/Resources/"
@@ -91,9 +101,28 @@ install_name_tool -change \
     "@executable_path/../Frameworks/ETermKit.framework/ETermKit" \
     "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
+# Fix SharedDB link path
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
+    # Get the actual linked path from the dylib
+    OLD_PATH=$(otool -L "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" | grep claude_session_db | awk '{print $1}')
+    if [ -n "$OLD_PATH" ]; then
+        install_name_tool -change \
+            "$OLD_PATH" \
+            "@loader_path/../Libs/libclaude_session_db.dylib" \
+            "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" 2>/dev/null || true
+    fi
+
+    install_name_tool -id \
+        "@loader_path/../Libs/libclaude_session_db.dylib" \
+        "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" 2>/dev/null || true
+fi
+
 # Re-sign after modification
 log_info "Re-signing..."
 codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
+    codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib"
+fi
 
 # Copy manifest.json
 cp "Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"
