@@ -168,6 +168,11 @@ public final class VlaudePlugin: NSObject, Plugin {
                 projectPath: pending.projectPath
             )
         }
+
+        // 索引会话到 SharedDb（如果有 transcriptPath）
+        if let transcriptPath = payload["transcriptPath"] as? String {
+            client?.indexSession(path: transcriptPath)
+        }
     }
 
     private func handleClaudeSessionEnd(_ payload: [String: Any]) {

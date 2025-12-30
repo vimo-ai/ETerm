@@ -22,42 +22,8 @@ final class ClickableWKWebView: WKWebView {
         return true
     }
 
-    /// 顶部排除区域高度（安全区 52 + header ~45 + divider 1）
-    private static let topExcludedHeight: CGFloat = 100
-
-    /// 重写 hitTest：排除顶部区域，让 SwiftUI 视图能接收点击
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let inBounds = bounds.contains(point)
-
-        // 获取 superview 信息
-        var distanceFromTop: CGFloat = -1
-        var shouldExclude = false
-
-        if let sv = superview {
-            let svPoint = convert(point, to: sv)
-            distanceFromTop = sv.bounds.height - svPoint.y
-            shouldExclude = distanceFromTop < Self.topExcludedHeight
-
-            print("[WKWebView.hitTest] point=\(point), inBounds=\(inBounds), distanceFromTop=\(distanceFromTop), excluded=\(shouldExclude)")
-
-            // 如果点击在顶部排除区域内，返回 superview 让 NSHostingView 处理 SwiftUI 事件
-            if shouldExclude {
-                // 向上查找 NSHostingView
-                var current: NSView? = sv
-                while let view = current {
-                    if String(describing: type(of: view)).contains("NSHostingView") {
-                        print("[WKWebView.hitTest] → 返回 NSHostingView，让 SwiftUI 处理")
-                        return view
-                    }
-                    current = view.superview
-                }
-                print("[WKWebView.hitTest] → 返回 nil（未找到 NSHostingView）")
-                return nil
-            }
-        }
-
-        return super.hitTest(point)
-    }
+    // WebView 只占据内容区域，不需要 hitTest hack
+    // 顶部控件在 SwiftUI 层通过 VStack 布局与 WebView 分离
 }
 
 // MARK: - MemexWebView
