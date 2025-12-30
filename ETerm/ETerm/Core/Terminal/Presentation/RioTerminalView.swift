@@ -1393,7 +1393,19 @@ class RioMetalView: NSView, RenderViewProtocol {
             return false
         }
 
-        guard let terminalId = coordinator?.getActiveTerminalId() else { return false }
+        guard let coordinator = coordinator else { return false }
+
+        // 根据放置位置找到目标 Panel（和 mouseDown 逻辑一致）
+        let location = convert(sender.draggingLocation, from: nil)
+        guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
+              let panel = coordinator.terminalWindow.getPanel(panelId),
+              let activeTab = panel.activeTab,
+              let terminalId = activeTab.rustTerminalId else {
+            return false
+        }
+
+        // 切换到目标 Panel（确保后续键盘输入也到这个 Terminal）
+        coordinator.setActivePanel(panelId)
 
         let paths = urls.map { $0.path }
         let payload = paths.joined(separator: " ") + " "

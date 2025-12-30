@@ -9,7 +9,7 @@ import AppKit
 import Combine
 
 /// 全局信息窗口
-final class InfoWindow: NSPanel {
+final class InfoWindow: NSWindow {
 
     private weak var registry: InfoWindowRegistry?
     private var hostingView: NSHostingView<InfoWindowContentView>?
@@ -20,7 +20,7 @@ final class InfoWindow: NSPanel {
 
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
-            styleMask: [.titled, .closable, .resizable],
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: true
         )
@@ -35,15 +35,11 @@ final class InfoWindow: NSPanel {
 
     private func setupWindow() {
         title = "信息面板"
-        level = .floating
         isOpaque = false
         backgroundColor = NSColor.windowBackgroundColor
 
-        // 允许在所有 Space 显示
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-        // 应用失去焦点时不自动隐藏
-        hidesOnDeactivate = false
+        // 跟随当前 Space
+        collectionBehavior = [.moveToActiveSpace]
 
         // 关闭时隐藏而不是释放
         isReleasedWhenClosed = false
@@ -130,7 +126,7 @@ final class InfoWindow: NSPanel {
     // MARK: - Window Behavior
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    override var canBecomeMain: Bool { true }
 
     // 关闭时只隐藏窗口，不清空内容列表
     // 内容由插件通过 hideContent() 管理
