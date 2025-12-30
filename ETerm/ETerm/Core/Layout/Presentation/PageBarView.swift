@@ -9,6 +9,7 @@
 
 import SwiftUI
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 // MARK: - 常量
@@ -211,6 +212,9 @@ final class PageBarHostingView: NSView {
     // 拖拽相关
     private var draggingPageId: UUID?
 
+    // Combine 订阅
+    private var cancellables = Set<AnyCancellable>()
+
     // 回调
     var onPageClick: ((UUID) -> Void)?
     var onPageClose: ((UUID) -> Void)?
@@ -273,6 +277,15 @@ final class PageBarHostingView: NSView {
         hosting.translatesAutoresizingMaskIntoConstraints = true
         addSubview(hosting)
         hostingView = hosting
+
+        // 监听插件注册的 PageBar 组件变化，触发重新布局
+        PageBarItemRegistry.shared.$items
+            .dropFirst()  // 跳过初始值
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.needsLayout = true
+            }
+            .store(in: &cancellables)
     }
 
     private func setupScrollView() {
