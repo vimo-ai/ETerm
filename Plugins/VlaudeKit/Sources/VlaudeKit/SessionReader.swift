@@ -72,6 +72,31 @@ struct RawMessage: Codable {
     }
 }
 
+/// Indexable session data (for writing to SharedDb)
+/// Contains correctly resolved project path (from cwd)
+struct IndexableSession: Codable {
+    let sessionId: String
+    let projectPath: String
+    let projectName: String
+    let messages: [IndexableMessage]
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case projectPath = "project_path"
+        case projectName = "project_name"
+        case messages
+    }
+}
+
+/// Message format for indexing
+struct IndexableMessage: Codable {
+    let uuid: String
+    let role: String
+    let content: String
+    let timestamp: Int64
+    let sequence: Int64
+}
+
 /// Helper for decoding any JSON value
 struct AnyCodable: Codable {
     let value: Any
@@ -283,6 +308,32 @@ final class SessionReader {
     static var version: String {
         guard let cstr = sr_version() else { return "unknown" }
         return String(cString: cstr)
+    }
+
+    // MARK: - Index Operations
+
+    /// Parse session for indexing to SharedDb
+    /// Correctly reads cwd to determine the real project path (fixes Chinese path issues)
+    /// - Parameter jsonlPath: Full path to JSONL session file
+    /// - Returns: IndexableSession if successful, nil if file is empty or parsing failed
+    func parseSessionForIndex(jsonlPath: String) -> IndexableSession? {
+        guard let handle = handle else { return nil }
+
+        let cstr = jsonlPath.withCString { path in
+            sr_parse_session_for_index(handle, path)
+        }
+
+        guard let cstr = cstr else { return nil }
+        defer { sr_free_string(cstr) }
+
+        let json = String(cString: cstr)
+
+        // Handle null response (empty file or no valid messages)
+        if json == "null" {
+            return nil
+        }
+
+        return decodeJSON(json)
     }
 
     // MARK: - Private Helpers

@@ -25,9 +25,20 @@ public final class MemexService: @unchecked Sendable {
     /// 服务进程（nonisolated 以支持 stop() 跨线程调用）
     private nonisolated(unsafe) var process: Process?
 
+    /// SharedDb 桥接（nonisolated 以支持 stop() 跨线程释放）
+    private nonisolated(unsafe) var sharedDb: SharedDbBridge?
+
+    /// Session Reader（用于解析 JSONL 文件）
+    private lazy var sessionReader = SessionReader()
+
     /// 是否正在运行
     public var isRunning: Bool {
         process?.isRunning ?? false
+    }
+
+    /// SharedDb 是否可用
+    public var isSharedDbAvailable: Bool {
+        sharedDb != nil
     }
 
     /// API 基础 URL
@@ -35,13 +46,32 @@ public final class MemexService: @unchecked Sendable {
         URL(string: "http://localhost:\(port)")!
     }
 
-    private init() {}
+    private init() {
+        initSharedDb()
+    }
+
+    /// 初始化 SharedDb（最佳努力）
+    private func initSharedDb() {
+        do {
+            sharedDb = try SharedDbBridge()
+            _ = try sharedDb?.register()
+            print("[MemexService] SharedDb initialized")
+        } catch {
+            print("[MemexService] SharedDb not available: \(error)")
+            sharedDb = nil
+        }
+    }
 
     // MARK: - Lifecycle
 
     /// 启动服务
     public func start() throws {
         guard !isRunning else { return }
+
+        // 确保 SharedDb 已初始化（可能之前被 stop() 释放）
+        if sharedDb == nil {
+            initSharedDb()
+        }
 
         // 检查端口是否已被占用（可能外部已启动 memex）
         if isPortInUse(port) { return }
@@ -87,10 +117,57 @@ public final class MemexService: @unchecked Sendable {
 
     /// 停止服务（同步版本，用于 app 退出时调用）
     public nonisolated func stop() {
-        guard let process = self.process, process.isRunning else { return }
-        process.terminate()
-        process.waitUntilExit()
-        self.process = nil
+        // 1. 释放 SharedDbBridge Writer（必须在停止进程前释放，确保 daemon 能接管）
+        releaseSharedDb()
+
+        // 2. 停止自己管理的进程
+        if let process = self.process, process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            self.process = nil
+        }
+
+        // 3. 杀掉端口上的 memex 进程（可能是外部启动的或上次未正确关闭的）
+        killMemexOnPort()
+    }
+
+    /// 释放 SharedDbBridge（线程安全，SharedDbBridge 内部用 queue.sync 保护）
+    private nonisolated func releaseSharedDb() {
+        guard let db = sharedDb else { return }
+        do {
+            try db.release()
+            print("[MemexService] SharedDb released")
+        } catch {
+            print("[MemexService] SharedDb release failed: \(error)")
+        }
+        sharedDb = nil
+    }
+
+    /// 杀掉端口上的 memex 进程
+    private nonisolated func killMemexOnPort() {
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-t", "-i", ":\(port)"]
+        let pipe = Pipe()
+        lsof.standardOutput = pipe
+        lsof.standardError = FileHandle.nullDevice
+
+        do {
+            try lsof.run()
+            lsof.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !output.isEmpty else { return }
+
+            // 可能有多个 PID（一行一个）
+            for pidStr in output.components(separatedBy: .newlines) {
+                guard let pid = Int32(pidStr.trimmingCharacters(in: .whitespaces)) else { continue }
+                kill(pid, SIGTERM)
+            }
+        } catch {
+            // 静默失败
+        }
     }
 
     /// 等待服务就绪
@@ -187,8 +264,32 @@ public final class MemexService: @unchecked Sendable {
 
 extension MemexService {
 
-    /// 搜索
+    /// 搜索（优先使用 SharedDb，回退到 HTTP API）
     public func search(query: String, limit: Int = 20) async throws -> [MemexSearchResult] {
+        // 优先使用 SharedDb
+        if let sharedDb = sharedDb {
+            do {
+                let safeLimit = max(1, min(limit, 100))
+                let results = try sharedDb.search(query: query, limit: safeLimit)
+                return results.map { r in
+                    MemexSearchResult(
+                        id: r.messageId,
+                        sessionId: r.sessionId,
+                        projectId: r.projectId,
+                        projectName: r.projectName,
+                        messageType: r.role,
+                        content: r.content,
+                        snippet: r.snippet,
+                        score: r.score,
+                        timestamp: r.timestamp.map { String($0) }
+                    )
+                }
+            } catch {
+                print("[MemexService] SharedDb search failed, falling back to HTTP: \(error)")
+            }
+        }
+
+        // 回退到 HTTP API
         var components = URLComponents(url: baseURL.appendingPathComponent("api/search"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
@@ -206,8 +307,25 @@ extension MemexService {
         return results.map { $0.toModel() }
     }
 
-    /// 获取统计信息
+    /// 获取统计信息（优先使用 SharedDb，回退到 HTTP API）
     public func getStats() async throws -> MemexStats {
+        // 优先使用 SharedDb
+        if let sharedDb = sharedDb {
+            do {
+                let stats = try sharedDb.getStats()
+                return MemexStats(
+                    projectCount: Int(stats.projectCount),
+                    sessionCount: Int(stats.sessionCount),
+                    messageCount: Int(stats.messageCount),
+                    semanticSearchEnabled: false,  // SharedDb 不支持语义搜索
+                    aiChatEnabled: false
+                )
+            } catch {
+                print("[MemexService] SharedDb getStats failed, falling back to HTTP: \(error)")
+            }
+        }
+
+        // 回退到 HTTP API
         let url = baseURL.appendingPathComponent("api/stats")
         let (data, response) = try await URLSession.shared.data(from: url)
 
@@ -235,7 +353,25 @@ extension MemexService {
 
     /// 索引指定会话（精确索引，替代 file watcher 轮询）
     /// - Parameter path: JSONL 会话文件路径
+    ///
+    /// 优先尝试 HTTP API，失败时回退到 SharedDb 直写
     public func indexSession(path: String) async throws {
+        // 1. 如果 HTTP 服务运行中，优先用 HTTP
+        if isRunning || isPortInUse(port) {
+            do {
+                try await indexSessionViaHTTP(path: path)
+                return
+            } catch {
+                print("[MemexService] HTTP indexSession failed, trying SharedDb: \(error)")
+            }
+        }
+
+        // 2. 回退到 SharedDb 直写
+        try await indexSessionViaSharedDb(path: path)
+    }
+
+    /// 通过 HTTP API 索引会话
+    private func indexSessionViaHTTP(path: String) async throws {
         let url = baseURL.appendingPathComponent("api/index")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -250,6 +386,58 @@ extension MemexService {
               httpResponse.statusCode == 200 else {
             throw MemexServiceError.requestFailed
         }
+    }
+
+    /// 通过 SharedDb 直接写入会话
+    private func indexSessionViaSharedDb(path: String) async throws {
+        guard let sharedDb = sharedDb else {
+            throw MemexServiceError.sharedDbNotAvailable
+        }
+
+        // 检查是否为 Writer，如果不是尝试接管
+        if sharedDb.role != .writer {
+            let health = try sharedDb.checkWriterHealth()
+            if health == .timeout || health == .released {
+                guard try sharedDb.tryTakeover() else {
+                    throw MemexServiceError.notWriter
+                }
+            } else {
+                throw MemexServiceError.notWriter
+            }
+        }
+
+        // 使用 session-reader-ffi 解析会话（正确读取 cwd 解决中文路径问题）
+        guard let session = sessionReader.parseSessionForIndex(jsonlPath: path) else {
+            print("[MemexService] No messages to index in \(path)")
+            return
+        }
+
+        // 转换消息格式
+        let messages = session.messages.map { msg in
+            MessageInput(
+                uuid: msg.uuid,
+                role: msg.role == "user" ? "human" : "assistant",
+                content: msg.content,
+                timestamp: msg.timestamp,
+                sequence: msg.sequence
+            )
+        }
+
+        guard !messages.isEmpty else {
+            print("[MemexService] No messages to index in \(path)")
+            return
+        }
+
+        // 写入数据库
+        let projectId = try sharedDb.upsertProject(
+            path: session.projectPath,
+            name: session.projectName,
+            source: "claude-code"
+        )
+        try sharedDb.upsertSession(sessionId: session.sessionId, projectId: projectId)
+        let inserted = try sharedDb.insertMessages(sessionId: session.sessionId, messages: messages)
+
+        print("[MemexService] Indexed \(inserted) messages via SharedDb for session \(session.sessionId)")
     }
 }
 
@@ -312,6 +500,9 @@ public enum MemexServiceError: Error, LocalizedError {
     case binaryNotFound
     case requestFailed
     case serviceNotRunning
+    case sharedDbNotAvailable
+    case notWriter
+    case fileReadFailed
 
     public var errorDescription: String? {
         switch self {
@@ -321,6 +512,12 @@ public enum MemexServiceError: Error, LocalizedError {
             return "HTTP request failed"
         case .serviceNotRunning:
             return "Memex service is not running"
+        case .sharedDbNotAvailable:
+            return "SharedDb not available"
+        case .notWriter:
+            return "Not a Writer, cannot write to SharedDb"
+        case .fileReadFailed:
+            return "Failed to read JSONL file"
         }
     }
 }
