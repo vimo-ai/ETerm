@@ -24,17 +24,19 @@ enum MemexViewMode: String, CaseIterable {
 
 // MARK: - MemexView
 
+/// Memex 主视图
+/// 布局：顶部安全区 + Header + 内容区域（各自独立，互不干扰）
 struct MemexView: View {
     @StateObject private var viewModel = MemexViewModel()
-    @State private var viewMode: MemexViewMode = .webUI  // 默认显示 Web UI
+    @State private var viewMode: MemexViewMode = .webUI
 
     var body: some View {
         VStack(spacing: 0) {
-            // 顶部安全区域（Tab 栏区域，必须允许点击穿透）
-            Color.clear.frame(height: 52)
-                .allowsHitTesting(false)
+            // 1. 顶部安全区域（Tab 栏）- 纯 SwiftUI
+            Color.clear
+                .frame(height: 52)
 
-            // 标题栏（带模式切换）
+            // 2. Header 区域 - 纯 SwiftUI，包含模式切换
             MemexHeaderView(
                 isRunning: viewModel.isServiceRunning,
                 viewMode: $viewMode,
@@ -43,7 +45,8 @@ struct MemexView: View {
 
             Divider()
 
-            // 主内容
+            // 3. 内容区域 - 根据模式显示不同内容
+            //    WebView 只在这个区域内渲染，不会覆盖上面的控件
             Group {
                 switch viewMode {
                 case .status:
@@ -56,6 +59,7 @@ struct MemexView: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task {

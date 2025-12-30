@@ -16,6 +16,7 @@ import SwiftUI
 import ETermKit
 
 @objc(MemexPlugin)
+@MainActor
 public final class MemexPlugin: NSObject, Plugin {
     public static var id = "com.eterm.memex"
 
