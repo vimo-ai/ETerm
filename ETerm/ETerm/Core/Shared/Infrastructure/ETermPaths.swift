@@ -68,6 +68,12 @@ enum ETermPaths {
     /// 插件配置文件: ~/.eterm/plugins/plugins.json
     static let pluginsConfig = plugins + "/plugins.json"
 
+    /// SDK 插件配置文件: ~/.eterm/plugins/sdk-plugins.json
+    static let sdkPluginsConfig = plugins + "/sdk-plugins.json"
+
+    /// Bundle 插件配置文件: ~/.eterm/plugins/bundle-plugins.json
+    static let bundlePluginsConfig = plugins + "/bundle-plugins.json"
+
     /// Claude Monitor 插件目录: ~/.eterm/plugins/claude-monitor
     static let claudeMonitorPlugin = plugins + "/claude-monitor"
 

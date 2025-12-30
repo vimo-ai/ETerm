@@ -64,10 +64,58 @@ final class SDKPluginLoader {
     /// MenuBar 状态栏项 (pluginId -> NSStatusItem)
     private var menuBarItems: [String: NSStatusItem] = [:]
 
+    /// 禁用的插件 ID 集合（持久化）
+    private var disabledPluginIds: Set<String> {
+        get { loadDisabledPlugins() }
+        set { saveDisabledPlugins(newValue) }
+    }
+
+    /// 配置文件路径
+    private let configFilePath = ETermPaths.sdkPluginsConfig
+
     // MARK: - Init
 
     private init() {
         setupRequestHandler()
+    }
+
+    // MARK: - 持久化
+
+    /// SDK 插件配置数据模型
+    private struct SDKPluginsConfig: Codable {
+        var disabledPlugins: [String]
+    }
+
+    /// 从 JSON 文件加载禁用的插件列表
+    private func loadDisabledPlugins() -> Set<String> {
+        guard FileManager.default.fileExists(atPath: configFilePath) else {
+            return []
+        }
+
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: configFilePath))
+            let config = try JSONDecoder().decode(SDKPluginsConfig.self, from: data)
+            return Set(config.disabledPlugins)
+        } catch {
+            logError("[SDKPluginLoader] 加载配置失败: \(error)")
+            return []
+        }
+    }
+
+    /// 保存禁用的插件列表到 JSON 文件
+    private func saveDisabledPlugins(_ disabledPlugins: Set<String>) {
+        do {
+            try ETermPaths.ensureParentDirectory(for: configFilePath)
+
+            let config = SDKPluginsConfig(disabledPlugins: Array(disabledPlugins).sorted())
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(config)
+
+            try data.write(to: URL(fileURLWithPath: configFilePath))
+        } catch {
+            logError("[SDKPluginLoader] 保存配置失败: \(error)")
+        }
     }
 
     /// 注入嵌入终端工厂
@@ -209,19 +257,152 @@ final class SDKPluginLoader {
         await loadBackgroundPlugins()
     }
 
-    /// 获取所有已加载的插件信息
+    /// 获取所有插件信息（包括已加载和已禁用的）
     func allPluginInfos() -> [PluginInfo] {
-        return manifests.values.map { manifest in
-            PluginInfo(
+        // 从 pendingManifests 获取所有扫描到的插件（包括禁用的）
+        var allManifests = pendingManifests
+        // 加上已加载的（避免重复）
+        for manifest in manifests.values where !allManifests.contains(where: { $0.id == manifest.id }) {
+            allManifests.append(manifest)
+        }
+
+        return allManifests.map { manifest in
+            let isEnabled = !disabledPluginIds.contains(manifest.id)
+            let isLoaded = manifests[manifest.id] != nil
+            return PluginInfo(
                 id: manifest.id,
                 name: manifest.name,
                 version: manifest.version,
                 dependencies: manifest.dependencies.map { $0.id },
-                isLoaded: true,
-                isEnabled: true,
+                isLoaded: isLoaded,
+                isEnabled: isEnabled,
                 dependents: getDependents(of: manifest.id)
             )
         }
+    }
+
+    // MARK: - 热插拔 API
+
+    /// 检查插件是否启用
+    func isPluginEnabled(_ pluginId: String) -> Bool {
+        !disabledPluginIds.contains(pluginId)
+    }
+
+    /// 检查插件是否已加载
+    func isPluginLoaded(_ pluginId: String) -> Bool {
+        manifests[pluginId] != nil
+    }
+
+    /// 启用插件（热加载）
+    /// - Parameter pluginId: 插件 ID
+    /// - Returns: 是否成功
+    @MainActor
+    @discardableResult
+    func enablePlugin(_ pluginId: String) async -> Bool {
+        // 从 pendingManifests 中找到 manifest
+        guard let manifest = pendingManifests.first(where: { $0.id == pluginId }) else {
+            logWarn("[SDKPluginLoader] Cannot enable \(pluginId): manifest not found")
+            return false
+        }
+
+        // 先启用依赖
+        for dep in manifest.dependencies {
+            if disabledPluginIds.contains(dep.id) {
+                let success = await enablePlugin(dep.id)
+                if !success {
+                    logWarn("[SDKPluginLoader] Cannot enable \(pluginId): dependency \(dep.id) failed to enable")
+                    return false
+                }
+            }
+        }
+
+        // 从禁用列表移除
+        var disabled = disabledPluginIds
+        disabled.remove(pluginId)
+        disabledPluginIds = disabled
+
+        // 加载插件
+        await loadPlugin(manifest)
+
+        logInfo("[SDKPluginLoader] Enabled plugin: \(pluginId)")
+        return manifests[pluginId] != nil
+    }
+
+    /// 禁用插件（热卸载）
+    /// - Parameter pluginId: 插件 ID
+    /// - Returns: 是否成功
+    @MainActor
+    @discardableResult
+    func disablePlugin(_ pluginId: String) -> Bool {
+        // 先禁用依赖此插件的其他插件
+        let dependents = getDependents(of: pluginId)
+        for depId in dependents {
+            if manifests[depId] != nil {
+                if !disablePlugin(depId) {
+                    logWarn("[SDKPluginLoader] Cannot disable \(pluginId): dependent \(depId) failed to disable")
+                    return false
+                }
+            }
+        }
+
+        // 卸载插件
+        unloadPlugin(pluginId)
+
+        // 加入禁用列表
+        var disabled = disabledPluginIds
+        disabled.insert(pluginId)
+        disabledPluginIds = disabled
+
+        logInfo("[SDKPluginLoader] Disabled plugin: \(pluginId)")
+        return true
+    }
+
+    /// 卸载插件（注销 UI 组件，但不改变启用状态）
+    private func unloadPlugin(_ pluginId: String) {
+        guard manifests[pluginId] != nil else { return }
+
+        // 注销侧边栏 Tab
+        SidebarRegistry.shared.unregisterTabs(for: pluginId)
+
+        // 注销 View Tab 视图定义
+        ViewTabRegistry.shared.unregisterAll(for: pluginId)
+
+        // 注销 PageBar 组件
+        PageBarItemRegistry.shared.unregisterItems(for: pluginId)
+
+        // 注销 Tab Slot
+        tabSlotRegistry.unregister(pluginId: pluginId)
+
+        // 注销 Page Slot
+        pageSlotRegistry.unregister(pluginId: pluginId)
+
+        // 注销 Info Panel
+        if let manifest = manifests[pluginId] {
+            for content in manifest.infoPanelContents {
+                InfoWindowRegistry.shared.unregisterContent(id: content.id)
+            }
+        }
+
+        // 移除 MenuBar
+        if let statusItem = menuBarItems[pluginId] {
+            NSStatusBar.system.removeStatusItem(statusItem)
+            menuBarItems.removeValue(forKey: pluginId)
+        }
+
+        // main mode: 调用 deactivate
+        if let plugin = mainModePlugins[pluginId] {
+            plugin.deactivate()
+            mainModePlugins.removeValue(forKey: pluginId)
+        }
+
+        // 清理存储
+        hostBridges.removeValue(forKey: pluginId)
+        pluginHosts.removeValue(forKey: pluginId)
+        viewProviders.removeValue(forKey: pluginId)
+        loadedBundles.removeValue(forKey: pluginId)
+        manifests.removeValue(forKey: pluginId)
+
+        logInfo("[SDKPluginLoader] Unloaded plugin: \(pluginId)")
     }
 
     /// 获取插件 Manifest
@@ -394,6 +575,12 @@ final class SDKPluginLoader {
     /// 加载单个插件
     private func loadPlugin(_ manifest: PluginManifest) async {
         let pluginId = manifest.id
+
+        // 检查是否禁用
+        if disabledPluginIds.contains(pluginId) {
+            logInfo("[SDKPluginLoader] Skipping disabled plugin: \(pluginId)")
+            return
+        }
 
         // 检查依赖
         for dep in manifest.dependencies {

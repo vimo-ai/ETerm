@@ -5,6 +5,7 @@
 //  插件管理视图 - 支持热插拔
 
 import SwiftUI
+import Combine
 
 struct PluginManagerView: View {
     @ObservedObject private var pluginManager = PluginManager.shared
@@ -178,15 +179,69 @@ struct PluginItemView: View {
     private func togglePlugin(enabled: Bool) {
         isToggling = true
 
-        // 异步执行，避免 UI 卡顿
-        DispatchQueue.main.async {
+        // 判断插件类型并调用对应的管理器
+        let pluginId = plugin.id
+
+        Task { @MainActor in
             if enabled {
-                pluginManager.enablePlugin(plugin.id)
+                // 尝试启用插件
+                _ = await enablePluginByType(pluginId)
             } else {
-                pluginManager.disablePlugin(plugin.id)
+                // 尝试禁用插件
+                _ = disablePluginByType(pluginId)
+            }
+
+            // 延迟一点触发刷新，让 Toggle 动画完成
+            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+
+            // 使用动画触发 UI 刷新
+            withAnimation(.easeInOut(duration: 0.2)) {
+                pluginManager.objectWillChange.send()
             }
             isToggling = false
         }
+    }
+
+    /// 根据插件类型启用插件
+    @MainActor
+    private func enablePluginByType(_ pluginId: String) async -> Bool {
+        // 1. 检查是否是内置插件
+        if pluginManager.allPluginInfos().contains(where: { $0.id == pluginId }) {
+            return pluginManager.enablePlugin(pluginId)
+        }
+
+        // 2. 检查是否是 SDK 插件
+        if SDKPluginLoader.shared.allPluginInfos().contains(where: { $0.id == pluginId }) {
+            return await SDKPluginLoader.shared.enablePlugin(pluginId)
+        }
+
+        // 3. 检查是否是 Bundle 插件
+        if PluginLoader.shared.allPluginInfos().contains(where: { $0.id == pluginId }) {
+            return PluginLoader.shared.enablePlugin(pluginId)
+        }
+
+        return false
+    }
+
+    /// 根据插件类型禁用插件
+    @MainActor
+    private func disablePluginByType(_ pluginId: String) -> Bool {
+        // 1. 检查是否是内置插件
+        if pluginManager.allPluginInfos().contains(where: { $0.id == pluginId }) {
+            return pluginManager.disablePlugin(pluginId)
+        }
+
+        // 2. 检查是否是 SDK 插件
+        if SDKPluginLoader.shared.allPluginInfos().contains(where: { $0.id == pluginId }) {
+            return SDKPluginLoader.shared.disablePlugin(pluginId)
+        }
+
+        // 3. 检查是否是 Bundle 插件
+        if PluginLoader.shared.allPluginInfos().contains(where: { $0.id == pluginId }) {
+            return PluginLoader.shared.disablePlugin(pluginId)
+        }
+
+        return false
     }
 }
 
