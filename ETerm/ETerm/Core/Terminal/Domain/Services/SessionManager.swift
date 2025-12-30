@@ -527,6 +527,62 @@ final class SessionManager {
             return screen
         }
         // 找不到则返回主屏幕
+        logWarn("[findScreen] 无法匹配屏幕标识符: \(identifier), fallback 到主屏幕")
         return NSScreen.main ?? NSScreen.screens.first!
+    }
+
+    /// 根据标识符和保存的屏幕 frame 查找屏幕
+    ///
+    /// NSScreenNumber 可能在重启/显示器变化后改变，所以需要额外验证屏幕 frame。
+    /// 优先级：
+    /// 1. screenId 匹配且 frame 也匹配（完美匹配）
+    /// 2. 只有 frame 匹配（screenId 变了，但物理位置没变）
+    /// 3. 只有 screenId 匹配（屏幕可能换了位置）
+    /// 4. fallback 到主屏幕
+    ///
+    /// - Parameters:
+    ///   - identifier: 屏幕标识符
+    ///   - savedFrame: 保存时的屏幕 frame（可选）
+    /// - Returns: 找到的 NSScreen
+    static func findScreen(withIdentifier identifier: String, savedFrame: CodableRect?) -> NSScreen {
+        let screens = NSScreen.screens
+
+        // 如果有保存的 frame，优先按 frame 匹配
+        if let savedFrame = savedFrame {
+            let savedRect = savedFrame.cgRect
+
+            // 1. 完美匹配：screenId 和 frame 都匹配
+            if let screen = screens.first(where: {
+                screenIdentifier(for: $0) == identifier && framesMatch($0.frame, savedRect)
+            }) {
+                logInfo("[findScreen] 完美匹配: \(identifier)")
+                return screen
+            }
+
+            // 2. Frame 匹配（screenId 可能变了）
+            if let screen = screens.first(where: { framesMatch($0.frame, savedRect) }) {
+                logInfo("[findScreen] Frame 匹配: 保存的 \(identifier) -> 当前 \(screenIdentifier(for: screen))")
+                return screen
+            }
+        }
+
+        // 3. 只有 screenId 匹配
+        if let screen = screens.first(where: { screenIdentifier(for: $0) == identifier }) {
+            logWarn("[findScreen] 仅 screenId 匹配，frame 不同: \(identifier)")
+            return screen
+        }
+
+        // 4. Fallback 到主屏幕
+        logWarn("[findScreen] 无法匹配，fallback 到主屏幕")
+        return NSScreen.main ?? screens.first!
+    }
+
+    /// 检查两个 frame 是否匹配（允许小误差）
+    private static func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+        let tolerance: CGFloat = 50  // 允许 50pt 误差（处理 Dock/菜单栏等）
+        return abs(a.origin.x - b.origin.x) < tolerance &&
+               abs(a.origin.y - b.origin.y) < tolerance &&
+               abs(a.width - b.width) < tolerance &&
+               abs(a.height - b.height) < tolerance
     }
 }
