@@ -278,16 +278,22 @@ pub struct UrlRange {
 ///
 /// # 返回
 /// URL 范围列表，按起始位置排序
-/// 需要从 URL 尾部移除的标点符号
-const TRAILING_PUNCTUATION: &[char] = &['.', ',', ')', ']', ';', ':', '!', '?', '\'', '"'];
+
+/// 判断字符是否是 URL 的合法结尾字符
+///
+/// URL 合法结尾通常是字母数字或少数特殊字符
+#[inline]
+fn is_valid_url_ending(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '=' | '~')
+}
 
 fn detect_urls(text: &str) -> Vec<UrlRange> {
     let mut urls = Vec::new();
 
     for mat in URL_REGEX.find_iter(text) {
-        // 获取匹配的 URL 并移除尾部标点
+        // 获取匹配的 URL 并移除尾部非法字符
         let raw_url = mat.as_str();
-        let trimmed_url = raw_url.trim_end_matches(TRAILING_PUNCTUATION);
+        let trimmed_url = raw_url.trim_end_matches(|c| !is_valid_url_ending(c));
 
         // 如果 trim 后为空或太短，跳过
         if trimmed_url.len() < 10 {
