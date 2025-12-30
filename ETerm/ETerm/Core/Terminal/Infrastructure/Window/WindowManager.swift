@@ -91,15 +91,21 @@ final class WindowManager: NSObject {
         let windowFrame: NSRect
         if let screenId = windowState.screenIdentifier {
             // 恢复模式：使用保存的位置和尺寸
-            let targetScreen = SessionManager.findScreen(withIdentifier: screenId)
+            // 使用新的查找方法，同时传入保存的屏幕 frame 来验证（NSScreenNumber 可能变化）
+            let targetScreen = SessionManager.findScreen(withIdentifier: screenId, savedFrame: windowState.screenFrame)
+            logInfo("[WindowRestore] targetScreen: \(SessionManager.screenIdentifier(for: targetScreen)) frame=\(targetScreen.frame)")
             windowFrame = repositionFrameToScreen(frame, savedScreenFrame: windowState.screenFrame, targetScreen: targetScreen)
+            logInfo("[WindowRestore] calculated windowFrame: \(windowFrame)")
         } else {
             windowFrame = frame
+            logInfo("[WindowRestore] no screenId, using raw frame: \(windowFrame)")
         }
 
         let window = KeyableWindow.create(contentRect: windowFrame)
+        logInfo("[WindowRestore] after create: window.frame=\(window.frame)")
         // macOS 可能会把窗口移到主屏幕，需要显式设置 frame
         window.setFrame(windowFrame, display: false)
+        logInfo("[WindowRestore] after setFrame: window.frame=\(window.frame)")
 
         // 创建 Registry 和 TerminalWindow（从 WindowState 恢复完整结构）
         let registry = TerminalWorkingDirectoryRegistry()
@@ -133,6 +139,13 @@ final class WindowManager: NSObject {
 
         // 显示窗口
         window.makeKeyAndOrderFront(nil)
+        logInfo("[WindowRestore] after makeKeyAndOrderFront: window.frame=\(window.frame) screen=\(window.screen.map { SessionManager.screenIdentifier(for: $0) } ?? "nil")")
+
+        // macOS 可能在 makeKeyAndOrderFront 时把窗口移到当前 Space/屏幕，需要再次设置 frame
+        if window.frame != windowFrame {
+            logInfo("[WindowRestore] frame changed by system, restoring to: \(windowFrame)")
+            window.setFrame(windowFrame, display: true)
+        }
 
         return window
     }
