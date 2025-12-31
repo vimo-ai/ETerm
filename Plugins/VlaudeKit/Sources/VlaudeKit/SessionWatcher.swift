@@ -20,10 +20,12 @@ protocol SessionWatcherDelegate: AnyObject {
     ///   - watcher: SessionWatcher 实例
     ///   - sessionId: 会话 ID
     ///   - messages: 新消息列表
+    ///   - transcriptPath: JSONL 文件路径（用于解析结构化内容）
     func sessionWatcher(
         _ watcher: SessionWatcher,
         didReceiveMessages messages: [RawMessage],
-        for sessionId: String
+        for sessionId: String,
+        transcriptPath: String
     )
 }
 
@@ -199,9 +201,10 @@ final class SessionWatcher {
 
         // 通知 delegate（在主线程）
         if !newMessages.isEmpty {
+            let path = session.transcriptPath
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.delegate?.sessionWatcher(self, didReceiveMessages: newMessages, for: sessionId)
+                self.delegate?.sessionWatcher(self, didReceiveMessages: newMessages, for: sessionId, transcriptPath: path)
             }
         }
     }

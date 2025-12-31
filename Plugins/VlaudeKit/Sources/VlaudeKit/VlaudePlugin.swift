@@ -506,11 +506,14 @@ extension VlaudePlugin: SessionWatcherDelegate {
     func sessionWatcher(
         _ watcher: SessionWatcher,
         didReceiveMessages messages: [RawMessage],
-        for sessionId: String
+        for sessionId: String,
+        transcriptPath: String
     ) {
-        // 推送新消息给服务器
+        // 推送新消息给服务器（带结构化内容块）
         for message in messages {
-            client?.pushMessage(sessionId: sessionId, message: message)
+            // 从 JSONL 文件解析结构化内容块
+            let blocks = ContentBlockParser.readMessage(from: transcriptPath, uuid: message.uuid)
+            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks)
         }
 
         print("[VlaudeKit] SessionWatcher 推送 \(messages.count) 条新消息: \(sessionId)")
