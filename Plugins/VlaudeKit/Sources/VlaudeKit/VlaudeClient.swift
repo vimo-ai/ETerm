@@ -2,13 +2,16 @@
 //  VlaudeClient.swift
 //  VlaudeKit
 //
-//  Socket 客户端 - 通过 ETermKit 的 SocketService 连接 vlaude-server
+//  Socket 客户端 - 通过 Rust FFI (SocketClientBridge) 连接 vlaude-server
 //
-//  协议：伪装为 daemon，复用现有的 daemon 协议
+//  架构：
+//  - Socket 连接/数据同步 → SocketClientBridge (Rust FFI)
+//  - ETerm 控制逻辑 → 本文件处理
 //
 
 import Foundation
 import ETermKit
+import SocketClientFFI
 
 // MARK: - Delegate Protocol
 
@@ -42,17 +45,15 @@ protocol VlaudeClientDelegate: AnyObject {
 
 // MARK: - VlaudeClient
 
-final class VlaudeClient {
+final class VlaudeClient: SocketClientBridgeDelegate {
     weak var delegate: VlaudeClientDelegate?
 
-    private var socket: SocketClientProtocol?
+    /// Socket 桥接层（Rust FFI）
+    private var socketBridge: SocketClientBridge?
     private(set) var isConnected = false
 
-    private var serverURL: URL?
+    private var serverURL: String?
     private var deviceName: String = "Mac"
-
-    /// Socket 服务（由主应用通过 HostBridge 提供）
-    private weak var socketService: SocketServiceProtocol?
 
     /// Session 读取器（FFI）
     private lazy var sessionReader = SessionReader()
@@ -62,8 +63,7 @@ final class VlaudeClient {
 
     // MARK: - Init
 
-    init(socketService: SocketServiceProtocol?) {
-        self.socketService = socketService
+    init() {
         initSharedDb()
     }
 
@@ -81,21 +81,11 @@ final class VlaudeClient {
 
     /// 连接到服务器
     /// - Parameters:
-    ///   - urlString: 服务器地址（如 http://nas:3000）
+    ///   - urlString: 服务器地址（如 https://localhost:10005）
     ///   - deviceName: 设备名称
     func connect(to urlString: String, deviceName: String) {
-        guard let socketService = socketService else {
-            print("[VlaudeClient] SocketService not available")
-            return
-        }
-
-        guard let url = URL(string: urlString) else {
-            print("[VlaudeClient] Invalid URL: \(urlString)")
-            return
-        }
-
         // 如果已连接到同一地址且设备名相同，不重复连接
-        if isConnected, serverURL == url, self.deviceName == deviceName {
+        if isConnected, serverURL == urlString, self.deviceName == deviceName {
             return
         }
 
@@ -107,40 +97,29 @@ final class VlaudeClient {
             initSharedDb()
         }
 
-        self.serverURL = url
+        self.serverURL = urlString
         self.deviceName = deviceName
 
-        // 创建 Socket 客户端配置
-        var config = SocketClientConfig()
-        config.reconnects = true
-        config.reconnectWait = 5
-        config.reconnectAttempts = -1  // 无限重试
-        config.forceWebsockets = true
-        config.compress = true
-        config.log = false
-
-        // 通过 SocketService 创建客户端
-        socket = socketService.createClient(
-            url: url,
-            namespace: "/daemon",
-            config: config
-        )
-
-        setupEventHandlers()
-
-        print("[VlaudeClient] Connecting to \(urlString)/daemon")
-        socket?.connect()
+        // 通过 Rust FFI 创建 Socket 客户端
+        do {
+            socketBridge = try SocketClientBridge(url: urlString, namespace: "/daemon")
+            socketBridge?.delegate = self
+            try socketBridge?.connect()
+            print("[VlaudeClient] Connecting to \(urlString)/daemon")
+        } catch {
+            print("[VlaudeClient] Connection failed: \(error)")
+        }
     }
 
     /// 断开连接
     func disconnect() {
         if isConnected {
             // 发送离线通知
-            reportOffline()
+            try? socketBridge?.reportOffline()
         }
 
-        socket?.disconnect()
-        socket = nil
+        socketBridge?.disconnect()
+        socketBridge = nil
         isConnected = false
         serverURL = nil
 
@@ -155,15 +134,21 @@ final class VlaudeClient {
         sharedDb = nil
     }
 
-    // MARK: - Connection Handling
+    // MARK: - SocketClientBridgeDelegate
 
-    /// 处理连接成功（首次连接或重连）
-    private func handleConnected() {
+    func socketClientDidConnect(_ bridge: SocketClientBridge) {
+        print("[VlaudeKit] Socket connected")
         isConnected = true
 
         // 发送注册和上线通知
-        register()
-        reportOnline()
+        do {
+            try socketBridge?.register(hostname: deviceName, platform: "darwin", version: "1.0.0")
+            print("[VlaudeKit] 📤 发送 daemon:register hostname=\(deviceName)")
+            try socketBridge?.reportOnline()
+            print("[VlaudeKit] 📤 发送 daemon:etermOnline")
+        } catch {
+            print("[VlaudeKit] Registration failed: \(error)")
+        }
 
         // 推送初始数据
         pushInitialData()
@@ -172,194 +157,72 @@ final class VlaudeClient {
         delegate?.vlaudeClientDidConnect(self)
     }
 
-    // MARK: - Event Handlers
+    func socketClientDidDisconnect(_ bridge: SocketClientBridge) {
+        print("[VlaudeKit] Socket disconnected")
+        isConnected = false
+        delegate?.vlaudeClientDidDisconnect(self)
+    }
 
-    private func setupEventHandlers() {
-        guard let socket = socket else { return }
-
-        // 先移除旧的事件处理器，避免重复注册
-        socket.offAll()
-
-        // 连接成功
-        socket.onClientEvent(.connect) { [weak self] in
-            guard let self = self else { return }
-            print("[VlaudeKit] Socket connected")
-            self.handleConnected()
-        }
-
-        // 重连成功（关键：服务器重启后会触发这个事件）
-        socket.onClientEvent(.reconnect) { [weak self] in
-            guard let self = self else { return }
-            print("[VlaudeKit] Socket reconnected")
-            self.handleConnected()
-        }
-
-        // 重连尝试
-        socket.onClientEvent(.reconnectAttempt) { [weak self] in
-            guard self != nil else { return }
-            print("[VlaudeKit] Reconnect attempt...")
-        }
-
-        // 断开连接
-        socket.onClientEvent(.disconnect) { [weak self] in
-            guard let self = self else { return }
-            print("[VlaudeKit] Socket disconnected")
-            self.isConnected = false
-            self.delegate?.vlaudeClientDidDisconnect(self)
-        }
-
-        // 连接错误
-        socket.onClientEvent(.error) { [weak self] in
-            guard self != nil else { return }
-            print("[VlaudeKit] Socket error")
-        }
-
-        // 服务器关闭通知
-        socket.on("server-shutdown") { [weak self] _ in
+    func socketClient(_ bridge: SocketClientBridge, didReceiveEvent event: String, data: [String: Any]) {
+        switch event {
+        case "server-shutdown":
             print("[VlaudeKit] Server shutdown notification")
-            self?.isConnected = false
-        }
+            isConnected = false
 
-        // 注入请求
-        socket.on("server:injectToEterm") { [weak self] data in
-            guard let self = self,
-                  let dict = data.first as? [String: Any],
-                  let sessionId = dict["sessionId"] as? String,
-                  let text = dict["text"] as? String else {
-                return
-            }
-            self.delegate?.vlaudeClient(self, didReceiveInject: sessionId, text: text)
-        }
+        case ServerEvent.injectToEterm.rawValue:
+            guard let sessionId = data["sessionId"] as? String,
+                  let text = data["text"] as? String else { return }
+            delegate?.vlaudeClient(self, didReceiveInject: sessionId, text: text)
 
-        // Mobile 查看状态
-        socket.on("server:mobileViewing") { [weak self] data in
-            guard let self = self,
-                  let dict = data.first as? [String: Any],
-                  let sessionId = dict["sessionId"] as? String,
-                  let isViewing = dict["isViewing"] as? Bool else {
-                return
-            }
-            self.delegate?.vlaudeClient(self, didReceiveMobileViewing: sessionId, isViewing: isViewing)
-        }
+        case ServerEvent.mobileViewing.rawValue:
+            guard let sessionId = data["sessionId"] as? String,
+                  let isViewing = data["isViewing"] as? Bool else { return }
+            delegate?.vlaudeClient(self, didReceiveMobileViewing: sessionId, isViewing: isViewing)
 
-        // 创建会话请求（旧方式）
-        socket.on("server:createSessionInEterm") { [weak self] data in
-            guard let self = self,
-                  let dict = data.first as? [String: Any],
-                  let projectPath = dict["projectPath"] as? String else {
-                return
-            }
+        case ServerEvent.createSessionInEterm.rawValue:
+            guard let projectPath = data["projectPath"] as? String else { return }
+            let prompt = data["prompt"] as? String
+            let requestId = data["requestId"] as? String
+            delegate?.vlaudeClient(self, didReceiveCreateSession: projectPath, prompt: prompt, requestId: requestId)
 
-            let prompt = dict["prompt"] as? String
-            let requestId = dict["requestId"] as? String
-            self.delegate?.vlaudeClient(self, didReceiveCreateSession: projectPath, prompt: prompt, requestId: requestId)
-        }
+        case ServerEvent.createSession.rawValue:
+            guard let projectPath = data["projectPath"] as? String,
+                  let requestId = data["requestId"] as? String else { return }
+            let prompt = data["prompt"] as? String
+            delegate?.vlaudeClient(self, didReceiveCreateSessionNew: projectPath, prompt: prompt, requestId: requestId)
 
-        // MARK: - 新 WebSocket 事件（统一接口）
+        case ServerEvent.sendMessage.rawValue:
+            guard let sessionId = data["sessionId"] as? String,
+                  let text = data["text"] as? String,
+                  let requestId = data["requestId"] as? String else { return }
+            let projectPath = data["projectPath"] as? String
+            let clientId = data["clientId"] as? String
+            delegate?.vlaudeClient(self, didReceiveSendMessage: sessionId, text: text, projectPath: projectPath, clientId: clientId, requestId: requestId)
 
-        // 创建会话请求（新方式）
-        socket.on("server:createSession") { [weak self] data in
-            guard let self = self,
-                  let dict = data.first as? [String: Any],
-                  let projectPath = dict["projectPath"] as? String,
-                  let requestId = dict["requestId"] as? String else {
-                return
-            }
+        case ServerEvent.checkLoading.rawValue:
+            guard let sessionId = data["sessionId"] as? String,
+                  let requestId = data["requestId"] as? String else { return }
+            let projectPath = data["projectPath"] as? String
+            delegate?.vlaudeClient(self, didReceiveCheckLoading: sessionId, projectPath: projectPath, requestId: requestId)
 
-            let prompt = dict["prompt"] as? String
-            self.delegate?.vlaudeClient(self, didReceiveCreateSessionNew: projectPath, prompt: prompt, requestId: requestId)
-        }
+        case ServerEvent.requestProjectData.rawValue:
+            handleRequestProjectData(data)
 
-        // 发送消息请求
-        socket.on("server:sendMessage") { [weak self] data in
-            guard let self = self,
-                  let dict = data.first as? [String: Any],
-                  let sessionId = dict["sessionId"] as? String,
-                  let text = dict["text"] as? String,
-                  let requestId = dict["requestId"] as? String else {
-                return
-            }
+        case ServerEvent.requestSessionMetadata.rawValue:
+            handleRequestSessionMetadata(data)
 
-            let projectPath = dict["projectPath"] as? String
-            let clientId = dict["clientId"] as? String
-            self.delegate?.vlaudeClient(self, didReceiveSendMessage: sessionId, text: text, projectPath: projectPath, clientId: clientId, requestId: requestId)
-        }
+        case ServerEvent.requestSessionMessages.rawValue:
+            handleRequestSessionMessages(data)
 
-        // 检查 loading 状态请求
-        socket.on("server:checkLoading") { [weak self] data in
-            guard let self = self,
-                  let dict = data.first as? [String: Any],
-                  let sessionId = dict["sessionId"] as? String,
-                  let requestId = dict["requestId"] as? String else {
-                return
-            }
+        case ServerEvent.requestSearch.rawValue:
+            handleRequestSearch(data)
 
-            let projectPath = dict["projectPath"] as? String
-            self.delegate?.vlaudeClient(self, didReceiveCheckLoading: sessionId, projectPath: projectPath, requestId: requestId)
-        }
-
-        // 数据请求：项目列表
-        socket.on("server:requestProjectData") { [weak self] data in
-            guard let self = self else { return }
-            let dict = data.first as? [String: Any] ?? [:]
-            self.handleRequestProjectData(dict)
-        }
-
-        // 数据请求：会话列表
-        socket.on("server:requestSessionMetadata") { [weak self] data in
-            guard let self = self else { return }
-            let dict = data.first as? [String: Any] ?? [:]
-            self.handleRequestSessionMetadata(dict)
-        }
-
-        // 数据请求：会话消息
-        socket.on("server:requestSessionMessages") { [weak self] data in
-            guard let self = self else { return }
-            let dict = data.first as? [String: Any] ?? [:]
-            self.handleRequestSessionMessages(dict)
-        }
-
-        // 数据请求：全文搜索（需要 SharedDb）
-        socket.on("server:requestSearch") { [weak self] data in
-            guard let self = self else { return }
-            let dict = data.first as? [String: Any] ?? [:]
-            self.handleRequestSearch(dict)
+        default:
+            break
         }
     }
 
     // MARK: - Uplink Events (VlaudeKit → Server)
-
-    /// 注册
-    /// 注意：使用普通 emit，不等待 ACK（与 Rust daemon 保持一致）
-    private func register() {
-        let data: [String: Any] = [
-            "hostname": deviceName,
-            "platform": "darwin",
-            "version": "1.0.0"
-        ]
-        print("[VlaudeKit] 📤 发送 daemon:register hostname=\(deviceName)")
-        socket?.emit("daemon:register", data)
-    }
-
-    /// 上线通知
-    private func reportOnline() {
-        let data: [String: Any] = [
-            "timestamp": ISO8601DateFormatter().string(from: Date())
-        ]
-        print("[VlaudeKit] 📤 发送 daemon:etermOnline")
-        socket?.emit("daemon:etermOnline", data)
-    }
-
-    /// 离线通知
-    private func reportOffline() {
-        guard isConnected else { return }
-
-        let data: [String: Any] = [
-            "timestamp": ISO8601DateFormatter().string(from: Date())
-        ]
-
-        socket?.emit("daemon:etermOffline", data)
-    }
 
     /// 上报 session 可用
     func reportSessionAvailable(sessionId: String, terminalId: Int, projectPath: String? = nil) {
@@ -378,7 +241,7 @@ final class VlaudeClient {
         }
 
         print("[VlaudeKit] 📤 发送 daemon:etermSessionAvailable sessionId=\(sessionId)")
-        socket?.emit("daemon:etermSessionAvailable", data)
+        try? socketBridge?.emit(event: "daemon:etermSessionAvailable", data: data)
     }
 
     /// 上报 session 不可用
@@ -394,7 +257,7 @@ final class VlaudeClient {
             data["projectPath"] = path
         }
 
-        socket?.emit("daemon:etermSessionUnavailable", data)
+        try? socketBridge?.emit(event: "daemon:etermSessionUnavailable", data: data)
     }
 
     /// 上报 session 创建完成（旧方式）
@@ -408,10 +271,10 @@ final class VlaudeClient {
             "timestamp": ISO8601DateFormatter().string(from: Date())
         ]
 
-        socket?.emit("daemon:etermSessionCreated", data)
+        try? socketBridge?.emit(event: "daemon:etermSessionCreated", data: data)
     }
 
-    // MARK: - 新 WebSocket 响应（统一接口）
+    // MARK: - V3 Write Operation Results
 
     /// 响应 createSession 结果
     func emitSessionCreatedResult(
@@ -424,16 +287,18 @@ final class VlaudeClient {
     ) {
         guard isConnected else { return }
 
-        var data: [String: Any] = [
-            "requestId": requestId,
-            "success": success
-        ]
-        if let sessionId = sessionId { data["sessionId"] = sessionId }
-        if let encodedDirName = encodedDirName { data["encodedDirName"] = encodedDirName }
-        if let transcriptPath = transcriptPath { data["transcriptPath"] = transcriptPath }
-        if let error = error { data["error"] = error }
-
-        socket?.emit("daemon:sessionCreatedResult", data)
+        do {
+            try socketBridge?.sendSessionCreatedResult(
+                requestId: requestId,
+                success: success,
+                sessionId: sessionId,
+                encodedDirName: encodedDirName,
+                transcriptPath: transcriptPath,
+                error: error
+            )
+        } catch {
+            print("[VlaudeKit] sendSessionCreatedResult failed: \(error)")
+        }
     }
 
     /// 响应 sendMessage 结果
@@ -445,82 +310,75 @@ final class VlaudeClient {
     ) {
         guard isConnected else { return }
 
-        var data: [String: Any] = [
-            "requestId": requestId,
-            "success": success
-        ]
-        if let message = message { data["message"] = message }
-        if let via = via { data["via"] = via }
-
-        socket?.emit("daemon:sendMessageResult", data)
+        do {
+            try socketBridge?.sendMessageResult(requestId: requestId, success: success, message: message, via: via)
+        } catch {
+            print("[VlaudeKit] sendMessageResult failed: \(error)")
+        }
     }
 
     /// 响应 checkLoading 结果
     func emitCheckLoadingResult(requestId: String, loading: Bool) {
         guard isConnected else { return }
 
-        let data: [String: Any] = [
-            "requestId": requestId,
-            "loading": loading
-        ]
-
-        socket?.emit("daemon:checkLoadingResult", data)
+        do {
+            try socketBridge?.sendCheckLoadingResult(requestId: requestId, loading: loading)
+        } catch {
+            print("[VlaudeKit] sendCheckLoadingResult failed: \(error)")
+        }
     }
 
     // MARK: - Connection Test
 
     /// 测试连接（用于设置页面）
     static func testConnection(
-        using socketService: SocketServiceProtocol?,
         to urlString: String,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard let socketService = socketService else {
-            completion(.failure(NSError(domain: "VlaudeClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketService not available"])))
-            return
+        do {
+            let bridge = try SocketClientBridge(url: urlString, namespace: "/daemon")
+
+            var completed = false
+
+            // 创建临时 delegate 处理连接结果
+            class TestDelegate: SocketClientBridgeDelegate {
+                var onConnect: (() -> Void)?
+                var onDisconnect: (() -> Void)?
+
+                func socketClientDidConnect(_ bridge: SocketClientBridge) {
+                    onConnect?()
+                }
+
+                func socketClientDidDisconnect(_ bridge: SocketClientBridge) {
+                    onDisconnect?()
+                }
+
+                func socketClient(_ bridge: SocketClientBridge, didReceiveEvent event: String, data: [String: Any]) {}
+            }
+
+            let testDelegate = TestDelegate()
+
+            testDelegate.onConnect = { [weak bridge] in
+                guard !completed else { return }
+                completed = true
+                bridge?.disconnect()
+                completion(.success("Connected successfully"))
+            }
+
+            // 设置超时
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak bridge] in
+                guard !completed else { return }
+                completed = true
+                bridge?.disconnect()
+                completion(.failure(NSError(domain: "VlaudeClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Connection timeout"])))
+            }
+
+            bridge.delegate = testDelegate
+            try bridge.connect()
+
+        } catch {
+            completion(.failure(NSError(domain: "VlaudeClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Connection failed: \(error.localizedDescription)"])))
         }
-
-        guard let url = URL(string: urlString) else {
-            completion(.failure(NSError(domain: "VlaudeClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
-            return
-        }
-
-        var config = SocketClientConfig()
-        config.reconnects = false
-        config.forceWebsockets = true
-        config.log = false
-
-        let socket = socketService.createClient(
-            url: url,
-            namespace: "/daemon",
-            config: config
-        )
-
-        var completed = false
-
-        // 设置超时
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-            guard !completed else { return }
-            completed = true
-            socket.disconnect()
-            completion(.failure(NSError(domain: "VlaudeClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Connection timeout"])))
-        }
-
-        socket.onClientEvent(.connect) {
-            guard !completed else { return }
-            completed = true
-            socket.disconnect()
-            completion(.success("Connected successfully"))
-        }
-
-        socket.onClientEvent(.error) {
-            guard !completed else { return }
-            completed = true
-            socket.disconnect()
-            completion(.failure(NSError(domain: "VlaudeClient", code: -3, userInfo: [NSLocalizedDescriptionKey: "Connection failed"])))
-        }
-
-        socket.connect()
     }
 
     // MARK: - Data Request Handlers
@@ -621,53 +479,44 @@ final class VlaudeClient {
     private func reportProjectData(projects: [ProjectInfo], requestId: String?) {
         guard isConnected else { return }
 
-        var data: [String: Any] = [
-            "projects": projects.map { project in
-                let dict: [String: Any] = [
-                    "path": project.path,
-                    "encodedName": project.encodedName,
-                    "name": project.name,
-                    "sessionCount": project.sessionCount,
-                    "lastModified": project.lastActive
-                ]
-                return dict
-            }
-        ]
-
-        if let requestId = requestId {
-            data["requestId"] = requestId
+        let projectsData: [[String: Any]] = projects.map { project in
+            [
+                "path": project.path,
+                "encodedName": project.encodedName,
+                "name": project.name,
+                "sessionCount": project.sessionCount,
+                "lastModified": project.lastActive
+            ]
         }
 
-        socket?.emit("daemon:projectData", data)
+        do {
+            try socketBridge?.reportProjectData(projects: projectsData, requestId: requestId)
+        } catch {
+            print("[VlaudeKit] reportProjectData failed: \(error)")
+        }
     }
 
     /// 上报会话元数据
     private func reportSessionMetadata(sessions: [SessionMeta], projectPath: String?, requestId: String?) {
         guard isConnected else { return }
 
-        var data: [String: Any] = [
-            "sessions": sessions.map { session in
-                var dict: [String: Any] = [
-                    "id": session.id,
-                    "projectPath": session.projectPath
-                ]
-                if let path = session.sessionPath { dict["path"] = path }
-                if let name = session.projectName { dict["projectName"] = name }
-                if let encoded = session.encodedDirName { dict["encodedDirName"] = encoded }
-                if let modified = session.lastModified { dict["lastModified"] = modified }
-                return dict
-            }
-        ]
-
-        if let projectPath = projectPath {
-            data["projectPath"] = projectPath
+        let sessionsData: [[String: Any]] = sessions.map { session in
+            var dict: [String: Any] = [
+                "id": session.id,
+                "projectPath": session.projectPath
+            ]
+            if let path = session.sessionPath { dict["path"] = path }
+            if let name = session.projectName { dict["projectName"] = name }
+            if let encoded = session.encodedDirName { dict["encodedDirName"] = encoded }
+            if let modified = session.lastModified { dict["lastModified"] = modified }
+            return dict
         }
 
-        if let requestId = requestId {
-            data["requestId"] = requestId
+        do {
+            try socketBridge?.reportSessionMetadata(sessions: sessionsData, projectPath: projectPath, requestId: requestId)
+        } catch {
+            print("[VlaudeKit] reportSessionMetadata failed: \(error)")
         }
-
-        socket?.emit("daemon:sessionMetadata", data)
     }
 
     /// 上报会话消息
@@ -697,19 +546,18 @@ final class VlaudeClient {
             return dict
         }
 
-        var data: [String: Any] = [
-            "sessionId": sessionId,
-            "projectPath": projectPath,
-            "messages": messagesData,
-            "total": total,
-            "hasMore": hasMore
-        ]
-
-        if let requestId = requestId {
-            data["requestId"] = requestId
+        do {
+            try socketBridge?.reportSessionMessages(
+                sessionId: sessionId,
+                projectPath: projectPath,
+                messages: messagesData,
+                total: total,
+                hasMore: hasMore,
+                requestId: requestId
+            )
+        } catch {
+            print("[VlaudeKit] reportSessionMessages failed: \(error)")
         }
-
-        socket?.emit("daemon:sessionMessages", data)
     }
 
     /// 上报搜索结果
@@ -745,7 +593,7 @@ final class VlaudeClient {
             data["error"] = error
         }
 
-        socket?.emit("daemon:searchResults", data)
+        try? socketBridge?.emit(event: "daemon:searchResults", data: data)
     }
 
     // MARK: - Project Update
@@ -755,13 +603,8 @@ final class VlaudeClient {
     func reportProjectUpdate(projectPath: String) {
         guard isConnected else { return }
 
-        let data: [String: Any] = [
-            "projectPath": projectPath,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
-        ]
-
         print("[VlaudeKit] 📤 发送 daemon:projectUpdate projectPath=\(projectPath)")
-        socket?.emit("daemon:projectUpdate", data)
+        try? socketBridge?.notifyProjectUpdate(projectPath: projectPath, metadata: nil)
     }
 
     // MARK: - Real-time Message Push
@@ -788,10 +631,7 @@ final class VlaudeClient {
 
         let role = (msgDict["message"] as? [String: Any])?["role"] as? String ?? "unknown"
         print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role)")
-        socket?.emit("daemon:newMessage", [
-            "sessionId": sessionId,
-            "message": msgDict
-        ])
+        try? socketBridge?.notifyNewMessage(sessionId: sessionId, message: msgDict)
     }
 
     /// 推送新消息给 Server（让 iOS 实时看到）
@@ -835,10 +675,7 @@ final class VlaudeClient {
         // 推送给 Server
         let role = (msgDict["message"] as? [String: Any])?["role"] as? String ?? "unknown"
         print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role)")
-        socket?.emit("daemon:newMessage", [
-            "sessionId": sessionId,
-            "message": msgDict
-        ])
+        try? socketBridge?.notifyNewMessage(sessionId: sessionId, message: msgDict)
     }
 
     /// 推送初始数据（连接成功后调用）

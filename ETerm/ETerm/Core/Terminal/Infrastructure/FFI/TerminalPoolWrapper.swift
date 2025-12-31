@@ -712,6 +712,12 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         _ = terminal_pool_change_font_size(handle, operation.rawValue)
     }
 
+    /// 获取当前字体大小
+    func getFontSize() -> Float {
+        guard let handle = handle else { return 14.0 }
+        return terminal_pool_get_font_size(handle)
+    }
+
     /// 获取字体度量（物理像素）
     ///
     /// 返回与渲染一致的字体度量

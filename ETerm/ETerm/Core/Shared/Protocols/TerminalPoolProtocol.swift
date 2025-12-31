@@ -189,6 +189,9 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 调整字体大小
     func changeFontSize(operation: FontSizeOperation)
 
+    /// 获取当前字体大小
+    func getFontSize() -> Float
+
     /// 获取字体度量（物理像素）
     ///
     /// 返回与渲染一致的字体度量：
@@ -248,6 +251,7 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func getSelectionText(terminalId: Int) -> String? { nil }
     func getInputRow(terminalId: Int) -> UInt16? { nil }
     func changeFontSize(operation: FontSizeOperation) {}
+    func getFontSize() -> Float { 14.0 }
     func getFontMetrics() -> SugarloafFontMetrics? { nil }
     func setMode(terminalId: Int, mode: TerminalMode) {}
     func getMode(terminalId: Int) -> TerminalMode? { nil }

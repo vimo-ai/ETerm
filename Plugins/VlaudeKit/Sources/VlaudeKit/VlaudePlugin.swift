@@ -58,11 +58,8 @@ public final class VlaudePlugin: NSObject, Plugin {
     public func activate(host: HostBridge) {
         self.host = host
 
-        // 存储 SocketService 引用（供 VlaudeSettingsView 使用）
-        VlaudeConfigManager.shared.socketService = host.socketService
-
-        // 初始化客户端（通过 HostBridge 获取 SocketService）
-        client = VlaudeClient(socketService: host.socketService)
+        // 初始化客户端（使用 Rust FFI）
+        client = VlaudeClient()
         client?.delegate = self
 
         // 初始化会话文件监听器

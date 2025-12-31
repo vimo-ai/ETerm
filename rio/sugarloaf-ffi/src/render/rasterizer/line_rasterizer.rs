@@ -401,6 +401,50 @@ impl LineRasterizer {
                     cursor_paint.set_style(skia_safe::PaintStyle::Fill);
                     let rect = skia_safe::Rect::from_xywh(cursor_x, 0.0, cell_width, line_height);
                     canvas.draw_rect(rect, &cursor_paint);
+
+                    // 🎯 重绘光标下的字符（使用反转颜色）
+                    // 找到光标位置的字形
+                    let cursor_col = cursor.col as usize;
+                    if let Some(glyph) = layout.glyphs.iter().find(|g| {
+                        let glyph_col = (g.x / cell_width).round() as usize;
+                        glyph_col == cursor_col || (g.width > 1.0 && glyph_col + 1 == cursor_col)
+                    }) {
+                        // 反转颜色：使用背景色作为文字颜色
+                        let inverted_color = background_color;
+                        let mut text_paint = Paint::default();
+                        text_paint.set_anti_alias(true);
+                        text_paint.set_color4f(inverted_color, None);
+
+                        // 检查是否是 emoji 序列
+                        let char_count = glyph.grapheme.chars().count();
+                        let is_emoji_sequence = char_count > 1;
+
+                        if is_emoji_sequence {
+                            // Emoji: 使用 Paragraph API 渲染
+                            FONT_COLLECTION.with(|fc| {
+                                let font_collection = fc.borrow();
+                                let mut paragraph_style = ParagraphStyle::new();
+                                let mut text_style = TextStyle::new();
+                                text_style.set_font_size(glyph.font.size());
+                                text_style.set_color(color4f_to_color(inverted_color));
+                                text_style.set_font_families(&["Apple Color Emoji"]);
+                                paragraph_style.set_text_style(&text_style);
+
+                                let mut builder = ParagraphBuilder::new(&paragraph_style, font_collection.clone());
+                                builder.add_text(&glyph.grapheme);
+
+                                let mut paragraph = builder.build();
+                                paragraph.layout(cell_width * glyph.width + 10.0);
+
+                                let para_baseline = paragraph.alphabetic_baseline();
+                                let y_offset = baseline_offset - para_baseline;
+                                paragraph.paint(canvas, Point::new(glyph.x, y_offset));
+                            });
+                        } else {
+                            // 普通字符：直接绘制
+                            canvas.draw_str(&glyph.grapheme, Point::new(glyph.x, baseline_offset), &glyph.font, &text_paint);
+                        }
+                    }
                 }
                 CursorShape::Underline => {
                     // 下划线（底部 2px）

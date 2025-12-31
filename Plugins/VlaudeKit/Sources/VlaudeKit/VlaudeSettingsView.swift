@@ -185,10 +185,7 @@ struct VlaudeSettingsView: View {
         isTesting = true
         testResult = nil
 
-        VlaudeClient.testConnection(
-            using: configManager.socketService,
-            to: serverURL
-        ) { [self] result in
+        VlaudeClient.testConnection(to: serverURL) { [self] result in
             DispatchQueue.main.async {
                 isTesting = false
 

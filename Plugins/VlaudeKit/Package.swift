@@ -23,11 +23,16 @@ let package = Package(
             name: "SharedDbFFI",
             path: "Libs/SharedDB"
         ),
+        .systemLibrary(
+            name: "SocketClientFFI",
+            path: "Libs/SocketClient"
+        ),
         .target(
             name: "VlaudeKit",
             dependencies: [
                 "ETermKit",
-                "SharedDbFFI"
+                "SharedDbFFI",
+                "SocketClientFFI"
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
@@ -35,7 +40,9 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags([
                     "Libs/SharedDB/libclaude_session_db.dylib",
-                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SharedDB"
+                    "Libs/SocketClient/libsocket_client_ffi.dylib",
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SharedDB",
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SocketClient"
                 ])
             ],
             plugins: [

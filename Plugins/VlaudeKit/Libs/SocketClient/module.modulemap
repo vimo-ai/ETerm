@@ -1,0 +1,5 @@
+module SocketClientFFI {
+    header "socket_client_ffi.h"
+    link "socket_client_ffi"
+    export *
+}
