@@ -838,6 +838,26 @@ extension RioContainerView {
 
 class RioMetalView: NSView, RenderViewProtocol {
 
+    // MARK: - Font Size Persistence
+
+    /// UserDefaults key for font size
+    private static let fontSizeKey = "terminal.fontSize"
+
+    /// Default font size
+    private static let defaultFontSize: Float = 14.0
+
+    /// Get saved font size from UserDefaults
+    private static var savedFontSize: Float {
+        let saved = UserDefaults.standard.float(forKey: fontSizeKey)
+        // UserDefaults returns 0.0 if key doesn't exist
+        return saved > 0 ? saved : defaultFontSize
+    }
+
+    /// Save font size to UserDefaults
+    private static func saveFontSize(_ size: Float) {
+        UserDefaults.standard.set(size, forKey: fontSizeKey)
+    }
+
     weak var coordinator: TerminalWindowCoordinator?
 
     // 新架构：TerminalPool wrapper（多终端管理 + 统一渲染）
@@ -883,6 +903,17 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 上次报告的尺寸（用于检测 updateNSView 中尺寸是否变化）
     var lastReportedSize: CGSize = .zero
+
+    /// 触控板滚动累积器（按终端 ID 分别累积）
+    private var scrollAccumulators: [Int: CGFloat] = [:]
+
+    /// 上次滚动方向（按终端 ID 记录，用于检测方向切换）
+    /// true = 正方向（deltaY > 0），false = 负方向
+    private var lastScrollDirections: [Int: Bool] = [:]
+
+    /// 触控板滚动阈值（累积多少像素后滚动一行）
+    /// 较小的值 = 更灵敏的滚动，较大的值 = 滚动更慢
+    private let scrollThreshold: CGFloat = 12.0
 
     // MARK: - 光标闪烁相关（照抄 Rio）
 
@@ -1155,14 +1186,14 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // TerminalPoolWrapper 初始化
 
-        // 创建 TerminalPoolWrapper
+        // 创建 TerminalPoolWrapper（使用保存的字体大小）
         terminalPool = TerminalPoolWrapper(
             windowHandle: viewPointer,
             displayHandle: viewPointer,
             width: Float(bounds.width),
             height: Float(bounds.height),
             scale: Float(effectiveScale),
-            fontSize: 14.0
+            fontSize: Self.savedFontSize
         )
 
         guard let pool = terminalPool else { return }
@@ -1342,6 +1373,12 @@ class RioMetalView: NSView, RenderViewProtocol {
     func changeFontSize(operation: FontSizeOperation) {
         // 新架构：通过 TerminalPoolWrapper 调整字体大小
         terminalPool?.changeFontSize(operation: operation)
+
+        // 保存新的字体大小到 UserDefaults
+        if let pool = terminalPool {
+            Self.saveFontSize(pool.getFontSize())
+        }
+
         // 重新渲染
         requestRender()
     }
@@ -2137,9 +2174,46 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         let deltaY = event.scrollingDeltaY
         let scrollLines: Int32
+
         if event.hasPreciseScrollingDeltas {
-            scrollLines = Int32(round(deltaY / 10.0))
+            // 触控板：使用累积器处理精细滚动
+            let tid = Int(terminalId)
+
+            // 只在惯性滚动完全结束时重置（手指离开且惯性停止）
+            if event.momentumPhase == .ended {
+                scrollAccumulators[tid] = 0
+                lastScrollDirections[tid] = nil
+                return
+            }
+
+            // 手指滚动被打断时重置
+            if event.phase == .cancelled {
+                scrollAccumulators[tid] = 0
+                lastScrollDirections[tid] = nil
+                return
+            }
+
+            // 检测方向切换：方向改变时重置累积器，避免抖动
+            let currentDirection = deltaY > 0
+            if let lastDirection = lastScrollDirections[tid], lastDirection != currentDirection {
+                scrollAccumulators[tid] = 0
+            }
+            lastScrollDirections[tid] = currentDirection
+
+            // 累积 delta（包括惯性阶段）
+            let accumulated = (scrollAccumulators[tid] ?? 0) + deltaY
+            scrollAccumulators[tid] = accumulated
+
+            // 达到阈值时滚动
+            let lines = Int32(accumulated / scrollThreshold)
+            if lines != 0 {
+                scrollAccumulators[tid] = accumulated.truncatingRemainder(dividingBy: scrollThreshold)
+                scrollLines = lines
+            } else {
+                return  // 累积不足，不滚动
+            }
         } else {
+            // 鼠标滚轮：直接转换为行数
             scrollLines = Int32(deltaY * 3)
         }
 
@@ -2336,6 +2410,7 @@ extension RioMetalView: NSTextInputClient {
 struct TerminalSearchOverlay: View {
     @ObservedObject var coordinator: TerminalWindowCoordinator
     @State private var searchText: String = ""
+    @FocusState private var isSearchFieldFocused: Bool
 
     /// 搜索框显示状态（双向绑定到 RioTerminalView）
     @Binding var isShowing: Bool
@@ -2361,6 +2436,7 @@ struct TerminalSearchOverlay: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .frame(width: 200)
+                    .focused($isSearchFieldFocused)
                     .onSubmit {
                         if !searchText.isEmpty {
                             coordinator.startSearch(pattern: searchText, searchPanelId: searchPanelId)
@@ -2433,6 +2509,8 @@ struct TerminalSearchOverlay: View {
             if let searchInfo = coordinator.getTabSearchInfo(for: searchPanelId) {
                 searchText = searchInfo.pattern
             }
+            // 自动聚焦到搜索框
+            isSearchFieldFocused = true
         }
     }
 

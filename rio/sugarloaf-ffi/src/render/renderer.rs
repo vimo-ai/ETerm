@@ -557,19 +557,74 @@ impl Renderer {
             None
         };
 
+        // 🔧 计算搜索高亮信息（从 state 动态计算）
+        // 🐛 调试日志：验证搜索状态是否正确传递
+        if state.search.is_some() {
+            eprintln!("🔍 [render_with_atlas] Line {} has search state with {} matches",
+                line, state.search.as_ref().unwrap().matches.len());
+        }
+        let search_ranges: Vec<(usize, usize, bool)> = if let Some(search) = &state.search {
+            let abs_line = state.grid.history_size()
+                .saturating_add(line)
+                .saturating_sub(state.grid.display_offset());
+
+            if let Some(indices) = search.get_matches_at_line(abs_line) {
+                indices.iter().map(|&idx| {
+                    let m = &search.matches[idx];
+                    let is_focused = idx == search.focused_index;
+                    let start_col = if abs_line == m.start.line { m.start.col } else { 0 };
+                    let end_col = if abs_line == m.end.line { m.end.col } else { usize::MAX };
+                    (start_col, end_col, is_focused)
+                }).collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // 🐛 调试日志：显示当前行的搜索匹配范围
+        if !search_ranges.is_empty() {
+            eprintln!("🔍 [render_with_atlas] Line {} search_ranges: {:?}", line, search_ranges);
+        }
+
         // 预填充 Atlas + 收集绘制数据（仅普通字符）
         let mut xforms: Vec<skia_safe::RSXform> = Vec::with_capacity(layout.glyphs.len());
         let mut tex_rects: Vec<Rect> = Vec::with_capacity(layout.glyphs.len());
         let mut colors: Vec<skia_safe::Color> = Vec::with_capacity(layout.glyphs.len());
 
-        // 收集需要单独渲染的 emoji
-        let mut emoji_glyphs: Vec<&super::layout::GlyphInfo> = Vec::new();
+        // 收集需要单独渲染的 emoji（带列号，用于搜索高亮）
+        let mut emoji_glyphs: Vec<(usize, &super::layout::GlyphInfo)> = Vec::new();
 
         let mut bg_paint = Paint::default();
 
         for glyph in &layout.glyphs {
-            // 绘制背景（如果有）
-            if let Some(bg) = glyph.background_color {
+            // 计算当前列号
+            let current_col = (glyph.x / cell_width).round() as usize;
+
+            // 检查是否在搜索匹配范围内
+            let search_match = search_ranges.iter().find_map(|&(start, end, is_focused)| {
+                if current_col >= start && current_col <= end {
+                    Some(is_focused)
+                } else {
+                    None
+                }
+            });
+
+            // 绘制背景（搜索高亮优先）
+            if let Some(is_focused) = search_match {
+                // 搜索匹配背景
+                let bg = if is_focused {
+                    self.config.colors.search_focused_match_background
+                } else {
+                    self.config.colors.search_match_background
+                };
+                bg_paint.set_color4f(Color4f::new(bg[0], bg[1], bg[2], bg[3]), None);
+                let bg_width = cell_width * glyph.width;
+                let rect = Rect::from_xywh(glyph.x, 0.0, bg_width, line_height);
+                canvas.draw_rect(rect, &bg_paint);
+            } else if let Some(bg) = glyph.background_color {
+                // 原始背景
                 bg_paint.set_color4f(bg, None);
                 let bg_width = cell_width * glyph.width;
                 let rect = Rect::from_xywh(glyph.x, 0.0, bg_width, line_height);
@@ -578,7 +633,7 @@ impl Renderer {
 
             // 检测 emoji：不走 Atlas，收集后用 Paragraph 渲染
             if glyph.is_emoji() {
-                emoji_glyphs.push(glyph);
+                emoji_glyphs.push((current_col, glyph));
                 continue;
             }
 
@@ -598,7 +653,24 @@ impl Renderer {
                     // RSXform: 无旋转缩放，平移时减去 x_offset 补偿
                     xforms.push(skia_safe::RSXform::new(1.0, 0.0, skia_safe::Vector::new(glyph.x - x_offset, 0.0)));
                     tex_rects.push(region.to_src_rect());
-                    colors.push(glyph.color.to_color());
+
+                    // 确定前景色（搜索高亮优先）
+                    let fg_color = if let Some(is_focused) = search_match {
+                        let fg = if is_focused {
+                            self.config.colors.search_focused_match_foreground
+                        } else {
+                            self.config.colors.search_match_foreground
+                        };
+                        skia_safe::Color::from_argb(
+                            (fg[3] * 255.0) as u8,
+                            (fg[0] * 255.0) as u8,
+                            (fg[1] * 255.0) as u8,
+                            (fg[2] * 255.0) as u8,
+                        )
+                    } else {
+                        glyph.color.to_color()
+                    };
+                    colors.push(fg_color);
                 }
             }
         }
@@ -624,11 +696,32 @@ impl Renderer {
             FONT_COLLECTION.with(|fc| {
                 let font_collection = fc.borrow();
 
-                for glyph in emoji_glyphs {
+                for (col, glyph) in emoji_glyphs {
+                    // 检查 emoji 是否在搜索匹配范围内
+                    let emoji_search_match = search_ranges.iter().find_map(|&(start, end, is_focused)| {
+                        if col >= start && col <= end {
+                            Some(is_focused)
+                        } else {
+                            None
+                        }
+                    });
+
+                    // 确定前景色（搜索高亮优先）
+                    let fg_color = if let Some(is_focused) = emoji_search_match {
+                        let fg = if is_focused {
+                            self.config.colors.search_focused_match_foreground
+                        } else {
+                            self.config.colors.search_match_foreground
+                        };
+                        Color4f::new(fg[0], fg[1], fg[2], fg[3])
+                    } else {
+                        glyph.color
+                    };
+
                     let mut paragraph_style = ParagraphStyle::new();
                     let mut text_style = TextStyle::new();
                     text_style.set_font_size(glyph.font.size());
-                    text_style.set_color(color4f_to_color(glyph.color));
+                    text_style.set_color(color4f_to_color(fg_color));
                     // 明确指定 emoji 字体
                     text_style.set_font_families(&["Apple Color Emoji"]);
                     paragraph_style.set_text_style(&text_style);
@@ -668,6 +761,46 @@ impl Renderer {
                     cursor_paint.set_style(skia_safe::PaintStyle::Fill);
                     let rect = Rect::from_xywh(cursor_x, 0.0, cell_width, line_height);
                     canvas.draw_rect(rect, &cursor_paint);
+
+                    // 🎯 重绘光标下的字符（使用反转颜色）
+                    let cursor_col_idx = col;
+                    if let Some(glyph) = layout.glyphs.iter().find(|g| {
+                        let glyph_col = (g.x / cell_width).round() as usize;
+                        glyph_col == cursor_col_idx || (g.width > 1.0 && glyph_col + 1 == cursor_col_idx)
+                    }) {
+                        // 反转颜色：使用背景色作为文字颜色
+                        let inverted_color = background_color;
+
+                        // 检查是否是 emoji
+                        if glyph.is_emoji() {
+                            // Emoji: 使用 Paragraph API 渲染
+                            FONT_COLLECTION.with(|fc| {
+                                let font_collection = fc.borrow();
+                                let mut paragraph_style = ParagraphStyle::new();
+                                let mut text_style = TextStyle::new();
+                                text_style.set_font_size(glyph.font.size());
+                                text_style.set_color(color4f_to_color(inverted_color));
+                                text_style.set_font_families(&["Apple Color Emoji"]);
+                                paragraph_style.set_text_style(&text_style);
+
+                                let mut builder = ParagraphBuilder::new(&paragraph_style, font_collection.clone());
+                                builder.add_text(&glyph.grapheme);
+
+                                let mut paragraph = builder.build();
+                                paragraph.layout(cell_width * glyph.width + 10.0);
+
+                                let para_baseline = paragraph.alphabetic_baseline();
+                                let y_offset = baseline_offset - para_baseline;
+                                paragraph.paint(canvas, Point::new(glyph.x, y_offset));
+                            });
+                        } else {
+                            // 普通字符：直接绘制
+                            let mut text_paint = Paint::default();
+                            text_paint.set_anti_alias(true);
+                            text_paint.set_color4f(inverted_color, None);
+                            canvas.draw_str(&glyph.grapheme, Point::new(glyph.x, baseline_offset), &glyph.font, &text_paint);
+                        }
+                    }
                 }
                 CursorShape::Underline => {
                     cursor_paint.set_style(skia_safe::PaintStyle::Fill);

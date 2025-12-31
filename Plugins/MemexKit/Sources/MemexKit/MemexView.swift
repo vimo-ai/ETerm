@@ -102,18 +102,20 @@ struct MemexView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                // 测试：ScrollView 内加入 Button
+                // 测试：ScrollView 内多个 Button
                 ScrollView {
                     VStack(spacing: 8) {
-                        Button("ScrollView 内按钮 (+100)") {
-                            tapCount += 100
-                            print("[MemexView] ScrollView 内按钮 ✅")
+                        ForEach(1...5, id: \.self) { i in
+                            Button("ScrollView 按钮 \(i) (+\(i * 10))") {
+                                tapCount += i * 10
+                                print("[MemexView] ScrollView 按钮 \(i) ✅")
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                     .padding()
                 }
-                .frame(height: 100)
+                .frame(height: 200)
                 .background(Color.red.opacity(0.2))
 
                 Button("按钮 B (+10)") {

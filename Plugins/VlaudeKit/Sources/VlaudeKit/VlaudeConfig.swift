@@ -43,9 +43,6 @@ public struct VlaudeConfig: Codable, Equatable {
 public final class VlaudeConfigManager: ObservableObject {
     public static let shared = VlaudeConfigManager()
 
-    /// Socket 服务引用（由 VlaudePlugin 在 activate 时设置）
-    public weak var socketService: SocketServiceProtocol?
-
     private static let configFilePath: String = {
         try? ETermPaths.ensureDirectory(ETermPaths.config)
         return ETermPaths.config + "/vlaude.json"

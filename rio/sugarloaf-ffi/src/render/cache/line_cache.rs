@@ -181,6 +181,26 @@ impl LineCache {
     pub fn len(&self) -> usize {
         self.cache.len()
     }
+
+    /// 获取内存统计信息（用于调试）
+    /// 返回：(条目数, 图像数, 最大条目数, 估算内存字节数)
+    #[allow(dead_code)]
+    pub fn memory_stats(&self) -> (usize, usize, usize, usize) {
+        let entries = self.cache.len();
+        let mut images = 0usize;
+        let mut mem_bytes = 0usize;
+
+        for (_, entry) in self.cache.iter() {
+            let render_count = entry.renders.len();
+            images += render_count;
+            // 估算每个 Image 的内存大小（宽 * 高 * 4 字节）
+            for (_, img) in entry.renders.iter() {
+                mem_bytes += (img.width() * img.height() * 4) as usize;
+            }
+        }
+
+        (entries, images, MAX_TEXT_ENTRIES, mem_bytes)
+    }
 }
 
 impl Default for LineCache {

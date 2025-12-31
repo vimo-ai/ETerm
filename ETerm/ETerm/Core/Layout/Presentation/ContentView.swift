@@ -73,6 +73,7 @@ struct ContentView: View {
                 AppKitPageBar(coordinator: coordinator)
                     .frame(height: PageBarHostingView.recommendedHeight())
                 Spacer()
+                    .allowsHitTesting(false)  // 让点击事件穿透到下层的插件视图
             }
 
             // 侧边栏背景遮罩：点击关闭侧边栏（放在详情面板和侧边栏下面）
