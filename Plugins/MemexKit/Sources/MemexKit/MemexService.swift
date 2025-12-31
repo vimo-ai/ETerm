@@ -93,6 +93,13 @@ public final class MemexService: @unchecked Sendable {
         env["PORT"] = String(port)
         env["RUST_LOG"] = "memex=info"
         env["MEMEX_DATA_DIR"] = dataDir.path
+        // 确保 PATH 包含 homebrew 和常用工具路径（归档需要 xz 等外部命令）
+        let extraPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        if let existingPath = env["PATH"] {
+            env["PATH"] = "\(extraPaths):\(existingPath)"
+        } else {
+            env["PATH"] = extraPaths
+        }
         process.environment = env
         process.currentDirectoryURL = dataDir
 
@@ -173,45 +180,41 @@ public final class MemexService: @unchecked Sendable {
 
     // MARK: - Binary Discovery
 
+    /// 源码目录路径（编译时确定）
+    private static let sourceDir: String = {
+        // #filePath = .../MemexKit/Sources/MemexKit/MemexService.swift
+        // → .../MemexKit
+        let filePath = #filePath
+        return URL(fileURLWithPath: filePath)
+            .deletingLastPathComponent()  // Sources/MemexKit
+            .deletingLastPathComponent()  // Sources
+            .deletingLastPathComponent()  // MemexKit
+            .path
+    }()
+
     /// 查找 memex 二进制
     private func findBinary() -> String? {
-        // 1. 插件 Bundle 内的 Lib 目录 (Contents/Lib/memex)
-        let bundlePath = Bundle(for: MemexService.self).bundlePath
-        let bundleLibPath = bundlePath + "/Contents/Lib/memex"
-        if FileManager.default.isExecutableFile(atPath: bundleLibPath) {
-            return bundleLibPath
+        // 1. 源码目录 Lib/memex（开发模式）
+        let devPath = Self.sourceDir + "/Lib/memex"
+        if FileManager.default.isExecutableFile(atPath: devPath) {
+            return devPath
         }
 
-        // 2. 插件源码目录 (开发时使用)
-        let devLibPath = (bundlePath as NSString).deletingLastPathComponent + "/Lib/memex"
-        if FileManager.default.isExecutableFile(atPath: devLibPath) {
-            return devLibPath
+        // 2. 插件 Bundle 内 Contents/Lib/memex（发布模式）
+        let bundlePath = Bundle(for: MemexService.self).bundlePath + "/Contents/Lib/memex"
+        if FileManager.default.isExecutableFile(atPath: bundlePath) {
+            return bundlePath
         }
 
-        // 3. $ETERM_HOME/bin
+        // 3. ~/.vimo/eterm/bin/memex
         let etermBin = ETermPaths.root + "/bin/memex"
         if FileManager.default.isExecutableFile(atPath: etermBin) {
             return etermBin
         }
 
-        // 4. /usr/local/bin (brew install)
-        let usrLocalBin = "/usr/local/bin/memex"
-        if FileManager.default.isExecutableFile(atPath: usrLocalBin) {
-            return usrLocalBin
-        }
-
-        // 5. PATH
-        let which = Process()
-        which.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        which.arguments = ["memex"]
-        let pipe = Pipe()
-        which.standardOutput = pipe
-        try? which.run()
-        which.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !path.isEmpty {
-            return path
+        // 4. /usr/local/bin/memex
+        if FileManager.default.isExecutableFile(atPath: "/usr/local/bin/memex") {
+            return "/usr/local/bin/memex"
         }
 
         return nil
