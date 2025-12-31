@@ -236,12 +236,16 @@ extension PluginManifest {
         /// - "tab": 点击后在 Tab 区域创建新的 View Tab
         public let renderMode: String?
 
-        public init(id: String, title: String, icon: String, viewClass: String, renderMode: String? = nil) {
+        /// 显示顺序（数字越小越靠前，默认 100）
+        public let order: Int?
+
+        public init(id: String, title: String, icon: String, viewClass: String, renderMode: String? = nil, order: Int? = nil) {
             self.id = id
             self.title = title
             self.icon = icon
             self.viewClass = viewClass
             self.renderMode = renderMode
+            self.order = order
         }
     }
 

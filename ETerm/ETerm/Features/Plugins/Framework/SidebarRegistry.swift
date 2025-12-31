@@ -12,6 +12,7 @@ public struct SidebarTab: Identifiable {
     public let id: String
     public let title: String
     public let icon: String
+    public let order: Int  // 显示顺序，数字越小越靠前
     public let viewProvider: () -> AnyView
     /// 点击时的回调（可选），用于直接执行操作（如打开 PluginPage）
     public let onSelect: (() -> Void)?
@@ -20,12 +21,14 @@ public struct SidebarTab: Identifiable {
         id: String,
         title: String,
         icon: String,
+        order: Int = 100,
         viewProvider: @escaping () -> AnyView,
         onSelect: (() -> Void)? = nil
     ) {
         self.id = id
         self.title = title
         self.icon = icon
+        self.order = order
         self.viewProvider = viewProvider
         self.onSelect = onSelect
     }
@@ -36,6 +39,7 @@ public struct PluginTabGroup: Identifiable {
     public let id: String           // 插件 ID
     public let pluginName: String   // 插件名称
     public let tabs: [SidebarTab]   // 该插件的 Tabs
+    public let order: Int           // 分组排序（取 tabs 中最小的 order）
 }
 
 /// 侧边栏注册表 - 管理插件注册的 Tab
@@ -76,15 +80,18 @@ final class SidebarRegistry: ObservableObject {
         tabs.values.flatMap { $0 }
     }
 
-    /// 获取按插件分组的 Tab 列表
+    /// 获取按插件分组的 Tab 列表（按 order 排序）
     var allTabGroups: [PluginTabGroup] {
         tabs.compactMap { (pluginId, tabs) in
             guard !tabs.isEmpty else { return nil }
+            let sortedTabs = tabs.sorted { $0.order < $1.order }
+            let groupOrder = sortedTabs.first?.order ?? 100
             return PluginTabGroup(
                 id: pluginId,
                 pluginName: pluginNames[pluginId] ?? pluginId,
-                tabs: tabs
+                tabs: sortedTabs,
+                order: groupOrder
             )
-        }.sorted { $0.pluginName < $1.pluginName }
+        }.sorted { $0.order < $1.order }
     }
 }
