@@ -3,9 +3,13 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <stdarg.h>
 #include <stdbool.h>
-#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include "stdint.h"
+#include "stdbool.h"
+#include "stddef.h"
 
 /**
  * FFI 友好的错误码
@@ -122,6 +126,103 @@ typedef struct SearchResultArray {
 } SearchResultArray;
 
 /**
+ * IndexableMessage C 结构体
+ */
+typedef struct IndexableMessageC {
+    char *uuid;
+    char *role;
+    char *content;
+    int64_t timestamp;
+    int64_t sequence;
+} IndexableMessageC;
+
+/**
+ * IndexableMessage 数组
+ */
+typedef struct IndexableMessageArray {
+    struct IndexableMessageC *data;
+    uintptr_t len;
+} IndexableMessageArray;
+
+/**
+ * IndexableSession C 结构体
+ */
+typedef struct IndexableSessionC {
+    char *session_id;
+    char *project_path;
+    char *project_name;
+    struct IndexableMessageArray messages;
+} IndexableSessionC;
+
+/**
+ * 解析结果
+ */
+typedef struct ParseResult {
+    struct IndexableSessionC *session;
+    enum SessionDbError error;
+} ParseResult;
+
+/**
+ * ProjectInfo C 结构体
+ */
+typedef struct ProjectInfoC {
+    char *encoded_name;
+    char *path;
+    char *name;
+    uintptr_t session_count;
+    uint64_t last_active;
+} ProjectInfoC;
+
+/**
+ * ProjectInfo 数组
+ */
+typedef struct ProjectInfoArray {
+    struct ProjectInfoC *data;
+    uintptr_t len;
+} ProjectInfoArray;
+
+/**
+ * SessionMetaC 结构体
+ */
+typedef struct SessionMetaC {
+    char *id;
+    char *project_path;
+    char *project_name;
+    char *encoded_dir_name;
+    char *session_path;
+    int64_t file_mtime;
+} SessionMetaC;
+
+/**
+ * SessionMeta 数组
+ */
+typedef struct SessionMetaArray {
+    struct SessionMetaC *data;
+    uintptr_t len;
+} SessionMetaArray;
+
+/**
+ * ParsedMessage C 结构体 (用于 read_messages)
+ */
+typedef struct ParsedMessageC {
+    char *uuid;
+    char *session_id;
+    int32_t message_type;
+    char *content;
+    char *timestamp;
+} ParsedMessageC;
+
+/**
+ * MessagesResult C 结构体
+ */
+typedef struct MessagesResultC {
+    struct ParsedMessageC *messages;
+    uintptr_t message_count;
+    uintptr_t total;
+    bool has_more;
+} MessagesResultC;
+
+/**
  * 连接数据库
  *
  * # Safety
@@ -180,8 +281,7 @@ enum SessionDbError session_db_check_writer_health(const struct SessionDbHandle 
  * `handle` 必须是有效句柄
  * `out_taken` 输出是否接管成功: 1=成功, 0=失败
  */
-enum SessionDbError session_db_try_takeover(struct SessionDbHandle *handle,
-                                            int32_t *out_taken);
+enum SessionDbError session_db_try_takeover(struct SessionDbHandle *handle, int32_t *out_taken);
 
 /**
  * 获取统计信息
@@ -341,5 +441,136 @@ void session_db_free_search_results(struct SearchResultArray *array);
  * `s` 必须是由本库创建的 C 字符串
  */
 void session_db_free_string(char *s);
+
+/**
+ * 解析 JSONL 会话文件
+ *
+ * # 参数
+ * - `jsonl_path`: JSONL 文件完整路径
+ *
+ * # 返回
+ * - 成功: session 非空, error = Success
+ * - 文件为空: session 为空, error = Success
+ * - 失败: session 为空, error = 对应错误码
+ *
+ * # Safety
+ * - `jsonl_path` 必须是有效的 UTF-8 C 字符串
+ * - 返回的 ParseResult.session 需要调用 `session_db_free_parse_result` 释放
+ */
+struct ParseResult session_db_parse_jsonl(const char *jsonl_path);
+
+/**
+ * 释放解析结果
+ *
+ * # Safety
+ * `result` 必须是 `session_db_parse_jsonl` 返回的有效指针
+ */
+void session_db_free_parse_result(struct IndexableSessionC *session);
+
+/**
+ * 编码项目路径为 Claude 目录名
+ * /Users/xxx/project → -Users-xxx-project
+ *
+ * # Safety
+ * - `path` 必须是有效的 UTF-8 C 字符串
+ * - 返回的字符串需要调用 `session_db_free_string` 释放
+ */
+char *session_db_encode_path(const char *path);
+
+/**
+ * 解码 Claude 目录名为项目路径
+ * -Users-xxx-project → /Users/xxx/project
+ *
+ * # Safety
+ * - `encoded` 必须是有效的 UTF-8 C 字符串
+ * - 返回的字符串需要调用 `session_db_free_string` 释放
+ */
+char *session_db_decode_path(const char *encoded);
+
+/**
+ * 列出所有项目（从文件系统）
+ *
+ * # 参数
+ * - `projects_path`: Claude projects 目录路径，null 使用默认路径 (~/.claude/projects)
+ * - `limit`: 最大返回数量，0 表示不限制
+ *
+ * # Safety
+ * - 返回的数组需要调用 `session_db_free_project_list` 释放
+ */
+enum SessionDbError session_db_list_file_projects(const char *projects_path,
+                                                  uint32_t limit,
+                                                  struct ProjectInfoArray **out_array);
+
+/**
+ * 释放项目列表
+ */
+void session_db_free_project_list(struct ProjectInfoArray *array);
+
+/**
+ * 列出会话
+ *
+ * # 参数
+ * - `projects_path`: Claude projects 目录路径，null 使用默认路径
+ * - `project_path`: 可选，过滤特定项目的会话
+ *
+ * # Safety
+ * - 返回的数组需要调用 `session_db_free_session_meta_list` 释放
+ */
+enum SessionDbError session_db_list_session_metas(const char *projects_path,
+                                                  const char *project_path,
+                                                  struct SessionMetaArray **out_array);
+
+/**
+ * 释放会话列表
+ */
+void session_db_free_session_meta_list(struct SessionMetaArray *array);
+
+/**
+ * 查找最新会话
+ *
+ * # 参数
+ * - `projects_path`: Claude projects 目录路径，null 使用默认路径
+ * - `project_path`: 项目路径
+ * - `within_seconds`: 时间范围（秒），0 表示不限制
+ *
+ * # 返回
+ * - 成功且找到：返回 SessionMetaC 指针
+ * - 成功但未找到：返回 null，error = Success
+ *
+ * # Safety
+ * - 返回的指针需要调用 `session_db_free_session_meta` 释放
+ */
+enum SessionDbError session_db_find_latest_session(const char *projects_path,
+                                                   const char *project_path,
+                                                   uint64_t within_seconds,
+                                                   struct SessionMetaC **out_session);
+
+/**
+ * 释放单个 SessionMeta
+ */
+void session_db_free_session_meta(struct SessionMetaC *session);
+
+/**
+ * 读取会话消息（支持分页）
+ *
+ * # 参数
+ * - `session_path`: 会话文件完整路径
+ * - `limit`: 每页消息数
+ * - `offset`: 偏移量
+ * - `order_asc`: true 升序，false 降序
+ *
+ * # Safety
+ * - 返回的结果需要调用 `session_db_free_messages_result` 释放
+ */
+enum SessionDbError session_db_read_session_messages(const char *session_path,
+                                                     uintptr_t limit,
+                                                     uintptr_t offset,
+                                                     bool order_asc,
+                                                     struct MessagesResultC **out_result);
+
+/**
+ * 释放消息结果
+ */
+void session_db_free_messages_result(struct MessagesResultC *result);
 
 #endif  /* CLAUDE_SESSION_DB_H */

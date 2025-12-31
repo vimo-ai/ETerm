@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ETermKit
 
 /// 内置插件安装器
 ///

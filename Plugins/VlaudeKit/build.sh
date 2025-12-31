@@ -9,7 +9,7 @@ PLUGIN_NAME="VlaudeKit"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
 # Output directory
-OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.eterm/plugins}"
+OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
 BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
 
 # Colors
@@ -40,17 +40,8 @@ mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"
 # Copy plugin dylib
 cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 
-# Copy session-reader-ffi
-log_info "Copying session-reader-ffi..."
-mkdir -p "${BUNDLE_PATH}/Contents/Libs"
-if [ -f "Libs/session_reader_ffi" ]; then
-    cp "Libs/session_reader_ffi" "${BUNDLE_PATH}/Contents/Libs/"
-    log_info "Copied session_reader_ffi"
-else
-    log_error "session_reader_ffi not found! Run: /path/to/vlaude-core/scripts/update_plugin.sh"
-fi
-
 # Copy SharedDB (claude-session-db FFI)
+mkdir -p "${BUNDLE_PATH}/Contents/Libs"
 log_info "Copying SharedDB..."
 if [ -f "Libs/SharedDB/libclaude_session_db.dylib" ]; then
     cp "Libs/SharedDB/libclaude_session_db.dylib" "${BUNDLE_PATH}/Contents/Libs/"
@@ -108,18 +99,6 @@ if [ -f "${BUNDLE_PATH}/Contents/Frameworks/libSocketIO.dylib" ] && \
         "${BUNDLE_PATH}/Contents/Frameworks/libSocketIO.dylib" 2>/dev/null || true
 fi
 
-# Fix session-reader-ffi link path
-if [ -f "${BUNDLE_PATH}/Contents/Libs/session_reader_ffi" ]; then
-    install_name_tool -change \
-        "session_reader_ffi" \
-        "@loader_path/../Libs/session_reader_ffi" \
-        "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" 2>/dev/null || true
-
-    install_name_tool -id \
-        "@loader_path/../Libs/session_reader_ffi" \
-        "${BUNDLE_PATH}/Contents/Libs/session_reader_ffi" 2>/dev/null || true
-fi
-
 # Fix SharedDB link path
 if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
     # Get the actual linked path from the dylib
@@ -144,9 +123,6 @@ for lib in "${SOCKETIO_LIBS[@]}"; do
         codesign -f -s - "${BUNDLE_PATH}/Contents/Frameworks/$lib"
     fi
 done
-if [ -f "${BUNDLE_PATH}/Contents/Libs/session_reader_ffi" ]; then
-    codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/session_reader_ffi"
-fi
 if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
     codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib"
 fi

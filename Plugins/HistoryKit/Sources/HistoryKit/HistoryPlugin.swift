@@ -31,7 +31,6 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
     }
 
     public func activate(host: HostBridge) {
-        print("[HistoryKit] activate called")
         self.host = host
         self.service = HistoryService(host: host)
 
@@ -46,8 +45,6 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
 
         // 主动加载工作区数据（解决事件时序问题）
         loadWorkspacesFromService()
-
-        print("[HistoryKit] 插件已激活")
     }
 
     /// 从 WorkspaceKit 服务加载工作区
@@ -60,26 +57,20 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
             name: "getWorkspaces",
             params: [:]
         ) else {
-            print("[HistoryKit] Failed to call getWorkspaces service")
             return
         }
 
         guard let workspaces = result["workspaces"] as? [[String: Any]] else {
-            if let error = result["error"] as? String {
-                print("[HistoryKit] getWorkspaces error: \(error)")
-            }
             return
         }
 
         if !workspaces.isEmpty {
             let paths = workspaces.compactMap { $0["path"] as? String }
             state.updateWorkspaces(paths)
-            print("[HistoryKit] Loaded \(paths.count) workspaces from service")
         }
     }
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        print("[HistoryKit] handleEvent called: \(eventName)")
         switch eventName {
         case "plugin.com.eterm.workspace.didUpdate":
             handleWorkspaceUpdate(payload)
@@ -91,12 +82,10 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
     public func deactivate() {
         scheduledTimer?.invalidate()
         scheduledTimer = nil
-        print("[HistoryKit] 插件已停用")
     }
 
     public func sidebarView(for tabId: String) -> AnyView? {
         if tabId == "history-panel", let service = service {
-            print("[HistoryPlugin] sidebarView called, state id = \(ObjectIdentifier(state)), workspaces = \(state.workspaces.count)")
             return AnyView(HistoryPanelView(service: service, state: state))
         }
         return nil
@@ -237,6 +226,5 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
 
         let paths = workspacesData.compactMap { $0["path"] as? String }
         state.updateWorkspaces(paths)
-        print("[HistoryKit] 工作区列表更新: \(paths.count) 个")
     }
 }

@@ -8,6 +8,7 @@
 
 import Foundation
 import SharedDbFFI
+import ETermKit
 
 // MARK: - Error Types
 
@@ -147,12 +148,9 @@ final class SharedDbBridge {
     // MARK: - Lifecycle
 
     /// Connect to shared database
-    /// - Parameter path: Database path (default: ~/.eterm/session.db)
+    /// - Parameter path: Database path (default: ~/.vimo/db/claude-session.db)
     init(path: String? = nil) throws {
-        let dbPath = path ?? {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            return "\(home)/.eterm/session.db"
-        }()
+        let dbPath = path ?? ETermPaths.claudeSessionDatabase
 
         // Ensure directory exists
         let dir = (dbPath as NSString).deletingLastPathComponent
@@ -168,7 +166,6 @@ final class SharedDbBridge {
         }
 
         self.handle = handlePtr
-        print("[SharedDbBridge] Connected to \(dbPath)")
     }
 
     deinit {
@@ -220,7 +217,6 @@ final class SharedDbBridge {
         // - Reader: 检查 Writer 是否超时，尝试接管
         startHeartbeat()
 
-        print("[SharedDbBridge] Registered as \(assignedRole)")
         return assignedRole
     }
 
@@ -238,7 +234,6 @@ final class SharedDbBridge {
 
             role = .reader
         }
-        print("[SharedDbBridge] Released writer")
     }
 
     /// Send heartbeat (thread-safe)
@@ -298,7 +293,6 @@ final class SharedDbBridge {
 
         if taken {
             startHeartbeat()
-            print("[SharedDbBridge] Takeover succeeded, now Writer")
         }
 
         return taken
@@ -315,21 +309,12 @@ final class SharedDbBridge {
 
             if self.role == .writer {
                 // Writer: 发送心跳
-                do {
-                    try self.heartbeat()
-                } catch {
-                    print("[SharedDbBridge] Heartbeat failed: \(error)")
-                }
+                try? self.heartbeat()
             } else {
                 // Reader: 检查 Writer 是否超时，尝试接管
-                do {
-                    let health = try self.checkWriterHealth()
-                    if health == .timeout || health == .released {
-                        print("[SharedDbBridge] Writer \(health), attempting takeover...")
-                        _ = try self.tryTakeover()
-                    }
-                } catch {
-                    print("[SharedDbBridge] Health check failed: \(error)")
+                if let health = try? self.checkWriterHealth(),
+                   health == .timeout || health == .released {
+                    _ = try? self.tryTakeover()
                 }
             }
         }

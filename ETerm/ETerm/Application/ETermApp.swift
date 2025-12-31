@@ -10,6 +10,7 @@
 import AppKit
 import SwiftUI
 import SwiftData
+import ETermKit
 
 // MARK: - AppDelegate
 
@@ -147,6 +148,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // 停用所有 SDK 插件（确保子进程被清理）
+        SDKPluginLoader.shared.deactivateAll()
+
         // 停止 Extension Host
         Task {
             await ExtensionHostManager.shared.stop()

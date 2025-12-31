@@ -405,6 +405,15 @@ final class SDKPluginLoader {
         logInfo("[SDKPluginLoader] Unloaded plugin: \(pluginId)")
     }
 
+    /// 停用所有插件（app 退出时调用）
+    func deactivateAll() {
+        for (pluginId, plugin) in mainModePlugins {
+            logInfo("[SDKPluginLoader] Deactivating plugin: \(pluginId)")
+            plugin.deactivate()
+        }
+        mainModePlugins.removeAll()
+    }
+
     /// 获取插件 Manifest
     func getManifest(_ pluginId: String) -> PluginManifest? {
         return manifests[pluginId]

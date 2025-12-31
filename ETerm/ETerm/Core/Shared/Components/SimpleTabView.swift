@@ -94,8 +94,8 @@ struct SimpleTabView: View {
         }
         // 激活 - 深红/墨色
         return colorScheme == .dark
-            ? Color(hex: "861717").opacity(0.6)
-            : Color(hex: "861717").opacity(0.4)
+            ? Color(hex: ThemeColors.accentHex).opacity(0.6)
+            : Color(hex: ThemeColors.accentHex).opacity(0.4)
     }
 
     /// 未激活状态背景色

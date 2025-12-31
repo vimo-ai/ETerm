@@ -55,9 +55,7 @@ public final class MemexService: @unchecked Sendable {
         do {
             sharedDb = try SharedDbBridge()
             _ = try sharedDb?.register()
-            print("[MemexService] SharedDb initialized")
         } catch {
-            print("[MemexService] SharedDb not available: \(error)")
             sharedDb = nil
         }
     }
@@ -85,8 +83,8 @@ public final class MemexService: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
 
-        // 数据目录（统一在 $ETERM_HOME/memex 下，不污染 ~ 目录）
-        let dataDir = URL(fileURLWithPath: ETermPaths.root)
+        // 数据目录（统一在 ~/.vimo/memex 下，与 memex-rs 独立运行时一致）
+        let dataDir = URL(fileURLWithPath: ETermPaths.vimoRoot)
             .appendingPathComponent("memex")
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
@@ -134,12 +132,7 @@ public final class MemexService: @unchecked Sendable {
     /// 释放 SharedDbBridge（线程安全，SharedDbBridge 内部用 queue.sync 保护）
     private nonisolated func releaseSharedDb() {
         guard let db = sharedDb else { return }
-        do {
-            try db.release()
-            print("[MemexService] SharedDb released")
-        } catch {
-            print("[MemexService] SharedDb release failed: \(error)")
-        }
+        try? db.release()
         sharedDb = nil
     }
 
@@ -285,7 +278,7 @@ extension MemexService {
                     )
                 }
             } catch {
-                print("[MemexService] SharedDb search failed, falling back to HTTP: \(error)")
+                // Fall through to HTTP
             }
         }
 
@@ -321,7 +314,7 @@ extension MemexService {
                     aiChatEnabled: false
                 )
             } catch {
-                print("[MemexService] SharedDb getStats failed, falling back to HTTP: \(error)")
+                // Fall through to HTTP
             }
         }
 
@@ -362,7 +355,7 @@ extension MemexService {
                 try await indexSessionViaHTTP(path: path)
                 return
             } catch {
-                print("[MemexService] HTTP indexSession failed, trying SharedDb: \(error)")
+                // Fall through to SharedDb
             }
         }
 
@@ -408,7 +401,6 @@ extension MemexService {
 
         // 使用 session-reader-ffi 解析会话（正确读取 cwd 解决中文路径问题）
         guard let session = sessionReader.parseSessionForIndex(jsonlPath: path) else {
-            print("[MemexService] No messages to index in \(path)")
             return
         }
 
@@ -423,10 +415,7 @@ extension MemexService {
             )
         }
 
-        guard !messages.isEmpty else {
-            print("[MemexService] No messages to index in \(path)")
-            return
-        }
+        guard !messages.isEmpty else { return }
 
         // 写入数据库
         let projectId = try sharedDb.upsertProject(
@@ -435,9 +424,7 @@ extension MemexService {
             source: "claude-code"
         )
         try sharedDb.upsertSession(sessionId: session.sessionId, projectId: projectId)
-        let inserted = try sharedDb.insertMessages(sessionId: session.sessionId, messages: messages)
-
-        print("[MemexService] Indexed \(inserted) messages via SharedDb for session \(session.sessionId)")
+        _ = try sharedDb.insertMessages(sessionId: session.sessionId, messages: messages)
     }
 }
 

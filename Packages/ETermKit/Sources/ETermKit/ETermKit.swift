@@ -94,6 +94,14 @@ public typealias _SocketClientEvent = SocketClientEvent
 // Socket 客户端配置
 public typealias _SocketClientConfig = SocketClientConfig
 
+// MARK: - Logging
+
+// 日志管理器
+public typealias _LogManager = LogManager
+
+// 日志级别
+public typealias _LogLevel = LogLevel
+
 // MARK: - SDK Version
 
 /// ETermKit SDK 版本

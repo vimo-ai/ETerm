@@ -14,6 +14,7 @@
 
 import Foundation
 import AppKit
+import ETermKit
 
 // MARK: - Font Size Operation
 

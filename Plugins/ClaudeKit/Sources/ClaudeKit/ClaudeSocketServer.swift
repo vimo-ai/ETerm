@@ -33,7 +33,7 @@ final class ClaudeSocketServer {
 
     /// 启动 Socket Server
     ///
-    /// - Parameter path: socket 文件路径（如 ~/.eterm/run/sockets/claude.sock）
+    /// - Parameter path: socket 文件路径（如 ~/.vimo/eterm/run/sockets/claude.sock）
     func start(at path: String) {
         // 确保目录存在（权限 0700）
         let socketDir = (path as NSString).deletingLastPathComponent

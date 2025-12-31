@@ -30,7 +30,7 @@ class ClaudeSocketServer {
 
     /// 启动 Socket Server
     func start() {
-        // 使用新的 socket 路径：~/.eterm/run/sockets/claude.sock
+        // 使用新的 socket 路径：~/.vimo/eterm/run/sockets/claude.sock
         let path = ETermPaths.socketPath(for: "claude")
 
         // 确保目录存在（权限 0700）
@@ -91,7 +91,7 @@ class ClaudeSocketServer {
         socketPath = path
 
         // 环境变量由 ETermPaths.createDirectories() 统一设置
-        // ETERM_SOCKET_DIR 指向 ~/.eterm/run/sockets
+        // ETERM_SOCKET_DIR 指向 ~/.vimo/eterm/run/sockets
 
         // 开始接受连接
         startAcceptingConnections()

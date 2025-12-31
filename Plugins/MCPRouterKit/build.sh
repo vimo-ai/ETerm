@@ -8,7 +8,7 @@ PLUGIN_NAME="MCPRouterKit"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
 # Output directory (can be overridden by BUNDLE_OUTPUT_DIR env var)
-OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.eterm/plugins}"
+OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
 BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
 
 # MCP Router Core library (no extension, like memex)

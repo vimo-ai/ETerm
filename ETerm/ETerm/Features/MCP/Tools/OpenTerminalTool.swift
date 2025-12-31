@@ -89,24 +89,18 @@ enum OpenTerminalTool {
 
     @MainActor
     private static func addTabToPanel(coordinator: TerminalWindowCoordinator, panelId: UUID, cwd: String?) -> Response {
-        let config = TabConfig(cwd: cwd ?? coordinator.getActiveCwd(for: panelId))
-        let result = coordinator.perform(.tab(.addWithConfig(panelId: panelId, config: config)))
+        // 使用 CoreTerminalService 统一实现
+        let result = CoreTerminalService.createTab(
+            cwd: cwd ?? coordinator.getActiveCwd(for: panelId),
+            panelId: panelId.uuidString
+        )
 
-        if result.success {
-            // 获取新创建的 tab 的 terminalId
-            if let panel = coordinator.terminalWindow.getPanel(panelId),
-               let activeTab = panel.tabs.first(where: { $0.tabId == panel.activeTabId }) {
-                return Response(
-                    success: true,
-                    message: "Terminal opened in current panel",
-                    terminalId: activeTab.rustTerminalId,
-                    panelId: panelId.uuidString
-                )
-            }
-            return Response(success: true, message: "Terminal opened", terminalId: nil, panelId: panelId.uuidString)
-        } else {
-            return Response(success: false, message: "Failed to add tab", terminalId: nil, panelId: nil)
-        }
+        return Response(
+            success: result.success,
+            message: result.message,
+            terminalId: result.terminalId,
+            panelId: result.panelId
+        )
     }
 
     @MainActor

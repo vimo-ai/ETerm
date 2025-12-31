@@ -121,10 +121,10 @@ public struct TabDecoration: Equatable, @unchecked Sendable {
         style: .solid
     )
 
-    /// Active 装饰（系统级，深红色）
+    /// Active 装饰（系统级，主题色低调版）
     public static let active = TabDecoration(
         priority: .system(.active),
-        color: NSColor(red: 0x86/255, green: 0x17/255, blue: 0x17/255, alpha: 1.0),
+        color: ThemeColors.accent.withAlphaComponent(0.5),
         style: .solid
     )
 

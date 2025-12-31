@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ETermKit
 
 /// Rust 日志桥接管理器
 class RustLogBridge {

@@ -2,33 +2,26 @@
 //  SessionReader.swift
 //  MemexKit
 //
-//  Swift wrapper for session-reader-ffi
+//  Swift wrapper for claude-session-db FFI (统一入口)
 //  Provides Claude session file parsing capabilities
 //
 
 import Foundation
-import SessionReaderFFI
+import SharedDbFFI
 
 // MARK: - Data Types
 
 /// Indexable session data (for writing to SharedDb)
 /// Contains correctly resolved project path (from cwd)
-struct IndexableSession: Codable {
+struct IndexableSession {
     let sessionId: String
     let projectPath: String
     let projectName: String
     let messages: [IndexableMessage]
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case projectPath = "project_path"
-        case projectName = "project_name"
-        case messages
-    }
 }
 
 /// Message format for indexing
-struct IndexableMessage: Codable {
+struct IndexableMessage {
     let uuid: String
     let role: String
     let content: String
@@ -38,24 +31,12 @@ struct IndexableMessage: Codable {
 
 // MARK: - SessionReader
 
-/// Swift wrapper for session-reader-ffi (minimal version for MemexKit)
+/// Swift wrapper for claude-session-db FFI (统一入口)
 final class SessionReader {
-    private var handle: OpaquePointer?
 
     // MARK: - Lifecycle
 
-    init() {
-        handle = sr_create()
-        if handle == nil {
-            print("[SessionReader] Warning: Failed to create reader")
-        }
-    }
-
-    deinit {
-        if let handle = handle {
-            sr_destroy(handle)
-        }
-    }
+    init() {}
 
     // MARK: - Index Operations
 
@@ -64,34 +45,61 @@ final class SessionReader {
     /// - Parameter jsonlPath: Full path to JSONL session file
     /// - Returns: IndexableSession if successful, nil if file is empty or parsing failed
     func parseSessionForIndex(jsonlPath: String) -> IndexableSession? {
-        guard let handle = handle else { return nil }
-
-        let cstr = jsonlPath.withCString { path in
-            sr_parse_session_for_index(handle, path)
+        let result = jsonlPath.withCString { path in
+            session_db_parse_jsonl(path)
         }
 
-        guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
-
-        let json = String(cString: cstr)
-
-        // Handle null response (empty file or no valid messages)
-        if json == "null" {
+        // Check for errors
+        guard result.error == Success else {
+            print("[SessionReader] Parse error: \(result.error)")
             return nil
         }
 
-        return decodeJSON(json)
-    }
-
-    // MARK: - Private Helpers
-
-    private func decodeJSON<T: Decodable>(_ json: String) -> T? {
-        guard let data = json.data(using: .utf8) else { return nil }
-        do {
-            return try JSONDecoder().decode(T.self, from: data)
-        } catch {
-            print("[SessionReader] JSON decode error: \(error)")
+        // Check for empty result (valid but no messages)
+        guard let sessionPtr = result.session else {
             return nil
         }
+        defer { session_db_free_parse_result(sessionPtr) }
+
+        let session = sessionPtr.pointee
+
+        // Convert session_id
+        guard let sessionIdPtr = session.session_id else { return nil }
+        let sessionId = String(cString: sessionIdPtr)
+
+        // Convert project_path
+        guard let projectPathPtr = session.project_path else { return nil }
+        let projectPath = String(cString: projectPathPtr)
+
+        // Convert project_name
+        guard let projectNamePtr = session.project_name else { return nil }
+        let projectName = String(cString: projectNamePtr)
+
+        // Convert messages
+        var messages: [IndexableMessage] = []
+        if session.messages.len > 0, let data = session.messages.data {
+            for i in 0..<Int(session.messages.len) {
+                let msg = data[i]
+                guard let uuidPtr = msg.uuid,
+                      let rolePtr = msg.role,
+                      let contentPtr = msg.content else {
+                    continue
+                }
+                messages.append(IndexableMessage(
+                    uuid: String(cString: uuidPtr),
+                    role: String(cString: rolePtr),
+                    content: String(cString: contentPtr),
+                    timestamp: msg.timestamp,
+                    sequence: msg.sequence
+                ))
+            }
+        }
+
+        return IndexableSession(
+            sessionId: sessionId,
+            projectPath: projectPath,
+            projectName: projectName,
+            messages: messages
+        )
     }
 }

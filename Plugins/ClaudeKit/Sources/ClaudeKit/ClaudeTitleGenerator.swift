@@ -29,7 +29,7 @@ private struct OllamaConfig: Codable {
 ///
 /// 使用 Ollama 本地模型根据用户问题生成简短标题。
 /// 异步执行，不阻塞主流程。Ollama 不可用时返回 nil。
-/// 配置从 ~/.eterm/config/ollama.json 读取，与主程序共享。
+/// 配置从 ~/.vimo/eterm/config/ollama.json 读取，与主程序共享。
 final class ClaudeTitleGenerator {
     static let shared = ClaudeTitleGenerator()
 

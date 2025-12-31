@@ -11,6 +11,7 @@
 
 import Foundation
 import AppKit
+import ETermKit
 
 // MARK: - 导出格式
 

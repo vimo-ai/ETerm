@@ -33,11 +33,7 @@ public final class MemexPlugin: NSObject, Plugin {
 
         // 启动 memex HTTP 服务
         Task { @MainActor in
-            do {
-                try MemexService.shared.start()
-            } catch {
-                print("[MemexKit] Failed to start service: \(error.localizedDescription)")
-            }
+            try? MemexService.shared.start()
         }
     }
 
@@ -51,19 +47,11 @@ public final class MemexPlugin: NSObject, Plugin {
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
         // 处理 Claude 响应完成事件，触发精确索引
         guard eventName == "claude.responseComplete" else { return }
-        guard let transcriptPath = payload["transcriptPath"] as? String else {
-            print("[MemexKit] Missing transcriptPath in responseComplete event")
-            return
-        }
+        guard let transcriptPath = payload["transcriptPath"] as? String else { return }
 
         // 异步调用索引 API（静默失败，不阻断主流程）
         Task {
-            do {
-                try await MemexService.shared.indexSession(path: transcriptPath)
-                print("[MemexKit] Indexed session: \(transcriptPath)")
-            } catch {
-                print("[MemexKit] Failed to index session: \(error.localizedDescription)")
-            }
+            try? await MemexService.shared.indexSession(path: transcriptPath)
         }
     }
 

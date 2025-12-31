@@ -14,6 +14,7 @@
 import Foundation
 import AppKit
 import Combine
+import ETermKit
 
 // MARK: - Page Lifecycle
 
@@ -49,21 +50,13 @@ extension TerminalWindowCoordinator {
     /// - Returns: 是否成功切换
     @discardableResult
     func switchToPage(_ pageId: UUID) -> Bool {
-        logDebug("[switchToPage] called, targetPageId=\(pageId.uuidString.prefix(8))")
-        logDebug("[switchToPage] currentActivePageId=\(terminalWindow.active.pageId?.uuidString.prefix(8) ?? "nil")")
-        logDebug("[switchToPage] allPages=\(terminalWindow.pages.all.map { "\($0.title)(\($0.pageId.uuidString.prefix(8)))" })")
-
         // 录制事件
         let fromPageId = terminalWindow.active.pageId
         recordPageEvent(.pageSwitch(fromPageId: fromPageId, toPageId: pageId))
 
         // 执行命令（处理旧终端停用、同步布局、渲染等副作用）
         let result = perform(.page(.switch(to: .specific(pageId))))
-        guard result.success else {
-            logWarn("[switchToPage] FAILED - pageId not found in pages")
-            return false
-        }
-        logDebug("[switchToPage] SUCCESS - switched to pageId=\(pageId.uuidString.prefix(8))")
+        guard result.success else { return false }
 
         // 延迟创建终端（Lazy Loading，内部会激活新创建的 activeTab 终端）
         if let activePage = terminalWindow.active.page {

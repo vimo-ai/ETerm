@@ -20,6 +20,7 @@
         }
     ],
     "subscribes": [
+        "claude.promptSubmit",
         "claude.responseComplete",
         "claude.sessionEnd",
         "core.terminal.didClose"

@@ -23,16 +23,11 @@ let package = Package(
             name: "SharedDbFFI",
             path: "Libs/SharedDB"
         ),
-        .systemLibrary(
-            name: "SessionReaderFFI",
-            path: "Libs/SessionReader"
-        ),
         .target(
             name: "MemexKit",
             dependencies: [
                 "ETermKit",
-                "SharedDbFFI",
-                "SessionReaderFFI"
+                "SharedDbFFI"
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v5)
@@ -40,9 +35,7 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags([
                     "Libs/SharedDB/libclaude_session_db.dylib",
-                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs",
-                    "Libs/SessionReader/session_reader_ffi",
-                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SessionReader"
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs"
                 ])
             ],
             plugins: [

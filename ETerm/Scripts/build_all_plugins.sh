@@ -2,17 +2,20 @@
 # 极简插件构建系统 - 调用每个 Kit 的 build.sh
 #
 # 用法:
-#   ./build_all_plugins.sh                    # 默认输出到 ~/.eterm/plugins/
+#   ./build_all_plugins.sh                    # 默认输出到 ~/.vimo/eterm/plugins/
 #   ./build_all_plugins.sh /path/to/output    # 指定输出目录
 
 set -euo pipefail
+
+# 清理残留的插件进程（避免旧进程占用端口）
+pkill -f "MemexKit.bundle/Contents/Lib/memex" 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PLUGINS_DIR="$(cd "${PROJECT_ROOT}/../Plugins" && pwd)"
 
 # 输出目录：参数 > 环境变量 > 默认值
-BUNDLE_OUTPUT_DIR="${1:-${BUNDLE_OUTPUT_DIR:-$HOME/.eterm/plugins}}"
+BUNDLE_OUTPUT_DIR="${1:-${BUNDLE_OUTPUT_DIR:-$HOME/.vimo/eterm/plugins}}"
 mkdir -p "$BUNDLE_OUTPUT_DIR"
 
 # 导出环境变量供 build.sh 使用

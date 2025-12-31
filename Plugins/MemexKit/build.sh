@@ -8,7 +8,7 @@ PLUGIN_NAME="MemexKit"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
 # Output directory
-OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.eterm/plugins}"
+OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
 BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
 
 # Memex binary
@@ -81,13 +81,15 @@ else
     log_warn "libclaude_session_db.dylib not found - SharedDb features will be disabled"
 fi
 
+# SessionReaderFFI 已被 SharedDbFFI 替代，不再需要
+
 # Copy Web UI if exists
 if [ -d "$MEMEX_WEB_DIR" ]; then
     cp -r "$MEMEX_WEB_DIR" "${BUNDLE_PATH}/Contents/Resources/"
     log_info "Web UI copied to bundle"
 
-    # Also deploy to ~/.eterm/memex/public for memex server to serve
-    MEMEX_PUBLIC_DIR="${HOME}/.eterm/memex/public"
+    # 部署到 ~/.vimo/memex/public（与 memex-rs 共享）
+    MEMEX_PUBLIC_DIR="${HOME}/.vimo/memex/public"
     rm -rf "$MEMEX_PUBLIC_DIR"
     mkdir -p "$MEMEX_PUBLIC_DIR"
     cp -r "$MEMEX_WEB_DIR"/* "$MEMEX_PUBLIC_DIR/"
@@ -103,7 +105,6 @@ install_name_tool -change \
 
 # Fix SharedDB link path
 if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
-    # Get the actual linked path from the dylib
     OLD_PATH=$(otool -L "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" | grep claude_session_db | awk '{print $1}')
     if [ -n "$OLD_PATH" ]; then
         install_name_tool -change \
@@ -111,11 +112,12 @@ if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
             "@loader_path/../Libs/libclaude_session_db.dylib" \
             "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" 2>/dev/null || true
     fi
-
     install_name_tool -id \
         "@loader_path/../Libs/libclaude_session_db.dylib" \
         "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" 2>/dev/null || true
 fi
+
+# SessionReaderFFI link path 不再需要
 
 # Re-sign after modification
 log_info "Re-signing..."

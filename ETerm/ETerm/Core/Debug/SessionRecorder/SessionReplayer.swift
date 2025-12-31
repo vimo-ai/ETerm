@@ -12,6 +12,7 @@
 
 import Foundation
 import AppKit
+import ETermKit
 
 // MARK: - 回放模式
 

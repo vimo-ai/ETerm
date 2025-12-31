@@ -10,6 +10,7 @@
 
 import Foundation
 import Network
+import ETermKit
 
 /// MCP Server 协调器（单例）
 ///
@@ -36,7 +37,7 @@ final class MCPServerCoordinator: @unchecked Sendable {
     /// 启动 HTTP MCP Server
     func start() {
         guard !isRunning else {
-            logWarning("Server already running")
+            logWarn("Server already running")
             return
         }
 
@@ -540,23 +541,6 @@ final class MCPServerCoordinator: @unchecked Sendable {
         }
     }
 
-    // MARK: - Logging
-
-    private func logInfo(_ message: String) {
-        // 日志已禁用
-    }
-
-    private func logWarning(_ message: String) {
-        #if DEBUG
-        print("[MCP][WARN] \(message)")
-        #endif
-    }
-
-    private func logError(_ message: String) {
-        #if DEBUG
-        print("[MCP][ERROR] \(message)")
-        #endif
-    }
 }
 
 // MARK: - Errors

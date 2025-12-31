@@ -1,5 +1,9 @@
 use crate::config::colors::{ColorArray, ColorBuilder, ColorComposition, Format};
 
+// Shuimo 主题主色调（青绿色）
+// 同步：Swift 侧 ETermKit/Domain/ThemeColors.swift
+pub const SHUIMO_ACCENT_HEX: &str = "#2AD98D";
+
 // These functions are expected to panic if cannot convert the hex string
 
 #[inline]
@@ -21,8 +25,7 @@ pub fn background() -> ColorComposition {
 
 #[inline]
 pub fn cursor() -> ColorArray {
-    // ETerm Shuimo Theme - 光标颜色（暗红色）
-    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
+    ColorBuilder::from_hex(String::from(SHUIMO_ACCENT_HEX), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
@@ -92,7 +95,6 @@ pub fn green() -> ColorArray {
 
 #[inline]
 pub fn red() -> ColorArray {
-    // ETerm Shuimo Theme - 暗红色
     ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
         .unwrap()
         .to_arr()
@@ -132,8 +134,7 @@ pub fn cyan() -> ColorArray {
 
 #[inline]
 pub fn magenta() -> ColorArray {
-    // ETerm Shuimo Theme - 洋红色（使用暗红色保持一致）
-    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
+    ColorBuilder::from_hex(String::from(SHUIMO_ACCENT_HEX), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
@@ -178,14 +179,12 @@ pub fn default_light_green() -> ColorArray {
 }
 #[inline]
 pub fn default_light_magenta() -> ColorArray {
-    // ETerm Shuimo Theme - Bright Magenta（使用暗红色）
-    ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
+    ColorBuilder::from_hex(String::from(SHUIMO_ACCENT_HEX), Format::SRGB0_1)
         .unwrap()
         .to_arr()
 }
 #[inline]
 pub fn default_light_red() -> ColorArray {
-    // ETerm Shuimo Theme - Bright Red（与 normal 一致）
     ColorBuilder::from_hex(String::from("#861717"), Format::SRGB0_1)
         .unwrap()
         .to_arr()

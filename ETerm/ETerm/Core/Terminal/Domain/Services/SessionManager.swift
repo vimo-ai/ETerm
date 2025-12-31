@@ -7,6 +7,7 @@
 
 import Foundation
 import AppKit
+import ETermKit
 
 // MARK: - Session 数据模型
 

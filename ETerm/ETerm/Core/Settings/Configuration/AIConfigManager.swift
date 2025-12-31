@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import ETermKit
 
 // MARK: - AI 配置模型
 

@@ -35,8 +35,6 @@ final class InfoWindow: NSWindow {
 
     private func setupWindow() {
         title = "信息面板"
-        isOpaque = false
-        backgroundColor = NSColor.windowBackgroundColor
 
         // 跟随当前 Space
         collectionBehavior = [.moveToActiveSpace]
@@ -51,11 +49,26 @@ final class InfoWindow: NSWindow {
     private func setupContent() {
         guard let registry = registry else { return }
 
+        // 毛玻璃背景作为 contentView
+        let visualEffect = NSVisualEffectView()
+        visualEffect.material = .sidebar
+        visualEffect.blendingMode = .behindWindow
+        visualEffect.state = .active
+
+        // SwiftUI 内容
         let content = InfoWindowContentView(registry: registry)
         let hosting = NSHostingView(rootView: content)
-        hosting.translatesAutoresizingMaskIntoConstraints = true
-        hosting.autoresizingMask = [.width, .height]
-        self.contentView = hosting
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+
+        visualEffect.addSubview(hosting)
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: visualEffect.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor)
+        ])
+
+        self.contentView = visualEffect
         self.hostingView = hosting
     }
 
@@ -141,23 +154,51 @@ struct InfoWindowContentView: View {
     @ObservedObject var registry: InfoWindowRegistry
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                ForEach(visibleContents) { content in
-                    InfoContentCard(
-                        content: content,
-                        onClose: {
-                            registry.hideContent(id: content.id)
-                        }
-                    )
-                }
+        Group {
+            if visibleContents.isEmpty {
+                emptyStateView
+            } else {
+                contentListView
             }
-            .padding(16)
         }
         .frame(minWidth: 400, minHeight: 200)
     }
 
-    /// 获取可见的内容项列表
+    // MARK: - Empty State
+
+    private var emptyStateView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "tray")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text("暂无内容")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Content List
+
+    private var contentListView: some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(visibleContents) { content in
+                    InfoContentCard(
+                        content: content,
+                        onClose: {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                registry.hideContent(id: content.id)
+                            }
+                        }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+            }
+            .padding(16)
+        }
+    }
+
     private var visibleContents: [InfoContent] {
         registry.visibleContentIds.compactMap { id in
             registry.registeredContents[id]
@@ -171,27 +212,81 @@ struct InfoContentCard: View {
     let content: InfoContent
     let onClose: () -> Void
 
+    @State private var isHovering = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             // 标题栏
-            HStack {
-                Text(content.title)
-                    .font(.headline)
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
+            cardHeader
 
-            Divider()
+            // 分隔线
+            Rectangle()
+                .fill(.quaternary)
+                .frame(height: 0.5)
+                .padding(.horizontal, 12)
 
-            // 内容
+            // 内容区
             content.viewProvider()
+                .padding(12)
         }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .cornerRadius(8)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .shadow(color: .black.opacity(isHovering ? 0.15 : 0.08), radius: isHovering ? 8 : 4, y: 2)
+        .scaleEffect(isHovering ? 1.005 : 1.0)
+        .animation(.easeOut(duration: 0.15), value: isHovering)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+
+    // MARK: - Card Header
+
+    private var cardHeader: some View {
+        HStack(spacing: 8) {
+            Text(content.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Spacer()
+
+            CloseButton(action: onClose)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+
+    // MARK: - Card Background
+
+    private var cardBackground: some View {
+        Color(nsColor: .controlBackgroundColor).opacity(0.6)
     }
 }
+
+// MARK: - Close Button
+
+private struct CloseButton: View {
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(isHovering ? .white : .secondary)
+                .frame(width: 18, height: 18)
+                .background(
+                    Circle()
+                        .fill(isHovering ? Color.secondary : Color.secondary.opacity(0.15))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isHovering = hovering
+            }
+        }
+        .help("关闭")
+    }
+}
+

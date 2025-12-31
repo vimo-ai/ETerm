@@ -29,36 +29,14 @@ enum SendInputTool {
     ///   - pressEnter: If true, send Enter key after a 50ms delay (like VlaudePlugin)
     @MainActor
     static func execute(terminalId: Int, text: String, pressEnter: Bool = false) async -> Response {
-        let windowManager = WindowManager.shared
+        // 使用 CoreTerminalService 统一实现
+        let result = await CoreTerminalService.sendInput(
+            terminalId: terminalId,
+            text: text,
+            pressEnter: pressEnter
+        )
 
-        // Find the coordinator that owns this terminal
-        for window in windowManager.windows {
-            guard let coordinator = windowManager.getCoordinator(for: window.windowNumber) else {
-                continue
-            }
-
-            // Check if this coordinator has the terminal
-            for page in coordinator.terminalWindow.pages.all {
-                for panel in page.allPanels {
-                    for tab in panel.tabs {
-                        if tab.rustTerminalId == terminalId {
-                            // Found the terminal, send input
-                            coordinator.writeInput(terminalId: terminalId, data: text)
-
-                            // If pressEnter, wait 50ms then send Enter
-                            if pressEnter {
-                                try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
-                                coordinator.writeInput(terminalId: terminalId, data: "\r")
-                            }
-
-                            return Response(success: true, message: "Input sent to terminal \(terminalId)")
-                        }
-                    }
-                }
-            }
-        }
-
-        return Response(success: false, message: "Terminal \(terminalId) not found")
+        return Response(success: result.success, message: result.message)
     }
 
     /// Encode response to JSON

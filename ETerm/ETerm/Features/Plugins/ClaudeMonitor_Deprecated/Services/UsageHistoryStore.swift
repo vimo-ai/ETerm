@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import ETermKit
 
 /// 单个用量数据点
 struct UsageDataPoint: Codable, Identifiable {
