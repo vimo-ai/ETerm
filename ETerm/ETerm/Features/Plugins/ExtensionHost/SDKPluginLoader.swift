@@ -843,6 +843,7 @@ final class SDKPluginLoader {
                     id: tabConfig.id,
                     title: tabConfig.title,
                     icon: tabConfig.icon,
+                    order: tabConfig.order ?? 100,
                     viewProvider: { AnyView(EmptyView()) },
                     onSelect: { [weak self] in
                         // 预注册视图 Provider（用于 Session 恢复）
@@ -886,7 +887,8 @@ final class SDKPluginLoader {
                 let tab = SidebarTab(
                     id: tabConfig.id,
                     title: tabConfig.title,
-                    icon: tabConfig.icon
+                    icon: tabConfig.icon,
+                    order: tabConfig.order ?? 100
                 ) { [weak self] in
                     self?.getSidebarView(pluginId: pluginId, tabId: tabConfig.id, isMainMode: isMainMode)
                         ?? AnyView(SDKPluginPlaceholderView(
