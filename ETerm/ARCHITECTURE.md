@@ -1,143 +1,435 @@
-# DDD 架构重构总结
+# ETerm 架构文档
 
-## 概述
+> 最后更新: 2025-01-01
 
-成功将终端渲染和布局管理从 MVVM 回调模式重构为 DDD 架构，实现了单向数据流和清晰的职责分离。
+## 架构总览
 
-## 核心改进
+ETerm 采用 **DDD（领域驱动设计）+ 插件化** 架构，核心设计原则：
 
-### 1. 聚合根增强
+1. **单向数据流** - Domain AR → Coordinator → UI → Rust 渲染
+2. **插件优先** - 功能通过插件扩展，核心保持轻量
+3. **FFI 隔离** - Swift 与 Rust 通过 C ABI 清晰分离
 
-#### TerminalTab (Domain/Aggregates/TerminalTab.swift)
-- **新增属性**: `rustTerminalId: UInt32?` - 持有终端 ID 用于渲染
-- **新增方法**: `setRustTerminalId(_ terminalId: UInt32)` - 设置终端 ID
+---
 
-#### EditorPanel (Domain/Aggregates/EditorPanel.swift)
-- **新增属性**: `bounds: CGRect` - 持有 Panel 的位置和尺寸
-- **新增方法**:
-  - `updateBounds(_ newBounds: CGRect)` - 更新位置
-  - `getActiveTabForRendering(headerHeight:)` - 获取激活的 Tab 用于渲染
-  - `setActiveTab(_ tabId: UUID)` - 切换激活的 Tab
+## 系统分层架构
 
-#### TerminalWindow (Domain/Aggregates/TerminalWindow.swift)
-- **核心方法**:
-  - `getActiveTabsForRendering(containerBounds:headerHeight:) -> [(UInt32, CGRect)]`
-    - 从所有 Panel 收集需要渲染的 Tab
-    - 计算每个 Panel 的 bounds
-    - 返回 `(terminalId, contentBounds)` 数组
-- **内部方法**:
-  - `updatePanelBounds(containerBounds:)` - 更新所有 Panel 的 bounds
-  - `calculatePanelBounds(layout:availableBounds:)` - 递归计算布局树中每个 Panel 的 bounds
+```mermaid
+flowchart TB
+    subgraph App["ETerm.app"]
+        subgraph Application["Application Layer"]
+            WM["WindowManager"]
+            PM["PluginManager"]
+            EB["EventBus"]
+            CR["CommandRegistry"]
+        end
 
-### 2. 新建协调器
+        subgraph Core["Core Layer"]
+            subgraph Terminal["Terminal (DDD)"]
+                TD["Domain<br/>TerminalWindow<br/>EditorPanel<br/>Tab/Page"]
+                TI["Infrastructure<br/>Coordinator<br/>FFI Wrappers"]
+                TP["Presentation<br/>RioTerminalView"]
+            end
 
-#### TerminalWindowCoordinator (Infrastructure/Coordination/TerminalWindowCoordinator.swift)
-**职责**：
-- 连接 Domain AR 和基础设施层
-- 管理终端生命周期（创建、销毁）
-- 协调渲染流程
+            Layout["Layout<br/>Panel · Tab · Divider"]
+            Keyboard["Keyboard<br/>IME · Shortcuts"]
+            Events["Events<br/>EventBus"]
+            Settings["Settings<br/>Config · Theme"]
+        end
 
-**核心方法**：
+        subgraph Features["Features Layer"]
+            PF["Plugin Framework<br/>PluginContext · ServiceRegistry"]
+            BI["Builtin Plugins<br/>Vlaude · Selection"]
+        end
+    end
 
-##### 终端管理
-```swift
-func setTerminalPool(_ pool: TerminalPoolProtocol)
-func updateCoordinateMapper(scale: CGFloat, containerBounds: CGRect)
-func updateFontMetrics(_ metrics: SugarloafFontMetrics)
+    subgraph SDK["External Plugins (ETermKit SDK)"]
+        CK["ClaudeKit"]
+        MK["MemexKit"]
+        VK["VlaudeKit"]
+        HK["HistoryKit"]
+        More["..."]
+    end
+
+    subgraph Rust["Rust Layer (sugarloaf-ffi)"]
+        FFI["FFI Exports<br/>terminal_pool · selection<br/>keyboard · ime"]
+        Domain["Domain<br/>Terminal · State<br/>Events"]
+        Render["Render<br/>Renderer · Layout<br/>Text Shaper"]
+        Rio["Rio Backend<br/>rio-backend<br/>crosswords<br/>teletypewriter"]
+    end
+
+    subgraph Engine["Rendering Engine"]
+        SL["Sugarloaf<br/>WGPU + Metal"]
+    end
+
+    %% 连接关系
+    Application --> Core
+    Core --> Features
+    Features --> SDK
+
+    TI --> FFI
+    FFI --> Domain
+    Domain --> Render
+    Render --> SL
+    Rio --> Domain
+
+    SDK -.-> PF
+
+    style App fill:#1a1a2e,stroke:#16213e,color:#fff
+    style Core fill:#0f3460,stroke:#16213e,color:#fff
+    style Features fill:#533483,stroke:#16213e,color:#fff
+    style SDK fill:#e94560,stroke:#16213e,color:#fff
+    style Rust fill:#b55400,stroke:#16213e,color:#fff
+    style Engine fill:#1f4068,stroke:#16213e,color:#fff
 ```
 
-##### 用户交互（从 UI 层调用）
-```swift
-func handleTabClick(panelId: UUID, tabId: UUID)
-func handleTabClose(panelId: UUID, tabId: UUID)
-func handleAddTab(panelId: UUID)
-func handleSplitPanel(panelId: UUID, direction: SplitDirection)
+---
+
+## 目录结构
+
+```
+ETerm/
+├── ETerm/
+│   ├── Application/              # 应用层入口
+│   │   └── ETermApp.swift
+│   │
+│   ├── Core/                     # 核心模块
+│   │   ├── Terminal/             # 终端核心（DDD 架构）
+│   │   │   ├── Domain/           # 领域层
+│   │   │   │   ├── Aggregates/   # 聚合根（TerminalWindow, EditorPanel, Tab, Page）
+│   │   │   │   ├── ValueObjects/ # 值对象（PanelLayout, SplitDirection）
+│   │   │   │   ├── Services/     # 领域服务（LayoutCalculator, SessionManager）
+│   │   │   │   └── Commands/     # 命令对象
+│   │   │   ├── Infrastructure/   # 基础设施层
+│   │   │   │   ├── Coordination/ # 协调器（TerminalWindowCoordinator）
+│   │   │   │   ├── FFI/          # Rust FFI 封装
+│   │   │   │   ├── Window/       # 窗口管理
+│   │   │   │   └── DragDrop/     # 拖放处理
+│   │   │   └── Presentation/     # 表现层
+│   │   │       └── RioTerminalView.swift
+│   │   │
+│   │   ├── Layout/               # 布局系统
+│   │   │   ├── Domain/           # Tab 模型
+│   │   │   └── Presentation/     # Panel/Tab/Divider 视图
+│   │   │
+│   │   ├── Keyboard/             # 键盘处理
+│   │   │   ├── IME/              # 输入法
+│   │   │   ├── Handlers/         # 按键处理器
+│   │   │   └── Configuration/    # 快捷键配置
+│   │   │
+│   │   ├── Events/               # 事件系统
+│   │   ├── Settings/             # 设置管理
+│   │   └── Shared/               # 共享组件
+│   │
+│   ├── Features/                 # 功能模块
+│   │   ├── Plugins/              # 插件系统
+│   │   │   ├── Framework/        # 插件框架
+│   │   │   │   ├── PluginManager.swift
+│   │   │   │   ├── PluginContext.swift
+│   │   │   │   └── ServiceRegistry.swift
+│   │   │   ├── Core/             # 核心命令引导
+│   │   │   ├── ExtensionHost/    # SDK 插件宿主
+│   │   │   └── [内置插件]/
+│   │   └── MCP/                  # MCP 协议支持
+│   │
+│   └── Resources/                # 资源文件
+│
+├── Plugins/                      # 外部插件（ETermKit SDK）
+│   ├── ClaudeKit/                # Claude 会话感知
+│   ├── MemexKit/                 # 历史搜索
+│   ├── VlaudeKit/                # 远程控制
+│   ├── HistoryKit/               # 历史记录
+│   └── .../
+│
+├── Packages/                     # Swift Packages
+│   └── PanelLayoutKit/           # 布局计算库
+│
+└── rio/                          # Rust 终端后端
+    └── sugarloaf-ffi/            # FFI 桥接层
+        ├── src/
+        │   ├── ffi/              # C ABI 导出
+        │   ├── domain/           # 领域模型
+        │   ├── render/           # 渲染管线
+        │   ├── app/              # 应用逻辑（TerminalPool）
+        │   └── infra/            # 基础设施
+        └── docs/
 ```
 
-##### 渲染流程（核心）
-```swift
-func renderAllPanels(containerBounds: CGRect)
+---
+
+## 核心模块
+
+### 1. Terminal (DDD 架构)
+
+终端核心采用领域驱动设计，分为三层：
+
+```mermaid
+flowchart LR
+    subgraph Domain["Domain Layer"]
+        TW["TerminalWindow<br/>(聚合根)"]
+        EP["EditorPanel"]
+        Tab["Tab"]
+        Page["Page"]
+    end
+
+    subgraph Infra["Infrastructure Layer"]
+        Coord["TerminalWindowCoordinator"]
+        Pool["TerminalPoolWrapper"]
+        Render["RenderSchedulerWrapper"]
+    end
+
+    subgraph Present["Presentation Layer"]
+        View["RioTerminalView"]
+        Panel["PanelView"]
+    end
+
+    TW --> EP --> Tab
+    TW --> Page
+    Coord --> TW
+    Coord --> Pool
+    Coord --> Render
+    View --> Coord
+    Panel --> Coord
+
+    style Domain fill:#2d4059,stroke:#fff,color:#fff
+    style Infra fill:#ea5455,stroke:#fff,color:#fff
+    style Present fill:#f07b3f,stroke:#fff,color:#fff
 ```
 
-**数据流示例**：
+**核心聚合根**：
+
+| 聚合根 | 职责 |
+|--------|------|
+| `TerminalWindow` | 窗口状态、Page 管理、焦点跟踪 |
+| `EditorPanel` | Panel 布局、Tab 管理、分割树 |
+| `Tab` | 终端标签、rustTerminalId、标题 |
+| `Page` | 页面容器、根 Panel |
+
+**数据流**：
+
 ```
-用户点击 Tab → handleTabClick(panelId, tabId)
-                ↓
-            panel.setActiveTab(tabId)  // 调用 AR 方法
-                ↓
-            objectWillChange.send()    // 通知 SwiftUI
-                ↓
-            renderView.requestRender()  // 触发渲染
-                ↓
-            renderAllPanels(containerBounds)
-                ↓
-            terminalWindow.getActiveTabsForRendering()  // 从 AR 读取数据
-                ↓
-            terminalPool.render(...)    // 调用 Rust 渲染
+用户操作 → Coordinator → AR 修改状态 → objectWillChange → UI 重绘 → Rust 渲染
 ```
 
-### 3. 新建视图层
+### 2. Plugin Framework
 
-#### DomainPanelView (Presentation/Views/DomainPanelView.swift)
-- **架构原则**：
-  - 从 EditorPanel AR 读取数据
-  - 不持有状态，只负责显示
-  - 用户操作直接调用 Coordinator 方法
+插件系统提供完整的扩展能力：
 
-#### DDDTerminalView (Presentation/Views/DDDTerminalView.swift)
-- **完整的 DDD 架构视图**：
-  - `DDDTerminalView` (SwiftUI 入口)
-  - `DDDRenderView` (NSViewRepresentable)
-  - `DDDPanelRenderView` (渲染视图，管理 Metal 层和 CVDisplayLink)
+```mermaid
+flowchart TB
+    subgraph Context["PluginContext"]
+        Commands["CommandService"]
+        Events["EventService"]
+        Keyboard["KeyboardService"]
+        UI["UIService"]
+        Terminal["TerminalService"]
+        Services["ServiceRegistry"]
+    end
 
-**关键特性**：
-- 从 AR 拉取数据进行渲染
-- 不使用回调，通过 Coordinator 调用 AR 方法
-- 单向数据流：AR → UI
+    subgraph Plugins["Plugins"]
+        Builtin["内置插件"]
+        SDK["SDK 插件"]
+    end
 
-## 架构对比
+    PM["PluginManager"] --> Context
+    Context --> Plugins
 
-### 旧架构（MVVM 回调模式）
+    style Context fill:#533483,stroke:#fff,color:#fff
 ```
-❌ 问题：
-- 三套模型并存（Domain AR + PanelLayoutKit + UI 层回调）
+
+**插件能力**：
+
+| 服务 | 能力 |
+|------|------|
+| `CommandService` | 注册/执行命令 |
+| `EventService` | 发布/订阅事件 |
+| `KeyboardService` | 绑定快捷键 |
+| `UIService` | 注册侧边栏、Tab Slot、Page Slot |
+| `TerminalService` | 向终端写入数据、查询状态 |
+| `ServiceRegistry` | 插件间能力共享 |
+
+**插件类型**：
+
+| 类型 | 位置 | 加载方式 |
+|------|------|----------|
+| 内置插件 | `Features/Plugins/` | 编译时链接 |
+| SDK 插件 | `Plugins/*/` | 动态加载 (.bundle) |
+
+### 3. Rust FFI Layer
+
+Swift 与 Rust 通过 C ABI 通信：
+
+```mermaid
+flowchart LR
+    subgraph Swift["Swift"]
+        TPW["TerminalPoolWrapper"]
+        RSW["RenderSchedulerWrapper"]
+    end
+
+    subgraph FFI["C ABI"]
+        F1["terminal_pool_*"]
+        F2["render_scheduler_*"]
+        F3["selection_*"]
+        F4["keyboard_*"]
+    end
+
+    subgraph Rust["Rust"]
+        TP["TerminalPool"]
+        RS["RenderScheduler"]
+        Domain["Domain State"]
+    end
+
+    TPW --> F1 --> TP
+    RSW --> F2 --> RS
+    TP --> Domain
+    RS --> Domain
+
+    style Swift fill:#0f3460,stroke:#fff,color:#fff
+    style FFI fill:#b55400,stroke:#fff,color:#fff
+    style Rust fill:#1f4068,stroke:#fff,color:#fff
+```
+
+**FFI 模块**：
+
+| 模块 | 职责 |
+|------|------|
+| `terminal_pool.rs` | 终端生命周期、输入输出 |
+| `selection.rs` | 文本选择 |
+| `keyboard.rs` | 按键事件 |
+| `ime.rs` | 输入法 |
+| `cursor.rs` | 光标状态 |
+| `render_scheduler.rs` | 渲染调度 |
+
+---
+
+## 数据流
+
+### 终端渲染流程
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant UI as PanelView
+    participant Coord as Coordinator
+    participant AR as TerminalWindow (AR)
+    participant FFI as Rust FFI
+    participant Render as Sugarloaf
+
+    User->>UI: 点击 Tab
+    UI->>Coord: handleTabClick(panelId, tabId)
+    Coord->>AR: panel.setActiveTab(tabId)
+    AR-->>Coord: objectWillChange.send()
+    Coord->>AR: getActiveTabsForRendering()
+    AR-->>Coord: [(terminalId, bounds)]
+    Coord->>FFI: terminalPool.render(...)
+    FFI->>Render: sugarloaf.render()
+    Render-->>User: 屏幕更新
+```
+
+### 插件事件流程
+
+```mermaid
+sequenceDiagram
+    participant Terminal as 终端
+    participant Hooks as Claude Hooks
+    participant CK as ClaudeKit
+    participant EB as EventBus
+    participant VK as VlaudeKit
+
+    Terminal->>Hooks: claude 命令输出
+    Hooks->>CK: onConversationReady
+    CK->>EB: emit("claude.session.ready")
+    EB->>VK: 订阅者收到事件
+    VK->>VK: 同步到远程
+```
+
+---
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| UI 框架 | SwiftUI + AppKit |
+| 渲染引擎 | Sugarloaf (WGPU + Metal) |
+| 终端后端 | Rio (crosswords + teletypewriter) |
+| FFI | Rust cdylib (C ABI) |
+| 插件 SDK | ETermKit (Swift Package) |
+
+---
+
+## 设计决策
+
+### 1. 为什么用 DDD？
+
+**问题**：传统 MVVM 导致状态分散、回调满天飞、难以追踪变化。
+
+**解决**：
+- 聚合根是唯一状态来源
+- Coordinator 协调，不持有状态
+- 单向数据流，变化可追踪
+
+### 2. 为什么插件优先？
+
+**问题**：功能堆砌导致核心臃肿、难以维护。
+
+**解决**：
+- 核心只提供基础能力（终端渲染、布局、事件）
+- 所有功能通过插件实现
+- 用户按需安装
+
+### 3. 为什么 FFI 用 C ABI？
+
+**问题**：Swift 和 Rust 直接互调复杂、不稳定。
+
+**解决**：
+- C ABI 是最稳定的跨语言接口
+- 清晰的边界，易于调试
+- 两边可以独立演进
+
+---
+
+## 相关文档
+
+- [README.md](./README.md) - 项目概述和快速开始
+- [../Plugins/PLUGIN_SDK.md](../Plugins/PLUGIN_SDK.md) - 插件开发指南
+- [docs/COORDINATE_SYSTEM_ANALYSIS.md](./docs/COORDINATE_SYSTEM_ANALYSIS.md) - 坐标系分析
+- [rio/sugarloaf-ffi/docs/ARCHITECTURE_render_pipeline.md](../rio/sugarloaf-ffi/docs/ARCHITECTURE_render_pipeline.md) - 渲染管线架构
+
+---
+
+## 附录：DDD 重构细节
+
+> 以下是终端核心从 MVVM 重构到 DDD 的技术细节。
+
+### 聚合根增强
+
+#### TerminalTab
+- 新增 `rustTerminalId: UInt32?` - 持有终端 ID
+- 新增 `setRustTerminalId(_:)` - 设置终端 ID
+
+#### EditorPanel
+- 新增 `bounds: CGRect` - 持有位置和尺寸
+- 新增 `updateBounds(_:)` - 更新位置
+- 新增 `getActiveTabForRendering(headerHeight:)` - 获取激活 Tab
+
+#### TerminalWindow
+- 核心方法 `getActiveTabsForRendering(containerBounds:headerHeight:)` - 收集渲染数据
+- 内部方法 `updatePanelBounds(containerBounds:)` - 更新所有 Panel bounds
+- 内部方法 `calculatePanelBounds(layout:availableBounds:)` - 递归计算布局
+
+### 架构对比
+
+**旧架构（MVVM 回调）**：
+- 三套模型并存
 - 状态分散，数据流双向
-- 回调满天飞（onTabClick, onDragStart, onTabClose 等）
-- UI 层持有状态，难以追踪变化
+- 回调满天飞
 
-数据流：
-TabItemView.onTap → PanelView.onTabClick → Coordinator.handleTabClick
-                                              ↓
-                                          layoutTree.updatePanel()
-                                              ↓
-                                          updatePanelViews()
-                                              ↓
-                                          panelView.updatePanel()
-```
-
-### 新架构（DDD 单向数据流）
-```
-✅ 优势：
-- Domain AR 是唯一的状态来源
-- UI 层无状态，只负责显示和捕获输入
+**新架构（DDD 单向数据流）**：
+- AR 是唯一状态来源
+- UI 无状态，只显示和捕获输入
 - 数据流单向：AR → Coordinator → UI
-- 清晰的职责分离
 
-数据流：
-用户操作 → Coordinator.handleXXX()
-             ↓
-         AR.method()  // 修改状态
-             ↓
-         objectWillChange.send()
-             ↓
-         renderView.requestRender()
-             ↓
-         AR.getActiveTabsForRendering()  // 读取数据
-             ↓
-         Rust 渲染
-```
-
-## 渲染流程（DDD 版本）
+### 渲染流程
 
 ```swift
 // 1. 用户输入 → Coordinator 调用 AR 方法
@@ -150,127 +442,11 @@ panel.setActiveTab(tabId)
 renderView.requestRender()
 
 // 4. 从 AR 拉取数据
-func performRender() {
-    // 从 AR 收集所有需要渲染的 Tab
-    let tabsToRender = terminalWindow.getActiveTabsForRendering(
-        containerBounds: bounds,
-        headerHeight: 30
-    )
+let tabsToRender = terminalWindow.getActiveTabsForRendering(...)
 
-    // 统一调用 Rust 渲染
-    for (terminalId, contentBounds) in tabsToRender {
-        let rustRect = coordinateMapper.swiftToRust(rect: contentBounds)
-        let cols = calculateCols(...)
-        let rows = calculateRows(...)
-
-        terminalPool.render(
-            terminalId: terminalId,
-            x: rustRect.origin.x,
-            y: rustRect.origin.y,
-            width: rustRect.width,
-            height: rustRect.height,
-            cols: cols,
-            rows: rows
-        )
-    }
-
-    // Sugarloaf 最终渲染
-    sugarloaf.render()
+// 5. 调用 Rust 渲染
+for (terminalId, contentBounds) in tabsToRender {
+    terminalPool.render(terminalId: terminalId, ...)
 }
+sugarloaf.render()
 ```
-
-## 关键设计决策
-
-### 1. 为什么 AR 持有 bounds？
-- **原因**：AR 是布局状态的唯一来源，bounds 是布局的一部分
-- **好处**：
-  - 简化布局计算逻辑
-  - 避免 UI 层持有状态
-  - AR 可以根据 bounds 计算渲染位置
-
-### 2. 为什么 Tab 持有 rustTerminalId？
-- **原因**：Tab 和终端是一对一映射，这是业务规则
-- **好处**：
-  - 清晰的生命周期管理
-  - 避免额外的映射表
-  - AR 可以直接提供渲染所需的 terminalId
-
-### 3. 为什么需要 Coordinator？
-- **原因**：连接 Domain 层和基础设施层
-- **职责**：
-  - 管理终端生命周期（Infrastructure）
-  - 调用 AR 方法（Domain）
-  - 协调渲染流程（Infrastructure）
-- **不做**：持有业务状态（状态在 AR 中）
-
-## 兼容性说明
-
-### 保留的组件
-- **PanelLayoutKit**: 仍然可以用于辅助布局计算（可选）
-- **CoordinateMapper**: 用于坐标系转换（Swift ↔ Rust）
-- **TerminalPoolWrapper**: 终端池基础设施
-- **SugarloafWrapper**: 渲染引擎
-
-### 新旧视图共存
-- **旧视图**: `TabTerminalView` (使用 LayoutTree + 回调模式)
-- **新视图**: `DDDTerminalView` (使用 Domain AR + 单向数据流)
-- **可以共存**：互不干扰，便于逐步迁移
-
-## 测试建议
-
-### 1. 单元测试（Domain 层）
-```swift
-func testGetActiveTabsForRendering() {
-    // 创建 TerminalWindow
-    let tab1 = TerminalTab(tabId: UUID(), title: "Tab 1", rustTerminalId: 1)
-    let panel = EditorPanel(initialTab: tab1)
-    let window = TerminalWindow(initialPanel: panel)
-
-    // 测试渲染数据收集
-    let tabs = window.getActiveTabsForRendering(
-        containerBounds: CGRect(x: 0, y: 0, width: 800, height: 600),
-        headerHeight: 30
-    )
-
-    XCTAssertEqual(tabs.count, 1)
-    XCTAssertEqual(tabs[0].0, 1)  // terminalId
-}
-```
-
-### 2. 集成测试
-- 测试 split 操作：创建新 Panel，验证终端创建
-- 测试 Tab 切换：验证渲染位置正确
-- 测试 Tab 关闭：验证终端销毁
-
-### 3. UI 测试
-- 使用 `DDDTerminalView` 启动应用
-- 验证：split、tab 切换、拖拽等功能正常
-- 验证：终端输入输出正常
-
-## 下一步优化
-
-### 1. 完全移除回调模式
-- 删除 `TabTerminalView` 中的旧 `TerminalCoordinator`
-- 统一使用 `TerminalWindowCoordinator`
-
-### 2. 增强 AR 方法
-- `TerminalWindow.removeTab(tabId:)` - 删除 Tab
-- `TerminalWindow.moveTab(from:to:)` - 移动 Tab
-- `TerminalWindow.removeSplit(panelId:)` - 删除分割
-
-### 3. 事件溯源（可选）
-- 记录所有 AR 方法调用
-- 用于调试和重放
-- 实现 undo/redo
-
-## 总结
-
-通过这次重构，我们成功实现了：
-
-✅ **单一数据源**: Domain AR 是唯一的状态来源
-✅ **单向数据流**: AR → UI，无回调
-✅ **清晰的职责**: AR 管理状态，Coordinator 协调，UI 只显示
-✅ **易于测试**: Domain 层可以独立测试
-✅ **易于维护**: 数据流清晰，变化容易追踪
-
-这是一个**真正的 DDD 架构**，符合领域驱动设计的核心原则。
