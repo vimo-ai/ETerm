@@ -439,7 +439,8 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             messages: result.messages,
             total: result.total,
             hasMore: result.hasMore,
-            requestId: requestId
+            requestId: requestId,
+            transcriptPath: sessionPath
         )
     }
 
@@ -526,7 +527,8 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         messages: [RawMessage],
         total: Int,
         hasMore: Bool,
-        requestId: String?
+        requestId: String?,
+        transcriptPath: String? = nil
     ) {
         guard isConnected else { return }
 
@@ -543,6 +545,41 @@ final class VlaudeClient: SocketClientBridgeDelegate {
                 if let content = message.content { msgDict["content"] = content.value }
                 dict["message"] = msgDict
             }
+
+            // 解析结构化内容块
+            if let path = transcriptPath,
+               let blocks = ContentBlockParser.readMessage(from: path, uuid: msg.uuid) {
+                dict["contentBlocks"] = blocks.map { block -> [String: Any] in
+                    switch block {
+                    case .text(let text):
+                        return ["type": "text", "text": text]
+                    case .toolUse(let tool):
+                        return [
+                            "type": "tool_use",
+                            "id": tool.id,
+                            "name": tool.name,
+                            "displayText": tool.displayText,
+                            "iconName": tool.iconName,
+                            "input": tool.input
+                        ]
+                    case .toolResult(let result):
+                        return [
+                            "type": "tool_result",
+                            "toolUseId": result.toolUseId,
+                            "isError": result.isError,
+                            "preview": result.preview,
+                            "hasMore": result.hasMore,
+                            "sizeDescription": result.sizeDescription,
+                            "content": result.content
+                        ]
+                    case .thinking(let text):
+                        return ["type": "thinking", "text": text]
+                    case .unknown(let raw):
+                        return ["type": "unknown", "raw": raw]
+                    }
+                }
+            }
+
             return dict
         }
 
@@ -613,7 +650,8 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     /// - Parameters:
     ///   - sessionId: 会话 ID
     ///   - message: 消息
-    func pushMessage(sessionId: String, message: RawMessage) {
+    ///   - contentBlocks: 结构化内容块（可选）
+    func pushMessage(sessionId: String, message: RawMessage, contentBlocks: [ContentBlock]? = nil) {
         guard isConnected else { return }
 
         // 转换消息格式
@@ -629,8 +667,41 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             msgDict["message"] = innerDict
         }
 
+        // 添加结构化内容块
+        if let blocks = contentBlocks {
+            msgDict["contentBlocks"] = blocks.map { block -> [String: Any] in
+                switch block {
+                case .text(let text):
+                    return ["type": "text", "text": text]
+                case .toolUse(let tool):
+                    return [
+                        "type": "tool_use",
+                        "id": tool.id,
+                        "name": tool.name,
+                        "displayText": tool.displayText,
+                        "iconName": tool.iconName,
+                        "input": tool.input
+                    ]
+                case .toolResult(let result):
+                    return [
+                        "type": "tool_result",
+                        "toolUseId": result.toolUseId,
+                        "isError": result.isError,
+                        "preview": result.preview,
+                        "hasMore": result.hasMore,
+                        "sizeDescription": result.sizeDescription,
+                        "content": result.content
+                    ]
+                case .thinking(let text):
+                    return ["type": "thinking", "text": text]
+                case .unknown(let raw):
+                    return ["type": "unknown", "raw": raw]
+                }
+            }
+        }
+
         let role = (msgDict["message"] as? [String: Any])?["role"] as? String ?? "unknown"
-        print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role)")
+        print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role) blocks=\(contentBlocks?.count ?? 0)")
         try? socketBridge?.notifyNewMessage(sessionId: sessionId, message: msgDict)
     }
 
