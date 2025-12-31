@@ -11,11 +11,20 @@
     "principalClass": "MemexPlugin",
     "sidebarTabs": [
         {
-            "id": "memex",
-            "title": "Memex",
-            "icon": "brain.head.profile",
-            "viewClass": "MemexView",
-            "renderMode": "tab"
+            "id": "memex-status",
+            "title": "Memex 状态",
+            "icon": "gauge.with.dots.needle.bottom.50percent",
+            "viewClass": "MemexStatusView",
+            "renderMode": "tab",
+            "order": 50
+        },
+        {
+            "id": "memex-web",
+            "title": "Memex Web",
+            "icon": "globe",
+            "viewClass": "MemexWebOnlyView",
+            "renderMode": "tab",
+            "order": 51
         }
     ],
     "infoPanelContents": [],

@@ -62,8 +62,14 @@ public final class MemexPlugin: NSObject, Plugin {
     // MARK: - View Providers
 
     public func sidebarView(for tabId: String) -> AnyView? {
-        guard tabId == "memex" else { return nil }
-        return AnyView(MemexView())
+        switch tabId {
+        case "memex", "memex-status":
+            return AnyView(MemexStatusView())
+        case "memex-web":
+            return AnyView(MemexWebOnlyView())
+        default:
+            return nil
+        }
     }
 
     public func bottomDockView(for id: String) -> AnyView? {

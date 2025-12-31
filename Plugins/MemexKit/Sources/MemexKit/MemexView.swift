@@ -2,34 +2,18 @@
 //  MemexView.swift
 //  MemexKit
 //
-//  Memex 主视图 - 支持原生状态仪表盘和 Web UI 两种模式
+//  Memex 视图 - 拆分为状态视图和 Web 视图两个独立侧边栏
 //
 
 import SwiftUI
 import AppKit
 import ETermKit
 
-// MARK: - View Mode
+// MARK: - MemexStatusView（纯状态，无 ScrollView）
 
-enum MemexViewMode: String, CaseIterable {
-    case status = "状态"
-    case webUI = "Web UI"
-
-    var icon: String {
-        switch self {
-        case .status: return "gauge.with.dots.needle.bottom.50percent"
-        case .webUI: return "globe"
-        }
-    }
-}
-
-// MARK: - MemexView
-
-/// Memex 主视图 - 完整版
-struct MemexView: View {
+/// 状态仪表盘视图 - 用于 memex-status 侧边栏
+struct MemexStatusView: View {
     @StateObject private var viewModel = MemexViewModel()
-    @State private var viewMode: MemexViewMode = .status
-    @State private var tapCount = 0  // 调试：点击计数
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,44 +21,19 @@ struct MemexView: View {
             Color.clear
                 .frame(height: 52)
 
-            // Header 区域
+            // Header
             HStack {
                 Image(systemName: "brain.head.profile")
                     .foregroundColor(.purple)
-                Text("Memex")
+                Text("Memex 状态")
                     .font(.headline)
 
-                // 状态指示
                 Circle()
                     .fill(viewModel.isServiceRunning ? Color.green : Color.gray)
                     .frame(width: 8, height: 8)
 
                 Spacer()
 
-                // 模式切换按钮
-                HStack(spacing: 4) {
-                    Button {
-                        viewMode = .status
-                    } label: {
-                        Label("状态", systemImage: "gauge.with.dots.needle.bottom.50percent")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .opacity(viewMode == .status ? 1 : 0.5)
-
-                    Button {
-                        viewMode = .webUI
-                    } label: {
-                        Label("Web UI", systemImage: "globe")
-                            .font(.caption)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .opacity(viewMode == .webUI ? 1 : 0.5)
-                }
-
-                Spacer()
-
-                // 刷新按钮
                 Button {
                     Task { await viewModel.refresh() }
                 } label: {
@@ -86,51 +45,57 @@ struct MemexView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
-            // 调试：点击计数显示
-            Text("点击计数: \(tapCount)")
-                .font(.headline)
-                .foregroundColor(.orange)
-                .padding(8)
-                .background(Color.orange.opacity(0.2))
-                .cornerRadius(8)
-
-            // 最简 ScrollView 测试
+            // 内容区域（固定布局，无 ScrollView）
             VStack(spacing: 16) {
-                Button("按钮 A (+1)") {
-                    tapCount += 1
-                    print("[MemexView] 按钮 A ✅")
-                }
-                .buttonStyle(.borderedProminent)
+                // 服务状态卡片
+                ServiceStatusCard(
+                    isRunning: viewModel.isServiceRunning,
+                    port: viewModel.port,
+                    onStart: { Task { await viewModel.startService() } },
+                    onStop: { Task { await viewModel.stopService() } }
+                )
 
-                // 测试：ScrollView 内多个 Button
-                ScrollView {
-                    VStack(spacing: 8) {
-                        ForEach(1...5, id: \.self) { i in
-                            Button("ScrollView 按钮 \(i) (+\(i * 10))") {
-                                tapCount += i * 10
-                                print("[MemexView] ScrollView 按钮 \(i) ✅")
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-                    .padding()
+                // 统计信息卡片
+                if let stats = viewModel.stats {
+                    StatsCard(stats: stats)
                 }
-                .frame(height: 200)
-                .background(Color.red.opacity(0.2))
 
-                Button("按钮 B (+10)") {
-                    tapCount += 10
-                    print("[MemexView] 按钮 B ✅")
+                // MCP 信息卡片
+                if viewModel.isServiceRunning {
+                    MCPInfoCard(port: viewModel.port)
                 }
-                .buttonStyle(.borderedProminent)
+
+                // 错误提示
+                if let error = viewModel.errorMessage {
+                    ErrorCard(message: error)
+                }
+
+                Spacer()
             }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(16)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             await viewModel.refresh()
         }
+    }
+}
+
+// MARK: - MemexWebOnlyView（纯 WebView，全屏）
+
+/// Web UI 视图 - 用于 memex-web 侧边栏
+struct MemexWebOnlyView: View {
+    var body: some View {
+        MemexWebContainer(port: MemexService.shared.port)
+    }
+}
+
+// MARK: - MemexView（保留兼容，指向状态视图）
+
+/// 兼容旧的 tabId="memex"
+struct MemexView: View {
+    var body: some View {
+        MemexStatusView()
     }
 }
 
@@ -282,63 +247,6 @@ final class MemexViewModel: ObservableObject {
     func stopService() async {
         MemexService.shared.stop()
         await refresh()
-    }
-}
-
-// MARK: - Header
-
-private struct MemexHeaderView: View {
-    let isRunning: Bool
-    @Binding var viewMode: MemexViewMode
-    let onRefresh: () -> Void
-
-    var body: some View {
-        HStack {
-            // 左侧：图标和标题
-            Image(systemName: "brain.head.profile")
-                .foregroundColor(.purple)
-            Text("Memex")
-                .font(.headline)
-
-            // 状态指示器
-            Circle()
-                .fill(isRunning ? Color.green : Color.gray)
-                .frame(width: 8, height: 8)
-
-            Spacer()
-
-            // 中间：模式切换
-            HStack(spacing: 0) {
-                ForEach(MemexViewMode.allCases, id: \.self) { mode in
-                    Button {
-                        viewMode = mode
-                    } label: {
-                        Label(mode.rawValue, systemImage: mode.icon)
-                            .font(.caption)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)  // 换成更明显的样式
-                }
-            }
-            .frame(width: 180)
-
-            Spacer()
-
-            // 右侧：刷新按钮
-            Button {
-                onRefresh()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.borderedProminent)
-            .help("刷新状态")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.red.opacity(0.1))  // 调试：高亮 header 区域
     }
 }
 
