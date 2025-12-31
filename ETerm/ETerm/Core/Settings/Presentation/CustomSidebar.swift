@@ -101,13 +101,15 @@ struct CustomSidebar: View {
 
                         ForEach(registry.allTabGroups) { group in
                             VStack(alignment: .leading, spacing: 4) {
-                                // 插件标题（不可点击）
-                                Text(group.pluginName)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 12)
-                                    .padding(.top, 8)
-                                    .padding(.bottom, 4)
+                                // 只有多个 tab 时才显示插件标题
+                                if group.tabs.count > 1 {
+                                    Text(group.pluginName)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 12)
+                                        .padding(.top, 8)
+                                        .padding(.bottom, 4)
+                                }
 
                                 // 该插件的 Tabs
                                 ForEach(group.tabs) { tab in
@@ -126,7 +128,7 @@ struct CustomSidebar: View {
                                                 selectedItem = .plugin(tab.id)
                                             }
                                         },
-                                        isSubItem: true
+                                        isSubItem: group.tabs.count > 1  // 只有多个 tab 时才缩进
                                     )
                                 }
                             }
