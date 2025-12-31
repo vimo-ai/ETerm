@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 # 配置
 BUNDLE_NAME="TranslationKit"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-BUNDLE_OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-$HOME/.eterm/plugins}"
+BUNDLE_OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-$HOME/.vimo/eterm/plugins}"
 
 echo "Building $BUNDLE_NAME ($CONFIGURATION)..."
 

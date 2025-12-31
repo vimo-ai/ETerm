@@ -55,6 +55,10 @@ final class PluginHostBridgeWrapper: HostBridge, @unchecked Sendable {
         bridge.writeToTerminal(terminalId: terminalId, data: data)
     }
 
+    func createTerminalTab(cwd: String?) -> Int? {
+        bridge.createTerminalTab(cwd: cwd)
+    }
+
     func getTerminalInfo(terminalId: Int) -> TerminalInfo? {
         bridge.getTerminalInfo(terminalId: terminalId)
     }

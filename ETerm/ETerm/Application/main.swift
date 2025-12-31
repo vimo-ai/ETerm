@@ -79,7 +79,7 @@ func printUsage() {
     MCP Server:
       ETerm 启动时自动在 http://localhost:11218 提供 MCP 服务
 
-    调试会话文件位置: ~/.eterm/logs/exports/
+    调试会话文件位置: ~/.vimo/eterm/logs/exports/
     """)
 }
 

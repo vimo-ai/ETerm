@@ -11,102 +11,120 @@ import Foundation
 /// ETerm 统一路径管理
 enum ETermPaths {
 
-    // MARK: - 根目录
+    // MARK: - Vimo 组织根目录
 
-    /// ETerm 主目录: ~/.eterm (可通过 ETERM_HOME 环境变量覆盖)
+    /// Vimo 组织根目录: ~/.vimo (可通过 VIMO_HOME 环境变量覆盖)
+    static let vimoRoot: String = {
+        if let customPath = ProcessInfo.processInfo.environment["VIMO_HOME"] {
+            return customPath
+        }
+        return NSHomeDirectory() + "/.vimo"
+    }()
+
+    // MARK: - ETerm 根目录
+
+    /// ETerm 主目录: ~/.vimo/eterm (可通过 ETERM_HOME 环境变量覆盖)
     static let root: String = {
         if let customPath = ProcessInfo.processInfo.environment["ETERM_HOME"] {
             return customPath
         }
-        return NSHomeDirectory() + "/.eterm"
+        return vimoRoot + "/eterm"
     }()
+
+    // MARK: - 共享数据目录
+
+    /// 共享数据库目录: ~/.vimo/db
+    static let sharedDb = vimoRoot + "/db"
+
+    /// Claude 会话数据库: ~/.vimo/db/claude-session.db
+    static let claudeSessionDatabase = sharedDb + "/claude-session.db"
 
     // MARK: - 一级目录
 
-    /// 配置目录: ~/.eterm/config
+    /// 配置目录: ~/.vimo/eterm/config
     static let config = root + "/config"
 
-    /// 数据目录: ~/.eterm/data
+    /// 数据目录: ~/.vimo/eterm/data
     static let data = root + "/data"
 
-    /// 插件目录: ~/.eterm/plugins
+    /// 插件目录: ~/.vimo/eterm/plugins
     static let plugins = root + "/plugins"
 
-    /// 日志目录: ~/.eterm/logs
+    /// 日志目录: ~/.vimo/eterm/logs
     static let logs = root + "/logs"
 
-    /// 临时目录: ~/.eterm/tmp
+    /// 临时目录: ~/.vimo/eterm/tmp
     static let tmp = root + "/tmp"
 
-    /// 缓存目录: ~/.eterm/cache
+    /// 缓存目录: ~/.vimo/eterm/cache
     static let cache = root + "/cache"
 
     // MARK: - 配置文件
 
-    /// AI 配置文件: ~/.eterm/config/ai.json
+    /// AI 配置文件: ~/.vimo/eterm/config/ai.json
     static let aiConfig = config + "/ai.json"
 
-    /// Ollama 配置文件: ~/.eterm/config/ollama.json
+    /// Ollama 配置文件: ~/.vimo/eterm/config/ollama.json
     static let ollamaConfig = config + "/ollama.json"
 
-    /// AI Socket 文件: ~/.eterm/tmp/ai.sock
+    /// AI Socket 文件: ~/.vimo/eterm/tmp/ai.sock
     static let aiSocket = tmp + "/ai.sock"
 
-    /// 会话配置文件: ~/.eterm/config/session.json
+    /// 会话配置文件: ~/.vimo/eterm/config/session.json
     static let sessionConfig = config + "/session.json"
 
     // MARK: - 数据文件
 
-    /// 单词数据库: ~/.eterm/data/words.db
+    /// 单词数据库: ~/.vimo/eterm/data/words.db
     static let wordsDatabase = data + "/words.db"
 
-    /// 工作区数据库: ~/.eterm/data/workspace.db
+    /// 工作区数据库: ~/.vimo/eterm/data/workspace.db
     static let workspaceDatabase = data + "/workspace.db"
 
     // MARK: - 插件相关
 
-    /// 插件配置文件: ~/.eterm/plugins/plugins.json
+    /// 插件配置文件: ~/.vimo/eterm/plugins/plugins.json
     static let pluginsConfig = plugins + "/plugins.json"
 
-    /// SDK 插件配置文件: ~/.eterm/plugins/sdk-plugins.json
+    /// SDK 插件配置文件: ~/.vimo/eterm/plugins/sdk-plugins.json
     static let sdkPluginsConfig = plugins + "/sdk-plugins.json"
 
-    /// Bundle 插件配置文件: ~/.eterm/plugins/bundle-plugins.json
+    /// Bundle 插件配置文件: ~/.vimo/eterm/plugins/bundle-plugins.json
     static let bundlePluginsConfig = plugins + "/bundle-plugins.json"
 
-    /// Claude Monitor 插件目录: ~/.eterm/plugins/claude-monitor
+    /// Claude Monitor 插件目录: ~/.vimo/eterm/plugins/claude-monitor
     static let claudeMonitorPlugin = plugins + "/claude-monitor"
 
-    /// Claude Monitor 使用历史: ~/.eterm/plugins/claude-monitor/usage_history.json
+    /// Claude Monitor 使用历史: ~/.vimo/eterm/plugins/claude-monitor/usage_history.json
     static let claudeMonitorUsageHistory = claudeMonitorPlugin + "/usage_history.json"
 
-    /// English Learning 插件目录: ~/.eterm/plugins/english-learning
+    /// English Learning 插件目录: ~/.vimo/eterm/plugins/english-learning
     static let englishLearningPlugin = plugins + "/english-learning"
 
-    /// 翻译插件配置: ~/.eterm/config/translation.json
+    /// 翻译插件配置: ~/.vimo/eterm/config/translation.json
     /// 与 SDK 插件 (TranslationKit/WritingKit) 共享配置
     static let translationConfig = config + "/translation.json"
 
-    /// MCP Router 插件目录: ~/.eterm/plugins/mcp-router
+    /// MCP Router 插件目录: ~/.vimo/eterm/plugins/mcp-router
     static let mcpRouterPlugin = plugins + "/mcp-router"
 
-    /// MCP Router 服务器配置: ~/.eterm/plugins/mcp-router/servers.json
+    /// MCP Router 服务器配置: ~/.vimo/eterm/plugins/mcp-router/servers.json
     static let mcpRouterServers = mcpRouterPlugin + "/servers.json"
 
-    /// MCP Router 工作区配置: ~/.eterm/plugins/mcp-router/workspaces.json
+    /// MCP Router 工作区配置: ~/.vimo/eterm/plugins/mcp-router/workspaces.json
     static let mcpRouterWorkspaces = mcpRouterPlugin + "/workspaces.json"
 
     // MARK: - 临时文件
 
-    /// 剪贴板临时目录: ~/.eterm/tmp/clipboard
+    /// 剪贴板临时目录: ~/.vimo/eterm/tmp/clipboard
     static let clipboard = tmp + "/clipboard"
 
     // MARK: - 运行时目录
 
-    /// 运行时目录: ~/.eterm/run
+    /// 运行时目录: ~/.vimo/eterm/run
     static let run = root + "/run"
 
-    /// 插件 Socket 目录: ~/.eterm/run/sockets
+    /// 插件 Socket 目录: ~/.vimo/eterm/run/sockets
     ///
     /// 插件在此目录创建 Unix Domain Socket。
     /// 环境变量 ETERM_SOCKET_DIR 指向此目录。
@@ -115,7 +133,7 @@ enum ETermPaths {
     /// 获取插件 socket 路径
     ///
     /// - Parameter namespace: socket namespace（如 "claude"）
-    /// - Returns: `~/.eterm/run/sockets/{namespace}.sock`
+    /// - Returns: `~/.vimo/eterm/run/sockets/{namespace}.sock`
     static func socketPath(for namespace: String) -> String {
         return "\(sockets)/\(namespace).sock"
     }
@@ -134,7 +152,7 @@ enum ETermPaths {
 
     // MARK: - 日志文件
 
-    /// 获取当天日志文件路径: ~/.eterm/logs/debug-{date}.log
+    /// 获取当天日志文件路径: ~/.vimo/eterm/logs/debug-{date}.log
     static func logFile(date: Date = Date()) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
@@ -142,7 +160,7 @@ enum ETermPaths {
         return "\(logs)/debug-\(dateString).log"
     }
 
-    /// 调试导出目录: ~/.eterm/logs/exports
+    /// 调试导出目录: ~/.vimo/eterm/logs/exports
     static let debugExports = logs + "/exports"
 
     // MARK: - 目录创建
@@ -153,6 +171,8 @@ enum ETermPaths {
 
         // 普通目录（默认权限）
         let directories = [
+            vimoRoot,
+            sharedDb,
             root,
             config,
             data,

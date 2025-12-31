@@ -2,12 +2,12 @@
 //  SessionReader.swift
 //  VlaudeKit
 //
-//  Swift wrapper for session-reader-ffi
+//  Swift wrapper for claude-session-db FFI (统一入口)
 //  Provides Claude session file reading capabilities
 //
 
 import Foundation
-import SessionReaderFFI
+import SharedDbFFI
 
 // MARK: - Data Types
 
@@ -15,8 +15,8 @@ import SessionReaderFFI
 struct ProjectInfo: Codable {
     let path: String
     let encodedName: String
-    let name: String?
-    let sessionCount: Int?
+    let name: String
+    let sessionCount: Int
     let lastActive: UInt64?
 
     enum CodingKeys: String, CodingKey {
@@ -48,23 +48,36 @@ struct SessionMeta: Codable {
 }
 
 /// Messages result with pagination info
-struct MessagesResult: Codable {
+struct MessagesResult {
     let messages: [RawMessage]
     let total: Int
     let hasMore: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case messages
-        case total
-        case hasMore = "has_more"
-    }
 }
 
 /// Raw message from session file
 struct RawMessage: Codable {
-    let type: String?
-    let message: MessageContent?
+    let uuid: String
+    let sessionId: String
+    let messageType: Int  // 0 = User, 1 = Assistant
+    let content: String
     let timestamp: String?
+
+    enum CodingKeys: String, CodingKey {
+        case uuid
+        case sessionId = "session_id"
+        case messageType = "message_type"
+        case content
+        case timestamp
+    }
+
+    // Computed property for compatibility
+    var type: String? {
+        messageType == 0 ? "user" : "assistant"
+    }
+
+    var message: MessageContent? {
+        MessageContent(role: messageType == 0 ? "user" : "assistant", content: AnyCodable(content))
+    }
 
     struct MessageContent: Codable {
         let role: String?
@@ -73,23 +86,15 @@ struct RawMessage: Codable {
 }
 
 /// Indexable session data (for writing to SharedDb)
-/// Contains correctly resolved project path (from cwd)
-struct IndexableSession: Codable {
+struct IndexableSession {
     let sessionId: String
     let projectPath: String
     let projectName: String
     let messages: [IndexableMessage]
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case projectPath = "project_path"
-        case projectName = "project_name"
-        case messages
-    }
 }
 
 /// Message format for indexing
-struct IndexableMessage: Codable {
+struct IndexableMessage {
     let uuid: String
     let role: String
     let content: String
@@ -147,124 +152,199 @@ struct AnyCodable: Codable {
 
 // MARK: - SessionReader
 
-/// Swift wrapper for session-reader-ffi
+/// Swift wrapper for claude-session-db FFI (统一入口)
 final class SessionReader {
-    private var handle: OpaquePointer?
+    private var projectsPath: String?
 
     // MARK: - Lifecycle
 
     init() {
-        handle = sr_create()
-        if handle == nil {
-            print("[SessionReader] Warning: Failed to create reader")
-        }
+        self.projectsPath = nil
     }
 
     init(projectsPath: String) {
-        handle = projectsPath.withCString { cstr in
-            sr_create_with_path(cstr)
-        }
-        if handle == nil {
-            print("[SessionReader] Warning: Failed to create reader with path: \(projectsPath)")
-        }
-    }
-
-    deinit {
-        if let handle = handle {
-            sr_destroy(handle)
-        }
+        self.projectsPath = projectsPath
     }
 
     // MARK: - Project Operations
 
     /// List all projects
-    /// - Parameter limit: Maximum number of projects (0 = unlimited)
-    /// - Returns: Array of ProjectInfo, or nil on failure
     func listProjects(limit: UInt32 = 0) -> [ProjectInfo]? {
-        guard let handle = handle else { return nil }
+        var arrayPtr: UnsafeMutablePointer<ProjectInfoArray>?
 
-        guard let cstr = sr_list_projects(handle, limit) else {
+        let err: SessionDbError
+        if let path = projectsPath {
+            err = path.withCString { cpath in
+                session_db_list_file_projects(cpath, limit, &arrayPtr)
+            }
+        } else {
+            err = session_db_list_file_projects(nil, limit, &arrayPtr)
+        }
+
+        guard err == Success, let array = arrayPtr else {
             return nil
         }
-        defer { sr_free_string(cstr) }
+        defer { session_db_free_project_list(array) }
 
-        let json = String(cString: cstr)
-        return decodeJSON(json)
+        var results: [ProjectInfo] = []
+        if array.pointee.len > 0, let data = array.pointee.data {
+            for i in 0..<Int(array.pointee.len) {
+                let p = data[i]
+                guard let encodedNamePtr = p.encoded_name,
+                      let pathPtr = p.path,
+                      let namePtr = p.name else {
+                    continue
+                }
+                results.append(ProjectInfo(
+                    path: String(cString: pathPtr),
+                    encodedName: String(cString: encodedNamePtr),
+                    name: String(cString: namePtr),
+                    sessionCount: Int(p.session_count),
+                    lastActive: p.last_active > 0 ? p.last_active : nil
+                ))
+            }
+        }
+        return results
     }
 
     // MARK: - Session Operations
 
     /// List sessions for a project
-    /// - Parameter projectPath: Project path (nil = all projects)
-    /// - Returns: Array of SessionMeta, or nil on failure
     func listSessions(projectPath: String? = nil) -> [SessionMeta]? {
-        guard let handle = handle else { return nil }
+        var arrayPtr: UnsafeMutablePointer<SessionMetaArray>?
 
-        let cstr: UnsafeMutablePointer<CChar>?
-        if let path = projectPath {
-            cstr = path.withCString { sr_list_sessions(handle, $0) }
+        let err: SessionDbError
+        if let path = self.projectsPath {
+            if let projPath = projectPath {
+                err = path.withCString { cpath in
+                    projPath.withCString { cproj in
+                        session_db_list_session_metas(cpath, cproj, &arrayPtr)
+                    }
+                }
+            } else {
+                err = path.withCString { cpath in
+                    session_db_list_session_metas(cpath, nil, &arrayPtr)
+                }
+            }
         } else {
-            cstr = sr_list_sessions(handle, nil)
+            if let projPath = projectPath {
+                err = projPath.withCString { cproj in
+                    session_db_list_session_metas(nil, cproj, &arrayPtr)
+                }
+            } else {
+                err = session_db_list_session_metas(nil, nil, &arrayPtr)
+            }
         }
 
-        guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
+        guard err == Success, let array = arrayPtr else {
+            return nil
+        }
+        defer { session_db_free_session_meta_list(array) }
 
-        let json = String(cString: cstr)
-        return decodeJSON(json)
+        var results: [SessionMeta] = []
+        if array.pointee.len > 0, let data = array.pointee.data {
+            for i in 0..<Int(array.pointee.len) {
+                let s = data[i]
+                guard let idPtr = s.id,
+                      let projectPathPtr = s.project_path else {
+                    continue
+                }
+                results.append(SessionMeta(
+                    id: String(cString: idPtr),
+                    projectPath: String(cString: projectPathPtr),
+                    projectName: s.project_name != nil ? String(cString: s.project_name) : nil,
+                    encodedDirName: s.encoded_dir_name != nil ? String(cString: s.encoded_dir_name) : nil,
+                    sessionPath: s.session_path != nil ? String(cString: s.session_path) : nil,
+                    lastModified: s.file_mtime >= 0 ? s.file_mtime : nil
+                ))
+            }
+        }
+        return results
     }
 
     /// Find the latest session for a project
-    /// - Parameters:
-    ///   - projectPath: Project path
-    ///   - withinSeconds: Time range in seconds (0 = unlimited)
-    /// - Returns: SessionMeta if found, nil otherwise
     func findLatestSession(projectPath: String, withinSeconds: UInt64 = 0) -> SessionMeta? {
-        guard let handle = handle else { return nil }
+        var sessionPtr: UnsafeMutablePointer<SessionMetaC>?
 
-        let cstr = projectPath.withCString { path in
-            sr_find_latest_session(handle, path, withinSeconds)
+        let err: SessionDbError
+        if let path = self.projectsPath {
+            err = path.withCString { cpath in
+                projectPath.withCString { cproj in
+                    session_db_find_latest_session(cpath, cproj, withinSeconds, &sessionPtr)
+                }
+            }
+        } else {
+            err = projectPath.withCString { cproj in
+                session_db_find_latest_session(nil, cproj, withinSeconds, &sessionPtr)
+            }
         }
 
-        guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
+        guard err == Success, let session = sessionPtr else {
+            return nil
+        }
+        defer { session_db_free_session_meta(session) }
 
-        let json = String(cString: cstr)
-
-        // Handle null response
-        if json == "null" {
+        let s = session.pointee
+        guard let idPtr = s.id,
+              let projectPathPtr = s.project_path else {
             return nil
         }
 
-        return decodeJSON(json)
+        return SessionMeta(
+            id: String(cString: idPtr),
+            projectPath: String(cString: projectPathPtr),
+            projectName: s.project_name != nil ? String(cString: s.project_name) : nil,
+            encodedDirName: s.encoded_dir_name != nil ? String(cString: s.encoded_dir_name) : nil,
+            sessionPath: s.session_path != nil ? String(cString: s.session_path) : nil,
+            lastModified: s.file_mtime >= 0 ? s.file_mtime : nil
+        )
     }
 
     // MARK: - Message Operations
 
     /// Read session messages with pagination
-    /// - Parameters:
-    ///   - sessionPath: Full path to session file
-    ///   - limit: Maximum number of messages
-    ///   - offset: Offset for pagination
-    ///   - orderAsc: True for ascending, false for descending
-    /// - Returns: MessagesResult or nil on failure
     func readMessages(
         sessionPath: String,
         limit: UInt32 = 50,
         offset: UInt32 = 0,
         orderAsc: Bool = true
     ) -> MessagesResult? {
-        guard let handle = handle else { return nil }
+        var resultPtr: UnsafeMutablePointer<MessagesResultC>?
 
-        let cstr = sessionPath.withCString { path in
-            sr_read_messages(handle, path, limit, offset, orderAsc)
+        let err = sessionPath.withCString { cpath in
+            session_db_read_session_messages(cpath, UInt(limit), UInt(offset), orderAsc, &resultPtr)
         }
 
-        guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
+        guard err == Success, let result = resultPtr else {
+            return nil
+        }
+        defer { session_db_free_messages_result(result) }
 
-        let json = String(cString: cstr)
-        return decodeJSON(json)
+        var messages: [RawMessage] = []
+        let r = result.pointee
+        if r.message_count > 0, let data = r.messages {
+            for i in 0..<Int(r.message_count) {
+                let m = data[i]
+                guard let uuidPtr = m.uuid,
+                      let sessionIdPtr = m.session_id,
+                      let contentPtr = m.content else {
+                    continue
+                }
+                messages.append(RawMessage(
+                    uuid: String(cString: uuidPtr),
+                    sessionId: String(cString: sessionIdPtr),
+                    messageType: Int(m.message_type),
+                    content: String(cString: contentPtr),
+                    timestamp: m.timestamp != nil ? String(cString: m.timestamp) : nil
+                ))
+            }
+        }
+
+        return MessagesResult(
+            messages: messages,
+            total: Int(r.total),
+            hasMore: r.has_more
+        )
     }
 
     /// Read messages and return raw JSON string (for forwarding to server)
@@ -274,77 +354,102 @@ final class SessionReader {
         offset: UInt32 = 0,
         orderAsc: Bool = true
     ) -> String? {
-        guard let handle = handle else { return nil }
-
-        let cstr = sessionPath.withCString { path in
-            sr_read_messages(handle, path, limit, offset, orderAsc)
+        guard let result = readMessages(sessionPath: sessionPath, limit: limit, offset: offset, orderAsc: orderAsc) else {
+            return nil
         }
 
-        guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        guard let data = try? encoder.encode(result.messages) else {
+            return nil
+        }
 
-        return String(cString: cstr)
+        // Wrap in MessagesResult format
+        let json: [String: Any] = [
+            "messages": (try? JSONSerialization.jsonObject(with: data)) ?? [],
+            "total": result.total,
+            "has_more": result.hasMore
+        ]
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: json) else {
+            return nil
+        }
+        return String(data: jsonData, encoding: .utf8)
     }
 
     // MARK: - Path Utilities
 
     /// Encode project path to Claude directory name
     static func encodePath(_ path: String) -> String? {
-        let cstr = path.withCString { sr_encode_path($0) }
+        let cstr = path.withCString { session_db_encode_path($0) }
         guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
+        defer { session_db_free_string(cstr) }
         return String(cString: cstr)
     }
 
     /// Decode Claude directory name to project path
     static func decodePath(_ encoded: String) -> String? {
-        let cstr = encoded.withCString { sr_decode_path($0) }
+        let cstr = encoded.withCString { session_db_decode_path($0) }
         guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
+        defer { session_db_free_string(cstr) }
         return String(cString: cstr)
     }
 
     /// Get library version
     static var version: String {
-        guard let cstr = sr_version() else { return "unknown" }
-        return String(cString: cstr)
+        "1.0.0"  // TODO: Add version FFI if needed
     }
 
     // MARK: - Index Operations
 
     /// Parse session for indexing to SharedDb
-    /// Correctly reads cwd to determine the real project path (fixes Chinese path issues)
-    /// - Parameter jsonlPath: Full path to JSONL session file
-    /// - Returns: IndexableSession if successful, nil if file is empty or parsing failed
     func parseSessionForIndex(jsonlPath: String) -> IndexableSession? {
-        guard let handle = handle else { return nil }
-
-        let cstr = jsonlPath.withCString { path in
-            sr_parse_session_for_index(handle, path)
+        let result = jsonlPath.withCString { path in
+            session_db_parse_jsonl(path)
         }
 
-        guard let cstr = cstr else { return nil }
-        defer { sr_free_string(cstr) }
-
-        let json = String(cString: cstr)
-
-        // Handle null response (empty file or no valid messages)
-        if json == "null" {
+        guard result.error == Success else {
+            print("[SessionReader] Parse error: \(result.error)")
             return nil
         }
 
-        return decodeJSON(json)
-    }
-
-    // MARK: - Private Helpers
-
-    private func decodeJSON<T: Decodable>(_ json: String) -> T? {
-        guard let data = json.data(using: .utf8) else { return nil }
-        do {
-            return try JSONDecoder().decode(T.self, from: data)
-        } catch {
-            print("[SessionReader] JSON decode error: \(error)")
+        guard let sessionPtr = result.session else {
             return nil
         }
+        defer { session_db_free_parse_result(sessionPtr) }
+
+        let session = sessionPtr.pointee
+
+        guard let sessionIdPtr = session.session_id,
+              let projectPathPtr = session.project_path,
+              let projectNamePtr = session.project_name else {
+            return nil
+        }
+
+        var messages: [IndexableMessage] = []
+        if session.messages.len > 0, let data = session.messages.data {
+            for i in 0..<Int(session.messages.len) {
+                let msg = data[i]
+                guard let uuidPtr = msg.uuid,
+                      let rolePtr = msg.role,
+                      let contentPtr = msg.content else {
+                    continue
+                }
+                messages.append(IndexableMessage(
+                    uuid: String(cString: uuidPtr),
+                    role: String(cString: rolePtr),
+                    content: String(cString: contentPtr),
+                    timestamp: msg.timestamp,
+                    sequence: msg.sequence
+                ))
+            }
+        }
+
+        return IndexableSession(
+            sessionId: String(cString: sessionIdPtr),
+            projectPath: String(cString: projectPathPtr),
+            projectName: String(cString: projectNamePtr),
+            messages: messages
+        )
     }
 }

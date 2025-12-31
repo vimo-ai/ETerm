@@ -8,7 +8,7 @@ PLUGIN_NAME="__PLUGIN_NAME__"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
 # Output directory
-OUTPUT_DIR="${HOME}/.eterm/plugins"
+OUTPUT_DIR="${HOME}/.vimo/eterm/plugins"
 BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
 
 # Colors

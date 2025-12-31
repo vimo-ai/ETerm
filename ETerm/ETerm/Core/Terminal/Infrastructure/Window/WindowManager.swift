@@ -13,6 +13,7 @@
 
 import AppKit
 import SwiftUI
+import ETermKit
 
 /// 窗口管理器（单例）
 final class WindowManager: NSObject {
@@ -796,18 +797,33 @@ final class WindowManager: NSObject {
             return false
         }
 
-        // 2. 从源 Panel 移除（不关闭终端）
+        // 2. 验证目标 Panel 存在（防止 Tab 丢失）
+        guard targetCoordinator.terminalWindow.getPanel(targetPanelId) != nil else {
+            return false
+        }
+
+        // 3. 从源 Panel 移除（不关闭终端）
         guard sourceCoordinator.removeTab(tabId, from: sourcePanelId, closeTerminal: false) else {
             return false
         }
 
-        // 3. 添加到目标 Panel
+        // 4. 添加到目标 Panel
         targetCoordinator.addTab(tab, to: targetPanelId)
 
-        // 5. 激活目标窗口
+        // 5. 如果源窗口没有 Page 了，关闭源窗口
+        if sourceCoordinator.terminalWindow.pages.all.isEmpty {
+            if let sourceWindow = windows.first(where: { $0.windowNumber == sourceWindowNumber }) {
+                sourceWindow.close()
+            }
+        }
+
+        // 6. 激活目标窗口
         if let targetWindow = windows.first(where: { $0.windowNumber == targetWindowNumber }) {
             targetWindow.makeKeyAndOrderFront(nil)
         }
+
+        // 7. 保存 Session（跨窗口移动，需要备份）
+        saveSessionWithBackup()
 
         return true
     }

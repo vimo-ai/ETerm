@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 import ETermKit
 
 // MARK: - View Mode
@@ -24,41 +25,104 @@ enum MemexViewMode: String, CaseIterable {
 
 // MARK: - MemexView
 
-/// Memex 主视图
-/// 布局：顶部安全区 + Header + 内容区域（各自独立，互不干扰）
+/// Memex 主视图 - 完整版
 struct MemexView: View {
     @StateObject private var viewModel = MemexViewModel()
-    @State private var viewMode: MemexViewMode = .webUI
+    @State private var viewMode: MemexViewMode = .status
+    @State private var tapCount = 0  // 调试：点击计数
 
     var body: some View {
         VStack(spacing: 0) {
-            // 1. 顶部安全区域（Tab 栏）- 纯 SwiftUI
+            // 顶部安全区域
             Color.clear
                 .frame(height: 52)
 
-            // 2. Header 区域 - 纯 SwiftUI，包含模式切换
-            MemexHeaderView(
-                isRunning: viewModel.isServiceRunning,
-                viewMode: $viewMode,
-                onRefresh: { Task { await viewModel.refresh() } }
-            )
+            // Header 区域
+            HStack {
+                Image(systemName: "brain.head.profile")
+                    .foregroundColor(.purple)
+                Text("Memex")
+                    .font(.headline)
 
-            Divider()
+                // 状态指示
+                Circle()
+                    .fill(viewModel.isServiceRunning ? Color.green : Color.gray)
+                    .frame(width: 8, height: 8)
 
-            // 3. 内容区域 - 根据模式显示不同内容
-            //    WebView 只在这个区域内渲染，不会覆盖上面的控件
-            Group {
-                switch viewMode {
-                case .status:
-                    StatusContentView(viewModel: viewModel)
-                case .webUI:
-                    WebUIContentView(
-                        isServiceRunning: viewModel.isServiceRunning,
-                        port: viewModel.port,
-                        onStartService: { Task { await viewModel.startService() } }
-                    )
+                Spacer()
+
+                // 模式切换按钮
+                HStack(spacing: 4) {
+                    Button {
+                        viewMode = .status
+                    } label: {
+                        Label("状态", systemImage: "gauge.with.dots.needle.bottom.50percent")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .opacity(viewMode == .status ? 1 : 0.5)
+
+                    Button {
+                        viewMode = .webUI
+                    } label: {
+                        Label("Web UI", systemImage: "globe")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .opacity(viewMode == .webUI ? 1 : 0.5)
                 }
+
+                Spacer()
+
+                // 刷新按钮
+                Button {
+                    Task { await viewModel.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("刷新状态")
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            // 调试：点击计数显示
+            Text("点击计数: \(tapCount)")
+                .font(.headline)
+                .foregroundColor(.orange)
+                .padding(8)
+                .background(Color.orange.opacity(0.2))
+                .cornerRadius(8)
+
+            // 最简 ScrollView 测试
+            VStack(spacing: 16) {
+                Button("按钮 A (+1)") {
+                    tapCount += 1
+                    print("[MemexView] 按钮 A ✅")
+                }
+                .buttonStyle(.borderedProminent)
+
+                // 测试：ScrollView 内加入 Button
+                ScrollView {
+                    VStack(spacing: 8) {
+                        Button("ScrollView 内按钮 (+100)") {
+                            tapCount += 100
+                            print("[MemexView] ScrollView 内按钮 ✅")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding()
+                }
+                .frame(height: 100)
+                .background(Color.red.opacity(0.2))
+
+                Button("按钮 B (+10)") {
+                    tapCount += 10
+                    print("[MemexView] 按钮 B ✅")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -68,38 +132,72 @@ struct MemexView: View {
     }
 }
 
-// MARK: - Status Content View
+// MARK: - Status Card View (无 ScrollView 版本)
+
+private struct StatusCardView: View {
+    @ObservedObject var viewModel: MemexViewModel
+
+    var body: some View {
+        VStack(spacing: 16) {
+            // 服务状态卡片
+            ServiceStatusCard(
+                isRunning: viewModel.isServiceRunning,
+                port: viewModel.port,
+                onStart: { Task { await viewModel.startService() } },
+                onStop: { Task { await viewModel.stopService() } }
+            )
+
+            // 统计信息卡片
+            if let stats = viewModel.stats {
+                StatsCard(stats: stats)
+            }
+
+            // MCP 信息卡片
+            if viewModel.isServiceRunning {
+                MCPInfoCard(port: viewModel.port)
+            }
+
+            // 错误提示
+            if let error = viewModel.errorMessage {
+                ErrorCard(message: error)
+            }
+
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Status Content View (保留备用)
 
 private struct StatusContentView: View {
     @ObservedObject var viewModel: MemexViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // 服务状态卡片
-                ServiceStatusCard(
-                    isRunning: viewModel.isServiceRunning,
-                    port: viewModel.port,
-                    onStart: { Task { await viewModel.startService() } },
-                    onStop: { Task { await viewModel.stopService() } }
-                )
+        VStack(spacing: 16) {
+            // 服务状态卡片
+            ServiceStatusCard(
+                isRunning: viewModel.isServiceRunning,
+                port: viewModel.port,
+                onStart: { Task { await viewModel.startService() } },
+                onStop: { Task { await viewModel.stopService() } }
+            )
 
-                // 统计信息卡片
-                if let stats = viewModel.stats {
-                    StatsCard(stats: stats)
-                }
-
-                // MCP 信息卡片
-                if viewModel.isServiceRunning {
-                    MCPInfoCard(port: viewModel.port)
-                }
-
-                // 错误提示
-                if let error = viewModel.errorMessage {
-                    ErrorCard(message: error)
-                }
+            // 统计信息卡片
+            if let stats = viewModel.stats {
+                StatsCard(stats: stats)
             }
-            .padding(16)
+
+            // MCP 信息卡片
+            if viewModel.isServiceRunning {
+                MCPInfoCard(port: viewModel.port)
+            }
+
+            // 错误提示
+            if let error = viewModel.errorMessage {
+                ErrorCard(message: error)
+            }
+
+            Spacer()
         }
     }
 }
@@ -130,7 +228,6 @@ private struct WebUIContentView: View {
                     .foregroundColor(.secondary)
 
                 Button {
-                    print("[MemexKit] 🔘 启动按钮被点击")
                     onStartService()
                 } label: {
                     Label("启动服务", systemImage: "play.fill")
@@ -170,15 +267,12 @@ final class MemexViewModel: ObservableObject {
     }
 
     func startService() async {
-        print("[MemexKit] 🚀 startService() 被调用")
         do {
             try MemexService.shared.start()
-            print("[MemexKit] ✅ MemexService.start() 成功")
             // 等待服务启动
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             await refresh()
         } catch {
-            print("[MemexKit] ❌ MemexService.start() 失败: \(error)")
             errorMessage = error.localizedDescription
         }
     }
@@ -211,7 +305,7 @@ private struct MemexHeaderView: View {
 
             Spacer()
 
-            // 中间：模式切换（使用自定义按钮替代 segmented Picker）
+            // 中间：模式切换
             HStack(spacing: 0) {
                 ForEach(MemexViewMode.allCases, id: \.self) { mode in
                     Button {
@@ -223,28 +317,26 @@ private struct MemexHeaderView: View {
                             .padding(.vertical, 6)
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.plain)
-                    .background(viewMode == mode ? Color.accentColor.opacity(0.2) : Color.clear)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.borderedProminent)  // 换成更明显的样式
                 }
             }
-            .background(Color.primary.opacity(0.05))
-            .cornerRadius(6)
-            .frame(width: 160)
+            .frame(width: 180)
 
             Spacer()
 
             // 右侧：刷新按钮
-            Button(action: onRefresh) {
+            Button {
+                onRefresh()
+            } label: {
                 Image(systemName: "arrow.clockwise")
                     .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderedProminent)
             .help("刷新状态")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .background(Color.red.opacity(0.1))  // 调试：高亮 header 区域
     }
 }
 

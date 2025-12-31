@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ETermKit
 
 // MARK: - 请求/响应模型
 
@@ -297,14 +298,3 @@ enum AISocketError: LocalizedError {
     }
 }
 
-// MARK: - Logging
-
-private func logInfo(_ message: String) {
-    // 日志已禁用
-}
-
-private func logError(_ message: String) {
-    #if DEBUG
-    print("[AISocketServer] ERROR: \(message)")
-    #endif
-}

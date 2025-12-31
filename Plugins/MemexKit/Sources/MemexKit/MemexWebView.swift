@@ -101,7 +101,6 @@ struct MemexWebView: NSViewRepresentable {
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
-            print("[MemexWebView] decidePolicyFor navigationAction: \(navigationAction.request.url?.absoluteString ?? "nil")")
             decisionHandler(.allow)
         }
 
@@ -111,29 +110,24 @@ struct MemexWebView: NSViewRepresentable {
             decidePolicyFor navigationResponse: WKNavigationResponse,
             decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
         ) {
-            print("[MemexWebView] decidePolicyFor navigationResponse: \(navigationResponse.response.url?.absoluteString ?? "nil")")
             decisionHandler(.allow)
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            print("[MemexWebView] didStartProvisionalNavigation")
             parent.onLoadingChange?(true)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            print("[MemexWebView] didFinish, title: \(webView.title ?? "nil")")
             parent.onLoadingChange?(false)
             parent.onTitleChange?(webView.title)
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            print("[MemexWebView] didFail: \(error.localizedDescription)")
             parent.onLoadingChange?(false)
             parent.onError?(error)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            print("[MemexWebView] didFailProvisionalNavigation: \(error.localizedDescription)")
             parent.onLoadingChange?(false)
             parent.onError?(error)
         }

@@ -120,6 +120,12 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
+    public func createTerminalTab(cwd: String?) -> Int? {
+        // isolated 模式暂不支持创建终端 Tab（需要访问 WindowManager）
+        // 如果需要支持，可添加 IPC 消息类型 .createTerminalTab
+        return nil
+    }
+
     public func getTerminalInfo(terminalId: Int) -> TerminalInfo? {
         let semaphore = DispatchSemaphore(value: 0)
         var result: TerminalInfo?
@@ -568,9 +574,15 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         if let dir = ProcessInfo.processInfo.environment["ETERM_SOCKET_DIR"] {
             return dir
         }
-        // 支持 ETERM_HOME 环境变量
-        let etermHome = ProcessInfo.processInfo.environment["ETERM_HOME"]
-            ?? NSHomeDirectory() + "/.eterm"
+        // 支持 ETERM_HOME / VIMO_HOME 环境变量
+        let etermHome: String
+        if let customEtermHome = ProcessInfo.processInfo.environment["ETERM_HOME"] {
+            etermHome = customEtermHome
+        } else {
+            let vimoRoot = ProcessInfo.processInfo.environment["VIMO_HOME"]
+                ?? NSHomeDirectory() + "/.vimo"
+            etermHome = vimoRoot + "/eterm"
+        }
         return etermHome + "/run/sockets"
     }
 

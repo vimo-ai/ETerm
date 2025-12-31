@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import ETermKit
 
 // MARK: - 会话上下文
 
@@ -306,12 +307,4 @@ final class AICompletionService: AISocketRequestHandler {
     func resetHealth() {
         unhealthyUntil = .distantPast
     }
-}
-
-// MARK: - Logging
-
-private func logError(_ message: String) {
-    #if DEBUG
-    print("[AICompletionService] ERROR: \(message)")
-    #endif
 }

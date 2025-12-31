@@ -88,7 +88,7 @@ actor ExtensionHostManager {
             }
         }
 
-        // 4. ~/.eterm/bin/（开发环境安装位置）
+        // 4. ~/.vimo/eterm/bin/（开发环境安装位置）
         let etermBinPath = ETermPaths.root + "/bin/ETermExtensionHost"
         if fm.fileExists(atPath: etermBinPath) {
             return etermBinPath

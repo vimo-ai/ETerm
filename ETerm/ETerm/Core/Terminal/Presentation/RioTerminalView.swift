@@ -784,7 +784,31 @@ extension RioContainerView {
 
         // 根据鼠标坐标找到目标 Panel
         let location = convert(sender.draggingLocation, from: nil)
-        guard let (targetPanel, targetView) = findPanel(at: location) else {
+        guard let (targetPanel, _) = findPanel(at: location) else {
+            return false
+        }
+
+        // 获取当前窗口编号（如果 window 为 nil，拒绝 drop）
+        guard let currentWindow = window else {
+            return false
+        }
+        let currentWindowNumber = currentWindow.windowNumber
+
+        // 🔑 跨窗口拖拽判断：如果源窗口和目标窗口不同，走跨窗口流程
+        if payload.sourceWindowNumber != currentWindowNumber {
+            // 跨窗口移动：直接提交跨窗口意图，由 WindowManager 处理
+            DropIntentQueue.shared.submit(.moveTabAcrossWindow(
+                tabId: payload.tabId,
+                sourcePanelId: payload.sourcePanelId,
+                sourceWindowNumber: payload.sourceWindowNumber,
+                targetPanelId: targetPanel.panelId,
+                targetWindowNumber: currentWindowNumber
+            ))
+            return true
+        }
+
+        // 同窗口拖拽：走现有逻辑
+        guard let (_, targetView) = findPanel(at: location) else {
             return false
         }
 
@@ -1065,33 +1089,26 @@ class RioMetalView: NSView, RenderViewProtocol {
 
     /// 系统从睡眠/锁屏唤醒
     @objc private func systemDidWake() {
-        logDebug("[RenderLoop] systemDidWake - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
         resumeRenderingIfNeeded()
     }
 
     /// 应用从后台切回前台
     @objc private func applicationDidBecomeActive() {
-        logDebug("[RenderLoop] applicationDidBecomeActive - CVDisplayLink isRunning: \(renderScheduler?.isRunning ?? false)")
         resumeRenderingIfNeeded()
     }
 
     /// 恢复渲染（唤醒后）
     private func resumeRenderingIfNeeded() {
-        guard isInitialized else {
-            logDebug("[RenderLoop] resumeRenderingIfNeeded - not initialized, skip")
-            return
-        }
+        guard isInitialized else { return }
 
         // 检查 CVDisplayLink 是否在运行
         if let scheduler = renderScheduler, !scheduler.isRunning {
-            logWarn("[RenderLoop] CVDisplayLink was stopped, restarting...")
             _ = scheduler.start()
         }
 
         // 强制同步布局并请求渲染（确保画面更新）
         lastLayoutHash = 0  // 清除缓存，强制同步
         requestRender()
-        logDebug("[RenderLoop] resumeRenderingIfNeeded - requested render")
     }
 
     private func initialize() {

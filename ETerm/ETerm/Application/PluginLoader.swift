@@ -82,7 +82,7 @@ final class PluginLoader {
 
     /// 扫描并加载所有插件
     func loadAllPlugins() {
-        // 加载插件（统一从 ~/.eterm/plugins/ 加载）
+        // 加载插件（统一从 ~/.vimo/eterm/plugins/ 加载）
         let pluginsPath = ETermPaths.plugins
         let pluginsURL = URL(fileURLWithPath: pluginsPath)
 

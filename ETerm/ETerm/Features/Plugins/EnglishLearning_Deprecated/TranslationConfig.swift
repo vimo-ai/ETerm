@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import ETermKit
 
 // MARK: - 翻译插件配置
 

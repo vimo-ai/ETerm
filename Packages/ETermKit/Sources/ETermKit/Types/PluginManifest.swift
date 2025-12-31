@@ -135,12 +135,12 @@ public struct PluginManifest: Sendable, Codable, Equatable {
     /// Socket namespace 列表
     ///
     /// 声明插件需要的 socket namespace。主进程会：
-    /// 1. 创建 `~/.eterm/run/sockets/{namespace}.sock` 路径
-    /// 2. 设置环境变量 `ETERM_SOCKET_DIR=~/.eterm/run/sockets`
+    /// 1. 创建 `~/.vimo/eterm/run/sockets/{namespace}.sock` 路径
+    /// 2. 设置环境变量 `ETERM_SOCKET_DIR=~/.vimo/eterm/run/sockets`
     ///
     /// 插件在 activate 时自己创建 socket server。
     ///
-    /// 示例：`["claude"]` → `~/.eterm/run/sockets/claude.sock`
+    /// 示例：`["claude"]` → `~/.vimo/eterm/run/sockets/claude.sock`
     public let sockets: [String]
 
     // MARK: - 初始化

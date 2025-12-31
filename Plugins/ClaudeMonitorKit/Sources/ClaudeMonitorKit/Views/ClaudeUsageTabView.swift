@@ -14,16 +14,39 @@ struct ClaudeUsageTabView: View {
     /// 用于控制 InfoPanel 显示/隐藏
     var onToggleDashboard: (() -> Void)?
 
+    /// 根据用量与时间进度的偏差计算颜色（HSB 渐变）
+    /// 目标是用完配额：用量领先=好（蓝→绿），用量落后=危险（黄→橙→红）
     private var usageColor: Color {
         guard let snapshot = tracker.snapshot else {
             return .gray
         }
-        switch snapshot.recommendation {
-        case .accelerate: return .blue
-        case .maintain: return .green
-        case .slowDown: return .orange
-        case .pause: return .red
+
+        // 差值 = 用量进度 - 时间进度
+        // 正数 = 用得快（好），负数 = 用得慢（危险）
+        let delta = snapshot.usageProgress - snapshot.timeProgress
+
+        // 将 delta 映射到色相：
+        // delta >= +0.20 → 蓝色 (hue=0.58)
+        // delta == 0     → 绿色 (hue=0.33)
+        // delta <= -0.20 → 红色 (hue=0.0)
+        let clampedDelta = min(max(delta, -0.20), 0.20)
+        let normalized = (clampedDelta + 0.20) / 0.40  // 0.0 ~ 1.0
+
+        // 色相从红(0) → 绿(0.33) → 蓝(0.58)
+        let hue: Double
+        if normalized <= 0.5 {
+            // 红 → 绿
+            hue = normalized * 2 * 0.33
+        } else {
+            // 绿 → 蓝
+            hue = 0.33 + (normalized - 0.5) * 2 * 0.25
         }
+
+        // 饱和度和亮度根据偏差程度调整
+        let saturation = 0.6 + 0.35 * (1 - normalized)  // 落后时更饱和
+        let brightness = 0.85 - 0.15 * (1 - normalized) // 落后时稍暗
+
+        return Color(hue: hue, saturation: saturation, brightness: brightness)
     }
 
     var body: some View {

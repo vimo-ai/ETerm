@@ -4,6 +4,7 @@
  */
 import SwiftUI
 import AppKit
+import ETermKit
 
 // MARK: - 标签类型
 enum ShuimoTagType {
@@ -142,8 +143,8 @@ struct ShuimoTabView: View {
             // Claude 响应完成提醒 - 橙色
             return Color.orange.opacity(0.7)
         }
-        // 激活的 Tab 使用深红色 #861717，未激活使用灰色
-        return isActive ? Color(hex: "861717") : Color.gray.opacity(0.6)
+        // 激活的 Tab 使用深红色，未激活使用灰色
+        return isActive ? Color(hex: ThemeColors.accentHex) : Color.gray.opacity(0.6)
     }
 
     private var leftWidth: CGFloat { height * 51.59 / 240.61 }

@@ -30,9 +30,7 @@ public final class HistoryState: ObservableObject {
 
     /// 更新工作区列表
     func updateWorkspaces(_ paths: [String]) {
-        print("[HistoryState] updateWorkspaces called with \(paths.count) paths: \(paths)")
         workspaces = paths
-        print("[HistoryState] workspaces updated, now has \(workspaces.count) items")
 
         // 如果当前工作区为空或不在列表中，尝试自动选择
         if currentWorkspace.isEmpty || !paths.contains(currentWorkspace) {

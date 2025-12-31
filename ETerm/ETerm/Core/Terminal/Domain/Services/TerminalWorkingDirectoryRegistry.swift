@@ -39,6 +39,7 @@
 //
 
 import Foundation
+import ETermKit
 
 /// 终端工作目录注册表
 ///
@@ -98,7 +99,6 @@ final class TerminalWorkingDirectoryRegistry {
         lock.lock()
         defer { lock.unlock() }
         pendingTerminals[tabId] = workingDirectory
-        logDebug("[CWD Registry] Registered pending: tabId=\(tabId.uuidString.prefix(8)), cwd=\(workingDirectory.path)")
     }
 
     /// 获取待创建终端的 CWD（非破坏性）
@@ -130,7 +130,6 @@ final class TerminalWorkingDirectoryRegistry {
         if let pending = pendingTerminals.removeValue(forKey: tabId) {
             activeTerminals[terminalId] = pending
             terminalToTabMapping[terminalId] = tabId
-            logDebug("[CWD Registry] Promoted: tabId=\(tabId.uuidString.prefix(8)) → terminalId=\(terminalId)")
         }
     }
 
@@ -146,11 +145,7 @@ final class TerminalWorkingDirectoryRegistry {
         lock.lock()
         defer { lock.unlock() }
 
-        let cwd = pendingTerminals[tabId]
-        if let cwd = cwd {
-            logDebug("[CWD Registry] Retained pending for retry: tabId=\(tabId.uuidString.prefix(8)), cwd=\(cwd.path)")
-        }
-        return cwd
+        return pendingTerminals[tabId]
     }
 
     // MARK: - Active State Management
@@ -188,7 +183,6 @@ final class TerminalWorkingDirectoryRegistry {
 
         activeTerminals[terminalId] = workingDirectory
         terminalToTabMapping[terminalId] = tabId
-        logDebug("[CWD Registry] Registered active: tabId=\(tabId.uuidString.prefix(8)), terminalId=\(terminalId)")
     }
 
     // MARK: - Detach/Reattach (Pool Transition)
@@ -213,7 +207,6 @@ final class TerminalWorkingDirectoryRegistry {
 
         // 保存到 detached
         detachedTerminals[tabId] = cwd
-        logDebug("[CWD Registry] Detached: tabId=\(tabId.uuidString.prefix(8)), terminalId=\(terminalId), cwd=\(cwd.path)")
     }
 
     /// 重新附加终端（Pool 切换完成、跨窗口迁移完成）
@@ -231,7 +224,6 @@ final class TerminalWorkingDirectoryRegistry {
         if let detached = detachedTerminals.removeValue(forKey: tabId) {
             activeTerminals[newTerminalId] = detached
             terminalToTabMapping[newTerminalId] = tabId
-            logDebug("[CWD Registry] Reattached: tabId=\(tabId.uuidString.prefix(8)) → terminalId=\(newTerminalId)")
         }
     }
 
@@ -246,7 +238,6 @@ final class TerminalWorkingDirectoryRegistry {
 
         activeTerminals.removeValue(forKey: terminalId)
         terminalToTabMapping.removeValue(forKey: terminalId)
-        logDebug("[CWD Registry] Removed terminal: terminalId=\(terminalId)")
     }
 
     /// 清除 Tab 的所有状态（Tab 被删除时调用）
@@ -264,8 +255,6 @@ final class TerminalWorkingDirectoryRegistry {
             activeTerminals.removeValue(forKey: terminalId)
             terminalToTabMapping.removeValue(forKey: terminalId)
         }
-
-        logDebug("[CWD Registry] Cleared tab: tabId=\(tabId.uuidString.prefix(8))")
     }
 
     // MARK: - Query (Core Interface)
@@ -295,20 +284,16 @@ final class TerminalWorkingDirectoryRegistry {
 
         // 2. 查询分离终端
         if let detached = detachedTerminals[tabId] {
-            logDebug("[CWD Registry] Query result (detached): tabId=\(tabId.uuidString.prefix(8)), cwd=\(detached.path)")
             return detached
         }
 
         // 3. 查询待创建终端
         if let pending = pendingTerminals[tabId] {
-            logDebug("[CWD Registry] Query result (pending): tabId=\(tabId.uuidString.prefix(8)), cwd=\(pending.path)")
             return pending
         }
 
         // 4. 默认值
-        let defaultCwd = WorkingDirectory.userHome()
-        logDebug("[CWD Registry] Query result (default): tabId=\(tabId.uuidString.prefix(8)), cwd=\(defaultCwd.path)")
-        return defaultCwd
+        return WorkingDirectory.userHome()
     }
 
     /// 查询已创建终端的运行时 CWD（内部方法）
@@ -351,13 +336,9 @@ final class TerminalWorkingDirectoryRegistry {
         lock.lock()
         defer { lock.unlock() }
 
-        logDebug("[CWD Registry] Capturing before pool transition: \(tabIdMapping.count) terminals")
-
         for (terminalId, tabId) in tabIdMapping {
             let cwd = queryActiveTerminalInternal(terminalId: terminalId)
-            // 保存到 detached 状态
             detachedTerminals[tabId] = cwd
-            logDebug("[CWD Registry] Captured: tabId=\(tabId.uuidString.prefix(8)), terminalId=\(terminalId), cwd=\(cwd.path)")
         }
 
         // 清空 active 状态
@@ -374,13 +355,10 @@ final class TerminalWorkingDirectoryRegistry {
         lock.lock()
         defer { lock.unlock() }
 
-        logDebug("[CWD Registry] Restoring after pool transition: \(tabIdMapping.count) terminals")
-
         for (tabId, newTerminalId) in tabIdMapping {
             if let detached = detachedTerminals.removeValue(forKey: tabId) {
                 activeTerminals[newTerminalId] = detached
                 terminalToTabMapping[newTerminalId] = tabId
-                logDebug("[CWD Registry] Restored: tabId=\(tabId.uuidString.prefix(8)) → terminalId=\(newTerminalId)")
             }
         }
     }
@@ -453,8 +431,4 @@ final class TerminalWorkingDirectoryRegistry {
         """
     }
 
-    /// 日志辅助方法（已禁用）
-    private func logDebug(_ message: String) {
-        // 日志已禁用
-    }
 }

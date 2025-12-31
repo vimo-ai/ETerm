@@ -11,19 +11,19 @@ import Foundation
 /// 事件网关
 ///
 /// 监听插件 emit 的事件，通过 Unix Domain Socket 推送给外部进程。
-/// 外部进程（如调度器 Claude）可通过 `nc -U ~/.eterm/run/events/claude/responseComplete.sock`
+/// 外部进程（如调度器 Claude）可通过 `nc -U ~/.vimo/eterm/run/events/claude/responseComplete.sock`
 /// 监听特定事件。
 ///
 /// ## 使用方式
 /// ```bash
 /// # 监听所有 Claude 完成事件
-/// nc -U ~/.eterm/run/events/claude/responseComplete.sock
+/// nc -U ~/.vimo/eterm/run/events/claude/responseComplete.sock
 ///
 /// # 监听所有 Claude 相关事件
-/// nc -U ~/.eterm/run/events/claude.sock
+/// nc -U ~/.vimo/eterm/run/events/claude.sock
 ///
 /// # 监听所有事件
-/// nc -U ~/.eterm/run/events/all.sock
+/// nc -U ~/.vimo/eterm/run/events/all.sock
 /// ```
 final class EventGateway {
 
@@ -185,7 +185,7 @@ final class EventGateway {
 // MARK: - ETermPaths Extension
 
 extension ETermPaths {
-    /// 事件 Socket 目录: ~/.eterm/run/events
+    /// 事件 Socket 目录: ~/.vimo/eterm/run/events
     static var eventsSocketDirectory: String {
         return "\(run)/events"
     }

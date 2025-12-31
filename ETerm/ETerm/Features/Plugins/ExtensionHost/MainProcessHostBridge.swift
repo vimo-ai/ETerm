@@ -123,6 +123,22 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
+    func createTerminalTab(cwd: String?) -> Int? {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated {
+                CoreTerminalService.createTab(cwd: cwd).terminalId
+            }
+        } else {
+            var result: Int?
+            DispatchQueue.main.sync {
+                result = MainActor.assumeIsolated {
+                    CoreTerminalService.createTab(cwd: cwd).terminalId
+                }
+            }
+            return result
+        }
+    }
+
     func getTerminalInfo(terminalId: Int) -> TerminalInfo? {
         if Thread.isMainThread {
             return Self.doGetTerminalInfo(terminalId: terminalId)

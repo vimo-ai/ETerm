@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UniformTypeIdentifiers
+import ETermKit
 
 struct SettingsView: View {
     @StateObject private var configManager = AIConfigManager.shared

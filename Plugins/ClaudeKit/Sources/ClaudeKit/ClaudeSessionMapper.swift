@@ -66,7 +66,7 @@ final class ClaudeSessionMapper {
 
     /// 从老版本 SessionManager 迁移数据
     ///
-    /// 老版本存储在 `~/.eterm/config/session.json` 的 `plugins.claude` 字段
+    /// 老版本存储在 `~/.vimo/eterm/config/session.json` 的 `plugins.claude` 字段
     private func migrateFromSessionManager() {
         // 如果新存储已有数据，跳过迁移
         if FileManager.default.fileExists(atPath: storagePath) {

@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import ETermKit
 
 // MARK: - 配置
 
@@ -476,12 +477,4 @@ private struct AnyCodable: Encodable {
             throw EncodingError.invalidValue(value, context)
         }
     }
-}
-
-// MARK: - Logging Helper
-
-private func logError(_ message: String) {
-    #if DEBUG
-    print("[OllamaService] ERROR: \(message)")
-    #endif
 }

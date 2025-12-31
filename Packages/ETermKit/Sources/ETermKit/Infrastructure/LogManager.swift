@@ -1,6 +1,6 @@
 //
 //  LogManager.swift
-//  ETerm
+//  ETermKit
 //
 //  统一的日志管理
 //  支持日志级别、文件输出、调试模式
@@ -9,7 +9,7 @@
 import Foundation
 
 /// 日志级别
-enum LogLevel: String, Comparable {
+public enum LogLevel: String, Comparable, Sendable {
     case debug = "DEBUG"
     case info = "INFO"
     case warn = "WARN"
@@ -34,32 +34,32 @@ enum LogLevel: String, Comparable {
         }
     }
 
-    static func < (lhs: LogLevel, rhs: LogLevel) -> Bool {
+    public static func < (lhs: LogLevel, rhs: LogLevel) -> Bool {
         return lhs.priority < rhs.priority
     }
 }
 
 /// 统一日志管理器
-class LogManager {
+public final class LogManager: @unchecked Sendable {
 
     // MARK: - Singleton
 
-    static let shared = LogManager()
+    public static let shared = LogManager()
 
     // MARK: - Properties
 
     /// 是否启用调试输出到 stderr
-    var debugEnabled: Bool = false
+    public var debugEnabled: Bool = false
 
     /// 是否启用文件日志
-    var fileLoggingEnabled: Bool = true
+    public var fileLoggingEnabled: Bool = true
 
     /// 最小日志级别（低于此级别的日志会被忽略）
     /// - debug: 记录所有日志
     /// - info: 忽略 debug
     /// - warn: 只记录 warn 和 error
     /// - error: 只记录 error
-    var minimumLevel: LogLevel = .info
+    public var minimumLevel: LogLevel = .info
 
     /// 当前日志文件路径
     private var currentLogFile: String?
@@ -103,29 +103,29 @@ class LogManager {
 
         } catch {
             // 日志系统初始化失败，输出到 stderr
-            fputs("❌ LogManager setup failed: \(error)\n", stderr)
+            fputs("LogManager setup failed: \(error)\n", stderr)
         }
     }
 
     // MARK: - Public Logging Methods
 
     /// 记录 debug 日志
-    func debug(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+    public func debug(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
         log(message, level: .debug, file: file, function: function, line: line)
     }
 
     /// 记录 info 日志
-    func info(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+    public func info(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
         log(message, level: .info, file: file, function: function, line: line)
     }
 
     /// 记录 warn 日志
-    func warn(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+    public func warn(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
         log(message, level: .warn, file: file, function: function, line: line)
     }
 
     /// 记录 error 日志
-    func error(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+    public func error(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
         log(message, level: .error, file: file, function: function, line: line)
     }
 
@@ -189,7 +189,7 @@ class LogManager {
     // MARK: - File Management
 
     /// 清理旧日志（保留最近 N 天）
-    func cleanOldLogs(keepDays: Int = 7) {
+    public func cleanOldLogs(keepDays: Int = 7) {
         queue.async {
             do {
                 let fileManager = FileManager.default
@@ -219,21 +219,21 @@ class LogManager {
 // MARK: - Global Convenience Functions
 
 /// 全局 debug 日志函数
-func logDebug(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+public func logDebug(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
     LogManager.shared.debug(message, file: file, function: function, line: line)
 }
 
 /// 全局 info 日志函数
-func logInfo(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+public func logInfo(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
     LogManager.shared.info(message, file: file, function: function, line: line)
 }
 
 /// 全局 warn 日志函数
-func logWarn(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+public func logWarn(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
     LogManager.shared.warn(message, file: file, function: function, line: line)
 }
 
 /// 全局 error 日志函数
-func logError(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
+public func logError(_ message: String, file: String = #file, function: String = #function, line: Int = #line) {
     LogManager.shared.error(message, file: file, function: function, line: line)
 }

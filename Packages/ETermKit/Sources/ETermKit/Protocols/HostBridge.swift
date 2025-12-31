@@ -83,6 +83,16 @@ public protocol HostBridge: AnyObject, Sendable {
     ///   - data: 要写入的字符串数据
     func writeToTerminal(terminalId: Int, data: String)
 
+    /// 创建终端 Tab
+    ///
+    /// 在当前窗口的当前 Panel 创建新终端 Tab。
+    ///
+    /// 需要 capability: `terminal.createTab`
+    ///
+    /// - Parameter cwd: 工作目录（nil 使用当前目录）
+    /// - Returns: 新终端的 ID，失败返回 nil
+    func createTerminalTab(cwd: String?) -> Int?
+
     /// 获取终端信息
     ///
     /// - Parameter terminalId: 终端 ID
@@ -368,7 +378,7 @@ public protocol HostBridge: AnyObject, Sendable {
 
     /// 获取 Socket 目录路径
     ///
-    /// 返回 `~/.eterm/run/sockets` 的绝对路径。
+    /// 返回 `~/.vimo/eterm/run/sockets` 的绝对路径。
     /// 插件在此目录下创建自己的 socket 文件。
     ///
     /// - Returns: Socket 目录的绝对路径
@@ -376,7 +386,7 @@ public protocol HostBridge: AnyObject, Sendable {
 
     /// 获取指定 namespace 的 socket 路径
     ///
-    /// 返回 `~/.eterm/run/sockets/{namespace}.sock` 的绝对路径。
+    /// 返回 `~/.vimo/eterm/run/sockets/{namespace}.sock` 的绝对路径。
     ///
     /// - Parameter namespace: socket namespace（如 "claude"）
     /// - Returns: Socket 文件的绝对路径

@@ -8,6 +8,7 @@ import Combine
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import ETermKit
 
 /// 工作区插件
 final class WorkspacePlugin: Plugin {

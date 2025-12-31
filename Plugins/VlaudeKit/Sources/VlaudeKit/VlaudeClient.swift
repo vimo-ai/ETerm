@@ -19,14 +19,25 @@ protocol VlaudeClientDelegate: AnyObject {
     /// 连接断开
     func vlaudeClientDidDisconnect(_ client: VlaudeClient)
 
-    /// 收到注入请求
+    /// 收到注入请求（旧方式）
     func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String)
 
     /// 收到 Mobile 查看状态
     func vlaudeClient(_ client: VlaudeClient, didReceiveMobileViewing sessionId: String, isViewing: Bool)
 
-    /// 收到创建会话请求
+    /// 收到创建会话请求（旧方式）
     func vlaudeClient(_ client: VlaudeClient, didReceiveCreateSession projectPath: String, prompt: String?, requestId: String?)
+
+    // MARK: - 新 WebSocket 事件（统一接口）
+
+    /// 收到创建会话请求（新方式）
+    func vlaudeClient(_ client: VlaudeClient, didReceiveCreateSessionNew projectPath: String, prompt: String?, requestId: String)
+
+    /// 收到发送消息请求
+    func vlaudeClient(_ client: VlaudeClient, didReceiveSendMessage sessionId: String, text: String, projectPath: String?, clientId: String?, requestId: String)
+
+    /// 收到检查 loading 状态请求
+    func vlaudeClient(_ client: VlaudeClient, didReceiveCheckLoading sessionId: String, projectPath: String?, requestId: String)
 }
 
 // MARK: - VlaudeClient
@@ -60,11 +71,8 @@ final class VlaudeClient {
     private func initSharedDb() {
         do {
             sharedDb = try SharedDbBridge()
-            // 注册为 Reader（VlaudeKit 主要读取数据）
             _ = try sharedDb?.register()
-            print("[VlaudeClient] SharedDb initialized")
         } catch {
-            print("[VlaudeClient] SharedDb not available: \(error)")
             sharedDb = nil
         }
     }
@@ -143,13 +151,25 @@ final class VlaudeClient {
     /// 释放 SharedDbBridge（线程安全）
     private func releaseSharedDb() {
         guard let db = sharedDb else { return }
-        do {
-            try db.release()
-            print("[VlaudeClient] SharedDb released")
-        } catch {
-            print("[VlaudeClient] SharedDb release failed: \(error)")
-        }
+        try? db.release()
         sharedDb = nil
+    }
+
+    // MARK: - Connection Handling
+
+    /// 处理连接成功（首次连接或重连）
+    private func handleConnected() {
+        isConnected = true
+
+        // 发送注册和上线通知
+        register()
+        reportOnline()
+
+        // 推送初始数据
+        pushInitialData()
+
+        // 通知 delegate
+        delegate?.vlaudeClientDidConnect(self)
     }
 
     // MARK: - Event Handlers
@@ -157,41 +177,46 @@ final class VlaudeClient {
     private func setupEventHandlers() {
         guard let socket = socket else { return }
 
+        // 先移除旧的事件处理器，避免重复注册
+        socket.offAll()
+
         // 连接成功
         socket.onClientEvent(.connect) { [weak self] in
             guard let self = self else { return }
-            print("[VlaudeClient] Connected")
-            self.isConnected = true
+            print("[VlaudeKit] Socket connected")
+            self.handleConnected()
+        }
 
-            // 发送注册和上线通知
-            self.register()
-            self.reportOnline()
+        // 重连成功（关键：服务器重启后会触发这个事件）
+        socket.onClientEvent(.reconnect) { [weak self] in
+            guard let self = self else { return }
+            print("[VlaudeKit] Socket reconnected")
+            self.handleConnected()
+        }
 
-            // 推送初始数据
-            self.pushInitialData()
-
-            // 通知 delegate
-            self.delegate?.vlaudeClientDidConnect(self)
+        // 重连尝试
+        socket.onClientEvent(.reconnectAttempt) { [weak self] in
+            guard self != nil else { return }
+            print("[VlaudeKit] Reconnect attempt...")
         }
 
         // 断开连接
         socket.onClientEvent(.disconnect) { [weak self] in
             guard let self = self else { return }
-            print("[VlaudeClient] Disconnected")
+            print("[VlaudeKit] Socket disconnected")
             self.isConnected = false
-
             self.delegate?.vlaudeClientDidDisconnect(self)
         }
 
         // 连接错误
         socket.onClientEvent(.error) { [weak self] in
-            print("[VlaudeClient] Error")
-            _ = self
+            guard self != nil else { return }
+            print("[VlaudeKit] Socket error")
         }
 
         // 服务器关闭通知
         socket.on("server-shutdown") { [weak self] _ in
-            print("[VlaudeClient] Server shutting down")
+            print("[VlaudeKit] Server shutdown notification")
             self?.isConnected = false
         }
 
@@ -203,9 +228,6 @@ final class VlaudeClient {
                   let text = dict["text"] as? String else {
                 return
             }
-
-            print("[VlaudeClient] Received inject: session=\(sessionId)")
-
             self.delegate?.vlaudeClient(self, didReceiveInject: sessionId, text: text)
         }
 
@@ -217,13 +239,10 @@ final class VlaudeClient {
                   let isViewing = dict["isViewing"] as? Bool else {
                 return
             }
-
-            print("[VlaudeClient] Mobile viewing: session=\(sessionId), isViewing=\(isViewing)")
-
             self.delegate?.vlaudeClient(self, didReceiveMobileViewing: sessionId, isViewing: isViewing)
         }
 
-        // 创建会话请求
+        // 创建会话请求（旧方式）
         socket.on("server:createSessionInEterm") { [weak self] data in
             guard let self = self,
                   let dict = data.first as? [String: Any],
@@ -233,10 +252,50 @@ final class VlaudeClient {
 
             let prompt = dict["prompt"] as? String
             let requestId = dict["requestId"] as? String
-
-            print("[VlaudeClient] Create session: projectPath=\(projectPath), requestId=\(requestId ?? "N/A")")
-
             self.delegate?.vlaudeClient(self, didReceiveCreateSession: projectPath, prompt: prompt, requestId: requestId)
+        }
+
+        // MARK: - 新 WebSocket 事件（统一接口）
+
+        // 创建会话请求（新方式）
+        socket.on("server:createSession") { [weak self] data in
+            guard let self = self,
+                  let dict = data.first as? [String: Any],
+                  let projectPath = dict["projectPath"] as? String,
+                  let requestId = dict["requestId"] as? String else {
+                return
+            }
+
+            let prompt = dict["prompt"] as? String
+            self.delegate?.vlaudeClient(self, didReceiveCreateSessionNew: projectPath, prompt: prompt, requestId: requestId)
+        }
+
+        // 发送消息请求
+        socket.on("server:sendMessage") { [weak self] data in
+            guard let self = self,
+                  let dict = data.first as? [String: Any],
+                  let sessionId = dict["sessionId"] as? String,
+                  let text = dict["text"] as? String,
+                  let requestId = dict["requestId"] as? String else {
+                return
+            }
+
+            let projectPath = dict["projectPath"] as? String
+            let clientId = dict["clientId"] as? String
+            self.delegate?.vlaudeClient(self, didReceiveSendMessage: sessionId, text: text, projectPath: projectPath, clientId: clientId, requestId: requestId)
+        }
+
+        // 检查 loading 状态请求
+        socket.on("server:checkLoading") { [weak self] data in
+            guard let self = self,
+                  let dict = data.first as? [String: Any],
+                  let sessionId = dict["sessionId"] as? String,
+                  let requestId = dict["requestId"] as? String else {
+                return
+            }
+
+            let projectPath = dict["projectPath"] as? String
+            self.delegate?.vlaudeClient(self, didReceiveCheckLoading: sessionId, projectPath: projectPath, requestId: requestId)
         }
 
         // 数据请求：项目列表
@@ -278,9 +337,8 @@ final class VlaudeClient {
             "platform": "darwin",
             "version": "1.0.0"
         ]
-
+        print("[VlaudeKit] 📤 发送 daemon:register hostname=\(deviceName)")
         socket?.emit("daemon:register", data)
-        print("[VlaudeClient] Register sent")
     }
 
     /// 上线通知
@@ -288,9 +346,8 @@ final class VlaudeClient {
         let data: [String: Any] = [
             "timestamp": ISO8601DateFormatter().string(from: Date())
         ]
-
+        print("[VlaudeKit] 📤 发送 daemon:etermOnline")
         socket?.emit("daemon:etermOnline", data)
-        print("[VlaudeClient] Online sent")
     }
 
     /// 离线通知
@@ -306,7 +363,10 @@ final class VlaudeClient {
 
     /// 上报 session 可用
     func reportSessionAvailable(sessionId: String, terminalId: Int, projectPath: String? = nil) {
-        guard isConnected else { return }
+        guard isConnected else {
+            print("[VlaudeKit] ⚠️ reportSessionAvailable 跳过: 未连接")
+            return
+        }
 
         var data: [String: Any] = [
             "sessionId": sessionId,
@@ -317,8 +377,8 @@ final class VlaudeClient {
             data["projectPath"] = path
         }
 
+        print("[VlaudeKit] 📤 发送 daemon:etermSessionAvailable sessionId=\(sessionId)")
         socket?.emit("daemon:etermSessionAvailable", data)
-        print("[VlaudeClient] SessionAvailable sent: \(sessionId)")
     }
 
     /// 上报 session 不可用
@@ -335,10 +395,9 @@ final class VlaudeClient {
         }
 
         socket?.emit("daemon:etermSessionUnavailable", data)
-        print("[VlaudeClient] SessionUnavailable sent: \(sessionId)")
     }
 
-    /// 上报 session 创建完成
+    /// 上报 session 创建完成（旧方式）
     func reportSessionCreated(requestId: String, sessionId: String, projectPath: String) {
         guard isConnected else { return }
 
@@ -350,7 +409,62 @@ final class VlaudeClient {
         ]
 
         socket?.emit("daemon:etermSessionCreated", data)
-        print("[VlaudeClient] SessionCreated sent: \(sessionId)")
+    }
+
+    // MARK: - 新 WebSocket 响应（统一接口）
+
+    /// 响应 createSession 结果
+    func emitSessionCreatedResult(
+        requestId: String,
+        success: Bool,
+        sessionId: String? = nil,
+        encodedDirName: String? = nil,
+        transcriptPath: String? = nil,
+        error: String? = nil
+    ) {
+        guard isConnected else { return }
+
+        var data: [String: Any] = [
+            "requestId": requestId,
+            "success": success
+        ]
+        if let sessionId = sessionId { data["sessionId"] = sessionId }
+        if let encodedDirName = encodedDirName { data["encodedDirName"] = encodedDirName }
+        if let transcriptPath = transcriptPath { data["transcriptPath"] = transcriptPath }
+        if let error = error { data["error"] = error }
+
+        socket?.emit("daemon:sessionCreatedResult", data)
+    }
+
+    /// 响应 sendMessage 结果
+    func emitSendMessageResult(
+        requestId: String,
+        success: Bool,
+        message: String? = nil,
+        via: String? = nil
+    ) {
+        guard isConnected else { return }
+
+        var data: [String: Any] = [
+            "requestId": requestId,
+            "success": success
+        ]
+        if let message = message { data["message"] = message }
+        if let via = via { data["via"] = via }
+
+        socket?.emit("daemon:sendMessageResult", data)
+    }
+
+    /// 响应 checkLoading 结果
+    func emitCheckLoadingResult(requestId: String, loading: Bool) {
+        guard isConnected else { return }
+
+        let data: [String: Any] = [
+            "requestId": requestId,
+            "loading": loading
+        ]
+
+        socket?.emit("daemon:checkLoadingResult", data)
     }
 
     // MARK: - Connection Test
@@ -417,7 +531,6 @@ final class VlaudeClient {
         let requestId = data["requestId"] as? String
 
         guard let projects = sessionReader.listProjects(limit: UInt32(limit)) else {
-            print("[VlaudeClient] Failed to list projects")
             return
         }
 
@@ -430,7 +543,6 @@ final class VlaudeClient {
         let requestId = data["requestId"] as? String
 
         guard let sessions = sessionReader.listSessions(projectPath: projectPath) else {
-            print("[VlaudeClient] Failed to list sessions")
             return
         }
 
@@ -441,7 +553,6 @@ final class VlaudeClient {
     private func handleRequestSessionMessages(_ data: [String: Any]) {
         guard let sessionId = data["sessionId"] as? String,
               let projectPath = data["projectPath"] as? String else {
-            print("[VlaudeClient] Missing sessionId or projectPath")
             return
         }
 
@@ -461,7 +572,6 @@ final class VlaudeClient {
             offset: UInt32(offset),
             orderAsc: orderStr == "asc"
         ) else {
-            print("[VlaudeClient] Failed to read messages for session: \(sessionId)")
             return
         }
 
@@ -478,7 +588,6 @@ final class VlaudeClient {
     /// 处理搜索请求（需要 SharedDb）
     private func handleRequestSearch(_ data: [String: Any]) {
         guard let query = data["query"] as? String else {
-            print("[VlaudeClient] Missing query for search")
             return
         }
 
@@ -489,7 +598,6 @@ final class VlaudeClient {
         let requestId = data["requestId"] as? String
 
         guard let sharedDb = sharedDb else {
-            print("[VlaudeClient] Search not available - SharedDb not initialized")
             reportSearchResults(results: [], query: query, requestId: requestId, error: "Search not available")
             return
         }
@@ -503,7 +611,6 @@ final class VlaudeClient {
             }
             reportSearchResults(results: results, query: query, requestId: requestId, error: nil)
         } catch {
-            print("[VlaudeClient] Search failed: \(error)")
             reportSearchResults(results: [], query: query, requestId: requestId, error: error.localizedDescription)
         }
     }
@@ -516,13 +623,13 @@ final class VlaudeClient {
 
         var data: [String: Any] = [
             "projects": projects.map { project in
-                var dict: [String: Any] = [
+                let dict: [String: Any] = [
                     "path": project.path,
-                    "encodedName": project.encodedName
+                    "encodedName": project.encodedName,
+                    "name": project.name,
+                    "sessionCount": project.sessionCount,
+                    "lastModified": project.lastActive
                 ]
-                if let name = project.name { dict["name"] = name }
-                if let count = project.sessionCount { dict["sessionCount"] = count }
-                if let lastActive = project.lastActive { dict["lastModified"] = lastActive }
                 return dict
             }
         ]
@@ -532,7 +639,6 @@ final class VlaudeClient {
         }
 
         socket?.emit("daemon:projectData", data)
-        print("[VlaudeClient] Sent \(projects.count) projects")
     }
 
     /// 上报会话元数据
@@ -562,7 +668,6 @@ final class VlaudeClient {
         }
 
         socket?.emit("daemon:sessionMetadata", data)
-        print("[VlaudeClient] Sent \(sessions.count) sessions")
     }
 
     /// 上报会话消息
@@ -578,7 +683,9 @@ final class VlaudeClient {
 
         // 将 RawMessage 转换为字典格式
         let messagesData: [[String: Any]] = messages.compactMap { msg in
-            var dict: [String: Any] = [:]
+            var dict: [String: Any] = [
+                "uuid": msg.uuid
+            ]
             if let type = msg.type { dict["type"] = type }
             if let timestamp = msg.timestamp { dict["timestamp"] = timestamp }
             if let message = msg.message {
@@ -587,7 +694,7 @@ final class VlaudeClient {
                 if let content = message.content { msgDict["content"] = content.value }
                 dict["message"] = msgDict
             }
-            return dict.isEmpty ? nil : dict
+            return dict
         }
 
         var data: [String: Any] = [
@@ -603,7 +710,6 @@ final class VlaudeClient {
         }
 
         socket?.emit("daemon:sessionMessages", data)
-        print("[VlaudeClient] Sent \(messages.count) messages for session \(sessionId)")
     }
 
     /// 上报搜索结果
@@ -640,14 +746,106 @@ final class VlaudeClient {
         }
 
         socket?.emit("daemon:searchResults", data)
-        print("[VlaudeClient] Sent \(results.count) search results for '\(query)'")
+    }
+
+    // MARK: - Project Update
+
+    /// 上报项目更新（当有新活动时通知服务器）
+    /// - Parameter projectPath: 项目路径
+    func reportProjectUpdate(projectPath: String) {
+        guard isConnected else { return }
+
+        let data: [String: Any] = [
+            "projectPath": projectPath,
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+
+        print("[VlaudeKit] 📤 发送 daemon:projectUpdate projectPath=\(projectPath)")
+        socket?.emit("daemon:projectUpdate", data)
+    }
+
+    // MARK: - Real-time Message Push
+
+    /// 推送单条消息给 Server（由 SessionWatcher 调用）
+    /// - Parameters:
+    ///   - sessionId: 会话 ID
+    ///   - message: 消息
+    func pushMessage(sessionId: String, message: RawMessage) {
+        guard isConnected else { return }
+
+        // 转换消息格式
+        var msgDict: [String: Any] = [
+            "uuid": message.uuid
+        ]
+        if let type = message.type { msgDict["type"] = type }
+        if let timestamp = message.timestamp { msgDict["timestamp"] = timestamp }
+        if let msg = message.message {
+            var innerDict: [String: Any] = [:]
+            if let role = msg.role { innerDict["role"] = role }
+            if let content = msg.content { innerDict["content"] = content.value }
+            msgDict["message"] = innerDict
+        }
+
+        let role = (msgDict["message"] as? [String: Any])?["role"] as? String ?? "unknown"
+        print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role)")
+        socket?.emit("daemon:newMessage", [
+            "sessionId": sessionId,
+            "message": msgDict
+        ])
+    }
+
+    /// 推送新消息给 Server（让 iOS 实时看到）
+    /// 注意：此方法已被 SessionWatcher + pushMessage 替代，保留用于兼容
+    /// - Parameters:
+    ///   - sessionId: 会话 ID
+    ///   - transcriptPath: JSONL 文件路径
+    func pushNewMessages(sessionId: String, transcriptPath: String) {
+        print("[VlaudeKit] 📨 pushNewMessages 被调用: sessionId=\(sessionId)")
+
+        guard isConnected else {
+            print("[VlaudeKit] ⚠️ pushNewMessages 跳过: 未连接")
+            return
+        }
+
+        // 读取最新的消息（倒序取最后一条）
+        guard let result = sessionReader.readMessages(
+            sessionPath: transcriptPath,
+            limit: 1,
+            offset: 0,
+            orderAsc: false
+        ), !result.messages.isEmpty else {
+            print("[VlaudeKit] ⚠️ pushNewMessages 跳过: 无法读取消息")
+            return
+        }
+
+        // 转换消息格式
+        let message = result.messages[0]
+        var msgDict: [String: Any] = [
+            "uuid": message.uuid
+        ]
+        if let type = message.type { msgDict["type"] = type }
+        if let timestamp = message.timestamp { msgDict["timestamp"] = timestamp }
+        if let msg = message.message {
+            var innerDict: [String: Any] = [:]
+            if let role = msg.role { innerDict["role"] = role }
+            if let content = msg.content { innerDict["content"] = content.value }
+            msgDict["message"] = innerDict
+        }
+
+        // 推送给 Server
+        let role = (msgDict["message"] as? [String: Any])?["role"] as? String ?? "unknown"
+        print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role)")
+        socket?.emit("daemon:newMessage", [
+            "sessionId": sessionId,
+            "message": msgDict
+        ])
     }
 
     /// 推送初始数据（连接成功后调用）
     /// 注意：VlaudeKit 只负责报告 ETerm 中当前打开的会话，不推送历史数据
     /// 历史数据由 Rust daemon 负责推送
     func pushInitialData() {
-        print("[VlaudeClient] Ready (no initial data push, ETerm sessions will be reported individually)")
+        // No-op: ETerm sessions are reported individually
     }
 
     // MARK: - SharedDb Write Operations
@@ -656,36 +854,24 @@ final class VlaudeClient {
     /// 使用 session-reader-ffi 正确解析路径（支持中文路径）
     /// - Parameter path: JSONL 会话文件路径
     func indexSession(path: String) {
-        guard let sharedDb = sharedDb else {
-            print("[VlaudeClient] SharedDb not available, skipping indexSession")
-            return
-        }
+        guard let sharedDb = sharedDb else { return }
 
         // 检查是否为 Writer，如果不是尝试接管
         if sharedDb.role != .writer {
             do {
                 let health = try sharedDb.checkWriterHealth()
                 if health == .timeout || health == .released {
-                    guard try sharedDb.tryTakeover() else {
-                        print("[VlaudeClient] Cannot takeover Writer, skipping indexSession")
-                        return
-                    }
+                    guard try sharedDb.tryTakeover() else { return }
                 } else {
-                    print("[VlaudeClient] Not Writer and cannot takeover, skipping indexSession")
                     return
                 }
             } catch {
-                print("[VlaudeClient] Writer check failed: \(error)")
                 return
             }
         }
 
         // 使用 session-reader-ffi 解析会话
-        // 这会正确读取 JSONL 中的 cwd 字段来确定真实的项目路径
-        guard let session = sessionReader.parseSessionForIndex(jsonlPath: path) else {
-            print("[VlaudeClient] No messages to index in \(path)")
-            return
-        }
+        guard let session = sessionReader.parseSessionForIndex(jsonlPath: path) else { return }
 
         // 转换消息格式
         let messages = session.messages.map { msg in
@@ -706,10 +892,9 @@ final class VlaudeClient {
                 source: "claude-code"
             )
             try sharedDb.upsertSession(sessionId: session.sessionId, projectId: projectId)
-            let inserted = try sharedDb.insertMessages(sessionId: session.sessionId, messages: messages)
-            print("[VlaudeClient] Indexed \(inserted) messages via SharedDb for session \(session.sessionId)")
+            _ = try sharedDb.insertMessages(sessionId: session.sessionId, messages: messages)
         } catch {
-            print("[VlaudeClient] Failed to write to SharedDb: \(error)")
+            // Silently fail - indexing is best-effort
         }
     }
 }

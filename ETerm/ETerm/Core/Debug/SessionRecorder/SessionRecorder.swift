@@ -13,6 +13,7 @@
 
 import Foundation
 import AppKit
+import ETermKit
 
 // MARK: - 录制器配置
 
