@@ -397,20 +397,46 @@ impl LineRasterizer {
 
             match cursor.shape {
                 CursorShape::Block => {
-                    // 实心方块，填满整个 line_height
+                    // 🎯 先查找光标位置的字符，以确定光标宽度
+                    let cursor_start_x = cursor_x;
+                    let cursor_end_x = cursor_x + cell_width;
+
+                    let glyph_at_cursor = layout.glyphs.iter().find(|g| {
+                        let glyph_end_x = g.x + cell_width * g.width;
+                        g.x < cursor_end_x && glyph_end_x > cursor_start_x
+                    });
+
+                    // 光标宽度：如果在宽字符上，使用双倍宽度
+                    let cursor_width = if let Some(g) = glyph_at_cursor {
+                        cell_width * g.width  // 宽字符时 width = 2.0
+                    } else {
+                        cell_width
+                    };
+
+                    // 光标起始位置：如果在宽字符的第二个 cell 上，需要调整到字符开始位置
+                    let actual_cursor_x = if let Some(g) = glyph_at_cursor {
+                        g.x  // 使用字符的实际起始位置
+                    } else {
+                        cursor_x
+                    };
+
+                    // 绘制光标背景
                     cursor_paint.set_style(skia_safe::PaintStyle::Fill);
-                    let rect = skia_safe::Rect::from_xywh(cursor_x, 0.0, cell_width, line_height);
+                    let rect = skia_safe::Rect::from_xywh(actual_cursor_x, 0.0, cursor_width, line_height);
                     canvas.draw_rect(rect, &cursor_paint);
 
-                    // 🎯 重绘光标下的字符（使用反转颜色）
-                    // 找到光标位置的字形
-                    let cursor_col = cursor.col as usize;
-                    if let Some(glyph) = layout.glyphs.iter().find(|g| {
-                        let glyph_col = (g.x / cell_width).round() as usize;
-                        glyph_col == cursor_col || (g.width > 1.0 && glyph_col + 1 == cursor_col)
-                    }) {
-                        // 反转颜色：使用背景色作为文字颜色
-                        let inverted_color = background_color;
+                    // 重绘光标下的字符（使用反转颜色）
+                    if let Some(glyph) = glyph_at_cursor {
+                        // 反转颜色：根据光标亮度计算对比色
+                        // 亮度公式：0.299*R + 0.587*G + 0.114*B
+                        let cursor_luminance = 0.299 * cursor_color.r + 0.587 * cursor_color.g + 0.114 * cursor_color.b;
+                        let inverted_color = if cursor_luminance > 0.5 {
+                            // 光标是亮色，文字用黑色
+                            Color4f::new(0.0, 0.0, 0.0, 1.0)
+                        } else {
+                            // 光标是暗色，文字用白色
+                            Color4f::new(1.0, 1.0, 1.0, 1.0)
+                        };
                         let mut text_paint = Paint::default();
                         text_paint.set_anti_alias(true);
                         text_paint.set_color4f(inverted_color, None);
