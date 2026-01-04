@@ -802,27 +802,37 @@ final class WindowManager: NSObject {
             return false
         }
 
-        // 3. 从源 Panel 移除（不关闭终端）
+        // 3. 分离终端（保持 PTY 连接活跃）
+        var detachedTerminal: DetachedTerminalHandle?
+        if let terminalId = tab.rustTerminalId {
+            detachedTerminal = sourceCoordinator.detachTerminal(Int(terminalId))
+        }
+
+        // 4. 从源 Panel 移除（不关闭终端，已经分离）
         guard sourceCoordinator.removeTab(tabId, from: sourcePanelId, closeTerminal: false) else {
+            // 如果失败，销毁已分离的终端
+            if let detached = detachedTerminal {
+                TerminalPoolWrapper.destroyDetachedTerminal(detached)
+            }
             return false
         }
 
-        // 4. 添加到目标 Panel
-        targetCoordinator.addTab(tab, to: targetPanelId)
+        // 5. 添加到目标 Panel，并附加终端
+        targetCoordinator.addTab(tab, to: targetPanelId, detachedTerminal: detachedTerminal)
 
-        // 5. 如果源窗口没有 Page 了，关闭源窗口
+        // 6. 如果源窗口没有 Page 了，关闭源窗口
         if sourceCoordinator.terminalWindow.pages.all.isEmpty {
             if let sourceWindow = windows.first(where: { $0.windowNumber == sourceWindowNumber }) {
                 sourceWindow.close()
             }
         }
 
-        // 6. 激活目标窗口
+        // 7. 激活目标窗口
         if let targetWindow = windows.first(where: { $0.windowNumber == targetWindowNumber }) {
             targetWindow.makeKeyAndOrderFront(nil)
         }
 
-        // 7. 保存 Session（跨窗口移动，需要备份）
+        // 8. 保存 Session（跨窗口移动，需要备份）
         saveSessionWithBackup()
 
         return true
@@ -996,24 +1006,23 @@ extension WindowManager: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? KeyableWindow else { return }
 
-        // 🔑 关键：先保存 Session，再移除窗口
-        // 否则保存时窗口已经从列表移除，会保存空 Session
-        saveSession()
-
-        // 关键：在注销 Coordinator 之前，先调用 cleanup() 清理终端
-        // 这样可以确保在对象开始释放之前完成清理
+        // 1. 清理终端（在注销 Coordinator 之前）
         if let coordinator = coordinators[window.windowNumber] {
             coordinator.cleanup()
         }
 
+        // 2. 注销 Coordinator 和移除窗口
         unregisterCoordinator(for: window)
         removeWindow(window)
 
-        // 🔑 关键：清除 delegate 引用，防止窗口释放后回调导致 crash
-        // 参考: https://stackoverflow.com/questions/65116534
+        // 3. 保存 Session（不包含被关闭的窗口）
+        // 注：如果所有窗口都关闭了，会保存空 Session，下次启动创建新窗口
+        saveSession()
+
+        // 4. 清除 delegate 引用，防止窗口释放后回调导致 crash
         window.delegate = nil
 
-        // 清除 contentView，帮助释放 SwiftUI 视图层级
+        // 5. 清除 contentView，帮助释放 SwiftUI 视图层级
         window.contentView = nil
     }
 

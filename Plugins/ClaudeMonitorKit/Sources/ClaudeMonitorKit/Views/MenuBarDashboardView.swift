@@ -125,7 +125,7 @@ struct WeeklyUsageCard: View {
                 }(),
                 valueText: formattedTimeProgress(metrics),
                 progress: metrics.progress,
-                tint: colorForTime(metrics.progress),
+                tint: colorForTimeProgress(usageProgress: snapshot.usageProgress, timeProgress: metrics.progress),
                 overlaySegments: overlaySegments,
                 arrowMarkers: arrowMarkers
             )
@@ -388,20 +388,45 @@ private func buildDynamicReason(usageProgress: Double, timeProgress: Double) -> 
     return String(format: "已使用 %.1f%%，时间进度 %.1f%%，%@", usagePercent, timePercent, deltaText)
 }
 
+/// ETerm 主题色（青绿色 #2AD98D）
+private let themeAccentColor = Color(red: 0x2A/255.0, green: 0xD9/255.0, blue: 0x8D/255.0)
+
+/// 用量标记颜色：使用主题色
 private func colorForUsage(_ progress: Double) -> Color {
-    let clamped = min(max(progress, 0), 1)
-    let baseHue: Double = 0.33 // green
-    let saturation = 0.25 + 0.70 * clamped
-    let brightness = 0.92 - 0.45 * clamped
-    return Color(hue: baseHue, saturation: saturation, brightness: brightness)
+    return themeAccentColor
 }
 
-private func colorForTime(_ progress: Double) -> Color {
-    let clamped = min(max(progress, 0), 1)
-    let baseHue: Double = 0.58 // blue
-    let saturation = 0.30 + 0.60 * clamped
-    let brightness = 0.90 - 0.40 * clamped
-    return Color(hue: baseHue, saturation: saturation, brightness: brightness)
+/// 时间进度条颜色：根据用量与时间差值动态变化（红→绿→蓝）
+/// - Parameters:
+///   - usageProgress: 用量进度 (0-1)
+///   - timeProgress: 时间进度 (0-1)
+private func colorForTimeProgress(usageProgress: Double, timeProgress: Double) -> Color {
+    // 差值 = 用量进度 - 时间进度
+    // 正数 = 用得快（好），负数 = 用得慢（危险）
+    let delta = usageProgress - timeProgress
+
+    // 将 delta 映射到色相：
+    // delta >= +0.20 → 蓝色 (hue=0.58)
+    // delta == 0     → 绿色 (hue=0.33)
+    // delta <= -0.20 → 红色 (hue=0.0)
+    let clampedDelta = min(max(delta, -0.20), 0.20)
+    let normalized = (clampedDelta + 0.20) / 0.40  // 0.0 ~ 1.0
+
+    // 色相从红(0) → 绿(0.33) → 蓝(0.58)
+    let hue: Double
+    if normalized <= 0.5 {
+        // 红 → 绿
+        hue = normalized * 2 * 0.33
+    } else {
+        // 绿 → 蓝
+        hue = 0.33 + (normalized - 0.5) * 2 * 0.25
+    }
+
+    // 饱和度和亮度（柔和但可辨识）
+    let saturation = 0.50
+    let brightness = 0.75
+
+    return Color(hue: hue, saturation: saturation, brightness: brightness)
 }
 
 // MARK: - 数据模型

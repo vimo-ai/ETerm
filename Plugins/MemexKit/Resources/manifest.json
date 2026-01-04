@@ -16,7 +16,7 @@
             "icon": "gauge.with.dots.needle.bottom.50percent",
             "viewClass": "MemexStatusView",
             "renderMode": "tab",
-            "order": 50
+            "order": 20
         },
         {
             "id": "memex-web",
@@ -24,7 +24,7 @@
             "icon": "globe",
             "viewClass": "MemexWebOnlyView",
             "renderMode": "tab",
-            "order": 51
+            "order": 21
         }
     ],
     "infoPanelContents": [],

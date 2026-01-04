@@ -63,7 +63,7 @@ final class CapabilityChecker {
     /// 注册插件及其能力
     func registerPlugin(_ manifest: PluginManifest) {
         pluginCapabilities[manifest.id] = Set(manifest.capabilities)
-        print("[CapabilityChecker] Registered plugin '\(manifest.id)' with capabilities: \(manifest.capabilities)")
+        logDebug("[CapabilityChecker] Registered plugin '\(manifest.id)' with capabilities: \(manifest.capabilities)")
     }
 
     /// 注销插件
@@ -79,14 +79,14 @@ final class CapabilityChecker {
     /// - Returns: 是否具有该能力
     func hasCapability(pluginId: String, capability: String) -> Bool {
         guard let capabilities = pluginCapabilities[pluginId] else {
-            print("[CapabilityChecker] Unknown plugin: \(pluginId)")
+            logWarn("[CapabilityChecker] Unknown plugin: \(pluginId)")
             return false
         }
 
         let hasIt = capabilities.contains(capability)
 
         if !hasIt {
-            print("[CapabilityChecker] Plugin '\(pluginId)' missing capability: \(capability)")
+            logWarn("[CapabilityChecker] Plugin '\(pluginId)' missing capability: \(capability)")
         }
 
         return hasIt

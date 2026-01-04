@@ -14,9 +14,12 @@ struct ClaudeUsageTabView: View {
     /// 用于控制 InfoPanel 显示/隐藏
     var onToggleDashboard: (() -> Void)?
 
-    /// 根据用量与时间进度的偏差计算颜色（HSB 渐变）
+    /// ETerm 主题色（青绿色 #2AD98D）
+    private let themeAccentColor = Color(red: 0x2A/255.0, green: 0xD9/255.0, blue: 0x8D/255.0)
+
+    /// 根据用量与时间进度的偏差计算时间进度条颜色（HSB 渐变）
     /// 目标是用完配额：用量领先=好（蓝→绿），用量落后=危险（黄→橙→红）
-    private var usageColor: Color {
+    private var timeProgressColor: Color {
         guard let snapshot = tracker.snapshot else {
             return .gray
         }
@@ -42,9 +45,9 @@ struct ClaudeUsageTabView: View {
             hue = 0.33 + (normalized - 0.5) * 2 * 0.25
         }
 
-        // 饱和度和亮度根据偏差程度调整
-        let saturation = 0.6 + 0.35 * (1 - normalized)  // 落后时更饱和
-        let brightness = 0.85 - 0.15 * (1 - normalized) // 落后时稍暗
+        // 饱和度和亮度（柔和但可辨识）
+        let saturation = 0.50
+        let brightness = 0.75
 
         return Color(hue: hue, saturation: saturation, brightness: brightness)
     }
@@ -54,17 +57,17 @@ struct ClaudeUsageTabView: View {
             HStack(spacing: 6) {
                 // 双进度条
                 VStack(spacing: 2) {
-                    // 时间进度条
+                    // 时间进度条（动态颜色：红→绿→蓝）
                     UsageProgressBarView(
                         progress: tracker.snapshot?.timeProgress ?? 0,
-                        color: .blue
+                        color: timeProgressColor
                     )
                     .frame(width: 32, height: 3)
 
-                    // 用量进度条
+                    // 用量进度条（主题色）
                     UsageProgressBarView(
                         progress: tracker.snapshot?.usageProgress ?? 0,
-                        color: usageColor
+                        color: themeAccentColor
                     )
                     .frame(width: 32, height: 3)
                 }

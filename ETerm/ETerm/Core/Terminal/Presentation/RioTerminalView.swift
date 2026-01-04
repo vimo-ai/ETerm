@@ -2424,7 +2424,7 @@ struct TerminalSearchOverlay: View {
             // 计算激活 Panel 的 bounds（用于定位搜索框）
             let activePanelFrame = getActivePanelFrame(in: geometry)
 
-            // 搜索框
+            // 搜索框 - 使用 offset 定位到 Panel 右上角
             HStack(spacing: 8) {
                 // 搜索图标
                 Image(systemName: "magnifyingglass")
@@ -2491,9 +2491,10 @@ struct TerminalSearchOverlay: View {
                     .fill(Color(nsColor: .controlBackgroundColor))
                     .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 2)
             )
+            .frame(width: 360, alignment: .trailing)  // 固定容器宽度，内容靠右对齐
             .position(
-                x: activePanelFrame.maxX - 150,  // 距离右边缘 150pt（搜索框宽度约 300pt）
-                y: activePanelFrame.minY + 40     // 距离顶部 40pt
+                x: activePanelFrame.maxX - 192,  // 右边缘距 Panel 右边 12pt (360/2 + 12 = 192)
+                y: activePanelFrame.minY + 40
             )
         }
         .onChange(of: searchPanelId) {

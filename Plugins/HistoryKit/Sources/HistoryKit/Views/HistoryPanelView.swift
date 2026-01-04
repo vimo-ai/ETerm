@@ -6,6 +6,7 @@
 
 import SwiftUI
 import AppKit
+import ETermKit
 
 // MARK: - HistoryPanelView
 
@@ -21,7 +22,6 @@ public struct HistoryPanelView: View {
     }
 
     public var body: some View {
-        let _ = print("[HistoryPanelView] body called, state.workspaces.count = \(state.workspaces.count), state id = \(ObjectIdentifier(state))")
         VStack(spacing: 0) {
             // 顶部安全区域
             Color.clear
@@ -109,7 +109,7 @@ final class HistoryPanelViewModel: ObservableObject {
             try await service.restore(cwd: cwd, snapshotId: snapshotId)
             await refresh(for: cwd)
         } catch {
-            print("[HistoryKit] 恢复失败: \(error)")
+            logError("[HistoryKit] 恢复失败: \(error)")
         }
     }
 
@@ -120,7 +120,7 @@ final class HistoryPanelViewModel: ObservableObject {
             try await service.deleteSnapshot(cwd: cwd, snapshotId: snapshotId)
             await refresh(for: cwd)
         } catch {
-            print("[HistoryKit] 删除失败: \(error)")
+            logError("[HistoryKit] 删除失败: \(error)")
         }
     }
 

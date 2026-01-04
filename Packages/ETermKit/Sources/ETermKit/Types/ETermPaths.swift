@@ -36,8 +36,8 @@ public enum ETermPaths {
     /// 共享数据库目录: ~/.vimo/db
     public static let sharedDb = vimoRoot + "/db"
 
-    /// Claude 会话数据库: ~/.vimo/db/claude-session.db
-    public static let claudeSessionDatabase = sharedDb + "/claude-session.db"
+    /// Claude 会话数据库: ~/.vimo/db/ai-cli-session.db
+    public static let claudeSessionDatabase = sharedDb + "/ai-cli-session.db"
 
     // MARK: - 一级目录
 

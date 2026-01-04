@@ -118,11 +118,11 @@ actor ExtensionHostManager {
 
         // 1. 检测 Host 是否已在运行
         if isHostAlive() {
-            print("[ExtensionHostManager] Host already running, connecting...")
+            logInfo("[ExtensionHostManager] Host already running, connecting...")
             state = .connecting
         } else {
             // 2. Host 未运行，启动它
-            print("[ExtensionHostManager] Host not running, starting...")
+            logInfo("[ExtensionHostManager] Host not running, starting...")
             try startHostProcess()
 
             // 等待 Host 启动
@@ -138,7 +138,7 @@ actor ExtensionHostManager {
         state = .running
         restartCount = 0
 
-        print("[ExtensionHostManager] Connected to Extension Host successfully")
+        logInfo("[ExtensionHostManager] Connected to Extension Host successfully")
     }
 
     /// 停止 Extension Host
@@ -151,7 +151,7 @@ actor ExtensionHostManager {
         await ipcBridge?.stop()
         ipcBridge = nil
 
-        print("[ExtensionHostManager] Disconnected from Extension Host")
+        logInfo("[ExtensionHostManager] Disconnected from Extension Host")
     }
 
     /// 强制终止 Host 进程（用于热重载）
@@ -162,7 +162,7 @@ actor ExtensionHostManager {
         if let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8),
            let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
             kill(pid, SIGTERM)
-            print("[ExtensionHostManager] Sent SIGTERM to Host (PID: \(pid))")
+            logInfo("[ExtensionHostManager] Sent SIGTERM to Host (PID: \(pid))")
         }
 
         // 清理 socket 文件
@@ -223,7 +223,7 @@ actor ExtensionHostManager {
     /// 启动 Host 进程
     private func startHostProcess() throws {
         let execPath = hostExecutablePath
-        print("[ExtensionHostManager] Launching Host: \(execPath)")
+        logInfo("[ExtensionHostManager] Launching Host: \(execPath)")
 
         // 确保目录存在
         let runDir = (socketPath as NSString).deletingLastPathComponent
@@ -249,7 +249,7 @@ actor ExtensionHostManager {
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if let str = String(data: data, encoding: .utf8), !str.isEmpty {
-                print("[ExtensionHost stderr] \(str)", terminator: "")
+                logWarn("[ExtensionHost stderr] \(str.trimmingCharacters(in: .newlines))")
             }
         }
 
@@ -257,7 +257,7 @@ actor ExtensionHostManager {
         try process.run()
         self.hostProcess = process
 
-        print("[ExtensionHostManager] Started Extension Host process (PID: \(process.processIdentifier))")
+        logInfo("[ExtensionHostManager] Started Extension Host process (PID: \(process.processIdentifier))")
     }
 
     /// 等待 Host 就绪
@@ -267,7 +267,7 @@ actor ExtensionHostManager {
         while Date().timeIntervalSince(startTime) < timeout {
             // 检查 socket 文件是否存在
             if FileManager.default.fileExists(atPath: socketPath) {
-                print("[ExtensionHostManager] Host socket ready")
+                logDebug("[ExtensionHostManager] Host socket ready")
                 return
             }
 
@@ -279,7 +279,7 @@ actor ExtensionHostManager {
 
     /// 处理连接断开（自动重连）
     func handleDisconnect() async {
-        print("[ExtensionHostManager] Connection lost, attempting to reconnect...")
+        logWarn("[ExtensionHostManager] Connection lost, attempting to reconnect...")
 
         state = .stopped
         ipcBridge = nil
@@ -290,18 +290,18 @@ actor ExtensionHostManager {
             lastRestartTime = Date()
 
             let delay = Double(restartCount) * 0.5
-            print("[ExtensionHostManager] Reconnecting in \(delay)s (attempt \(restartCount))")
+            logInfo("[ExtensionHostManager] Reconnecting in \(delay)s (attempt \(restartCount))")
 
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
             do {
                 try await start()
             } catch {
-                print("[ExtensionHostManager] Reconnect failed: \(error)")
+                logError("[ExtensionHostManager] Reconnect failed: \(error)")
                 state = .crashed(exitCode: -1)
             }
         } else {
-            print("[ExtensionHostManager] Too many reconnect attempts, giving up")
+            logError("[ExtensionHostManager] Too many reconnect attempts, giving up")
             state = .crashed(exitCode: -1)
         }
     }

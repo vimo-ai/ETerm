@@ -102,7 +102,7 @@ final class MCPRouterViewState: ObservableObject {
         do {
             try bridge.loadWorkspaces(workspaces)
         } catch {
-            print("[MCPRouter] loadWorkspaces error: \(error)")
+            logError("[MCPRouter] loadWorkspaces error: \(error)")
         }
     }
 
@@ -115,7 +115,7 @@ final class MCPRouterViewState: ObservableObject {
             }
             fullMode = bridge.getExposeManagementTools()
         } catch {
-            print("[MCPRouter] refresh error: \(error)")
+            logError("[MCPRouter] refresh error: \(error)")
         }
     }
 
@@ -167,7 +167,7 @@ final class MCPRouterViewState: ObservableObject {
             }
             refresh()
         } catch {
-            print("[MCPRouter] addServer error: \(error)")
+            logError("[MCPRouter] addServer error: \(error)")
         }
     }
 
@@ -176,7 +176,7 @@ final class MCPRouterViewState: ObservableObject {
             try bridge.removeServer(name: name)
             refresh()
         } catch {
-            print("[MCPRouter] removeServer error: \(error)")
+            logError("[MCPRouter] removeServer error: \(error)")
         }
     }
 
@@ -185,7 +185,7 @@ final class MCPRouterViewState: ObservableObject {
             try bridge.setServerEnabled(name: name, enabled: enabled)
             refresh()
         } catch {
-            print("[MCPRouter] setServerEnabled error: \(error)")
+            logError("[MCPRouter] setServerEnabled error: \(error)")
         }
     }
 
@@ -194,7 +194,7 @@ final class MCPRouterViewState: ObservableObject {
             try bridge.setServerFlattenMode(name: name, flatten: flatten)
             refresh()
         } catch {
-            print("[MCPRouter] setServerFlattenMode error: \(error)")
+            logError("[MCPRouter] setServerFlattenMode error: \(error)")
         }
     }
 
@@ -203,7 +203,7 @@ final class MCPRouterViewState: ObservableObject {
             try bridge.setExposeManagementTools(expose)
             fullMode = expose
         } catch {
-            print("[MCPRouter] setExposeManagementTools error: \(error)")
+            logError("[MCPRouter] setExposeManagementTools error: \(error)")
         }
     }
 }

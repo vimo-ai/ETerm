@@ -18,7 +18,8 @@
             "id": "grammar-archive",
             "title": "语法档案",
             "icon": "doc.text.fill",
-            "viewClass": "GrammarArchiveView"
+            "viewClass": "GrammarArchiveView",
+            "order": 200
         }
     ],
     "commands": [],

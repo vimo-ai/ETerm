@@ -58,7 +58,7 @@ public final class MCPRouterPlugin: NSObject, ETermKit.Plugin {
         do {
             try MCPRouterBridge.shared.startServer(port: 19104)
         } catch {
-            print("[MCPRouterKit] Failed to start server: \(error)")
+            logError("[MCPRouterKit] Failed to start server: \(error)")
         }
     }
 
@@ -70,13 +70,13 @@ public final class MCPRouterPlugin: NSObject, ETermKit.Plugin {
             name: "getWorkspaces",
             params: [:]
         ) else {
-            print("[MCPRouterKit] Failed to call getWorkspaces service")
+            logError("[MCPRouterKit] Failed to call getWorkspaces service")
             return
         }
 
         guard let workspaces = result["workspaces"] as? [[String: Any]] else {
             if let error = result["error"] as? String {
-                print("[MCPRouterKit] getWorkspaces error: \(error)")
+                logError("[MCPRouterKit] getWorkspaces error: \(error)")
             }
             return
         }
@@ -89,7 +89,7 @@ public final class MCPRouterPlugin: NSObject, ETermKit.Plugin {
                 object: nil,
                 userInfo: ["workspaces": workspaces]
             )
-            print("[MCPRouterKit] Loaded \(workspaces.count) workspaces from service")
+            logInfo("[MCPRouterKit] Loaded \(workspaces.count) workspaces from service")
         }
     }
 
@@ -98,7 +98,7 @@ public final class MCPRouterPlugin: NSObject, ETermKit.Plugin {
         do {
             try MCPRouterBridge.shared.stopServer()
         } catch {
-            print("[MCPRouterKit] Failed to stop server: \(error)")
+            logError("[MCPRouterKit] Failed to stop server: \(error)")
         }
     }
 

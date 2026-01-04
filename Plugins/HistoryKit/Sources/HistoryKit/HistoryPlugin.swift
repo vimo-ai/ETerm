@@ -115,7 +115,7 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
                 do {
                     _ = try await service.snapshot(cwd: cwd, label: label)
                 } catch {
-                    print("[HistoryKit] 快照创建失败: \(error)")
+                    logError("[HistoryKit] 快照创建失败: \(error)")
                 }
             }
 
@@ -212,7 +212,7 @@ public final class HistoryPlugin: NSObject, ETermKit.Plugin {
             do {
                 _ = try await service.snapshot(cwd: workspace, label: "scheduled")
             } catch {
-                print("[HistoryKit] 定时快照失败 (\(workspace)): \(error)")
+                logError("[HistoryKit] 定时快照失败 (\(workspace)): \(error)")
             }
         }
     }

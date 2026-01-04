@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import ETermKit
 
 /// 底部 Overlay 注册表 - 单例模式
 ///
@@ -39,14 +40,14 @@ final class BottomOverlayRegistry: ObservableObject {
     func show(_ id: String) {
         guard !visibleIds.contains(id) else { return }
         visibleIds.append(id)
-        print("[BottomOverlayRegistry] show: \(id), visible: \(visibleIds)")
+        logDebug("[BottomOverlayRegistry] show: \(id), visible: \(visibleIds)")
     }
 
     /// 隐藏 overlay
     func hide(_ id: String) {
         guard let index = visibleIds.firstIndex(of: id) else { return }
         visibleIds.remove(at: index)
-        print("[BottomOverlayRegistry] hide: \(id), visible: \(visibleIds)")
+        logDebug("[BottomOverlayRegistry] hide: \(id), visible: \(visibleIds)")
     }
 
     /// 切换 overlay 显示状态
@@ -61,6 +62,6 @@ final class BottomOverlayRegistry: ObservableObject {
     /// 隐藏所有 overlay
     func hideAll() {
         visibleIds.removeAll()
-        print("[BottomOverlayRegistry] hideAll")
+        logDebug("[BottomOverlayRegistry] hideAll")
     }
 }

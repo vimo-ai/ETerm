@@ -18,13 +18,15 @@
             "id": "translation-settings",
             "title": "翻译配置",
             "icon": "gearshape.fill",
-            "viewClass": "TranslationSettingsView"
+            "viewClass": "TranslationSettingsView",
+            "order": 210
         },
         {
             "id": "vocabulary",
             "title": "单词本",
             "icon": "book.fill",
-            "viewClass": "VocabularyView"
+            "viewClass": "VocabularyView",
+            "order": 211
         }
     ],
     "infoPanelContents": [

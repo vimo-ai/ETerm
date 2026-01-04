@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import ETermKit
 
 /// 事件网关
 ///
@@ -73,7 +74,7 @@ final class EventGateway {
         }
 
         isRunning = true
-        print("[EventGateway] Started, sockets: \(ETermPaths.eventsSocketDirectory)")
+        logInfo("[EventGateway] Started, sockets: \(ETermPaths.eventsSocketDirectory)")
     }
 
     /// 停止事件网关
@@ -100,7 +101,7 @@ final class EventGateway {
         logWriter = nil
 
         isRunning = false
-        print("[EventGateway] Stopped")
+        logInfo("[EventGateway] Stopped")
     }
 
     // MARK: - Socket Server Management
@@ -125,7 +126,7 @@ final class EventGateway {
         if server.start() {
             socketServers[pattern] = server
         } else {
-            print("[EventGateway] Failed to start socket: \(path)")
+            logError("[EventGateway] Failed to start socket: \(path)")
         }
     }
 

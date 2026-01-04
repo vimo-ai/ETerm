@@ -45,18 +45,15 @@ public final class TranslationPluginConfigManager: ObservableObject {
 
     private init() {
         // 配置优先级：JSON 文件 > 迁移数据 > 默认值
-        print("[TranslationKit] 配置文件路径: \(configFilePath)")
         if let fileConfig = Self.loadFromFile(path: configFilePath) {
             self.config = fileConfig
-            print("[TranslationKit] 从文件加载配置: dispatcher=\(fileConfig.dispatcherModel), analysis=\(fileConfig.analysisModel), translation=\(fileConfig.translationModel)")
         } else if let migratedConfig = Self.migrateFromUserDefaults() {
             // MARK: - Migration (TODO: Remove after v1.1)
             // 从旧的 UserDefaults 迁移数据
             self.config = migratedConfig
-            print("[TranslationKit] 从 UserDefaults 迁移配置")
+            logInfo("[TranslationKit] 从 UserDefaults 迁移配置")
         } else {
             self.config = .default
-            print("[TranslationKit] 使用默认配置")
         }
     }
 
@@ -71,7 +68,7 @@ public final class TranslationPluginConfigManager: ObservableObject {
 
             try data.write(to: URL(fileURLWithPath: configFilePath))
         } catch {
-            print("[TranslationKit] 保存配置失败: \(error)")
+            logError("[TranslationKit] 保存配置失败: \(error)")
         }
     }
 
@@ -86,7 +83,7 @@ public final class TranslationPluginConfigManager: ObservableObject {
             let config = try JSONDecoder().decode(TranslationPluginConfig.self, from: data)
             return config
         } catch {
-            print("[TranslationKit] 加载配置失败: \(error)")
+            logError("[TranslationKit] 加载配置失败: \(error)")
             return nil
         }
     }
