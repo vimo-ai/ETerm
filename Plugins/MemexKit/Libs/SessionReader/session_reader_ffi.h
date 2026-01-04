@@ -139,36 +139,6 @@ char *sr_read_messages(struct SRReader *reader,
                        bool order_asc);
 
 /**
- * 编码项目路径为 Claude 目录名
- *
- * # 参数
- * - `path`: 项目路径（如 /Users/xxx/project）
- *
- * # 返回
- * - 返回编码后的目录名（如 -Users-xxx-project）
- *
- * # Safety
- * - `path` 必须是有效的 UTF-8 C 字符串
- * - 调用者负责通过 `sr_free_string` 释放返回的字符串
- */
-char *sr_encode_path(const char *path);
-
-/**
- * 解码 Claude 目录名为项目路径
- *
- * # 参数
- * - `encoded`: 编码后的目录名（如 -Users-xxx-project）
- *
- * # 返回
- * - 返回解码后的路径（如 /Users/xxx/project）
- *
- * # Safety
- * - `encoded` 必须是有效的 UTF-8 C 字符串
- * - 调用者负责通过 `sr_free_string` 释放返回的字符串
- */
-char *sr_decode_path(const char *encoded);
-
-/**
  * 解析 JSONL 会话文件，用于索引到 SharedDb
  *
  * 会正确读取 cwd 来确定真实的项目路径，避免中文路径解析错误

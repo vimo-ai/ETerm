@@ -147,19 +147,11 @@ final class SharedDbBridge {
 
     // MARK: - Lifecycle
 
-    /// Connect to shared database
-    /// - Parameter path: Database path (default: ~/.vimo/db/claude-session.db)
-    init(path: String? = nil) throws {
-        let dbPath = path ?? ETermPaths.claudeSessionDatabase
-
-        // Ensure directory exists
-        let dir = (dbPath as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-
+    /// Connect to shared database (path managed by Rust layer)
+    init() throws {
         var handlePtr: OpaquePointer?
-        let error = dbPath.withCString { cstr in
-            session_db_connect(cstr, &handlePtr)
-        }
+        // 传 nil 让 Rust 使用默认路径
+        let error = session_db_connect(nil, &handlePtr)
 
         if let err = SharedDbError.from(error) {
             throw err
