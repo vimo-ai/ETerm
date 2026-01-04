@@ -55,11 +55,17 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     private var serverURL: String?
     private var deviceName: String = "Mac"
 
+    /// 是否使用 Redis 模式
+    private var useRedisMode = false
+
     /// Session 读取器（FFI）
     private lazy var sessionReader = SessionReader()
 
     /// 共享数据库桥接（可选，用于缓存查询和搜索）
     private var sharedDb: SharedDbBridge?
+
+    /// 当前活跃的 Session 列表（用于 Redis 更新）
+    private var activeSessions: [String: String] = [:]  // sessionId -> projectPath
 
     // MARK: - Init
 
@@ -79,13 +85,13 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     // MARK: - Connection
 
-    /// 连接到服务器
+    /// 连接到服务器（直连模式）
     /// - Parameters:
     ///   - urlString: 服务器地址（如 https://localhost:10005）
     ///   - deviceName: 设备名称
     func connect(to urlString: String, deviceName: String) {
         // 如果已连接到同一地址且设备名相同，不重复连接
-        if isConnected, serverURL == urlString, self.deviceName == deviceName {
+        if isConnected, serverURL == urlString, self.deviceName == deviceName, !useRedisMode {
             return
         }
 
@@ -99,15 +105,63 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
         self.serverURL = urlString
         self.deviceName = deviceName
+        self.useRedisMode = false
 
         // 通过 Rust FFI 创建 Socket 客户端
         do {
             socketBridge = try SocketClientBridge(url: urlString, namespace: "/daemon")
             socketBridge?.delegate = self
             try socketBridge?.connect()
-            print("[VlaudeClient] Connecting to \(urlString)/daemon")
+            print("[VlaudeClient] Connecting to \(urlString)/daemon (direct mode)")
         } catch {
             print("[VlaudeClient] Connection failed: \(error)")
+        }
+    }
+
+    /// 连接到服务器（Redis 服务发现模式）
+    /// - Parameters:
+    ///   - config: VlaudeConfig 配置
+    func connectWithRedis(config: VlaudeConfig) {
+        // 断开旧连接
+        disconnect()
+
+        // 确保 SharedDb 已初始化
+        if sharedDb == nil {
+            initSharedDb()
+        }
+
+        self.serverURL = config.serverURL
+        self.deviceName = config.deviceName
+        self.useRedisMode = true
+
+        // 构建 Redis 和 Daemon 配置
+        let redisConfig = RedisConfig(
+            host: config.redisHost,
+            port: config.redisPort,
+            password: config.redisPassword
+        )
+
+        let daemonConfig = DaemonConfig(
+            deviceId: config.deviceId,
+            deviceName: config.deviceName,
+            platform: "darwin",
+            version: "1.0.0",
+            ttl: config.daemonTTL
+        )
+
+        // 通过 Rust FFI 创建带 Redis 的 Socket 客户端
+        do {
+            socketBridge = try SocketClientBridge(
+                url: config.serverURL.isEmpty ? "https://localhost:10005" : config.serverURL,
+                namespace: "/daemon",
+                redis: redisConfig,
+                daemon: daemonConfig
+            )
+            socketBridge?.delegate = self
+            try socketBridge?.connectWithDiscovery()
+            print("[VlaudeClient] Connecting via Redis discovery (host=\(config.redisHost):\(config.redisPort))")
+        } catch {
+            print("[VlaudeClient] Redis connection failed: \(error)")
         }
     }
 
@@ -122,9 +176,41 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         socketBridge = nil
         isConnected = false
         serverURL = nil
+        useRedisMode = false
+        activeSessions.removeAll()
 
         // 释放 SharedDbBridge Writer（确保 daemon 能接管）
         releaseSharedDb()
+    }
+
+    // MARK: - Redis Session Tracking
+
+    /// 添加活跃 Session（用于 Redis 模式）
+    func addActiveSession(sessionId: String, projectPath: String) {
+        activeSessions[sessionId] = projectPath
+        syncSessionsToRedis()
+    }
+
+    /// 移除活跃 Session（用于 Redis 模式）
+    func removeActiveSession(sessionId: String) {
+        activeSessions.removeValue(forKey: sessionId)
+        syncSessionsToRedis()
+    }
+
+    /// 同步 Session 列表到 Redis
+    private func syncSessionsToRedis() {
+        guard useRedisMode, isConnected else { return }
+
+        let sessions = activeSessions.map { (sessionId, projectPath) in
+            SessionInfo(sessionId: sessionId, projectPath: projectPath)
+        }
+
+        do {
+            try socketBridge?.updateSessions(sessions)
+            print("[VlaudeClient] Synced \(sessions.count) sessions to Redis")
+        } catch {
+            print("[VlaudeClient] Failed to sync sessions to Redis: \(error)")
+        }
     }
 
     /// 释放 SharedDbBridge（线程安全）
@@ -358,18 +444,22 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
             let testDelegate = TestDelegate()
 
-            testDelegate.onConnect = { [weak bridge] in
+            // 注意：闭包需要强引用 bridge 和 testDelegate，防止被 ARC 提前释放
+            // 因为 bridge.delegate 是 weak 引用，且回调是异步的
+            testDelegate.onConnect = { [bridge, testDelegate] in
+                _ = testDelegate // 防止 unused 警告，保持强引用
                 guard !completed else { return }
                 completed = true
-                bridge?.disconnect()
+                bridge.disconnect()
                 completion(.success("Connected successfully"))
             }
 
             // 设置超时
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak bridge] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [bridge, testDelegate] in
+                _ = testDelegate // 防止 unused 警告，保持强引用
                 guard !completed else { return }
                 completed = true
-                bridge?.disconnect()
+                bridge.disconnect()
                 completion(.failure(NSError(domain: "VlaudeClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Connection timeout"])))
             }
 
@@ -419,10 +509,11 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         let orderStr = (data["order"] as? String) ?? "asc"
         let requestId = data["requestId"] as? String
 
-        // 构建会话文件路径
-        let encodedDir = SessionReader.encodePath(projectPath) ?? projectPath
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let sessionPath = "\(home)/.claude/projects/\(encodedDir)/\(sessionId).jsonl"
+        // 获取会话文件路径
+        guard let sessionPath = sessionReader.getSessionPath(sessionId: sessionId) else {
+            print("[VlaudeClient] Session not found: \(sessionId)")
+            return
+        }
 
         guard let result = sessionReader.readMessages(
             sessionPath: sessionPath,

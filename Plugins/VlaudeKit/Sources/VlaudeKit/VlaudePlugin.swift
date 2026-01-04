@@ -115,14 +115,26 @@ public final class VlaudePlugin: NSObject, Plugin {
             return
         }
 
-        client?.connect(to: config.serverURL, deviceName: config.deviceName)
+        // 根据配置选择连接模式
+        if config.useRedis {
+            print("[VlaudeKit] Using Redis discovery mode")
+            client?.connectWithRedis(config: config)
+        } else {
+            print("[VlaudeKit] Using direct connection mode")
+            client?.connect(to: config.serverURL, deviceName: config.deviceName)
+        }
     }
 
     private func handleConfigChange() {
         let config = VlaudeConfigManager.shared.config
 
         if config.isValid {
-            client?.connect(to: config.serverURL, deviceName: config.deviceName)
+            // 根据配置选择连接模式
+            if config.useRedis {
+                client?.connectWithRedis(config: config)
+            } else {
+                client?.connect(to: config.serverURL, deviceName: config.deviceName)
+            }
         } else {
             client?.disconnect()
         }
@@ -168,18 +180,21 @@ public final class VlaudePlugin: NSObject, Plugin {
         sessionPaths[sessionId] = transcriptPath
 
         // 上报 session 可用
-        let projectPath = payload["cwd"] as? String
+        let projectPath = payload["cwd"] as? String ?? ""
         client?.reportSessionAvailable(
             sessionId: sessionId,
             terminalId: terminalId,
-            projectPath: projectPath
+            projectPath: projectPath.isEmpty ? nil : projectPath
         )
+
+        // Redis 模式：添加活跃 Session
+        client?.addActiveSession(sessionId: sessionId, projectPath: projectPath)
 
         // 开始监听文件变化
         sessionWatcher?.startWatching(sessionId: sessionId, transcriptPath: transcriptPath)
 
         // 发送 projectUpdate 事件
-        if let projectPath = projectPath {
+        if !projectPath.isEmpty {
             client?.reportProjectUpdate(projectPath: projectPath)
         }
     }
@@ -287,6 +302,9 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 上报 session 不可用
         client?.reportSessionUnavailable(sessionId: sessionId)
+
+        // Redis 模式：移除活跃 Session
+        client?.removeActiveSession(sessionId: sessionId)
     }
 
     private func handleTerminalClosed(_ payload: [String: Any]) {
@@ -311,6 +329,9 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 上报 session 不可用
         client?.reportSessionUnavailable(sessionId: sessionId)
+
+        // Redis 模式：移除活跃 Session
+        client?.removeActiveSession(sessionId: sessionId)
     }
 
     public func handleCommand(_ commandId: String) {

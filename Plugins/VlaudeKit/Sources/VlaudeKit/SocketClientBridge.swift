@@ -21,6 +21,7 @@ enum SocketClientError: Error, LocalizedError {
     case notConnected
     case emitFailed
     case runtimeError
+    case registryError
     case unknown(Int32)
 
     static func from(_ code: SocketClientFFI.SocketClientError) -> SocketClientError? {
@@ -32,6 +33,7 @@ enum SocketClientError: Error, LocalizedError {
         case NOT_CONNECTED: return .notConnected
         case EMIT_FAILED: return .emitFailed
         case RUNTIME_ERROR: return .runtimeError
+        case REGISTRY_ERROR: return .registryError
         default: return .unknown(Int32(code.rawValue))
         }
     }
@@ -44,6 +46,7 @@ enum SocketClientError: Error, LocalizedError {
         case .notConnected: return "Not connected"
         case .emitFailed: return "Emit failed"
         case .runtimeError: return "Runtime error"
+        case .registryError: return "Registry error"
         case .unknown(let code): return "Unknown error (\(code))"
         }
     }
@@ -79,6 +82,30 @@ protocol SocketClientBridgeDelegate: AnyObject {
     func socketClientDidDisconnect(_ bridge: SocketClientBridge)
 }
 
+// MARK: - Redis Configuration
+
+/// Redis 配置
+struct RedisConfig {
+    let host: String
+    let port: UInt16
+    let password: String?
+}
+
+/// Daemon 配置（用于 Redis 注册）
+struct DaemonConfig {
+    let deviceId: String
+    let deviceName: String
+    let platform: String
+    let version: String
+    let ttl: UInt64  // 秒
+}
+
+/// Session 信息（用于 Redis 更新）
+struct SessionInfo: Codable {
+    let sessionId: String
+    let projectPath: String
+}
+
 // MARK: - SocketClientBridge
 
 /// Swift bridge for socket-client-ffi
@@ -92,18 +119,71 @@ final class SocketClientBridge {
     /// 保持对 self 的引用，用于 C 回调
     private var callbackContext: UnsafeMutableRawPointer?
 
+    /// 是否使用 Redis 服务发现模式
+    private let useRedisDiscovery: Bool
+
     // MARK: - Lifecycle
 
-    /// 创建 Socket 客户端
+    /// 创建 Socket 客户端（无 Redis）
     /// - Parameters:
     ///   - url: 服务器地址（如 "https://localhost:10005"）
     ///   - namespace: 命名空间（默认 "/daemon"）
     init(url: String, namespace: String = "/daemon") throws {
+        self.useRedisDiscovery = false
         var handlePtr: OpaquePointer?
 
         let error = url.withCString { urlCstr in
             namespace.withCString { nsCstr in
                 socket_client_create(urlCstr, nsCstr, &handlePtr)
+            }
+        }
+
+        if let err = SocketClientError.from(error) {
+            throw err
+        }
+
+        self.handle = handlePtr
+    }
+
+    /// 创建带 Redis 配置的 Socket 客户端
+    /// - Parameters:
+    ///   - url: 服务器地址（作为 fallback）
+    ///   - namespace: 命名空间（默认 "/daemon"）
+    ///   - redis: Redis 配置
+    ///   - daemon: Daemon 配置
+    init(url: String, namespace: String = "/daemon", redis: RedisConfig, daemon: DaemonConfig) throws {
+        self.useRedisDiscovery = true
+        var handlePtr: OpaquePointer?
+
+        let error = url.withCString { urlCstr in
+            namespace.withCString { nsCstr in
+                redis.host.withCString { hostCstr in
+                    daemon.deviceId.withCString { deviceIdCstr in
+                        daemon.deviceName.withCString { deviceNameCstr in
+                            daemon.platform.withCString { platformCstr in
+                                daemon.version.withCString { versionCstr in
+                                    let passwordPtr: UnsafePointer<CChar>? = redis.password.flatMap { strdup($0).map { UnsafePointer($0) } }
+                                    defer {
+                                        if let p = passwordPtr { free(UnsafeMutablePointer(mutating: p)) }
+                                    }
+                                    return socket_client_create_with_redis(
+                                        urlCstr,
+                                        nsCstr,
+                                        hostCstr,
+                                        redis.port,
+                                        passwordPtr,
+                                        deviceIdCstr,
+                                        deviceNameCstr,
+                                        platformCstr,
+                                        versionCstr,
+                                        daemon.ttl,
+                                        &handlePtr
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -133,7 +213,7 @@ final class SocketClientBridge {
 
     // MARK: - Connection
 
-    /// 连接到服务器
+    /// 连接到服务器（直连模式）
     func connect() throws {
         try queue.sync {
             guard let handle = handle else { throw SocketClientError.nullPointer }
@@ -151,6 +231,47 @@ final class SocketClientBridge {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.delegate?.socketClientDidConnect(self)
+        }
+    }
+
+    /// 使用 Redis 服务发现连接
+    /// 1. 初始化 Redis 连接
+    /// 2. 从 Redis 发现 Server 地址
+    /// 3. 连接 Socket
+    /// 4. 注册到 Redis
+    /// 5. 启动心跳
+    func connectWithDiscovery() throws {
+        try queue.sync {
+            guard let handle = handle else { throw SocketClientError.nullPointer }
+
+            // 设置事件回调
+            setupEventCallback()
+
+            let error = socket_client_connect_with_discovery(handle)
+            if let err = SocketClientError.from(error) {
+                throw err
+            }
+        }
+
+        // 通知代理
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.socketClientDidConnect(self)
+        }
+    }
+
+    /// 发现 Server 地址
+    /// - Returns: 发现的第一个 Server 地址，如果没有则返回 nil
+    func discoverServer() -> String? {
+        queue.sync {
+            guard let handle = handle else { return nil }
+
+            let resultPtr = socket_client_discover_server(handle)
+            guard let ptr = resultPtr else { return nil }
+
+            let result = String(cString: ptr)
+            socket_client_free_string(ptr)
+            return result
         }
     }
 
@@ -264,6 +385,30 @@ final class SocketClientBridge {
         try queue.sync {
             guard let handle = handle else { throw SocketClientError.nullPointer }
             let error = socket_client_report_offline(handle)
+            if let err = SocketClientError.from(error) {
+                throw err
+            }
+        }
+    }
+
+    // MARK: - Redis Session Updates
+
+    /// 更新 Redis 中的 Session 列表
+    /// - Parameter sessions: Session 信息数组
+    func updateSessions(_ sessions: [SessionInfo]) throws {
+        try queue.sync {
+            guard let handle = handle else { throw SocketClientError.nullPointer }
+
+            let encoder = JSONEncoder()
+            let jsonData = try encoder.encode(sessions)
+            guard let jsonStr = String(data: jsonData, encoding: .utf8) else {
+                throw SocketClientError.invalidUtf8
+            }
+
+            let error = jsonStr.withCString { jsonCstr in
+                socket_client_update_sessions(handle, jsonCstr)
+            }
+
             if let err = SocketClientError.from(error) {
                 throw err
             }
