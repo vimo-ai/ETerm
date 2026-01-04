@@ -5,7 +5,6 @@ use skia_safe::Color4f;
 use crate::domain::primitives::{LogicalPixels, PhysicalPixels};
 use rio_backend::config::colors::Colors;
 use std::sync::Arc;
-use super::box_drawing::BoxDrawingConfig;
 
 /// 渲染配置（不可变值对象）
 #[derive(Debug, Clone)]
@@ -20,8 +19,6 @@ pub struct RenderConfig {
     pub background_color: Color4f,
     /// 颜色配置（光标、选区、ANSI 颜色等）
     pub colors: Arc<Colors>,
-    /// Box-drawing 字符渲染配置（可选，松耦合）
-    pub box_drawing: BoxDrawingConfig,
 }
 
 impl RenderConfig {
@@ -32,7 +29,6 @@ impl RenderConfig {
             scale,
             background_color: Color4f::new(0.0, 0.0, 0.0, 0.0),  // 默认透明，让窗口磨砂效果显示
             colors,
-            box_drawing: BoxDrawingConfig::default(),  // 默认启用 box-drawing
         }
     }
 
@@ -50,14 +46,7 @@ impl RenderConfig {
             scale,
             background_color,
             colors,
-            box_drawing: BoxDrawingConfig::default(),  // 默认启用 box-drawing
         }
-    }
-
-    /// 创建带自定义 box-drawing 配置的配置
-    pub fn with_box_drawing(mut self, box_drawing: BoxDrawingConfig) -> Self {
-        self.box_drawing = box_drawing;
-        self
     }
 
     /// 获取物理字体大小（用于 Skia）

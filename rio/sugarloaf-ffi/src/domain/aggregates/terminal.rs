@@ -1052,6 +1052,14 @@ impl Terminal {
                 .as_ref()
                 .map(|s| s.all_matches.len())
                 .unwrap_or(0);
+            // 提取焦点位置并滚动
+            let scroll_pos = crosswords.search_state
+                .as_ref()
+                .and_then(|s| s.focused_match.as_ref())
+                .map(|f| *f.start());
+            if let Some(pos) = scroll_pos {
+                crosswords.scroll_to_pos(pos);
+            }
             let view = Self::build_search_view(&*crosswords);
             (count, view)
         } else if let Some(ref cw) = self.crosswords_test {
@@ -1061,6 +1069,14 @@ impl Terminal {
                 .as_ref()
                 .map(|s| s.all_matches.len())
                 .unwrap_or(0);
+            // 提取焦点位置并滚动
+            let scroll_pos = crosswords.search_state
+                .as_ref()
+                .and_then(|s| s.focused_match.as_ref())
+                .map(|f| *f.start());
+            if let Some(pos) = scroll_pos {
+                crosswords.scroll_to_pos(pos);
+            }
             let view = Self::build_search_view(&*crosswords);
             (count, view)
         } else {
@@ -1076,10 +1092,26 @@ impl Terminal {
         let search_view = if let Some(ref cw) = self.crosswords_ffi {
             let mut crosswords = cw.write();
             crosswords.search_goto_next();
+            // 提取焦点位置并滚动
+            let scroll_pos = crosswords.search_state
+                .as_ref()
+                .and_then(|s| s.focused_match.as_ref())
+                .map(|f| *f.start());
+            if let Some(pos) = scroll_pos {
+                crosswords.scroll_to_pos(pos);
+            }
             Self::build_search_view(&*crosswords)
         } else if let Some(ref cw) = self.crosswords_test {
             let mut crosswords = cw.write();
             crosswords.search_goto_next();
+            // 提取焦点位置并滚动
+            let scroll_pos = crosswords.search_state
+                .as_ref()
+                .and_then(|s| s.focused_match.as_ref())
+                .map(|f| *f.start());
+            if let Some(pos) = scroll_pos {
+                crosswords.scroll_to_pos(pos);
+            }
             Self::build_search_view(&*crosswords)
         } else {
             None
@@ -1092,10 +1124,26 @@ impl Terminal {
         let search_view = if let Some(ref cw) = self.crosswords_ffi {
             let mut crosswords = cw.write();
             crosswords.search_goto_prev();
+            // 提取焦点位置并滚动
+            let scroll_pos = crosswords.search_state
+                .as_ref()
+                .and_then(|s| s.focused_match.as_ref())
+                .map(|f| *f.start());
+            if let Some(pos) = scroll_pos {
+                crosswords.scroll_to_pos(pos);
+            }
             Self::build_search_view(&*crosswords)
         } else if let Some(ref cw) = self.crosswords_test {
             let mut crosswords = cw.write();
             crosswords.search_goto_prev();
+            // 提取焦点位置并滚动
+            let scroll_pos = crosswords.search_state
+                .as_ref()
+                .and_then(|s| s.focused_match.as_ref())
+                .map(|f| *f.start());
+            if let Some(pos) = scroll_pos {
+                crosswords.scroll_to_pos(pos);
+            }
             Self::build_search_view(&*crosswords)
         } else {
             None
