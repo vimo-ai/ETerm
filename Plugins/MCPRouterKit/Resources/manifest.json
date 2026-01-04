@@ -17,7 +17,8 @@
             "id": "mcp-router-settings",
             "title": "MCP Router",
             "icon": "server.rack",
-            "viewClass": "MCPRouterSettingsView"
+            "viewClass": "MCPRouterSettingsView",
+            "order": 30
         }
     ],
     "commands": [],

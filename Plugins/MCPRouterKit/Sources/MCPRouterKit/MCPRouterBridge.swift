@@ -195,7 +195,7 @@ public final class MCPRouterBridge {
         if !success, let errorPtr = errorPtr {
             let error = String(cString: errorPtr)
             mcp_router_free_string(errorPtr)
-            print("[MCPRouter] Failed to load servers: \(error)")
+            logError("[MCPRouter] Failed to load servers: \(error)")
         }
     }
 
@@ -212,7 +212,7 @@ public final class MCPRouterBridge {
         do {
             try jsonString.write(toFile: Self.configPath, atomically: true, encoding: .utf8)
         } catch {
-            print("[MCPRouter] Failed to save servers: \(error)")
+            logError("[MCPRouter] Failed to save servers: \(error)")
         }
     }
 

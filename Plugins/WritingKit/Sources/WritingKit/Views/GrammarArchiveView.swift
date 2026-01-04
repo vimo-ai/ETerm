@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import ETermKit
 
 // MARK: - 统计项组件
 
@@ -291,7 +292,7 @@ public struct GrammarArchiveView: View {
         do {
             try modelContext.delete(model: GrammarErrorRecord.self)
         } catch {
-            print("[WritingKit] Failed to clear errors: \(error)")
+            logError("[WritingKit] Failed to clear errors: \(error)")
         }
     }
 }

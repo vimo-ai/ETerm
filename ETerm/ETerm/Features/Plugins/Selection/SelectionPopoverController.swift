@@ -50,7 +50,7 @@ final class SelectionPopoverController: NSObject {
         self.sourceRect = rect
 
         guard !actions.isEmpty else {
-            print("[SelectionPopoverController] No actions to show")
+            logDebug("[SelectionPopoverController] No actions to show")
             return
         }
 
@@ -127,7 +127,7 @@ extension SelectionPopoverController {
             userInfo: payload
         )
 
-        print("[SelectionPopoverController] Triggered action: \(actionId), rect: \(effectiveRect)")
+        logDebug("[SelectionPopoverController] Triggered action: \(actionId), rect: \(effectiveRect)")
     }
 }
 

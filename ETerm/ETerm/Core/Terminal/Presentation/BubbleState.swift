@@ -10,6 +10,7 @@ import SwiftUI
 import Combine
 import AppKit
 import SwiftData
+import ETermKit
 
 @MainActor
 class BubbleState: ObservableObject {
@@ -118,7 +119,7 @@ class BubbleState: ObservableObject {
 
     /// 加载内容（核心业务逻辑）
     func loadContent() async {
-        print("[主程序 BubbleState] loadContent 被调用！不应该走这里！")
+        logWarn("[主程序 BubbleState] loadContent 被调用！不应该走这里！")
         content = .loading
         currentModelTag = ""
         analysisTranslation = ""

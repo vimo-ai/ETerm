@@ -30,6 +30,7 @@ import AppKit
 import CoreGraphics
 import Combine
 import PanelLayoutKit
+import ETermKit
 
 /// 渲染视图协议 - 统一不同的 RenderView 实现
 protocol RenderViewProtocol: AnyObject {
@@ -504,9 +505,29 @@ class TerminalWindowCoordinator: ObservableObject {
     /// - Parameters:
     ///   - tab: 要添加的 Tab
     ///   - panelId: 目标 Panel ID
-    func addTab(_ tab: Tab, to panelId: UUID) {
+    ///   - detachedTerminal: 分离的终端句柄（跨窗口迁移时传入）
+    func addTab(_ tab: Tab, to panelId: UUID, detachedTerminal: DetachedTerminalHandle? = nil) {
         guard let panel = terminalWindow.getPanel(panelId) else {
+            // 如果失败，销毁已分离的终端
+            if let detached = detachedTerminal {
+                TerminalPoolWrapper.destroyDetachedTerminal(detached)
+            }
             return
+        }
+
+        // 如果有分离的终端，附加到当前窗口的 TerminalPool
+        if let detached = detachedTerminal {
+            let newTerminalId = terminalPool.attachTerminal(detached)
+            if newTerminalId >= 0 {
+                tab.setRustTerminalId(newTerminalId)
+                // 更新 CWD Registry
+                workingDirectoryRegistry.reattachTerminal(
+                    tabId: tab.tabId,
+                    newTerminalId: newTerminalId
+                )
+                // 设置终端为激活状态
+                terminalPool.setMode(terminalId: newTerminalId, mode: .active)
+            }
         }
 
         panel.addTab(tab)
@@ -673,15 +694,15 @@ class TerminalWindowCoordinator: ObservableObject {
             // 这些是正常的边界情况，不需要特殊处理
             break
         case .tabNotFound(let id):
-            print("[Coordinator] Tab not found: \(id)")
+            logWarn("[Coordinator] Tab not found: \(id)")
         case .panelNotFound(let id):
-            print("[Coordinator] Panel not found: \(id)")
+            logWarn("[Coordinator] Panel not found: \(id)")
         case .pageNotFound(let id):
-            print("[Coordinator] Page not found: \(id)")
+            logWarn("[Coordinator] Page not found: \(id)")
         case .noActivePage:
-            print("[Coordinator] No active page")
+            logWarn("[Coordinator] No active page")
         case .noActivePanel:
-            print("[Coordinator] No active panel")
+            logWarn("[Coordinator] No active panel")
         }
     }
 

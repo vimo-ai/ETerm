@@ -95,7 +95,6 @@ public final class ClaudePlugin: NSObject, Plugin {
 
         let socketPath = host.socketPath(for: "claude")
         socketServer?.start(at: socketPath)
-        print("[ClaudeKit] Plugin activated, socket: \(socketPath)")
 
         // 注册 waitForSession 服务（供 MCP call_plugin_service 调用）
         host.registerService(name: "waitForSession") { [weak self] params in
@@ -138,7 +137,6 @@ public final class ClaudePlugin: NSObject, Plugin {
         }
 
         guard !sessionsToResume.isEmpty else { return }
-        print("[ClaudeKit] Resuming \(sessionsToResume.count) sessions")
 
         for (terminalId, tabId, sessionId) in sessionsToResume {
             // 延迟恢复
@@ -355,7 +353,6 @@ public final class ClaudePlugin: NSObject, Plugin {
             guard let currentTabId = self.getTabId(for: terminalId),
                   currentTabId == tabId else { return }
 
-            print("[ClaudeKit] Resuming session \(sessionId)")
             self.host?.writeToTerminal(
                 terminalId: terminalId,
                 data: "claude --resume \(sessionId)\n"

@@ -6,6 +6,7 @@
 
 import Foundation
 import Combine
+import ETermKit
 
 /// 单个用量数据点
 struct UsageDataPoint: Codable, Identifiable {
@@ -147,7 +148,7 @@ final class UsageHistoryStore: ObservableObject {
             decoder.dateDecodingStrategy = .iso8601
             dataPoints = try decoder.decode([UsageDataPoint].self, from: data)
         } catch {
-            print("[ClaudeMonitor] 加载用量历史数据失败: \(error)")
+            logError("[ClaudeMonitor] 加载用量历史数据失败: \(error)")
             dataPoints = []
         }
     }
@@ -162,7 +163,7 @@ final class UsageHistoryStore: ObservableObject {
             let data = try encoder.encode(dataPoints)
             try data.write(to: URL(fileURLWithPath: filePath), options: .atomic)
         } catch {
-            print("[ClaudeMonitor] 保存用量历史数据失败: \(error)")
+            logError("[ClaudeMonitor] 保存用量历史数据失败: \(error)")
         }
     }
 
@@ -199,7 +200,7 @@ final class UsageHistoryStore: ObservableObject {
 
             try FileManager.default.removeItem(at: oldFileURL)
         } catch {
-            print("[ClaudeMonitor] 迁移用量历史数据失败: \(error)")
+            logError("[ClaudeMonitor] 迁移用量历史数据失败: \(error)")
         }
     }
 

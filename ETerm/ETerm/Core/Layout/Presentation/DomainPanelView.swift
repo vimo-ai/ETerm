@@ -18,6 +18,7 @@ import AppKit
 import Foundation
 import PanelLayoutKit
 import SwiftUI
+import ETermKit
 
 /// 基于 Domain AR 的 Panel 视图
 final class DomainPanelView: NSView {
@@ -331,7 +332,7 @@ final class DomainPanelView: NSView {
         let now = Date()
         if now.timeIntervalSince(Self.lastLayoutLog) > 1.0 {
             if Self.layoutCount > 10 {
-                print("[DomainPanelView] layout called \(Self.layoutCount) times in last second!")
+                logDebug("[DomainPanelView] layout called \(Self.layoutCount) times in last second!")
             }
             Self.layoutCount = 0
             Self.lastLayoutLog = now

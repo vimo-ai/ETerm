@@ -132,7 +132,7 @@ public final class WorkspacePlugin: NSObject, ETermKit.Plugin {
                 let paths = folders.map { $0.path }
                 WorkspaceEventEmitter.shared.emitWorkspacesUpdated(paths: paths)
             } catch {
-                print("[WorkspaceKit] Failed to fetch initial workspaces: \(error)")
+                logError("[WorkspaceKit] Failed to fetch initial workspaces: \(error)")
             }
         }
     }
@@ -202,7 +202,7 @@ enum WorkspaceDataStore {
             return container
         } catch {
             // 如果自定义路径失败，回退到默认路径
-            print("[WorkspaceKit] 使用自定义路径初始化工作区数据库失败，回退到默认路径: \(error)")
+            logWarn("[WorkspaceKit] 使用自定义路径初始化工作区数据库失败，回退到默认路径: \(error)")
 
             do {
                 let config = ModelConfiguration("Workspace", schema: schema)

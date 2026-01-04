@@ -109,14 +109,14 @@ actor PluginIPCBridge {
             try await waitForHandshake(timeout: 10.0)
         } catch {
             // 握手失败，清理状态
-            print("[PluginIPCBridge] Handshake failed: \(error)")
+            logError("[PluginIPCBridge] Handshake failed: \(error)")
             await conn.disconnect()
             self.connection = nil
             isRunning = false
             throw error
         }
 
-        print("[PluginIPCBridge] Connected to Extension Host as client")
+        logInfo("[PluginIPCBridge] Connected to Extension Host as client")
     }
 
     /// 停止 IPC 服务端
@@ -167,7 +167,7 @@ actor PluginIPCBridge {
         do {
             try await conn.send(message)
         } catch {
-            print("[PluginIPCBridge] Failed to send event: \(error)")
+            logError("[PluginIPCBridge] Failed to send event: \(error)")
         }
     }
 
@@ -267,7 +267,7 @@ actor PluginIPCBridge {
 
             } catch {
                 if isRunning {
-                    print("[PluginIPCBridge] Accept failed: \(error)")
+                    logError("[PluginIPCBridge] Accept failed: \(error)")
                     try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s 后重试
                 }
             }
@@ -340,7 +340,7 @@ actor PluginIPCBridge {
             await handleHideBubble(message)
 
         default:
-            print("[PluginIPCBridge] Unhandled message type: \(message.type)")
+            logWarn("[PluginIPCBridge] Unhandled message type: \(message.type)")
         }
     }
 

@@ -150,7 +150,7 @@ final class IsolatedModePluginHost: PluginHost {
                     commandId: commandId
                 )
             } catch {
-                print("[IsolatedModePluginHost] Failed to send command: \(error)")
+                logError("[IsolatedModePluginHost] Failed to send command: \(error)")
             }
         }
     }

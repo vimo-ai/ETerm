@@ -51,7 +51,7 @@ final class SessionReader {
 
         // Check for errors
         guard result.error == Success else {
-            print("[SessionReader] Parse error: \(result.error)")
+            logWarn("[SessionReader] Parse error: \(result.error)")
             return nil
         }
 

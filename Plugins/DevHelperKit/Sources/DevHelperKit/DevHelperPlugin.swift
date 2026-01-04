@@ -55,13 +55,13 @@ public final class DevHelperPlugin: NSObject, ETermKit.Plugin {
             name: "getWorkspaces",
             params: [:]
         ) else {
-            print("[DevHelperKit] Failed to call getWorkspaces service")
+            logWarn("[DevHelperKit] Failed to call getWorkspaces service")
             return
         }
 
         guard let workspaces = result["workspaces"] as? [[String: Any]] else {
             if let error = result["error"] as? String {
-                print("[DevHelperKit] getWorkspaces error: \(error)")
+                logError("[DevHelperKit] getWorkspaces error: \(error)")
             }
             return
         }
@@ -69,7 +69,7 @@ public final class DevHelperPlugin: NSObject, ETermKit.Plugin {
         if !workspaces.isEmpty {
             let paths = workspaces.compactMap { $0["path"] as? String }
             WorkspaceStore.shared.workspacePaths = paths
-            print("[DevHelperKit] Loaded \(paths.count) workspaces from service")
+            logInfo("[DevHelperKit] Loaded \(paths.count) workspaces from service")
         }
     }
 

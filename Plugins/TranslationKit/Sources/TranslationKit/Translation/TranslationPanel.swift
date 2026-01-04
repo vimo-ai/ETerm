@@ -213,7 +213,7 @@ final class TranslationController: NSObject {
     }
 
     private func showTranslationWindow() {
-        print("[TranslationController] showTranslationWindow called, host: \(host != nil ? "exists" : "nil"), rect: \(sourceRect)")
+        logDebug("[TranslationController] showTranslationWindow called, host: \(host != nil ? "exists" : "nil"), rect: \(sourceRect)")
 
         // 先通知主程序设置 InfoPanel 位置
         if sourceRect != .zero {

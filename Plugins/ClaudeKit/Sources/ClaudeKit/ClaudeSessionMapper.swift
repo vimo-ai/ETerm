@@ -85,7 +85,7 @@ final class ClaudeSessionMapper {
                   let plugins = json["plugins"] as? [String: Any],
                   let claudeDataString = plugins["claude"] as? String,
                   let claudeData = claudeDataString.data(using: .utf8) else {
-                print("[ClaudeKit] Migration: invalid data format")
+                logWarn("[ClaudeKit] Migration: invalid data format")
                 return
             }
 
@@ -100,9 +100,9 @@ final class ClaudeSessionMapper {
             // 保存到新位置
             saveToStorage()
 
-            print("[ClaudeKit] Migrated \(state.sessions.count) sessions from legacy storage")
+            logInfo("[ClaudeKit] Migrated \(state.sessions.count) sessions from legacy storage")
         } catch {
-            print("[ClaudeKit] Migration failed: \(error)")
+            logError("[ClaudeKit] Migration failed: \(error)")
         }
     }
 

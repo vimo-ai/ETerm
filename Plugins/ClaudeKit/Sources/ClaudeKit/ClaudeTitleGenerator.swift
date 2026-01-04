@@ -68,7 +68,7 @@ final class ClaudeTitleGenerator {
             return title
 
         } catch {
-            print("[ClaudeTitleGenerator] Error: \(error)")
+            logError("[ClaudeTitleGenerator] Error: \(error)")
             return nil
         }
     }

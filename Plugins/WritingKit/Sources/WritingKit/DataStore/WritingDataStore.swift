@@ -26,10 +26,10 @@ public enum WritingDataStore {
             let config = ModelConfiguration(url: dbURL)
 
             let container = try ModelContainer(for: schema, configurations: [config])
-            print("[WritingKit] DataStore initialized at: \(databasePath)")
+            logInfo("[WritingKit] DataStore initialized at: \(databasePath)")
             return container
         } catch {
-            print("[WritingKit] 使用自定义路径初始化数据库失败，回退到默认路径: \(error)")
+            logWarn("[WritingKit] 使用自定义路径初始化数据库失败，回退到默认路径: \(error)")
 
             do {
                 let config = ModelConfiguration("WritingKit", schema: schema)
@@ -67,9 +67,9 @@ public enum WritingDataStore {
 
         do {
             try mainContext.save()
-            print("[WritingKit] Saved grammar error: \(original) -> \(corrected)")
+            logInfo("[WritingKit] Saved grammar error: \(original) -> \(corrected)")
         } catch {
-            print("[WritingKit] Failed to save grammar error: \(error)")
+            logError("[WritingKit] Failed to save grammar error: \(error)")
         }
     }
 }

@@ -207,6 +207,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 481CC2DC2EC7B633009F969C /* Build configuration list for PBXNativeTarget "ETerm" */;
 			buildPhases = (
+				482D31A42F0A15A300C9B447 /* Run Script */,
 				481CC2B52EC7B632009F969C /* Sources */,
 				481CC2B62EC7B632009F969C /* Frameworks */,
 				481CC2B72EC7B632009F969C /* Resources */,
@@ -416,6 +417,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "# 清理 DerivedData 的 rpath（动态获取）\nif [[ \"$CONFIGURATION\" == \"Debug\" ]]; then\n    APP_BINARY=\"${TARGET_BUILD_DIR}/${EXECUTABLE_PATH}\"\n    DYLIB_BINARY=\"${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/MacOS/${PRODUCT_NAME}.debug.dylib\"\n    \n    # 从 otool 输出中提取包含 DerivedData 的 rpath 并删除\n    for binary in \"$APP_BINARY\" \"$DYLIB_BINARY\"; do\n        if [[ -f \"$binary\" ]]; then\n            DERIVED_RPATH=$(otool -l \"$binary\" 2>/dev/null | grep -A2 LC_RPATH | grep DerivedData | awk '{print $2}')\n            if [[ -n \"$DERIVED_RPATH\" ]]; then\n                echo \"Removing DerivedData rpath from $binary\"\n                install_name_tool -delete_rpath \"$DERIVED_RPATH\" \"$binary\" 2>/dev/null || true\n            fi\n        fi\n    done\nfi\n";
+		};
+		482D31A42F0A15A300C9B447 /* Run Script */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Run Script";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "  # Kill ETerm's MemexKit memex only (not standalone memex-rs)\n  pkill -f \"Plugins/MemexKit/Lib/memex\" 2>/dev/null || true\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
