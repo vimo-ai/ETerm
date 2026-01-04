@@ -79,8 +79,6 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 如果配置有效，立即连接
         connectIfConfigured()
-
-        print("[VlaudeKit] Plugin activated")
     }
 
     public func deactivate() {
@@ -101,40 +99,21 @@ public final class VlaudePlugin: NSObject, Plugin {
         pendingRequests.removeAll()
         mobileViewingTerminals.removeAll()
         loadingSessions.removeAll()
-
-        print("[VlaudeKit] Plugin deactivated")
     }
 
     // MARK: - Configuration
 
     private func connectIfConfigured() {
         let config = VlaudeConfigManager.shared.config
-
-        guard config.isValid else {
-            print("[VlaudeKit] Config not valid, skipping connection")
-            return
-        }
-
-        // 根据配置选择连接模式
-        if config.useRedis {
-            print("[VlaudeKit] Using Redis discovery mode")
-            client?.connectWithRedis(config: config)
-        } else {
-            print("[VlaudeKit] Using direct connection mode")
-            client?.connect(to: config.serverURL, deviceName: config.deviceName)
-        }
+        guard config.isValid else { return }
+        client?.connect(config: config)
     }
 
     private func handleConfigChange() {
         let config = VlaudeConfigManager.shared.config
 
         if config.isValid {
-            // 根据配置选择连接模式
-            if config.useRedis {
-                client?.connectWithRedis(config: config)
-            } else {
-                client?.connect(to: config.serverURL, deviceName: config.deviceName)
-            }
+            client?.connect(config: config)
         } else {
             client?.disconnect()
         }
@@ -156,7 +135,7 @@ public final class VlaudePlugin: NSObject, Plugin {
         case "claude.sessionEnd":
             handleClaudeSessionEnd(payload)
 
-        case "core.terminal.didClose":
+        case "terminal.didClose":
             handleTerminalClosed(payload)
 
         default:
@@ -167,12 +146,7 @@ public final class VlaudePlugin: NSObject, Plugin {
     private func handleClaudeSessionStart(_ payload: [String: Any]) {
         guard let terminalId = payload["terminalId"] as? Int,
               let sessionId = payload["sessionId"] as? String,
-              let transcriptPath = payload["transcriptPath"] as? String else {
-            print("[VlaudeKit] ⚠️ handleClaudeSessionStart: 缺少必要字段")
-            return
-        }
-
-        print("[VlaudeKit] 📥 收到 claude.sessionStart: terminalId=\(terminalId), sessionId=\(sessionId)")
+              let transcriptPath = payload["transcriptPath"] as? String else { return }
 
         // 提前建立映射（不等 responseComplete）
         sessionMap[terminalId] = sessionId
@@ -207,12 +181,7 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     private func handleClaudeResponseComplete(_ payload: [String: Any]) {
         guard let terminalId = payload["terminalId"] as? Int,
-              let sessionId = payload["sessionId"] as? String else {
-            print("[VlaudeKit] ⚠️ handleClaudeResponseComplete: 缺少 terminalId 或 sessionId")
-            return
-        }
-
-        print("[VlaudeKit] 📥 收到 claude.responseComplete: terminalId=\(terminalId), sessionId=\(sessionId)")
+              let sessionId = payload["sessionId"] as? String else { return }
 
         // 清除 loading 状态
         loadingSessions.remove(sessionId)
@@ -253,7 +222,8 @@ public final class VlaudePlugin: NSObject, Plugin {
             sessionPaths[sessionId] = transcriptPath
 
             // 如果还没有在监听，启动监听
-            if !(sessionWatcher?.isWatching(sessionId: sessionId) ?? false) {
+            let alreadyWatching = sessionWatcher?.isWatching(sessionId: sessionId) ?? false
+            if !alreadyWatching {
                 sessionWatcher?.startWatching(sessionId: sessionId, transcriptPath: transcriptPath)
             }
         }
@@ -274,22 +244,16 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 索引会话到 SharedDb（推送由 SessionWatcher 处理）
         if let transcriptPath = payload["transcriptPath"] as? String {
-            print("[VlaudeKit] 📤 索引会话: transcriptPath=\(transcriptPath)")
             client?.indexSession(path: transcriptPath)
         }
     }
 
     private func handleClaudeSessionEnd(_ payload: [String: Any]) {
         guard let terminalId = payload["terminalId"] as? Int,
-              let sessionId = payload["sessionId"] as? String else {
-            return
-        }
+              let sessionId = payload["sessionId"] as? String else { return }
 
         // 防御：检查当前映射是否匹配，避免乱序事件清错映射
-        guard sessionMap[terminalId] == sessionId else {
-            print("[VlaudeKit] ⚠️ sessionEnd 跳过: 映射已变更")
-            return
-        }
+        guard sessionMap[terminalId] == sessionId else { return }
 
         // 停止文件监听
         sessionWatcher?.stopWatching(sessionId: sessionId)
@@ -402,18 +366,13 @@ extension VlaudePlugin: VlaudeClientDelegate {
             )
         }
 
-        print("[VlaudeKit] Connected, reported \(sessionMap.count) sessions")
     }
 
     func vlaudeClientDidDisconnect(_ client: VlaudeClient) {
-        print("[VlaudeKit] Disconnected")
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String) {
-        guard let terminalId = reverseSessionMap[sessionId] else {
-            print("[VlaudeKit] Session not found: \(sessionId)")
-            return
-        }
+        guard let terminalId = reverseSessionMap[sessionId] else { return }
 
         // 写入终端
         host?.writeToTerminal(terminalId: terminalId, data: text)
@@ -422,8 +381,6 @@ extension VlaudePlugin: VlaudeClientDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.host?.writeToTerminal(terminalId: terminalId, data: "\r")
         }
-
-        print("[VlaudeKit] Injected to terminal \(terminalId)")
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveMobileViewing sessionId: String, isViewing: Bool) {
@@ -444,8 +401,7 @@ extension VlaudePlugin: VlaudeClientDelegate {
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveCreateSession projectPath: String, prompt: String?, requestId: String?) {
-        // 旧方式：不支持，仅记录日志
-        print("[VlaudeKit] Old createSession request (deprecated): projectPath=\(projectPath)")
+        // 旧方式：不支持
     }
 
     // MARK: - 新 WebSocket 事件处理
@@ -461,8 +417,6 @@ extension VlaudePlugin: VlaudeClientDelegate {
             client.emitSessionCreatedResult(requestId: requestId, success: false, error: "Failed to create terminal")
             return
         }
-
-        print("[VlaudeKit] Created terminal \(terminalId) for requestId: \(requestId)")
 
         // 2. 保存 pending 请求，等待 claude.responseComplete 事件
         pendingRequests[terminalId] = (requestId: requestId, projectPath: projectPath)
@@ -511,8 +465,6 @@ extension VlaudePlugin: VlaudeClientDelegate {
             self?.host?.writeToTerminal(terminalId: terminalId, data: "\r")
             client.emitSendMessageResult(requestId: requestId, success: true, via: "eterm")
         }
-
-        print("[VlaudeKit] Sent message to session \(sessionId) via terminal \(terminalId)")
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveCheckLoading sessionId: String, projectPath: String?, requestId: String) {
@@ -532,11 +484,8 @@ extension VlaudePlugin: SessionWatcherDelegate {
     ) {
         // 推送新消息给服务器（带结构化内容块）
         for message in messages {
-            // 从 JSONL 文件解析结构化内容块
             let blocks = ContentBlockParser.readMessage(from: transcriptPath, uuid: message.uuid)
             client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks)
         }
-
-        print("[VlaudeKit] SessionWatcher 推送 \(messages.count) 条新消息: \(sessionId)")
     }
 }

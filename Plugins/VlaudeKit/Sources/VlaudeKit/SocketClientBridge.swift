@@ -80,6 +80,10 @@ protocol SocketClientBridgeDelegate: AnyObject {
     /// 连接状态变化
     func socketClientDidConnect(_ bridge: SocketClientBridge)
     func socketClientDidDisconnect(_ bridge: SocketClientBridge)
+
+    /// 重连状态（Server 重启后自动重连）
+    func socketClientDidReconnect(_ bridge: SocketClientBridge)
+    func socketClient(_ bridge: SocketClientBridge, reconnectFailed error: String)
 }
 
 // MARK: - Redis Configuration
@@ -119,40 +123,15 @@ final class SocketClientBridge {
     /// 保持对 self 的引用，用于 C 回调
     private var callbackContext: UnsafeMutableRawPointer?
 
-    /// 是否使用 Redis 服务发现模式
-    private let useRedisDiscovery: Bool
-
     // MARK: - Lifecycle
 
-    /// 创建 Socket 客户端（无 Redis）
-    /// - Parameters:
-    ///   - url: 服务器地址（如 "https://localhost:10005"）
-    ///   - namespace: 命名空间（默认 "/daemon"）
-    init(url: String, namespace: String = "/daemon") throws {
-        self.useRedisDiscovery = false
-        var handlePtr: OpaquePointer?
-
-        let error = url.withCString { urlCstr in
-            namespace.withCString { nsCstr in
-                socket_client_create(urlCstr, nsCstr, &handlePtr)
-            }
-        }
-
-        if let err = SocketClientError.from(error) {
-            throw err
-        }
-
-        self.handle = handlePtr
-    }
-
-    /// 创建带 Redis 配置的 Socket 客户端
+    /// 创建 Socket 客户端（通过 Redis 服务发现）
     /// - Parameters:
     ///   - url: 服务器地址（作为 fallback）
     ///   - namespace: 命名空间（默认 "/daemon"）
     ///   - redis: Redis 配置
     ///   - daemon: Daemon 配置
     init(url: String, namespace: String = "/daemon", redis: RedisConfig, daemon: DaemonConfig) throws {
-        self.useRedisDiscovery = true
         var handlePtr: OpaquePointer?
 
         let error = url.withCString { urlCstr in
@@ -213,34 +192,13 @@ final class SocketClientBridge {
 
     // MARK: - Connection
 
-    /// 连接到服务器（直连模式）
-    func connect() throws {
-        try queue.sync {
-            guard let handle = handle else { throw SocketClientError.nullPointer }
-
-            // 设置事件回调
-            setupEventCallback()
-
-            let error = socket_client_connect(handle)
-            if let err = SocketClientError.from(error) {
-                throw err
-            }
-        }
-
-        // 通知代理
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.delegate?.socketClientDidConnect(self)
-        }
-    }
-
-    /// 使用 Redis 服务发现连接
+    /// 连接到服务器（通过 Redis 服务发现）
     /// 1. 初始化 Redis 连接
     /// 2. 从 Redis 发现 Server 地址
     /// 3. 连接 Socket
     /// 4. 注册到 Redis
-    /// 5. 启动心跳
-    func connectWithDiscovery() throws {
+    /// 5. 启动心跳和重连监听
+    func connect() throws {
         try queue.sync {
             guard let handle = handle else { throw SocketClientError.nullPointer }
 
@@ -328,6 +286,26 @@ final class SocketClientBridge {
             let bridge = Unmanaged<SocketClientBridge>.fromOpaque(userData).takeUnretainedValue()
             let eventStr = String(cString: event)
             let dataStr = String(cString: data)
+
+            // 处理内部事件
+            switch eventStr {
+            case "__reconnected":
+                DispatchQueue.main.async {
+                    bridge.delegate?.socketClientDidReconnect(bridge)
+                }
+                return
+            case "__reconnect_failed":
+                if let jsonData = dataStr.data(using: .utf8),
+                   let dict = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                   let error = dict["error"] as? String {
+                    DispatchQueue.main.async {
+                        bridge.delegate?.socketClient(bridge, reconnectFailed: error)
+                    }
+                }
+                return
+            default:
+                break
+            }
 
             // 解析 JSON - 支持对象和数组
             if let jsonData = dataStr.data(using: .utf8),
@@ -546,6 +524,21 @@ final class SocketClientBridge {
                 } else {
                     return socket_client_notify_project_update(handle, pathCstr, nil)
                 }
+            }
+
+            if let err = SocketClientError.from(error) {
+                throw err
+            }
+        }
+    }
+
+    /// 通知会话列表更新
+    func notifySessionListUpdate(projectPath: String) throws {
+        try queue.sync {
+            guard let handle = handle else { throw SocketClientError.nullPointer }
+
+            let error = projectPath.withCString { pathCstr in
+                socket_client_notify_session_list_update(handle, pathCstr)
             }
 
             if let err = SocketClientError.from(error) {

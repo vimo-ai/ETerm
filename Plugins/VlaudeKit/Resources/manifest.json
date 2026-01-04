@@ -16,14 +16,16 @@
             "id": "vlaude-settings",
             "title": "Remote",
             "icon": "iphone.and.arrow.forward",
-            "viewClass": "VlaudeSettingsView"
+            "viewClass": "VlaudeSettingsView",
+            "order": 10
         }
     ],
     "subscribes": [
+        "claude.sessionStart",
         "claude.promptSubmit",
         "claude.responseComplete",
         "claude.sessionEnd",
-        "core.terminal.didClose"
+        "terminal.didClose"
     ],
     "tabSlots": [
         {

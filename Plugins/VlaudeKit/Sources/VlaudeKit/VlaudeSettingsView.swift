@@ -180,20 +180,17 @@ struct VlaudeSettingsView: View {
     }
 
     private func testConnection() {
-        guard !serverURL.isEmpty else { return }
-
+        // 使用当前配置测试
         isTesting = true
         testResult = nil
 
-        VlaudeClient.testConnection(to: serverURL) { [self] result in
+        VlaudeClient.testConnection(config: configManager.config) { [self] result in
             DispatchQueue.main.async {
                 isTesting = false
 
                 switch result {
                 case .success(let message):
                     testResult = .success(message)
-                    // 测试成功后保存配置
-                    saveServerURL()
 
                 case .failure(let error):
                     testResult = .failure(error.localizedDescription)

@@ -19,6 +19,7 @@ typedef enum SocketClientError {
   NOT_CONNECTED = 4,
   EMIT_FAILED = 5,
   RUNTIME_ERROR = 6,
+  REGISTRY_ERROR = 7,
   UNKNOWN = 99,
 } SocketClientError;
 
@@ -41,6 +42,21 @@ typedef void (*EventCallbackFn)(const char *event, const char *data, void *user_
 enum SocketClientError socket_client_connect(struct SocketClientHandle *handle);
 
 /**
+ * 使用 Redis 服务发现连接
+ *
+ * 1. 初始化 Redis 连接
+ * 2. 从 Redis 发现 Server 地址
+ * 3. 连接 Socket
+ * 4. 注册到 Redis
+ * 5. 启动心跳
+ * 6. 启动重连监听（监听 Server online 事件）
+ *
+ * # Safety
+ * - `handle` 必须是有效句柄
+ */
+enum SocketClientError socket_client_connect_with_discovery(struct SocketClientHandle *handle);
+
+/**
  * 创建 Socket 客户端
  *
  * # Safety
@@ -51,6 +67,28 @@ enum SocketClientError socket_client_connect(struct SocketClientHandle *handle);
 enum SocketClientError socket_client_create(const char *url,
                                             const char *namespace_,
                                             struct SocketClientHandle **out_handle);
+
+/**
+ * 创建带 Redis 配置的 Socket 客户端
+ *
+ * # Safety
+ * - `url` 必须是有效的 UTF-8 C 字符串
+ * - `namespace` 可为 null
+ * - `redis_host` 可为 null（不启用 Redis）
+ * - `device_id`, `device_name`, `platform`, `version` 启用 Redis 时必填
+ * - 返回的句柄需要通过 `socket_client_destroy` 释放
+ */
+enum SocketClientError socket_client_create_with_redis(const char *url,
+                                                       const char *namespace_,
+                                                       const char *redis_host,
+                                                       uint16_t redis_port,
+                                                       const char *redis_password,
+                                                       const char *device_id,
+                                                       const char *device_name,
+                                                       const char *platform,
+                                                       const char *version,
+                                                       uint64_t ttl,
+                                                       struct SocketClientHandle **out_handle);
 
 /**
  * 销毁 Socket 客户端
@@ -68,6 +106,17 @@ void socket_client_destroy(struct SocketClientHandle *handle);
  * - `handle` 必须是有效句柄
  */
 void socket_client_disconnect(struct SocketClientHandle *handle);
+
+/**
+ * 发现 Server 地址
+ *
+ * 返回发现的第一个 Server 地址，如果没有则返回 null
+ * 调用者需要使用 `socket_client_free_string` 释放返回的字符串
+ *
+ * # Safety
+ * - `handle` 必须是有效句柄
+ */
+char *socket_client_discover_server(struct SocketClientHandle *handle);
 
 /**
  * 发送事件
@@ -118,6 +167,16 @@ enum SocketClientError socket_client_notify_new_message(struct SocketClientHandl
 enum SocketClientError socket_client_notify_project_update(struct SocketClientHandle *handle,
                                                            const char *project_path,
                                                            const char *metadata_json);
+
+/**
+ * 通知会话列表更新
+ *
+ * # Safety
+ * - `handle` 必须是有效句柄
+ * - `project_path` 必须是有效字符串
+ */
+enum SocketClientError socket_client_notify_session_list_update(struct SocketClientHandle *handle,
+                                                                const char *project_path);
 
 /**
  * 注册 daemon
@@ -242,6 +301,17 @@ enum SocketClientError socket_client_send_session_created_result(struct SocketCl
 void socket_client_set_event_callback(struct SocketClientHandle *handle,
                                       EventCallbackFn callback,
                                       void *user_data);
+
+/**
+ * 更新 Redis 中的 Session 列表
+ *
+ * # Safety
+ * - `handle` 必须是有效句柄
+ * - `sessions_json` 必须是有效的 JSON 数组字符串，格式：
+ *   `[{"sessionId": "xxx", "projectPath": "/path"}]`
+ */
+enum SocketClientError socket_client_update_sessions(struct SocketClientHandle *handle,
+                                                     const char *sessions_json);
 
 /**
  * 获取版本号

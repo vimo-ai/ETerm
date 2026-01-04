@@ -55,9 +55,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     private var serverURL: String?
     private var deviceName: String = "Mac"
 
-    /// 是否使用 Redis 模式
-    private var useRedisMode = false
-
     /// Session 读取器（FFI）
     private lazy var sessionReader = SessionReader()
 
@@ -85,43 +82,10 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     // MARK: - Connection
 
-    /// 连接到服务器（直连模式）
-    /// - Parameters:
-    ///   - urlString: 服务器地址（如 https://localhost:10005）
-    ///   - deviceName: 设备名称
-    func connect(to urlString: String, deviceName: String) {
-        // 如果已连接到同一地址且设备名相同，不重复连接
-        if isConnected, serverURL == urlString, self.deviceName == deviceName, !useRedisMode {
-            return
-        }
-
-        // 断开旧连接
-        disconnect()
-
-        // 确保 SharedDb 已初始化（可能之前被 disconnect() 释放）
-        if sharedDb == nil {
-            initSharedDb()
-        }
-
-        self.serverURL = urlString
-        self.deviceName = deviceName
-        self.useRedisMode = false
-
-        // 通过 Rust FFI 创建 Socket 客户端
-        do {
-            socketBridge = try SocketClientBridge(url: urlString, namespace: "/daemon")
-            socketBridge?.delegate = self
-            try socketBridge?.connect()
-            print("[VlaudeClient] Connecting to \(urlString)/daemon (direct mode)")
-        } catch {
-            print("[VlaudeClient] Connection failed: \(error)")
-        }
-    }
-
-    /// 连接到服务器（Redis 服务发现模式）
+    /// 连接到服务器（通过 Redis 服务发现）
     /// - Parameters:
     ///   - config: VlaudeConfig 配置
-    func connectWithRedis(config: VlaudeConfig) {
+    func connect(config: VlaudeConfig) {
         // 断开旧连接
         disconnect()
 
@@ -132,7 +96,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
         self.serverURL = config.serverURL
         self.deviceName = config.deviceName
-        self.useRedisMode = true
 
         // 构建 Redis 和 Daemon 配置
         let redisConfig = RedisConfig(
@@ -158,10 +121,9 @@ final class VlaudeClient: SocketClientBridgeDelegate {
                 daemon: daemonConfig
             )
             socketBridge?.delegate = self
-            try socketBridge?.connectWithDiscovery()
-            print("[VlaudeClient] Connecting via Redis discovery (host=\(config.redisHost):\(config.redisPort))")
+            try socketBridge?.connect()
         } catch {
-            print("[VlaudeClient] Redis connection failed: \(error)")
+            // Connection failed silently
         }
     }
 
@@ -176,7 +138,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         socketBridge = nil
         isConnected = false
         serverURL = nil
-        useRedisMode = false
         activeSessions.removeAll()
 
         // 释放 SharedDbBridge Writer（确保 daemon 能接管）
@@ -189,28 +150,60 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     func addActiveSession(sessionId: String, projectPath: String) {
         activeSessions[sessionId] = projectPath
         syncSessionsToRedis()
+
+        // 立即创建 Session 记录到 SQLite（确保 iOS 刷新时能看到）
+        createSessionRecord(sessionId: sessionId, projectPath: projectPath)
+
+        // 通知 iOS 端刷新 session 列表
+        notifySessionListUpdate(projectPath: projectPath)
+    }
+
+    /// 创建 Session 记录到 SQLite（用于 sessionStart 时立即创建空记录）
+    private func createSessionRecord(sessionId: String, projectPath: String) {
+        guard let sharedDb = sharedDb, !projectPath.isEmpty else { return }
+
+        let projectName = (projectPath as NSString).lastPathComponent
+
+        do {
+            let projectId = try sharedDb.upsertProject(
+                path: projectPath,
+                name: projectName,
+                source: "claude"
+            )
+            try sharedDb.upsertSession(sessionId: sessionId, projectId: projectId)
+        } catch {
+            // Silently fail
+        }
+    }
+
+    /// 通知会话列表更新
+    private func notifySessionListUpdate(projectPath: String) {
+        guard isConnected, !projectPath.isEmpty else { return }
+        try? socketBridge?.notifySessionListUpdate(projectPath: projectPath)
     }
 
     /// 移除活跃 Session（用于 Redis 模式）
     func removeActiveSession(sessionId: String) {
+        // 先获取 projectPath 用于通知
+        let projectPath = activeSessions[sessionId]
         activeSessions.removeValue(forKey: sessionId)
         syncSessionsToRedis()
+
+        // 通知 iOS 端刷新 session 列表
+        if let path = projectPath {
+            notifySessionListUpdate(projectPath: path)
+        }
     }
 
     /// 同步 Session 列表到 Redis
     private func syncSessionsToRedis() {
-        guard useRedisMode, isConnected else { return }
+        guard isConnected else { return }
 
         let sessions = activeSessions.map { (sessionId, projectPath) in
             SessionInfo(sessionId: sessionId, projectPath: projectPath)
         }
 
-        do {
-            try socketBridge?.updateSessions(sessions)
-            print("[VlaudeClient] Synced \(sessions.count) sessions to Redis")
-        } catch {
-            print("[VlaudeClient] Failed to sync sessions to Redis: \(error)")
-        }
+        try? socketBridge?.updateSessions(sessions)
     }
 
     /// 释放 SharedDbBridge（线程安全）
@@ -223,28 +216,21 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     // MARK: - SocketClientBridgeDelegate
 
     func socketClientDidConnect(_ bridge: SocketClientBridge) {
-        print("[VlaudeKit] Socket connected")
         isConnected = true
 
         // 发送注册和上线通知
         do {
             try socketBridge?.register(hostname: deviceName, platform: "darwin", version: "1.0.0")
-            print("[VlaudeKit] 📤 发送 daemon:register hostname=\(deviceName)")
             try socketBridge?.reportOnline()
-            print("[VlaudeKit] 📤 发送 daemon:etermOnline")
         } catch {
-            print("[VlaudeKit] Registration failed: \(error)")
+            // Registration failed silently
         }
 
-        // 推送初始数据
         pushInitialData()
-
-        // 通知 delegate
         delegate?.vlaudeClientDidConnect(self)
     }
 
     func socketClientDidDisconnect(_ bridge: SocketClientBridge) {
-        print("[VlaudeKit] Socket disconnected")
         isConnected = false
         delegate?.vlaudeClientDidDisconnect(self)
     }
@@ -252,7 +238,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     func socketClient(_ bridge: SocketClientBridge, didReceiveEvent event: String, data: [String: Any]) {
         switch event {
         case "server-shutdown":
-            print("[VlaudeKit] Server shutdown notification")
             isConnected = false
 
         case ServerEvent.injectToEterm.rawValue:
@@ -308,14 +293,29 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         }
     }
 
+    func socketClientDidReconnect(_ bridge: SocketClientBridge) {
+        isConnected = true
+
+        do {
+            try socketBridge?.register(hostname: deviceName, platform: "darwin", version: "1.0.0")
+            try socketBridge?.reportOnline()
+        } catch {
+            // Reconnection registration failed silently
+        }
+
+        pushInitialData()
+        delegate?.vlaudeClientDidConnect(self)
+    }
+
+    func socketClient(_ bridge: SocketClientBridge, reconnectFailed error: String) {
+        // Keep isConnected = false, wait for next server online event
+    }
+
     // MARK: - Uplink Events (VlaudeKit → Server)
 
     /// 上报 session 可用
     func reportSessionAvailable(sessionId: String, terminalId: Int, projectPath: String? = nil) {
-        guard isConnected else {
-            print("[VlaudeKit] ⚠️ reportSessionAvailable 跳过: 未连接")
-            return
-        }
+        guard isConnected else { return }
 
         var data: [String: Any] = [
             "sessionId": sessionId,
@@ -326,7 +326,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             data["projectPath"] = path
         }
 
-        print("[VlaudeKit] 📤 发送 daemon:etermSessionAvailable sessionId=\(sessionId)")
         try? socketBridge?.emit(event: "daemon:etermSessionAvailable", data: data)
     }
 
@@ -373,18 +372,14 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     ) {
         guard isConnected else { return }
 
-        do {
-            try socketBridge?.sendSessionCreatedResult(
-                requestId: requestId,
-                success: success,
-                sessionId: sessionId,
-                encodedDirName: encodedDirName,
-                transcriptPath: transcriptPath,
-                error: error
-            )
-        } catch {
-            print("[VlaudeKit] sendSessionCreatedResult failed: \(error)")
-        }
+        try? socketBridge?.sendSessionCreatedResult(
+            requestId: requestId,
+            success: success,
+            sessionId: sessionId,
+            encodedDirName: encodedDirName,
+            transcriptPath: transcriptPath,
+            error: error
+        )
     }
 
     /// 响应 sendMessage 结果
@@ -395,34 +390,43 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         via: String? = nil
     ) {
         guard isConnected else { return }
-
-        do {
-            try socketBridge?.sendMessageResult(requestId: requestId, success: success, message: message, via: via)
-        } catch {
-            print("[VlaudeKit] sendMessageResult failed: \(error)")
-        }
+        try? socketBridge?.sendMessageResult(requestId: requestId, success: success, message: message, via: via)
     }
 
     /// 响应 checkLoading 结果
     func emitCheckLoadingResult(requestId: String, loading: Bool) {
         guard isConnected else { return }
-
-        do {
-            try socketBridge?.sendCheckLoadingResult(requestId: requestId, loading: loading)
-        } catch {
-            print("[VlaudeKit] sendCheckLoadingResult failed: \(error)")
-        }
+        try? socketBridge?.sendCheckLoadingResult(requestId: requestId, loading: loading)
     }
 
     // MARK: - Connection Test
 
     /// 测试连接（用于设置页面）
     static func testConnection(
-        to urlString: String,
+        config: VlaudeConfig,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         do {
-            let bridge = try SocketClientBridge(url: urlString, namespace: "/daemon")
+            let redisConfig = RedisConfig(
+                host: config.redisHost,
+                port: config.redisPort,
+                password: config.redisPassword
+            )
+
+            let daemonConfig = DaemonConfig(
+                deviceId: config.deviceId + "-test",
+                deviceName: config.deviceName,
+                platform: "darwin",
+                version: "1.0.0",
+                ttl: 30
+            )
+
+            let bridge = try SocketClientBridge(
+                url: config.serverURL.isEmpty ? "https://localhost:10005" : config.serverURL,
+                namespace: "/daemon",
+                redis: redisConfig,
+                daemon: daemonConfig
+            )
 
             var completed = false
 
@@ -440,6 +444,10 @@ final class VlaudeClient: SocketClientBridgeDelegate {
                 }
 
                 func socketClient(_ bridge: SocketClientBridge, didReceiveEvent event: String, data: [String: Any]) {}
+
+                func socketClientDidReconnect(_ bridge: SocketClientBridge) {}
+
+                func socketClient(_ bridge: SocketClientBridge, reconnectFailed error: String) {}
             }
 
             let testDelegate = TestDelegate()
@@ -510,10 +518,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         let requestId = data["requestId"] as? String
 
         // 获取会话文件路径
-        guard let sessionPath = sessionReader.getSessionPath(sessionId: sessionId) else {
-            print("[VlaudeClient] Session not found: \(sessionId)")
-            return
-        }
+        guard let sessionPath = sessionReader.getSessionPath(sessionId: sessionId) else { return }
 
         guard let result = sessionReader.readMessages(
             sessionPath: sessionPath,
@@ -581,11 +586,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             ]
         }
 
-        do {
-            try socketBridge?.reportProjectData(projects: projectsData, requestId: requestId)
-        } catch {
-            print("[VlaudeKit] reportProjectData failed: \(error)")
-        }
+        try? socketBridge?.reportProjectData(projects: projectsData, requestId: requestId)
     }
 
     /// 上报会话元数据
@@ -604,11 +605,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             return dict
         }
 
-        do {
-            try socketBridge?.reportSessionMetadata(sessions: sessionsData, projectPath: projectPath, requestId: requestId)
-        } catch {
-            print("[VlaudeKit] reportSessionMetadata failed: \(error)")
-        }
+        try? socketBridge?.reportSessionMetadata(sessions: sessionsData, projectPath: projectPath, requestId: requestId)
     }
 
     /// 上报会话消息
@@ -674,18 +671,14 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             return dict
         }
 
-        do {
-            try socketBridge?.reportSessionMessages(
-                sessionId: sessionId,
-                projectPath: projectPath,
-                messages: messagesData,
-                total: total,
-                hasMore: hasMore,
-                requestId: requestId
-            )
-        } catch {
-            print("[VlaudeKit] reportSessionMessages failed: \(error)")
-        }
+        try? socketBridge?.reportSessionMessages(
+            sessionId: sessionId,
+            projectPath: projectPath,
+            messages: messagesData,
+            total: total,
+            hasMore: hasMore,
+            requestId: requestId
+        )
     }
 
     /// 上报搜索结果
@@ -730,8 +723,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     /// - Parameter projectPath: 项目路径
     func reportProjectUpdate(projectPath: String) {
         guard isConnected else { return }
-
-        print("[VlaudeKit] 📤 发送 daemon:projectUpdate projectPath=\(projectPath)")
         try? socketBridge?.notifyProjectUpdate(projectPath: projectPath, metadata: nil)
     }
 
@@ -791,8 +782,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             }
         }
 
-        let role = (msgDict["message"] as? [String: Any])?["role"] as? String ?? "unknown"
-        print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role) blocks=\(contentBlocks?.count ?? 0)")
         try? socketBridge?.notifyNewMessage(sessionId: sessionId, message: msgDict)
     }
 
@@ -802,12 +791,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     ///   - sessionId: 会话 ID
     ///   - transcriptPath: JSONL 文件路径
     func pushNewMessages(sessionId: String, transcriptPath: String) {
-        print("[VlaudeKit] 📨 pushNewMessages 被调用: sessionId=\(sessionId)")
-
-        guard isConnected else {
-            print("[VlaudeKit] ⚠️ pushNewMessages 跳过: 未连接")
-            return
-        }
+        guard isConnected else { return }
 
         // 读取最新的消息（倒序取最后一条）
         guard let result = sessionReader.readMessages(
@@ -815,10 +799,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             limit: 1,
             offset: 0,
             orderAsc: false
-        ), !result.messages.isEmpty else {
-            print("[VlaudeKit] ⚠️ pushNewMessages 跳过: 无法读取消息")
-            return
-        }
+        ), !result.messages.isEmpty else { return }
 
         // 转换消息格式
         let message = result.messages[0]
@@ -834,9 +815,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             msgDict["message"] = innerDict
         }
 
-        // 推送给 Server
-        let role = (msgDict["message"] as? [String: Any])?["role"] as? String ?? "unknown"
-        print("[VlaudeKit] 📤 发送 daemon:newMessage sessionId=\(sessionId) role=\(role)")
         try? socketBridge?.notifyNewMessage(sessionId: sessionId, message: msgDict)
     }
 
@@ -844,7 +822,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     /// 注意：VlaudeKit 只负责报告 ETerm 中当前打开的会话，不推送历史数据
     /// 历史数据由 Rust daemon 负责推送
     func pushInitialData() {
-        // No-op: ETerm sessions are reported individually
+        syncSessionsToRedis()
     }
 
     // MARK: - SharedDb Write Operations

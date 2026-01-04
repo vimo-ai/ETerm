@@ -379,17 +379,33 @@ final class SessionReader {
 
     // MARK: - Path Utilities
 
-    /// Encode project path to Claude directory name
-    static func encodePath(_ path: String) -> String? {
-        let cstr = path.withCString { session_db_encode_path($0) }
+    /// 获取会话文件路径
+    ///
+    /// 通过 session_id 查询完整的 JSONL 文件路径。
+    /// 需要先调用 listSessions 来填充缓存。
+    func getSessionPath(sessionId: String) -> String? {
+        guard let projectsPath = projectsPath else { return nil }
+        let cstr = projectsPath.withCString { pp in
+            sessionId.withCString { sid in
+                session_db_get_session_path(pp, sid)
+            }
+        }
         guard let cstr = cstr else { return nil }
         defer { session_db_free_string(cstr) }
         return String(cString: cstr)
     }
 
-    /// Decode Claude directory name to project path
-    static func decodePath(_ encoded: String) -> String? {
-        let cstr = encoded.withCString { session_db_decode_path($0) }
+    /// 获取项目的编码目录名
+    ///
+    /// 通过 project_path 查询对应的编码目录名。
+    /// 需要先调用 listProjects 来填充缓存。
+    func getEncodedDirName(projectPath: String) -> String? {
+        guard let projectsPath = projectsPath else { return nil }
+        let cstr = projectsPath.withCString { pp in
+            projectPath.withCString { path in
+                session_db_get_encoded_dir_name(pp, path)
+            }
+        }
         guard let cstr = cstr else { return nil }
         defer { session_db_free_string(cstr) }
         return String(cString: cstr)
@@ -409,7 +425,7 @@ final class SessionReader {
         }
 
         guard result.error == Success else {
-            print("[SessionReader] Parse error: \(result.error)")
+            logWarn("[SessionReader] Parse error: \(result.error)")
             return nil
         }
 

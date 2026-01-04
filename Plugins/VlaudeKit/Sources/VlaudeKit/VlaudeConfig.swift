@@ -27,9 +27,6 @@ public struct VlaudeConfig: Codable, Equatable {
 
     // MARK: - Redis 配置
 
-    /// 是否启用 Redis 服务发现
-    var useRedis: Bool
-
     /// Redis 主机地址
     var redisHost: String
 
@@ -48,7 +45,6 @@ public struct VlaudeConfig: Codable, Equatable {
             enabled: false,
             deviceName: Host.current().localizedName ?? "Mac",
             deviceId: generateDeviceId(),
-            useRedis: false,
             redisHost: "localhost",
             redisPort: 6379,
             redisPassword: nil,
@@ -59,16 +55,8 @@ public struct VlaudeConfig: Codable, Equatable {
     /// 验证配置是否有效
     var isValid: Bool {
         guard enabled else { return false }
-
-        // Redis 模式：只需要 Redis 配置有效
-        if useRedis {
-            return !redisHost.isEmpty
-        }
-
-        // 直连模式：需要服务器地址有效
-        guard !serverURL.isEmpty else { return false }
-        guard URL(string: serverURL) != nil else { return false }
-        return true
+        // 只需要 Redis 配置有效
+        return !redisHost.isEmpty
     }
 
     /// 生成唯一设备 ID
@@ -130,10 +118,8 @@ public final class VlaudeConfigManager: ObservableObject {
         // 从文件加载配置，否则使用默认值
         if let fileConfig = Self.loadFromFile(path: configFilePath) {
             self.config = fileConfig
-            print("[VlaudeKit] Loaded config: serverURL=\(fileConfig.serverURL), enabled=\(fileConfig.enabled)")
         } else {
             self.config = .default
-            print("[VlaudeKit] Using default config")
         }
     }
 
@@ -146,7 +132,7 @@ public final class VlaudeConfigManager: ObservableObject {
             let data = try encoder.encode(config)
             try data.write(to: URL(fileURLWithPath: configFilePath))
         } catch {
-            print("[VlaudeKit] Failed to save config: \(error)")
+            // Save failed silently
         }
     }
 
@@ -160,7 +146,6 @@ public final class VlaudeConfigManager: ObservableObject {
             let config = try JSONDecoder().decode(VlaudeConfig.self, from: data)
             return config
         } catch {
-            print("[VlaudeKit] Failed to load config: \(error)")
             return nil
         }
     }
