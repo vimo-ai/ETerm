@@ -1,12 +1,13 @@
 use crate::domain::TerminalState;
 use crate::domain::views::grid::CellData;
-use super::cache::{LineCache, GlyphLayout, CacheResult, CursorInfo, SearchMatchInfo, HyperlinkHoverInfo};
+use super::cache::{LineCache, GlyphLayout, CacheResult};
 use super::cache::GlyphAtlas;
 use super::cache::{compute_text_hash, compute_state_hash_for_line};
 use super::font::FontContext;
 use super::layout::TextShaper;
-use super::rasterizer::{LineRasterizer, GlyphRasterizer};
+use super::rasterizer::GlyphRasterizer;
 use super::config::{RenderConfig, FontMetrics};
+use super::block_drawing::{BlockDrawer, is_drawable_block_char};
 use sugarloaf::layout::{BuilderLine, FragmentData, FragmentStyle};
 use sugarloaf::font_introspector::Attributes;
 use rio_backend::config::colors::AnsiColor;
@@ -44,14 +45,12 @@ pub struct Renderer {
     font_context: Arc<FontContext>,
     /// 文本整形器
     text_shaper: TextShaper,
-    /// 行光栅化器（旧路径，保留用于回退）
-    rasterizer: LineRasterizer,
     /// 字形光栅化器（Atlas 路径）
     glyph_rasterizer: GlyphRasterizer,
     /// 字形 Atlas（字形纹理缓存）
     glyph_atlas: GlyphAtlas,
-    /// 是否使用 Atlas 渲染（默认 true）
-    use_atlas: bool,
+    /// Block Elements 绘制器（解决高 DPI 缝隙问题）
+    block_drawer: BlockDrawer,
 
     // ===== 配置和缓存 =====
     /// 渲染配置（不可变）
@@ -79,18 +78,12 @@ impl Renderer {
             stats: RenderStats::default(),
             font_context,
             text_shaper,
-            rasterizer: LineRasterizer::new(),
             glyph_rasterizer: GlyphRasterizer::new(),
             glyph_atlas: GlyphAtlas::new(),
-            use_atlas: true,  // 使用 draw_atlas 批量绘制
+            block_drawer: BlockDrawer::new(),
             config,
             cached_metrics: None,
         }
-    }
-
-    /// 启用/禁用 Atlas 渲染（用于测试对比）
-    pub fn set_use_atlas(&mut self, use_atlas: bool) {
-        self.use_atlas = use_atlas;
     }
 
     /// 获取 Atlas 统计信息
@@ -103,13 +96,9 @@ impl Renderer {
     /// # 参数
     /// - `line`: 屏幕行号
     /// - `state`: 终端状态
-    /// - `gpu_context`: 可选的 GPU 上下文
-    pub fn render_line(&mut self, line: usize, state: &TerminalState, gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
-        if self.use_atlas {
-            self.render_line_atlas(line, state)
-        } else {
-            self.render_line_legacy(line, state, gpu_context)
-        }
+    /// - `_gpu_context`: 未使用（保留用于 API 兼容）
+    pub fn render_line(&mut self, line: usize, state: &TerminalState, _gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
+        self.render_line_atlas(line, state)
     }
 
     /// 混合渲染策略：LineCache (1-2屏) + Atlas (历史滚动)
@@ -150,32 +139,6 @@ impl Renderer {
         self.cache.insert(text_hash, state_hash, layout, image.clone());
 
         image
-    }
-
-    /// 旧路径：三级缓存（保留用于对比测试）
-    fn render_line_legacy(&mut self, line: usize, state: &TerminalState, gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
-        let text_hash = compute_text_hash(line, state);
-        let state_hash = compute_state_hash_for_line(line, state);
-
-        match self.cache.get(text_hash, state_hash) {
-            CacheResult::FullHit(image) => {
-                self.stats.cache_hits += 1;
-                image
-            }
-            CacheResult::LayoutHit(layout) => {
-                self.stats.layout_hits += 1;
-                let image = self.render_with_layout(layout.clone(), line, state, gpu_context);
-                self.cache.insert(text_hash, state_hash, layout, image.clone());
-                image
-            }
-            CacheResult::Miss => {
-                self.stats.cache_misses += 1;
-                let layout = self.compute_glyph_layout(line, state);
-                let image = self.render_with_layout(layout.clone(), line, state, gpu_context);
-                self.cache.insert(text_hash, state_hash, layout, image.clone());
-                image
-            }
-        }
     }
 
     /// 获取当前帧的缓存统计（不重置）
@@ -472,7 +435,6 @@ impl Renderer {
             scale: self.config.scale,
             background_color: self.config.background_color,
             colors: Arc::clone(&self.config.colors),
-            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
@@ -484,7 +446,6 @@ impl Renderer {
             scale: self.config.scale,
             background_color: self.config.background_color,
             colors: Arc::clone(&self.config.colors),
-            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
@@ -496,7 +457,6 @@ impl Renderer {
             scale,
             background_color: self.config.background_color,
             colors: Arc::clone(&self.config.colors),
-            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
@@ -508,7 +468,6 @@ impl Renderer {
             scale: self.config.scale,
             background_color: color,
             colors: Arc::clone(&self.config.colors),
-            box_drawing: self.config.box_drawing.clone(),
         });
     }
 
@@ -634,6 +593,36 @@ impl Renderer {
             // 检测 emoji：不走 Atlas，收集后用 Paragraph 渲染
             if glyph.is_emoji() {
                 emoji_glyphs.push((current_col, glyph));
+                continue;
+            }
+
+            // 🎯 Block Elements 自定义绘制（解决高 DPI 缝隙问题）
+            // 使用矩形填充代替字体渲染，确保像素级精确
+            let first_char = glyph.grapheme.chars().next().unwrap_or(' ');
+            if glyph.grapheme.chars().count() == 1 && is_drawable_block_char(first_char) {
+                // 确定前景色（搜索高亮优先）
+                let fg_color = if let Some(is_focused) = search_match {
+                    let fg = if is_focused {
+                        self.config.colors.search_focused_match_foreground
+                    } else {
+                        self.config.colors.search_match_foreground
+                    };
+                    Color4f::new(fg[0], fg[1], fg[2], fg[3])
+                } else {
+                    glyph.color
+                };
+
+                // 使用 BlockDrawer 绘制
+                self.block_drawer.draw(
+                    canvas,
+                    first_char,
+                    glyph.x,
+                    0.0,  // y = 0，从行顶部开始
+                    cell_width * glyph.width,
+                    line_height,
+                    fg_color,
+                    self.config.scale,
+                );
                 continue;
             }
 
@@ -865,142 +854,6 @@ impl Renderer {
             line,
             state,
         )
-    }
-
-    /// 基于布局绘制（光栅化）
-    ///
-    /// 注意：cursor_info 从 state 动态计算，不从 layout 缓存读取
-    fn render_with_layout(&mut self, layout: GlyphLayout, line: usize, state: &TerminalState, gpu_context: Option<&mut skia_safe::gpu::DirectContext>) -> skia_safe::Image {
-        // 获取 metrics（自动缓存）
-        let metrics = self.get_font_metrics();
-
-        // 计算行宽度（物理像素）
-        let line_width = metrics.cell_width.value * state.grid.columns() as f32;
-
-        // 从配置获取背景色（不再硬编码）
-        let background_color = self.config.background_color;
-
-        // 🎯 计算完整行高（= cell_height * line_height_factor）
-        // 用于 box-drawing 字符的拉升填充
-        let line_height = metrics.cell_height.value * self.config.line_height;
-
-        // 🔧 从 state 动态计算 cursor_info（不从 layout 缓存读取）
-        // 注意：cursor.line() 是绝对坐标，line 是屏幕行号，需要转换
-        // 绝对坐标 = history_size + 屏幕行号 - display_offset
-        // 所以：屏幕行号 = 绝对坐标 - history_size + display_offset
-        let cursor_screen_line = state.cursor.line()
-            .saturating_sub(state.grid.history_size())
-            .saturating_add(state.grid.display_offset());
-
-        // 光标是否在本行（用于 IME 渲染，不依赖光标可见性）
-        let cursor_on_this_line = cursor_screen_line == line;
-
-        // cursor_info 用于渲染光标本身（需要可见）
-        let cursor_info = if state.cursor.is_visible() && cursor_on_this_line {
-            Some(CursorInfo {
-                col: state.cursor.col(),
-                shape: state.cursor.shape,
-                color: state.cursor.color,
-            })
-        } else {
-            None
-        };
-
-        // 🔧 从 state 动态计算 search_info（不从 layout 缓存读取）
-        // 注意：search 使用绝对坐标，需要转换为屏幕行号进行比较
-        let search_info = if let Some(search) = &state.search {
-            // 转换屏幕行号为绝对行号
-            let abs_line = state.grid.history_size()
-                .saturating_add(line)
-                .saturating_sub(state.grid.display_offset());
-
-            // 使用按行索引快速查找该行的匹配
-            if let Some(indices) = search.get_matches_at_line(abs_line) {
-                // 收集本行的匹配范围
-                let mut ranges = Vec::new();
-                for &idx in indices {
-                    let m = &search.matches[idx];
-                    let is_focused = idx == search.focused_index;
-
-                    // 计算本行的匹配列范围
-                    let start_col = if abs_line == m.start.line {
-                        m.start.col
-                    } else {
-                        0
-                    };
-                    let end_col = if abs_line == m.end.line {
-                        m.end.col
-                    } else {
-                        usize::MAX
-                    };
-
-                    ranges.push((start_col, end_col, is_focused));
-                }
-
-                if !ranges.is_empty() {
-                    Some(SearchMatchInfo {
-                        ranges,
-                        fg_color: self.config.colors.search_match_foreground,
-                        bg_color: self.config.colors.search_match_background,
-                        focused_fg_color: self.config.colors.search_focused_match_foreground,
-                        focused_bg_color: self.config.colors.search_focused_match_background,
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // 🔧 从 state 动态计算 hyperlink_hover_info
-        let hyperlink_hover_info = if let Some(hover) = &state.hyperlink_hover {
-            // 转换屏幕行号为绝对行号
-            let abs_line = state.grid.history_size()
-                .saturating_add(line)
-                .saturating_sub(state.grid.display_offset());
-
-            // 检查本行是否在超链接范围内
-            if let Some((start_col, end_col)) = hover.column_range_on_line(abs_line, usize::MAX) {
-                Some(HyperlinkHoverInfo {
-                    start_col,
-                    end_col,
-                    // 超链接使用蓝色（标准超链接颜色）
-                    fg_color: [0.0, 0.5, 1.0, 1.0],
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // 注意：IME 渲染已移到独立的 overlay 层（draw_ime_overlay）
-
-        // 🔧 获取当前行的 URL 范围（用于绘制下划线）
-        let url_ranges: Vec<_> = state.grid.row(line)
-            .map(|row| row.urls().to_vec())
-            .unwrap_or_default();
-
-        self.rasterizer
-            .render(
-                &layout,
-                cursor_info.as_ref(),
-                search_info.as_ref(),
-                hyperlink_hover_info.as_ref(),
-                &url_ranges,
-                line_width,
-                metrics.cell_width.value,
-                metrics.cell_height.value,
-                line_height,
-                metrics.baseline_offset.value,
-                background_color,
-                &self.config.box_drawing,
-                gpu_context,
-            )
-            .expect("Failed to render line")
     }
 
     /// 重置统计信息
@@ -1708,90 +1561,7 @@ mod tests {
             "Frame 2 should be at least 2x faster than Frame 1");
     }
 
-    /// 性能对比测试：Atlas vs Legacy
-    #[test]
-    fn test_atlas_vs_legacy_performance() {
-        use std::time::Instant;
-
-        // 创建 50 行的 mock state
-        let row_hashes: Vec<u64> = (0..50).map(|i| 2000 + i as u64).collect();
-        let grid_data = Arc::new(GridData::new_mock(120, 50, 0, row_hashes));
-        let grid = GridView::new(grid_data);
-        let cursor = CursorView::new(AbsolutePoint::new(0, 0), CursorShape::Block);
-        let state = TerminalState {
-            grid,
-            cursor,
-            selection: None,
-            search: None,
-            hyperlink_hover: None,
-            ime: None,
-        };
-
-        const WARMUP_FRAMES: usize = 5;
-        const TEST_FRAMES: usize = 20;
-
-        // ========== Legacy 路径 ==========
-        let mut legacy_renderer = create_test_renderer();
-        legacy_renderer.set_use_atlas(false);
-
-        // 预热
-        for _ in 0..WARMUP_FRAMES {
-            for line in 0..50 {
-                let _img = legacy_renderer.render_line(line, &state, None);
-            }
-        }
-        legacy_renderer.cache.clear();
-
-        // 测试
-        let legacy_start = Instant::now();
-        for _ in 0..TEST_FRAMES {
-            for line in 0..50 {
-                let _img = legacy_renderer.render_line(line, &state, None);
-            }
-        }
-        let legacy_time = legacy_start.elapsed();
-
-        // ========== Atlas 路径 ==========
-        let mut atlas_renderer = create_test_renderer();
-        atlas_renderer.set_use_atlas(true);
-
-        // 预热
-        for _ in 0..WARMUP_FRAMES {
-            for line in 0..50 {
-                let _img = atlas_renderer.render_line(line, &state, None);
-            }
-        }
-        atlas_renderer.cache.clear();
-
-        // 测试
-        let atlas_start = Instant::now();
-        for _ in 0..TEST_FRAMES {
-            for line in 0..50 {
-                let _img = atlas_renderer.render_line(line, &state, None);
-            }
-        }
-        let atlas_time = atlas_start.elapsed();
-
-        // 输出结果
-        let total_lines = TEST_FRAMES * 50;
-        let legacy_per_line = legacy_time.as_micros() as f64 / total_lines as f64;
-        let atlas_per_line = atlas_time.as_micros() as f64 / total_lines as f64;
-        let ratio = atlas_time.as_micros() as f64 / legacy_time.as_micros() as f64;
-
-        eprintln!("\n🎯 [Atlas vs Legacy] {} frames × 50 lines = {} lines", TEST_FRAMES, total_lines);
-        eprintln!("   Legacy: {:?} ({:.2}µs/line)", legacy_time, legacy_per_line);
-        eprintln!("   Atlas:  {:?} ({:.2}µs/line)", atlas_time, atlas_per_line);
-        eprintln!("   Ratio:  {:.2}x (Atlas/Legacy)", ratio);
-
-        if ratio < 1.0 {
-            eprintln!("   ✅ Atlas is {:.1}% faster", (1.0 - ratio) * 100.0);
-        } else {
-            eprintln!("   ⚠️ Atlas is {:.1}% slower", (ratio - 1.0) * 100.0);
-        }
-    }
-
     /// 冷启动测试：第一帧性能（真正的 cache miss）
-    /// 使用真实内容测试 Atlas vs Legacy 的性能差异
     #[test]
     fn test_cold_start_performance() {
         use std::time::Instant;
@@ -1812,45 +1582,32 @@ mod tests {
             ime: None,
         };
 
-        // ========== Legacy 冷启动 ==========
-        let mut legacy_renderer = create_test_renderer();
-        legacy_renderer.set_use_atlas(false);
+        // ========== 冷启动（Atlas 是空的）==========
+        let mut renderer = create_test_renderer();
 
-        let legacy_start = Instant::now();
+        let cold_start = Instant::now();
         for line in 0..LINES {
-            let _img = legacy_renderer.render_line(line, &state, None);
+            let _img = renderer.render_line(line, &state, None);
         }
-        let legacy_cold = legacy_start.elapsed();
+        let cold_time = cold_start.elapsed();
 
-        // ========== Atlas 冷启动（Atlas 也是空的）==========
-        let mut atlas_renderer = create_test_renderer();
-        atlas_renderer.set_use_atlas(true);
+        // ========== 预热后再来一次（字形已缓存）==========
+        renderer.cache.clear();  // 只清 LineCache，保留 Atlas
 
-        let atlas_start = Instant::now();
+        let warm_start = Instant::now();
         for line in 0..LINES {
-            let _img = atlas_renderer.render_line(line, &state, None);
+            let _img = renderer.render_line(line, &state, None);
         }
-        let atlas_cold = atlas_start.elapsed();
-
-        // ========== Atlas 预热后再来一次（字形已缓存）==========
-        atlas_renderer.cache.clear();  // 只清 LineCache，保留 Atlas
-
-        let atlas_warm_start = Instant::now();
-        for line in 0..LINES {
-            let _img = atlas_renderer.render_line(line, &state, None);
-        }
-        let atlas_warm = atlas_warm_start.elapsed();
+        let warm_time = warm_start.elapsed();
 
         // 输出
         eprintln!("\n🎯 [Cold Start] {} lines × {} cols (真实内容)", LINES, COLS);
-        eprintln!("   Legacy (cold):     {:?} ({:.2}µs/line)", legacy_cold, legacy_cold.as_micros() as f64 / LINES as f64);
-        eprintln!("   Atlas (cold):      {:?} ({:.2}µs/line)", atlas_cold, atlas_cold.as_micros() as f64 / LINES as f64);
-        eprintln!("   Atlas (warm):      {:?} ({:.2}µs/line)", atlas_warm, atlas_warm.as_micros() as f64 / LINES as f64);
-        eprintln!("   Cold ratio:        {:.2}x", atlas_cold.as_micros() as f64 / legacy_cold.as_micros() as f64);
-        eprintln!("   Warm ratio:        {:.2}x", atlas_warm.as_micros() as f64 / legacy_cold.as_micros() as f64);
+        eprintln!("   Cold:       {:?} ({:.2}µs/line)", cold_time, cold_time.as_micros() as f64 / LINES as f64);
+        eprintln!("   Warm:       {:?} ({:.2}µs/line)", warm_time, warm_time.as_micros() as f64 / LINES as f64);
+        eprintln!("   Speedup:    {:.2}x", cold_time.as_micros() as f64 / warm_time.as_micros() as f64);
 
         // Atlas stats
-        let stats = atlas_renderer.glyph_atlas.stats();
+        let stats = renderer.glyph_atlas.stats();
         eprintln!("   Atlas glyphs:      {} (unique)", stats.num_glyphs);
         eprintln!("   Atlas utilization: {:.1}%", stats.utilization_ratio * 100.0);
 
@@ -1881,7 +1638,6 @@ mod tests {
         };
 
         let mut renderer = create_test_renderer();
-        renderer.set_use_atlas(true);
 
         // === 第1帧：冷启动（LineCache miss, Atlas cold）===
         let start1 = Instant::now();

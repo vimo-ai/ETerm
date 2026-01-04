@@ -36,6 +36,8 @@ pub mod rasterizer;
 
 pub mod box_drawing;
 
+pub mod block_drawing;
+
 // Re-exports for convenience
 
 pub use renderer::{Renderer, RenderStats};
