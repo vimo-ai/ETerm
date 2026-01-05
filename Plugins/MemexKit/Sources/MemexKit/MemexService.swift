@@ -180,24 +180,12 @@ public final class MemexService: @unchecked Sendable {
 
     // MARK: - Binary Discovery
 
-    /// 源码目录路径（编译时确定）
-    private static let sourceDir: String = {
-        // #filePath = .../MemexKit/Sources/MemexKit/MemexService.swift
-        // → .../MemexKit
-        let filePath = #filePath
-        return URL(fileURLWithPath: filePath)
-            .deletingLastPathComponent()  // Sources/MemexKit
-            .deletingLastPathComponent()  // Sources
-            .deletingLastPathComponent()  // MemexKit
-            .path
-    }()
-
     /// 查找 memex 二进制
     private func findBinary() -> String? {
-        // 1. 源码目录 Lib/memex（开发模式）
-        let devPath = Self.sourceDir + "/Lib/memex"
-        if FileManager.default.isExecutableFile(atPath: devPath) {
-            return devPath
+        // 1. ~/.vimo/eterm/bin/memex（主要路径，build.sh 部署位置）
+        let etermBin = ETermPaths.root + "/bin/memex"
+        if FileManager.default.isExecutableFile(atPath: etermBin) {
+            return etermBin
         }
 
         // 2. 插件 Bundle 内 Contents/Lib/memex（发布模式）
@@ -206,13 +194,7 @@ public final class MemexService: @unchecked Sendable {
             return bundlePath
         }
 
-        // 3. ~/.vimo/eterm/bin/memex
-        let etermBin = ETermPaths.root + "/bin/memex"
-        if FileManager.default.isExecutableFile(atPath: etermBin) {
-            return etermBin
-        }
-
-        // 4. /usr/local/bin/memex
+        // 3. /usr/local/bin/memex（全局安装）
         if FileManager.default.isExecutableFile(atPath: "/usr/local/bin/memex") {
             return "/usr/local/bin/memex"
         }
