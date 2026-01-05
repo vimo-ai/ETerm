@@ -23,7 +23,12 @@ protocol VlaudeClientDelegate: AnyObject {
     func vlaudeClientDidDisconnect(_ client: VlaudeClient)
 
     /// 收到注入请求（旧方式）
-    func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String)
+    /// - Parameters:
+    ///   - client: VlaudeClient 实例
+    ///   - sessionId: 会话 ID
+    ///   - text: 消息内容
+    ///   - clientMessageId: 客户端消息 ID（用于去重）
+    func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String, clientMessageId: String?)
 
     /// 收到 Mobile 查看状态
     func vlaudeClient(_ client: VlaudeClient, didReceiveMobileViewing sessionId: String, isViewing: Bool)
@@ -123,7 +128,8 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             socketBridge?.delegate = self
             try socketBridge?.connect()
         } catch {
-            // Connection failed silently
+            // 连接失败时通知 delegate
+            delegate?.vlaudeClientDidDisconnect(self)
         }
     }
 
@@ -142,6 +148,13 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
         // 释放 SharedDbBridge Writer（确保 daemon 能接管）
         releaseSharedDb()
+    }
+
+    /// 手动重连（使用当前配置）
+    func reconnect() {
+        let config = VlaudeConfigManager.shared.config
+        guard config.isValid else { return }
+        connect(config: config)
     }
 
     // MARK: - Redis Session Tracking
@@ -243,7 +256,8 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         case ServerEvent.injectToEterm.rawValue:
             guard let sessionId = data["sessionId"] as? String,
                   let text = data["text"] as? String else { return }
-            delegate?.vlaudeClient(self, didReceiveInject: sessionId, text: text)
+            let clientMessageId = data["clientMessageId"] as? String
+            delegate?.vlaudeClient(self, didReceiveInject: sessionId, text: text, clientMessageId: clientMessageId)
 
         case ServerEvent.mobileViewing.rawValue:
             guard let sessionId = data["sessionId"] as? String,
@@ -733,7 +747,8 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     ///   - sessionId: 会话 ID
     ///   - message: 消息
     ///   - contentBlocks: 结构化内容块（可选）
-    func pushMessage(sessionId: String, message: RawMessage, contentBlocks: [ContentBlock]? = nil) {
+    ///   - clientMessageId: 客户端消息 ID（用于去重，可选）
+    func pushMessage(sessionId: String, message: RawMessage, contentBlocks: [ContentBlock]? = nil, clientMessageId: String? = nil) {
         guard isConnected else { return }
 
         // 转换消息格式
@@ -747,6 +762,11 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             if let role = msg.role { innerDict["role"] = role }
             if let content = msg.content { innerDict["content"] = content.value }
             msgDict["message"] = innerDict
+        }
+
+        // 添加 clientMessageId（用于 iOS 乐观更新去重）
+        if let clientMsgId = clientMessageId {
+            msgDict["clientMessageId"] = clientMsgId
         }
 
         // 添加结构化内容块
