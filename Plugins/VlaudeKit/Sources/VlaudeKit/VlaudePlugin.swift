@@ -43,11 +43,18 @@ public final class VlaudePlugin: NSObject, Plugin {
     /// 正在 loading（Claude 思考中）的 session 集合
     private var loadingSessions: Set<String> = []
 
+    /// 待处理的 clientMessageId：sessionId -> clientMessageId
+    /// 当收到 iOS 发送的消息注入请求时存储，推送 user 消息时携带并清除
+    private var pendingClientMessageIds: [String: String] = [:]
+
     /// 会话文件监听器
     private var sessionWatcher: SessionWatcher?
 
     /// 配置变更观察
     private var configObserver: NSObjectProtocol?
+
+    /// 重连请求观察
+    private var reconnectObserver: NSObjectProtocol?
 
     public override required init() {
         super.init()
@@ -77,12 +84,26 @@ public final class VlaudePlugin: NSObject, Plugin {
             }
         }
 
+        // 监听重连请求
+        reconnectObserver = NotificationCenter.default.addObserver(
+            forName: .vlaudeReconnectRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleReconnectRequest()
+            }
+        }
+
         // 如果配置有效，立即连接
         connectIfConfigured()
     }
 
     public func deactivate() {
         if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = reconnectObserver {
             NotificationCenter.default.removeObserver(observer)
         }
 
@@ -93,12 +114,16 @@ public final class VlaudePlugin: NSObject, Plugin {
         client?.disconnect()
         client = nil
 
+        // 更新状态
+        VlaudeConfigManager.shared.updateConnectionStatus(.disconnected)
+
         sessionMap.removeAll()
         reverseSessionMap.removeAll()
         sessionPaths.removeAll()
         pendingRequests.removeAll()
         mobileViewingTerminals.removeAll()
         loadingSessions.removeAll()
+        pendingClientMessageIds.removeAll()
     }
 
     // MARK: - Configuration
@@ -106,6 +131,7 @@ public final class VlaudePlugin: NSObject, Plugin {
     private func connectIfConfigured() {
         let config = VlaudeConfigManager.shared.config
         guard config.isValid else { return }
+        VlaudeConfigManager.shared.updateConnectionStatus(.connecting)
         client?.connect(config: config)
     }
 
@@ -113,10 +139,19 @@ public final class VlaudePlugin: NSObject, Plugin {
         let config = VlaudeConfigManager.shared.config
 
         if config.isValid {
+            VlaudeConfigManager.shared.updateConnectionStatus(.connecting)
             client?.connect(config: config)
         } else {
             client?.disconnect()
+            VlaudeConfigManager.shared.updateConnectionStatus(.disconnected)
         }
+    }
+
+    private func handleReconnectRequest() {
+        let config = VlaudeConfigManager.shared.config
+        guard config.isValid else { return }
+        VlaudeConfigManager.shared.updateConnectionStatus(.reconnecting)
+        client?.reconnect()
     }
 
     // MARK: - Event Handling
@@ -355,6 +390,9 @@ public final class VlaudePlugin: NSObject, Plugin {
 
 extension VlaudePlugin: VlaudeClientDelegate {
     func vlaudeClientDidConnect(_ client: VlaudeClient) {
+        // 更新连接状态
+        VlaudeConfigManager.shared.updateConnectionStatus(.connected)
+
         // 连接成功后，上报所有已存在的 session
         for (terminalId, sessionId) in sessionMap {
             // 获取项目路径
@@ -365,14 +403,32 @@ extension VlaudePlugin: VlaudeClientDelegate {
                 projectPath: projectPath
             )
         }
-
     }
 
     func vlaudeClientDidDisconnect(_ client: VlaudeClient) {
+        // 如果正在重连中，不要覆盖状态（避免 .reconnecting -> .disconnected 闪烁）
+        let currentStatus = VlaudeConfigManager.shared.connectionStatus
+        if currentStatus != .reconnecting {
+            VlaudeConfigManager.shared.updateConnectionStatus(.disconnected)
+        }
     }
 
-    func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String) {
-        guard let terminalId = reverseSessionMap[sessionId] else { return }
+    func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String, clientMessageId: String?) {
+        print("💉 [VlaudePlugin] didReceiveInject: sessionId=\(sessionId.prefix(8))..., text='\(text)', clientMsgId=\(clientMessageId ?? "nil")")
+        print("💉 [VlaudePlugin] reverseSessionMap keys: \(reverseSessionMap.keys.map { String($0.prefix(8)) })")
+
+        guard let terminalId = reverseSessionMap[sessionId] else {
+            print("❌ [VlaudePlugin] sessionId not found in reverseSessionMap!")
+            return
+        }
+
+        print("✅ [VlaudePlugin] Found terminalId: \(terminalId), writing to terminal...")
+
+        // 存储 clientMessageId，等待 SessionWatcher 检测到 user 消息后一起推送
+        if let clientMsgId = clientMessageId {
+            pendingClientMessageIds[sessionId] = clientMsgId
+            print("💾 [VlaudePlugin] Stored clientMessageId: \(clientMsgId) for session: \(sessionId.prefix(8))...")
+        }
 
         // 写入终端
         host?.writeToTerminal(terminalId: terminalId, data: text)
@@ -485,7 +541,18 @@ extension VlaudePlugin: SessionWatcherDelegate {
         // 推送新消息给服务器（带结构化内容块）
         for message in messages {
             let blocks = ContentBlockParser.readMessage(from: transcriptPath, uuid: message.uuid)
-            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks)
+
+            // 对于 user 类型消息，携带 clientMessageId（如果有）
+            var clientMsgId: String? = nil
+            if message.type == "user" {
+                // 取出并消费 clientMessageId（一次性使用）
+                clientMsgId = pendingClientMessageIds.removeValue(forKey: sessionId)
+                if let id = clientMsgId {
+                    print("📤 [VlaudePlugin] Pushing user message with clientMessageId: \(id)")
+                }
+            }
+
+            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks, clientMessageId: clientMsgId)
         }
     }
 }
