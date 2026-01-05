@@ -93,10 +93,10 @@ final class PluginManager: ObservableObject {
         // 1. 注册所有插件类型
         // EnglishLearningPlugin 已迁移到 SDK 插件 (TranslationKit)
         // ClaudePlugin 已迁移到 SDK 插件 (ClaudeKit)
+        // VlaudePlugin 已迁移到 SDK 插件 (VlaudeKit)
         registerPluginType(WritingAssistantPlugin.self)
         registerPluginType(OneLineCommandPlugin.self)
         registerPluginType(ClaudeMonitorPlugin.self)
-        registerPluginType(VlaudePlugin.self)
         registerPluginType(DevHelperPlugin.self)
         registerPluginType(WorkspacePlugin.self)
 
