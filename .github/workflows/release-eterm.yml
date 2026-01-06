@@ -53,6 +53,15 @@ jobs:
           # Build all builtin plugins that ship with the app
           ./scripts/build-plugins.sh release build/plugins
 
+      - name: Remove plugins with native dependencies
+        run: |
+          # Remove VlaudeKit and MemexKit - they have native dependencies
+          # and are downloadable separately
+          rm -rf Plugins/VlaudeKit
+          rm -rf Plugins/MemexKit
+          rm -rf Plugins/MCPRouterKit
+          echo "Removed plugins with native dependencies"
+
       - name: Build ETerm.app
         run: |
           VERSION="${{ steps.tag.outputs.VERSION }}"
