@@ -28,5 +28,18 @@
         "dest": "Libs/SharedDB/"
       }
     }
+  },
+  "mcprouterkit": {
+    "name": "MCPRouterKit",
+    "path": "Plugins/MCPRouterKit",
+    "deps": {
+      "mcp_router_core": {
+        "repo": "vimo-ai/mcp-router",
+        "tag": "v0.0.2-beta.15",
+        "asset": "mcp_router_core-0.0.2-beta.15-macos-universal.zip",
+        "dest": "Lib/",
+        "extract": true
+      }
+    }
   }
 }

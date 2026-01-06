@@ -5,6 +5,7 @@ on:
     tags:
       - 'vlaudekit-v*'
       - 'memexkit-v*'
+      - 'mcprouterkit-v*'
 
 permissions:
   contents: write
@@ -62,6 +63,7 @@ jobs:
             TAG=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].tag" .github/plugin-deps.json)
             ASSET=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].asset" .github/plugin-deps.json)
             DEST=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].dest" .github/plugin-deps.json)
+            EXTRACT=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].extract // false" .github/plugin-deps.json)
 
             echo "Downloading $DEP from $REPO@$TAG..."
 
@@ -72,6 +74,13 @@ jobs:
               --repo "$REPO" \
               --pattern "$ASSET" \
               --dir "$DEST_DIR"
+
+            # 如果需要解压 zip
+            if [ "$EXTRACT" = "true" ] && [[ "$ASSET" == *.zip ]]; then
+              echo "Extracting $ASSET..."
+              unzip -o "$DEST_DIR/$ASSET" -d "$DEST_DIR"
+              rm "$DEST_DIR/$ASSET"
+            fi
 
             echo "Downloaded $ASSET to $DEST_DIR"
             ls -la "$DEST_DIR"
@@ -89,8 +98,14 @@ jobs:
 
           cd "$PLUGIN_PATH"
 
-          # Build with release configuration
-          swift build -c release
+          # MCPRouterKit 需要特殊的 linker 参数
+          if [ "$PLUGIN_NAME" = "MCPRouterKit" ] && [ -f "Lib/mcp_router_core" ]; then
+            echo "Building MCPRouterKit with custom linker..."
+            swift build -c release -Xlinker "$(pwd)/Lib/mcp_router_core"
+          else
+            # Build with release configuration
+            swift build -c release
+          fi
 
           # Create bundle structure
           BUNDLE_DIR="build/${PLUGIN_NAME}.bundle"
@@ -119,6 +134,11 @@ jobs:
               cp ".build/release/$lib" "$BUNDLE_DIR/Contents/Frameworks/"
             fi
           done
+
+          # Copy mcp_router_core if exists (MCPRouterKit)
+          if [ -f "Lib/mcp_router_core" ]; then
+            cp "Lib/mcp_router_core" "$BUNDLE_DIR/Contents/Frameworks/"
+          fi
 
           # Copy manifest.json
           if [ -f "Resources/manifest.json" ]; then
@@ -207,6 +227,14 @@ jobs:
               "$BUNDLE_DIR/Contents/Frameworks/libSocketIO.dylib" 2>/dev/null || true
           fi
 
+          # Fix mcp_router_core reference (MCPRouterKit)
+          if [ -f "$BUNDLE_DIR/Contents/Frameworks/mcp_router_core" ]; then
+            install_name_tool -change "mcp_router_core" \
+              "@loader_path/../Frameworks/mcp_router_core" \
+              "$MAIN_DYLIB" 2>/dev/null || true
+            # 不需要设置 id，因为已经是相对路径
+          fi
+
       - name: Sign bundle
         run: |
           PLUGIN_PATH="${{ steps.config.outputs.PLUGIN_PATH }}"
@@ -215,6 +243,11 @@ jobs:
 
           # Sign all dylibs
           find "$BUNDLE_DIR" -name "*.dylib" -exec codesign -f -s - {} \;
+
+          # Sign mcp_router_core if exists (no extension)
+          if [ -f "$BUNDLE_DIR/Contents/Frameworks/mcp_router_core" ]; then
+            codesign -f -s - "$BUNDLE_DIR/Contents/Frameworks/mcp_router_core"
+          fi
 
           # Sign the bundle
           codesign -f -s - "$BUNDLE_DIR"
