@@ -19,8 +19,9 @@ PLUGINS_DIR="$ETERM_ROOT/Plugins"
 CONFIGURATION="${1:-Debug}"
 OUTPUT_DIR="${2:-$HOME/.vimo/eterm/plugins}"
 
-# 纯 Swift 插件列表（无 native 依赖）
-PURE_SWIFT_PLUGINS=(
+# 内置插件列表
+# MCPRouterKit 需要先准备好 Lib/mcp_router_core 和 mcp_router_core.h
+BUILTIN_PLUGINS=(
     "ClaudeKit"
     "ClaudeMonitorKit"
     "DevHelperKit"
@@ -117,7 +118,7 @@ EOF
 # 主逻辑
 # ============================================================================
 main() {
-    log_info "Building pure Swift plugins..."
+    log_info "Building builtin plugins..."
     log_info "Configuration: $CONFIGURATION"
     log_info "Output: $OUTPUT_DIR"
     echo ""
@@ -129,7 +130,7 @@ main() {
     local success_count=0
     local fail_count=0
 
-    for plugin in "${PURE_SWIFT_PLUGINS[@]}"; do
+    for plugin in "${BUILTIN_PLUGINS[@]}"; do
         if build_plugin "$plugin"; then
             ((success_count++))
         else
