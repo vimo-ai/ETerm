@@ -229,10 +229,15 @@ jobs:
 
           # Fix mcp_router_core reference (MCPRouterKit)
           if [ -f "$BUNDLE_DIR/Contents/Frameworks/mcp_router_core" ]; then
-            install_name_tool -change "mcp_router_core" \
+            OLD_PATH=$(otool -L "$MAIN_DYLIB" | grep mcp_router_core | awk '{print $1}')
+            if [ -n "$OLD_PATH" ]; then
+              install_name_tool -change "$OLD_PATH" \
+                "@loader_path/../Frameworks/mcp_router_core" \
+                "$MAIN_DYLIB"
+            fi
+            install_name_tool -id \
               "@loader_path/../Frameworks/mcp_router_core" \
-              "$MAIN_DYLIB" 2>/dev/null || true
-            # 不需要设置 id，因为已经是相对路径
+              "$BUNDLE_DIR/Contents/Frameworks/mcp_router_core"
           fi
 
       - name: Sign bundle
