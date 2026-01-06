@@ -32,9 +32,55 @@ jobs:
         with:
           xcode-version: 'latest-stable'
 
-      - name: Build pure Swift plugins
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build sugarloaf-ffi (terminal renderer)
         run: |
-          # Build all pure Swift plugins that ship with the app
+          cd rio
+          cargo build --release -p sugarloaf-ffi --target aarch64-apple-darwin
+
+          # Copy static lib to expected location
+          mkdir -p ../ETerm/Libs/Sugarloaf
+          cp target/aarch64-apple-darwin/release/libsugarloaf_ffi.a ../ETerm/Libs/Sugarloaf/
+          echo "Built libsugarloaf_ffi.a"
+          ls -la ../ETerm/Libs/Sugarloaf/
+
+      - name: Clone and build mcp-router-core
+        run: |
+          # Clone mcp-router repo
+          git clone --depth 1 https://github.com/vimo-ai/mcp-router.git /tmp/mcp-router
+
+          # Build mcp-router-core FFI
+          cd /tmp/mcp-router
+          cargo build --release -p mcp-router-core --target aarch64-apple-darwin
+
+          # Copy dylib to ETerm/Libs/MCPRouter for main app
+          mkdir -p $GITHUB_WORKSPACE/ETerm/Libs/MCPRouter
+          cp target/aarch64-apple-darwin/release/libmcp_router_core.dylib $GITHUB_WORKSPACE/ETerm/Libs/MCPRouter/
+
+          # Copy to plugin location with correct name (no lib prefix, no .dylib extension)
+          PLUGIN_LIB="$GITHUB_WORKSPACE/Plugins/MCPRouterKit/Lib"
+          mkdir -p "$PLUGIN_LIB"
+          cp target/aarch64-apple-darwin/release/libmcp_router_core.dylib "$PLUGIN_LIB/mcp_router_core"
+          cp core/include/mcp_router_core.h "$PLUGIN_LIB/"
+
+          # Create module.modulemap
+          cat > "$PLUGIN_LIB/module.modulemap" << 'EOF'
+          module MCPRouterCore {
+              header "mcp_router_core.h"
+              export *
+          }
+          EOF
+
+          echo "Built mcp-router-core FFI"
+          ls -la "$PLUGIN_LIB/"
+
+      - name: Build builtin plugins
+        run: |
+          # Build all builtin plugins that ship with the app
           ./scripts/build-plugins.sh release build/plugins
 
       - name: Build ETerm.app
