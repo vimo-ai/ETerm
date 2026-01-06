@@ -233,7 +233,8 @@ struct DownloadablePluginItemView: View {
                 Button("安装") {
                     Task {
                         await onInstall()
-                        isInstalled = true
+                        // 安装后重新检查 VersionManager，而不是盲目设为 true
+                        isInstalled = VersionManager.shared.isPluginInstalled(plugin.id)
                     }
                 }
                 .buttonStyle(.borderedProminent)
