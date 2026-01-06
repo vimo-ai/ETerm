@@ -42,11 +42,11 @@ jobs:
           cd rio
           cargo build --release -p sugarloaf-ffi --target aarch64-apple-darwin
 
-          # Copy static lib to expected location
-          mkdir -p ../ETerm/Libs/Sugarloaf
-          cp target/aarch64-apple-darwin/release/libsugarloaf_ffi.a ../ETerm/Libs/Sugarloaf/
+          # Copy static lib to expected location (Xcode expects $(PROJECT_DIR)/ETerm/Libs/Sugarloaf/)
+          mkdir -p ../ETerm/ETerm/Libs/Sugarloaf
+          cp target/aarch64-apple-darwin/release/libsugarloaf_ffi.a ../ETerm/ETerm/Libs/Sugarloaf/
           echo "Built libsugarloaf_ffi.a"
-          ls -la ../ETerm/Libs/Sugarloaf/
+          ls -la ../ETerm/ETerm/Libs/Sugarloaf/
 
       - name: Build builtin plugins
         run: |
