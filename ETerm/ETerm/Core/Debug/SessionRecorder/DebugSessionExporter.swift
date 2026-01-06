@@ -528,7 +528,28 @@ extension DebugSessionExporter {
         revealItem.target = self
         items.append(revealItem)
 
+        // 分隔线
+        items.append(NSMenuItem.separator())
+
+        // 显示首次引导（调试用）
+        let onboardingItem = NSMenuItem(
+            title: "显示首次引导...",
+            action: #selector(handleShowOnboarding),
+            keyEquivalent: ""
+        )
+        onboardingItem.target = self
+        items.append(onboardingItem)
+
         return items
+    }
+
+    @objc private func handleShowOnboarding() {
+        #if DEBUG
+        OnboardingManager.shared.forceShowOnboarding()
+        #else
+        OnboardingManager.shared.resetOnboardingState()
+        OnboardingManager.shared.showOnboarding()
+        #endif
     }
 
     @objc private func handleExportBugReport() {

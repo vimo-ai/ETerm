@@ -54,6 +54,21 @@ struct VlaudeSettingsView: View {
                         configManager.config.enabled = newValue
                     }
 
+                // 连接状态
+                if isEnabled {
+                    HStack {
+                        connectionStatusView
+                        Spacer()
+                        if configManager.connectionStatus == .disconnected {
+                            Button("Reconnect") {
+                                configManager.requestReconnect()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+
                 Divider()
 
                 // 服务器配置
@@ -159,6 +174,48 @@ struct VlaudeSettingsView: View {
         }
         .onAppear {
             loadConfig()
+        }
+    }
+
+    // MARK: - Connection Status View
+
+    @ViewBuilder
+    private var connectionStatusView: some View {
+        HStack(spacing: 6) {
+            statusIndicator
+            Text(statusText)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var statusIndicator: some View {
+        Circle()
+            .fill(statusColor)
+            .frame(width: 8, height: 8)
+    }
+
+    private var statusColor: Color {
+        switch configManager.connectionStatus {
+        case .connected:
+            return .green
+        case .connecting, .reconnecting:
+            return .orange
+        case .disconnected:
+            return .red
+        }
+    }
+
+    private var statusText: String {
+        switch configManager.connectionStatus {
+        case .connected:
+            return "Connected"
+        case .connecting:
+            return "Connecting..."
+        case .reconnecting:
+            return "Reconnecting..."
+        case .disconnected:
+            return "Disconnected"
         }
     }
 

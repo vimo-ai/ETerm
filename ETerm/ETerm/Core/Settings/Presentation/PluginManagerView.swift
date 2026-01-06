@@ -39,26 +39,24 @@ struct PluginManagerView: View {
 
             // 插件列表
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if plugins.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "puzzlepiece.extension")
-                                .font(.system(size: 48))
-                                .foregroundColor(.secondary)
-                            Text("暂无插件")
+                VStack(alignment: .leading, spacing: 20) {
+                    // 已安装插件
+                    if !plugins.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("已安装")
                                 .font(.headline)
                                 .foregroundColor(.secondary)
-                            Text("插件可以扩展 ETerm 的功能")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 60)
-                    } else {
-                        ForEach(plugins) { plugin in
-                            PluginItemView(plugin: plugin)
+
+                            ForEach(plugins) { plugin in
+                                PluginItemView(plugin: plugin)
+                            }
                         }
                     }
+
+                    Divider()
+
+                    // 可下载插件
+                    DownloadablePluginsView()
                 }
                 .padding()
             }
