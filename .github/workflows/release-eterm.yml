@@ -48,36 +48,6 @@ jobs:
           echo "Built libsugarloaf_ffi.a"
           ls -la ../ETerm/Libs/Sugarloaf/
 
-      - name: Clone and build mcp-router-core
-        run: |
-          # Clone mcp-router repo
-          git clone --depth 1 https://github.com/vimo-ai/mcp-router.git /tmp/mcp-router
-
-          # Build mcp-router-core FFI (Cargo.toml is in core/)
-          cd /tmp/mcp-router/core
-          cargo build --release --target aarch64-apple-darwin
-
-          # Copy dylib to ETerm/Libs/MCPRouter for main app
-          mkdir -p $GITHUB_WORKSPACE/ETerm/Libs/MCPRouter
-          cp target/aarch64-apple-darwin/release/libmcp_router_core.dylib $GITHUB_WORKSPACE/ETerm/Libs/MCPRouter/
-
-          # Copy to plugin location with correct name (no lib prefix, no .dylib extension)
-          PLUGIN_LIB="$GITHUB_WORKSPACE/Plugins/MCPRouterKit/Lib"
-          mkdir -p "$PLUGIN_LIB"
-          cp target/aarch64-apple-darwin/release/libmcp_router_core.dylib "$PLUGIN_LIB/mcp_router_core"
-          cp include/mcp_router_core.h "$PLUGIN_LIB/"
-
-          # Create module.modulemap
-          cat > "$PLUGIN_LIB/module.modulemap" << 'EOF'
-          module MCPRouterCore {
-              header "mcp_router_core.h"
-              export *
-          }
-          EOF
-
-          echo "Built mcp-router-core FFI"
-          ls -la "$PLUGIN_LIB/"
-
       - name: Build builtin plugins
         run: |
           # Build all builtin plugins that ship with the app
@@ -174,7 +144,6 @@ jobs:
             - ClaudeMonitorKit
             - DevHelperKit
             - HistoryKit
-            - MCPRouterKit
             - OneLineCommandKit
             - TranslationKit
             - WorkspaceKit
@@ -183,6 +152,7 @@ jobs:
             ### Optional Plugins (Download separately)
             - [VlaudeKit](https://github.com/vimo-ai/ETerm/releases?q=vlaudekit) - Claude remote control
             - [MemexKit](https://github.com/vimo-ai/ETerm/releases?q=memexkit) - Session history search
+            - MCPRouterKit - MCP server management (requires mcp-router-core)
 
             ### Installation
             1. Open DMG and drag ETerm to Applications

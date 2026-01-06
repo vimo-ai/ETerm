@@ -19,14 +19,13 @@ PLUGINS_DIR="$ETERM_ROOT/Plugins"
 CONFIGURATION="${1:-Debug}"
 OUTPUT_DIR="${2:-$HOME/.vimo/eterm/plugins}"
 
-# 内置插件列表
-# MCPRouterKit 需要先准备好 Lib/mcp_router_core 和 mcp_router_core.h
+# 内置插件列表（纯 Swift，无 native 依赖）
+# 注意：MCPRouterKit 需要 mcp-router-core FFI，暂不包含
 BUILTIN_PLUGINS=(
     "ClaudeKit"
     "ClaudeMonitorKit"
     "DevHelperKit"
     "HistoryKit"
-    "MCPRouterKit"
     "OneLineCommandKit"
     "TranslationKit"
     "WorkspaceKit"
