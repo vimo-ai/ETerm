@@ -53,9 +53,9 @@ jobs:
           # Clone mcp-router repo
           git clone --depth 1 https://github.com/vimo-ai/mcp-router.git /tmp/mcp-router
 
-          # Build mcp-router-core FFI
-          cd /tmp/mcp-router
-          cargo build --release -p mcp-router-core --target aarch64-apple-darwin
+          # Build mcp-router-core FFI (Cargo.toml is in core/)
+          cd /tmp/mcp-router/core
+          cargo build --release --target aarch64-apple-darwin
 
           # Copy dylib to ETerm/Libs/MCPRouter for main app
           mkdir -p $GITHUB_WORKSPACE/ETerm/Libs/MCPRouter
@@ -65,7 +65,7 @@ jobs:
           PLUGIN_LIB="$GITHUB_WORKSPACE/Plugins/MCPRouterKit/Lib"
           mkdir -p "$PLUGIN_LIB"
           cp target/aarch64-apple-darwin/release/libmcp_router_core.dylib "$PLUGIN_LIB/mcp_router_core"
-          cp core/include/mcp_router_core.h "$PLUGIN_LIB/"
+          cp include/mcp_router_core.h "$PLUGIN_LIB/"
 
           # Create module.modulemap
           cat > "$PLUGIN_LIB/module.modulemap" << 'EOF'
