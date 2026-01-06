@@ -88,6 +88,15 @@ public struct VlaudeConfig: Codable, Equatable {
     }
 }
 
+// MARK: - 连接状态
+
+public enum VlaudeConnectionStatus: Equatable {
+    case disconnected
+    case connecting
+    case connected
+    case reconnecting
+}
+
 // MARK: - 配置管理器
 
 public final class VlaudeConfigManager: ObservableObject {
@@ -112,6 +121,30 @@ public final class VlaudeConfigManager: ObservableObject {
                 )
             }
         }
+    }
+
+    /// 连接状态
+    @Published public private(set) var connectionStatus: VlaudeConnectionStatus = .disconnected
+
+    /// 更新连接状态（由 VlaudePlugin 调用）
+    public func updateConnectionStatus(_ status: VlaudeConnectionStatus) {
+        if connectionStatus != status {
+            connectionStatus = status
+            NotificationCenter.default.post(
+                name: .vlaudeConnectionStatusDidChange,
+                object: nil,
+                userInfo: ["status": status]
+            )
+        }
+    }
+
+    /// 请求手动重连（由 UI 调用）
+    public func requestReconnect() {
+        guard connectionStatus == .disconnected else { return }
+        NotificationCenter.default.post(
+            name: .vlaudeReconnectRequested,
+            object: nil
+        )
     }
 
     private init() {
@@ -162,4 +195,6 @@ public final class VlaudeConfigManager: ObservableObject {
 
 public extension Notification.Name {
     static let vlaudeConfigDidChange = Notification.Name("VlaudeConfigDidChange")
+    static let vlaudeConnectionStatusDidChange = Notification.Name("VlaudeConnectionStatusDidChange")
+    static let vlaudeReconnectRequested = Notification.Name("VlaudeReconnectRequested")
 }

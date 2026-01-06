@@ -1,0 +1,147 @@
+name: Release ETerm
+
+on:
+  push:
+    tags:
+      - 'eterm-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-app:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Parse tag info
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION=$(echo "$TAG" | sed 's/^eterm-v//')
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: Build pure Swift plugins
+        run: |
+          # Build all pure Swift plugins that ship with the app
+          ./scripts/build-plugins.sh release build/plugins
+
+      - name: Build ETerm.app
+        run: |
+          VERSION="${{ steps.tag.outputs.VERSION }}"
+
+          xcodebuild -project ETerm/ETerm.xcodeproj \
+                     -scheme ETerm \
+                     -configuration Release \
+                     -archivePath build/ETerm.xcarchive \
+                     -destination 'generic/platform=macOS' \
+                     MARKETING_VERSION="$VERSION" \
+                     CODE_SIGN_IDENTITY="-" \
+                     ARCHS=arm64 \
+                     SWIFT_STRICT_CONCURRENCY=minimal \
+                     archive
+
+          # Export app
+          cp -R build/ETerm.xcarchive/Products/Applications/ETerm.app build/
+
+      - name: Embed built-in plugins
+        run: |
+          APP_PLUGINS="build/ETerm.app/Contents/PlugIns"
+          mkdir -p "$APP_PLUGINS"
+
+          # Copy all built plugins into the app bundle
+          for bundle in build/plugins/*.bundle; do
+            if [ -d "$bundle" ]; then
+              cp -R "$bundle" "$APP_PLUGINS/"
+              echo "Embedded: $(basename $bundle)"
+            fi
+          done
+
+          echo "Embedded plugins:"
+          ls -la "$APP_PLUGINS/"
+
+      - name: Sign app
+        run: |
+          # Sign all embedded plugins
+          find build/ETerm.app/Contents/PlugIns -name "*.bundle" -exec codesign -f -s - --deep {} \;
+
+          # Sign frameworks
+          find build/ETerm.app/Contents/Frameworks -name "*.framework" -exec codesign -f -s - {} \; 2>/dev/null || true
+          find build/ETerm.app/Contents/Frameworks -name "*.dylib" -exec codesign -f -s - {} \; 2>/dev/null || true
+
+          # Sign main app
+          codesign -f -s - --deep build/ETerm.app
+
+          # Verify
+          codesign --verify --deep --strict build/ETerm.app
+          echo "Signing completed"
+
+      - name: Create DMG
+        id: dmg
+        run: |
+          VERSION="${{ steps.tag.outputs.VERSION }}"
+          DMG_NAME="ETerm-${VERSION}.dmg"
+
+          # Create DMG
+          hdiutil create -volname "ETerm" \
+                         -srcfolder build/ETerm.app \
+                         -ov -format UDZO \
+                         "build/$DMG_NAME"
+
+          # Calculate SHA256
+          SHA256=$(shasum -a 256 "build/$DMG_NAME" | awk '{print $1}')
+          SIZE=$(stat -f%z "build/$DMG_NAME")
+
+          echo "DMG_NAME=$DMG_NAME" >> $GITHUB_OUTPUT
+          echo "DMG_PATH=build/$DMG_NAME" >> $GITHUB_OUTPUT
+          echo "SHA256=$SHA256" >> $GITHUB_OUTPUT
+          echo "SIZE=$SIZE" >> $GITHUB_OUTPUT
+
+          echo "Created $DMG_NAME (SHA256: $SHA256, Size: $SIZE bytes)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "ETerm v${{ steps.tag.outputs.VERSION }}"
+          files: ${{ steps.dmg.outputs.DMG_PATH }}
+          body: |
+            ## ETerm v${{ steps.tag.outputs.VERSION }}
+
+            ### Download
+            - **File**: `${{ steps.dmg.outputs.DMG_NAME }}`
+            - **Size**: ${{ steps.dmg.outputs.SIZE }} bytes
+            - **SHA256**: `${{ steps.dmg.outputs.SHA256 }}`
+
+            ### Built-in Plugins
+            - ClaudeKit
+            - ClaudeMonitorKit
+            - DevHelperKit
+            - HistoryKit
+            - MCPRouterKit
+            - OneLineCommandKit
+            - TranslationKit
+            - WorkspaceKit
+            - WritingKit
+
+            ### Optional Plugins (Download separately)
+            - [VlaudeKit](https://github.com/vimo-ai/ETerm/releases?q=vlaudekit) - Claude remote control
+            - [MemexKit](https://github.com/vimo-ai/ETerm/releases?q=memexkit) - Session history search
+
+            ### Installation
+            1. Open DMG and drag ETerm to Applications
+            2. First launch: Right-click → Open (or run `xattr -cr /Applications/ETerm.app`)
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.VERSION, 'beta') || contains(steps.tag.outputs.VERSION, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

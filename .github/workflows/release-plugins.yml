@@ -1,0 +1,267 @@
+name: Release Plugins
+
+on:
+  push:
+    tags:
+      - 'vlaudekit-v*'
+      - 'memexkit-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-plugin:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Parse tag info
+        id: tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "TAG=$TAG" >> $GITHUB_OUTPUT
+
+          # Extract plugin name and version from tag
+          # vlaudekit-v0.0.1-beta.1 -> plugin=vlaudekit, version=0.0.1-beta.1
+          PLUGIN_KEY=$(echo "$TAG" | sed 's/-v.*//')
+          VERSION=$(echo "$TAG" | sed 's/^[^-]*-v//')
+
+          echo "PLUGIN_KEY=$PLUGIN_KEY" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Parsed: plugin=$PLUGIN_KEY, version=$VERSION"
+
+      - name: Read plugin config
+        id: config
+        run: |
+          PLUGIN_KEY="${{ steps.tag.outputs.PLUGIN_KEY }}"
+
+          # Read plugin config from plugin-deps.json
+          PLUGIN_NAME=$(jq -r ".[\"$PLUGIN_KEY\"].name" .github/plugin-deps.json)
+          PLUGIN_PATH=$(jq -r ".[\"$PLUGIN_KEY\"].path" .github/plugin-deps.json)
+
+          echo "PLUGIN_NAME=$PLUGIN_NAME" >> $GITHUB_OUTPUT
+          echo "PLUGIN_PATH=$PLUGIN_PATH" >> $GITHUB_OUTPUT
+          echo "Plugin: $PLUGIN_NAME at $PLUGIN_PATH"
+
+      - name: Download dependencies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PLUGIN_KEY="${{ steps.tag.outputs.PLUGIN_KEY }}"
+          PLUGIN_PATH="${{ steps.config.outputs.PLUGIN_PATH }}"
+
+          echo "Downloading dependencies for $PLUGIN_KEY..."
+
+          # Get all deps for this plugin
+          DEPS=$(jq -r ".[\"$PLUGIN_KEY\"].deps | keys[]" .github/plugin-deps.json)
+
+          for DEP in $DEPS; do
+            REPO=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].repo" .github/plugin-deps.json)
+            TAG=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].tag" .github/plugin-deps.json)
+            ASSET=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].asset" .github/plugin-deps.json)
+            DEST=$(jq -r ".[\"$PLUGIN_KEY\"].deps[\"$DEP\"].dest" .github/plugin-deps.json)
+
+            echo "Downloading $DEP from $REPO@$TAG..."
+
+            DEST_DIR="$PLUGIN_PATH/$DEST"
+            mkdir -p "$DEST_DIR"
+
+            gh release download "$TAG" \
+              --repo "$REPO" \
+              --pattern "$ASSET" \
+              --dir "$DEST_DIR"
+
+            echo "Downloaded $ASSET to $DEST_DIR"
+            ls -la "$DEST_DIR"
+          done
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: Build plugin
+        run: |
+          PLUGIN_PATH="${{ steps.config.outputs.PLUGIN_PATH }}"
+          PLUGIN_NAME="${{ steps.config.outputs.PLUGIN_NAME }}"
+
+          cd "$PLUGIN_PATH"
+
+          # Build with release configuration
+          swift build -c release
+
+          # Create bundle structure
+          BUNDLE_DIR="build/${PLUGIN_NAME}.bundle"
+          rm -rf build/
+          mkdir -p "$BUNDLE_DIR/Contents/MacOS"
+          mkdir -p "$BUNDLE_DIR/Contents/Resources"
+          mkdir -p "$BUNDLE_DIR/Contents/Frameworks"
+          mkdir -p "$BUNDLE_DIR/Contents/Libs"
+
+          # Copy main dylib
+          cp ".build/release/lib${PLUGIN_NAME}.dylib" "$BUNDLE_DIR/Contents/MacOS/"
+
+          # Copy SharedDB if exists
+          if [ -f "Libs/SharedDB/libclaude_session_db.dylib" ]; then
+            cp "Libs/SharedDB/libclaude_session_db.dylib" "$BUNDLE_DIR/Contents/Libs/"
+          fi
+
+          # Copy SocketClient if exists (VlaudeKit)
+          if [ -f "Libs/SocketClient/libsocket_client_ffi.dylib" ]; then
+            cp "Libs/SocketClient/libsocket_client_ffi.dylib" "$BUNDLE_DIR/Contents/Libs/"
+          fi
+
+          # Copy Socket.IO dependencies if exist
+          for lib in libSocketIO.dylib libStarscream.dylib; do
+            if [ -f ".build/release/$lib" ]; then
+              cp ".build/release/$lib" "$BUNDLE_DIR/Contents/Frameworks/"
+            fi
+          done
+
+          # Copy manifest.json
+          if [ -f "Resources/manifest.json" ]; then
+            cp "Resources/manifest.json" "$BUNDLE_DIR/Contents/Resources/"
+          fi
+
+          # Create Info.plist
+          BUNDLE_ID=$(grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' Resources/manifest.json 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || echo "com.eterm.${PLUGIN_NAME,,}")
+
+          cat > "$BUNDLE_DIR/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key>
+              <string>$BUNDLE_ID</string>
+              <key>CFBundleName</key>
+              <string>$PLUGIN_NAME</string>
+              <key>CFBundleVersion</key>
+              <string>${{ steps.tag.outputs.VERSION }}</string>
+              <key>CFBundlePackageType</key>
+              <string>BNDL</string>
+              <key>CFBundleExecutable</key>
+              <string>lib${PLUGIN_NAME}.dylib</string>
+          </dict>
+          </plist>
+          EOF
+
+          echo "Bundle created at $BUNDLE_DIR"
+          ls -laR "$BUNDLE_DIR"
+
+      - name: Fix dylib paths
+        run: |
+          PLUGIN_PATH="${{ steps.config.outputs.PLUGIN_PATH }}"
+          PLUGIN_NAME="${{ steps.config.outputs.PLUGIN_NAME }}"
+          BUNDLE_DIR="$PLUGIN_PATH/build/${PLUGIN_NAME}.bundle"
+          MAIN_DYLIB="$BUNDLE_DIR/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+
+          # Fix ETermKit reference
+          install_name_tool -change \
+            "@rpath/libETermKit.dylib" \
+            "@executable_path/../Frameworks/ETermKit.framework/ETermKit" \
+            "$MAIN_DYLIB" 2>/dev/null || true
+
+          # Fix SharedDB reference
+          if [ -f "$BUNDLE_DIR/Contents/Libs/libclaude_session_db.dylib" ]; then
+            OLD_PATH=$(otool -L "$MAIN_DYLIB" | grep claude_session_db | awk '{print $1}')
+            if [ -n "$OLD_PATH" ]; then
+              install_name_tool -change "$OLD_PATH" \
+                "@loader_path/../Libs/libclaude_session_db.dylib" \
+                "$MAIN_DYLIB"
+            fi
+            install_name_tool -id \
+              "@loader_path/../Libs/libclaude_session_db.dylib" \
+              "$BUNDLE_DIR/Contents/Libs/libclaude_session_db.dylib"
+          fi
+
+          # Fix SocketClient reference
+          if [ -f "$BUNDLE_DIR/Contents/Libs/libsocket_client_ffi.dylib" ]; then
+            OLD_PATH=$(otool -L "$MAIN_DYLIB" | grep socket_client_ffi | awk '{print $1}')
+            if [ -n "$OLD_PATH" ]; then
+              install_name_tool -change "$OLD_PATH" \
+                "@loader_path/../Libs/libsocket_client_ffi.dylib" \
+                "$MAIN_DYLIB"
+            fi
+            install_name_tool -id \
+              "@loader_path/../Libs/libsocket_client_ffi.dylib" \
+              "$BUNDLE_DIR/Contents/Libs/libsocket_client_ffi.dylib"
+          fi
+
+          # Fix Socket.IO references
+          for lib in libSocketIO.dylib libStarscream.dylib; do
+            if [ -f "$BUNDLE_DIR/Contents/Frameworks/$lib" ]; then
+              install_name_tool -change "@rpath/$lib" \
+                "@loader_path/../Frameworks/$lib" \
+                "$MAIN_DYLIB" 2>/dev/null || true
+              install_name_tool -id "@loader_path/../Frameworks/$lib" \
+                "$BUNDLE_DIR/Contents/Frameworks/$lib" 2>/dev/null || true
+            fi
+          done
+
+          # Fix Starscream reference in SocketIO
+          if [ -f "$BUNDLE_DIR/Contents/Frameworks/libSocketIO.dylib" ]; then
+            install_name_tool -change "@rpath/libStarscream.dylib" \
+              "@loader_path/libStarscream.dylib" \
+              "$BUNDLE_DIR/Contents/Frameworks/libSocketIO.dylib" 2>/dev/null || true
+          fi
+
+      - name: Sign bundle
+        run: |
+          PLUGIN_PATH="${{ steps.config.outputs.PLUGIN_PATH }}"
+          PLUGIN_NAME="${{ steps.config.outputs.PLUGIN_NAME }}"
+          BUNDLE_DIR="$PLUGIN_PATH/build/${PLUGIN_NAME}.bundle"
+
+          # Sign all dylibs
+          find "$BUNDLE_DIR" -name "*.dylib" -exec codesign -f -s - {} \;
+
+          # Sign the bundle
+          codesign -f -s - "$BUNDLE_DIR"
+
+          # Verify
+          codesign --verify --deep --strict "$BUNDLE_DIR"
+          echo "Signing completed"
+
+      - name: Create ZIP
+        id: zip
+        run: |
+          PLUGIN_PATH="${{ steps.config.outputs.PLUGIN_PATH }}"
+          PLUGIN_NAME="${{ steps.config.outputs.PLUGIN_NAME }}"
+          VERSION="${{ steps.tag.outputs.VERSION }}"
+
+          cd "$PLUGIN_PATH/build"
+
+          ZIP_NAME="${PLUGIN_NAME}.bundle.zip"
+          ditto -c -k --sequesterRsrc --keepParent "${PLUGIN_NAME}.bundle" "$ZIP_NAME"
+
+          # Calculate SHA256
+          SHA256=$(shasum -a 256 "$ZIP_NAME" | awk '{print $1}')
+          SIZE=$(stat -f%z "$ZIP_NAME")
+
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_OUTPUT
+          echo "ZIP_PATH=$PLUGIN_PATH/build/$ZIP_NAME" >> $GITHUB_OUTPUT
+          echo "SHA256=$SHA256" >> $GITHUB_OUTPUT
+          echo "SIZE=$SIZE" >> $GITHUB_OUTPUT
+
+          echo "Created $ZIP_NAME (SHA256: $SHA256, Size: $SIZE bytes)"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "${{ steps.config.outputs.PLUGIN_NAME }} v${{ steps.tag.outputs.VERSION }}"
+          files: ${{ steps.zip.outputs.ZIP_PATH }}
+          body: |
+            ## ${{ steps.config.outputs.PLUGIN_NAME }} v${{ steps.tag.outputs.VERSION }}
+
+            ### Download
+            - **File**: `${{ steps.zip.outputs.ZIP_NAME }}`
+            - **Size**: ${{ steps.zip.outputs.SIZE }} bytes
+            - **SHA256**: `${{ steps.zip.outputs.SHA256 }}`
+
+            ### Installation
+            Download and extract to `~/.vimo/eterm/plugins/`
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.VERSION, 'beta') || contains(steps.tag.outputs.VERSION, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

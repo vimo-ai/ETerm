@@ -131,6 +131,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             WindowManager.shared.createWindow()
         }
 
+        // 检测并显示首次启动引导
+        if OnboardingManager.shared.shouldShowOnboarding() {
+            // 延迟一点显示，让主窗口先完成渲染
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                OnboardingManager.shared.showOnboarding()
+            }
+        }
+
         // 后台加载 background 插件
         Task.detached(priority: .userInitiated) {
             await SDKPluginLoader.shared.loadBackgroundPlugins()

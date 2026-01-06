@@ -82,14 +82,43 @@ final class PluginLoader {
 
     /// 扫描并加载所有插件
     func loadAllPlugins() {
-        // 加载插件（统一从 ~/.vimo/eterm/plugins/ 加载）
-        let pluginsPath = ETermPaths.plugins
-        let pluginsURL = URL(fileURLWithPath: pluginsPath)
+        // 1. 优先从 app 内置的 PlugIns/ 目录加载
+        if let builtinPlugInsURL = Bundle.main.builtInPlugInsURL {
+            scanAndLoadBuiltinPlugins(from: builtinPlugInsURL)
+        }
 
-        // 确保插件目录存在
-        try? FileManager.default.createDirectory(at: pluginsURL, withIntermediateDirectories: true)
+        // 2. 然后从用户目录加载（~/.vimo/eterm/plugins/）
+        let userPluginsPath = ETermPaths.plugins
+        let userPluginsURL = URL(fileURLWithPath: userPluginsPath)
 
-        scanAndLoadPlugins(from: pluginsURL)
+        // 确保用户插件目录存在
+        try? FileManager.default.createDirectory(at: userPluginsURL, withIntermediateDirectories: true)
+
+        scanAndLoadPlugins(from: userPluginsURL)
+    }
+
+    /// 扫描并加载内置插件（直接在 PlugIns/ 目录下的 .bundle）
+    private func scanAndLoadBuiltinPlugins(from directory: URL) {
+        do {
+            let bundles = try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            ).filter { url in
+                url.pathExtension == "bundle"
+            }
+
+            for bundleURL in bundles {
+                let identifier = bundleURL.deletingPathExtension().lastPathComponent
+                scannedPlugins[identifier] = bundleURL
+
+                // 只加载未禁用的插件
+                if !disabledPluginIds.contains(identifier) {
+                    loadPlugin(at: bundleURL)
+                }
+            }
+        } catch {
+            // Scanning error, silently ignore
+        }
     }
 
     /// 扫描并加载插件

@@ -1,0 +1,32 @@
+{
+  "vlaudekit": {
+    "name": "VlaudeKit",
+    "path": "Plugins/VlaudeKit",
+    "deps": {
+      "libclaude_session_db": {
+        "repo": "vimo-ai/ai-cli-session-db",
+        "tag": "v0.0.1-beta.1",
+        "asset": "libclaude_session_db.dylib",
+        "dest": "Libs/SharedDB/"
+      },
+      "libsocket_client_ffi": {
+        "repo": "vimo-ai/vlaude",
+        "tag": "socket-ffi-v0.0.1-beta.1",
+        "asset": "libsocket_client_ffi.dylib",
+        "dest": "Libs/SocketClient/"
+      }
+    }
+  },
+  "memexkit": {
+    "name": "MemexKit",
+    "path": "Plugins/MemexKit",
+    "deps": {
+      "libclaude_session_db": {
+        "repo": "vimo-ai/ai-cli-session-db",
+        "tag": "v0.0.1-beta.1",
+        "asset": "libclaude_session_db.dylib",
+        "dest": "Libs/SharedDB/"
+      }
+    }
+  }
+}
