@@ -223,11 +223,13 @@ final class PluginDownloader: ObservableObject {
             try? fileManager.removeItem(atPath: tmpPath)
         }
 
-        // 下载到临时文件
-        let (localUrl, response) = try await URLSession.shared.download(from: downloadUrl)
-
-        // 移动到临时路径
-        try fileManager.moveItem(at: localUrl, to: URL(fileURLWithPath: tmpPath))
+        // 下载到临时文件（带进度回调）
+        try await downloadWithProgress(
+            from: downloadUrl,
+            to: tmpPath,
+            fileName: (url as NSString).lastPathComponent,
+            progressHandler: progressHandler
+        )
 
         // 校验 SHA256
         if let expectedSha256 = sha256 {
@@ -279,6 +281,79 @@ final class PluginDownloader: ObservableObject {
 
         if process.terminationStatus != 0 {
             throw DownloadError.installFailed("解压失败")
+        }
+    }
+
+    /// 带进度回调的下载
+    private func downloadWithProgress(
+        from url: URL,
+        to destinationPath: String,
+        fileName: String,
+        progressHandler: ((DownloadProgress) -> Void)?
+    ) async throws {
+        let request = URLRequest(url: url)
+        let (asyncBytes, response) = try await URLSession.shared.bytes(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw DownloadError.networkError(
+                NSError(domain: "HTTP", code: (response as? HTTPURLResponse)?.statusCode ?? 0)
+            )
+        }
+
+        let totalBytes = response.expectedContentLength
+        var downloadedBytes: Int64 = 0
+
+        // 创建输出文件
+        FileManager.default.createFile(atPath: destinationPath, contents: nil)
+        guard let fileHandle = FileHandle(forWritingAtPath: destinationPath) else {
+            throw DownloadError.installFailed("无法创建临时文件")
+        }
+
+        defer {
+            try? fileHandle.close()
+        }
+
+        // 批量写入 buffer
+        let bufferSize = 65536 // 64KB
+        var buffer = Data(capacity: bufferSize)
+
+        // 流式下载并报告进度
+        for try await byte in asyncBytes {
+            buffer.append(byte)
+            downloadedBytes += 1
+
+            // buffer 满了就写入文件并报告进度
+            if buffer.count >= bufferSize {
+                try fileHandle.write(contentsOf: buffer)
+                buffer.removeAll(keepingCapacity: true)
+
+                let progress = DownloadProgress(
+                    bytesDownloaded: downloadedBytes,
+                    totalBytes: totalBytes,
+                    currentFile: fileName
+                )
+                await MainActor.run {
+                    progressHandler?(progress)
+                    self.currentProgress = progress
+                }
+            }
+        }
+
+        // 写入剩余数据
+        if !buffer.isEmpty {
+            try fileHandle.write(contentsOf: buffer)
+        }
+
+        // 最终进度
+        let finalProgress = DownloadProgress(
+            bytesDownloaded: downloadedBytes,
+            totalBytes: downloadedBytes,
+            currentFile: fileName
+        )
+        await MainActor.run {
+            progressHandler?(finalProgress)
+            self.currentProgress = finalProgress
         }
     }
 }
