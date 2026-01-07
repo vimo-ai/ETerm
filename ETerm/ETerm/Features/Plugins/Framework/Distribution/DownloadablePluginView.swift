@@ -15,6 +15,7 @@ struct DownloadablePluginsView: View {
     @State private var downloadingPluginId: String?
     @State private var downloadProgress: Double = 0
     @State private var errorMessage: String?
+    @State private var lastFailedPluginId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -37,6 +38,8 @@ struct DownloadablePluginsView: View {
                         plugin: Self.vlaudeKitPlugin,
                         isDownloading: downloadingPluginId == Self.vlaudeKitPlugin.id,
                         progress: downloadProgress,
+                        errorMessage: downloadingPluginId == nil ? errorMessage : nil,
+                        lastFailedPluginId: lastFailedPluginId,
                         onInstall: { await installPlugin(Self.vlaudeKitPlugin) }
                     )
 
@@ -44,6 +47,8 @@ struct DownloadablePluginsView: View {
                         plugin: Self.memexKitPlugin,
                         isDownloading: downloadingPluginId == Self.memexKitPlugin.id,
                         progress: downloadProgress,
+                        errorMessage: downloadingPluginId == nil ? errorMessage : nil,
+                        lastFailedPluginId: lastFailedPluginId,
                         onInstall: { await installPlugin(Self.memexKitPlugin) }
                     )
                 }
@@ -53,6 +58,8 @@ struct DownloadablePluginsView: View {
                         plugin: plugin,
                         isDownloading: downloadingPluginId == plugin.id,
                         progress: downloadProgress,
+                        errorMessage: downloadingPluginId == nil ? errorMessage : nil,
+                        lastFailedPluginId: lastFailedPluginId,
                         onInstall: { await installPlugin(plugin) }
                     )
                 }
@@ -88,6 +95,7 @@ struct DownloadablePluginsView: View {
         downloadingPluginId = plugin.id
         downloadProgress = 0
         errorMessage = nil
+        lastFailedPluginId = nil
 
         do {
             let result = try await downloader.installPlugin(plugin) { progress in
@@ -102,8 +110,10 @@ struct DownloadablePluginsView: View {
             }
         } catch let error as DownloadError {
             errorMessage = error.errorDescription
+            lastFailedPluginId = plugin.id
         } catch {
             errorMessage = error.localizedDescription
+            lastFailedPluginId = plugin.id
         }
 
         downloadingPluginId = nil
@@ -117,7 +127,7 @@ struct DownloadablePluginsView: View {
         version: "0.0.1-beta.1",
         description: "从 iOS 查看和控制 Claude",
         size: 10 * 1024 * 1024, // ~10MB
-        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/v0.0.1-beta.1/VlaudeKit.bundle.zip",
+        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/vlaudekit-v0.0.1-beta.1/VlaudeKit.bundle.zip",
         sha256: nil,
         runtimeDeps: [
             RuntimeDependency(
@@ -125,14 +135,14 @@ struct DownloadablePluginsView: View {
                 minVersion: "0.0.1-beta.1",
                 path: "lib/libclaude_session_db.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/claude-session-db/releases/download/v0.0.1-beta.1/libclaude_session_db.dylib"
+                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libclaude_session_db.dylib"
             ),
             RuntimeDependency(
                 name: "libsocket_client_ffi",
                 minVersion: "0.0.1-beta.1",
                 path: "lib/libsocket_client_ffi.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/vlaude/releases/download/v0.0.1-beta.1/libsocket_client_ffi.dylib"
+                downloadUrl: "https://github.com/vimo-ai/vlaude/releases/download/socket-ffi-v0.0.1-beta.1/libsocket_client_ffi.dylib"
             )
         ]
     )
@@ -143,7 +153,7 @@ struct DownloadablePluginsView: View {
         version: "0.0.1-beta.1",
         description: "Claude 会话历史搜索",
         size: 123 * 1024 * 1024, // ~123MB
-        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/v0.0.1-beta.1/MemexKit.bundle.zip",
+        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/memexkit-v0.0.1-beta.1/MemexKit.bundle.zip",
         sha256: nil,
         runtimeDeps: [
             RuntimeDependency(
@@ -151,7 +161,7 @@ struct DownloadablePluginsView: View {
                 minVersion: "0.0.1-beta.1",
                 path: "lib/libclaude_session_db.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/claude-session-db/releases/download/v0.0.1-beta.1/libclaude_session_db.dylib"
+                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libclaude_session_db.dylib"
             ),
             RuntimeDependency(
                 name: "memex",
@@ -169,9 +179,16 @@ struct DownloadablePluginItemView: View {
     let plugin: DownloadablePlugin
     let isDownloading: Bool
     let progress: Double
+    let errorMessage: String?
+    let lastFailedPluginId: String?
     let onInstall: () async -> Void
 
     @State private var isInstalled = false
+
+    /// 当前插件是否安装失败
+    private var hasInstallError: Bool {
+        lastFailedPluginId == plugin.id && errorMessage != nil
+    }
 
     var body: some View {
         HStack(spacing: 16) {
@@ -225,6 +242,16 @@ struct DownloadablePluginItemView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
+            } else if hasInstallError {
+                // 安装失败，显示重试按钮
+                Button("重试") {
+                    Task {
+                        await onInstall()
+                        isInstalled = VersionManager.shared.isPluginInstalled(plugin.id)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
             } else if isInstalled || VersionManager.shared.isPluginInstalled(plugin.id) {
                 Label("已安装", systemImage: "checkmark.circle.fill")
                     .font(.caption)
