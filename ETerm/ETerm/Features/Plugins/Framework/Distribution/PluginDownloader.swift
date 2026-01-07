@@ -242,7 +242,15 @@ final class PluginDownloader: ObservableObject {
         if url.hasSuffix(".zip") {
             let extractDir = tmpDir + "/\(UUID().uuidString).extracted"
             try await unzip(tmpPath, to: extractDir)
-            finalPath = extractDir
+
+            // 查找解压出的 .bundle 文件
+            let contents = try fileManager.contentsOfDirectory(atPath: extractDir)
+            if let bundleName = contents.first(where: { $0.hasSuffix(".bundle") }) {
+                finalPath = extractDir + "/" + bundleName
+            } else {
+                // 没有 bundle，可能是直接解压的文件
+                finalPath = extractDir
+            }
         } else {
             finalPath = tmpPath
         }
