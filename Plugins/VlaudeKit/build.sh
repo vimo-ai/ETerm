@@ -4,13 +4,26 @@
 
 set -euo pipefail
 
+# DEBUG
+echo "=== DEBUG VlaudeKit/build.sh ===" >> /tmp/eterm_plugin_debug.log
+echo "Date: $(date)" >> /tmp/eterm_plugin_debug.log
+echo "BUNDLE_OUTPUT_DIR = ${BUNDLE_OUTPUT_DIR:-NOT_SET}" >> /tmp/eterm_plugin_debug.log
+echo "Caller: $(ps -o command= -p $PPID)" >> /tmp/eterm_plugin_debug.log
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_NAME="VlaudeKit"
+BUNDLE_ID="com.eterm.vlaude"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
-# Output directory
+# Output directory: {plugins}/{id}/{name}.bundle
 OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
-BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
+PLUGIN_DIR="${OUTPUT_DIR}/${BUNDLE_ID}"
+BUNDLE_PATH="${PLUGIN_DIR}/${BUNDLE_NAME}"
+
+# DEBUG: 输出实际路径
+echo "OUTPUT_DIR = $OUTPUT_DIR" >> /tmp/eterm_plugin_debug.log
+echo "BUNDLE_PATH = $BUNDLE_PATH" >> /tmp/eterm_plugin_debug.log
+echo "" >> /tmp/eterm_plugin_debug.log
 
 # Colors
 GREEN='\033[0;32m'
@@ -32,7 +45,7 @@ swift build
 
 # Create Bundle structure
 log_info "Creating bundle..."
-rm -rf "$BUNDLE_PATH"
+rm -rf "$PLUGIN_DIR"
 mkdir -p "${BUNDLE_PATH}/Contents/MacOS"
 mkdir -p "${BUNDLE_PATH}/Contents/Resources"
 mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"

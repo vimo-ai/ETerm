@@ -5,11 +5,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_NAME="MemexKit"
+BUNDLE_ID="com.eterm.memex"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
-# Output directory
+# Output directory: {plugins}/{id}/{name}.bundle
 OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
-BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
+PLUGIN_DIR="${OUTPUT_DIR}/${BUNDLE_ID}"
+BUNDLE_PATH="${PLUGIN_DIR}/${BUNDLE_NAME}"
 
 # Memex binary
 MEMEX_BINARY="${SCRIPT_DIR}/Lib/memex"
@@ -56,7 +58,7 @@ swift build
 
 # Create Bundle structure
 log_info "Creating bundle..."
-rm -rf "$BUNDLE_PATH"
+rm -rf "$PLUGIN_DIR"
 mkdir -p "${BUNDLE_PATH}/Contents/MacOS"
 mkdir -p "${BUNDLE_PATH}/Contents/Resources"
 mkdir -p "${BUNDLE_PATH}/Contents/Lib"

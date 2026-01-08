@@ -441,40 +441,4 @@ final class OllamaService: OllamaServiceProtocol, ObservableObject {
     }
 }
 
-// MARK: - AnyCodable Helper
-
-private struct AnyCodable: Encodable {
-    private let value: Any
-
-    init(_ value: Any) {
-        self.value = value
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-
-        switch value {
-        case let int as Int:
-            try container.encode(int)
-        case let double as Double:
-            try container.encode(double)
-        case let string as String:
-            try container.encode(string)
-        case let bool as Bool:
-            try container.encode(bool)
-        case let array as [String]:
-            try container.encode(array)
-        case let array as [Int]:
-            try container.encode(array)
-        case let dict as [String: Any]:
-            let encodableDict = dict.mapValues { AnyCodable($0) }
-            try container.encode(encodableDict)
-        default:
-            let context = EncodingError.Context(
-                codingPath: container.codingPath,
-                debugDescription: "AnyCodable cannot encode \(type(of: value))"
-            )
-            throw EncodingError.invalidValue(value, context)
-        }
-    }
-}
+// 使用 ETermKit.AnyCodable 统一处理动态类型

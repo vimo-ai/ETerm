@@ -12,7 +12,7 @@
 		4825DE272EFD2E56003AE32C /* ETermKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE222EFCF6C2003AE32C /* ETermKit */; };
 		4825DE3B2EFD322E003AE32C /* ETermKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE3A2EFD322E003AE32C /* ETermKit */; };
 		4825DE3C2EFD322E003AE32C /* ETermKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE3A2EFD322E003AE32C /* ETermKit */; };
-		4825DE3F2EFD329A003AE32C /* ETermExtensionHost in CopyFiles */ = {isa = PBXBuildFile; fileRef = 4825DE2F2EFD304B003AE32C /* ETermExtensionHost */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		4825DE3F2EFD329A003AE32C /* ETermExtensionHost in Copy Files */ = {isa = PBXBuildFile; fileRef = 4825DE2F2EFD304B003AE32C /* ETermExtensionHost */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		482F3D712EFADA4500B33236 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 482F3D702EFADA4500B33236 /* SystemConfiguration.framework */; };
 		48979A022EE6B451006ECB59 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 48979A012EE6B451006ECB59 /* SocketIO */; };
 /* End PBXBuildFile section */
@@ -73,14 +73,15 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		4825DE3E2EFD3284003AE32C /* CopyFiles */ = {
+		4825DE3E2EFD3284003AE32C /* Copy Files */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 6;
 			files = (
-				4825DE3F2EFD329A003AE32C /* ETermExtensionHost in CopyFiles */,
+				4825DE3F2EFD329A003AE32C /* ETermExtensionHost in Copy Files */,
 			);
+			name = "Copy Files";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -212,9 +213,9 @@
 				481CC2B62EC7B632009F969C /* Frameworks */,
 				481CC2B72EC7B632009F969C /* Resources */,
 				4825DE282EFD2E56003AE32C /* Embed Frameworks */,
-				4825DE3E2EFD3284003AE32C /* CopyFiles */,
-				4825E2762EFDBF41003AE32C /* ShellScript */,
-				4825F3122EFF116D003AE32C /* ShellScript */,
+				4825DE3E2EFD3284003AE32C /* Copy Files */,
+				4825E2762EFDBF41003AE32C /* Run Script */,
+				4825F3122EFF116D003AE32C /* Run Script */,
 			);
 			buildRules = (
 			);
@@ -383,7 +384,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		4825E2762EFDBF41003AE32C /* ShellScript */ = {
+		4825E2762EFDBF41003AE32C /* Run Script */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -393,6 +394,7 @@
 			);
 			inputPaths = (
 			);
+			name = "Run Script";
 			outputFileListPaths = (
 			);
 			outputPaths = (
@@ -401,7 +403,7 @@
 			shellPath = /bin/bash;
 			shellScript = "  # Package Builtin Plugins\n  set -euo pipefail\n\n  SCRIPT_DIR=\"${SRCROOT}/Scripts\"\n  PLUGINS_DIR=\"${SRCROOT}/../Plugins\"\n  OUTPUT_DIR=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/BuiltinPlugins\"\n\n  echo \"=== Packaging Builtin Plugins ===\"\n  echo \"Output: ${OUTPUT_DIR}\"\n\n  mkdir -p \"${OUTPUT_DIR}\"\n\n  export BUNDLE_OUTPUT_DIR=\"${OUTPUT_DIR}\"\n  export CONFIGURATION=\"${CONFIGURATION}\"\n\n  \"${SCRIPT_DIR}/build_all_plugins.sh\" \"${OUTPUT_DIR}\"\n\n  echo \"=== Done ===\"\n";
 		};
-		4825F3122EFF116D003AE32C /* ShellScript */ = {
+		4825F3122EFF116D003AE32C /* Run Script */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -410,6 +412,7 @@
 			);
 			inputPaths = (
 			);
+			name = "Run Script";
 			outputFileListPaths = (
 			);
 			outputPaths = (
@@ -434,7 +437,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "  # Kill ETerm's MemexKit memex only (not standalone memex-rs)\n  pkill -f \"Plugins/MemexKit/Lib/memex\" 2>/dev/null || true\n";
+			shellScript = "  # Kill ETerm's MemexKit memex only (not standalone memex-rs)\n  pkill -f \"/memex$\" 2>/dev/null || true\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

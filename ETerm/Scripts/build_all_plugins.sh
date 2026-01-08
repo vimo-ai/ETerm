@@ -18,6 +18,14 @@ PLUGINS_DIR="$(cd "${PROJECT_ROOT}/../Plugins" && pwd)"
 BUNDLE_OUTPUT_DIR="${1:-${BUNDLE_OUTPUT_DIR:-$HOME/.vimo/eterm/plugins}}"
 mkdir -p "$BUNDLE_OUTPUT_DIR"
 
+# DEBUG: 输出调试信息到文件
+echo "=== DEBUG build_all_plugins.sh ===" >> /tmp/eterm_plugin_debug.log
+echo "Date: $(date)" >> /tmp/eterm_plugin_debug.log
+echo "\$1 = ${1:-<not set>}" >> /tmp/eterm_plugin_debug.log
+echo "BUNDLE_OUTPUT_DIR = $BUNDLE_OUTPUT_DIR" >> /tmp/eterm_plugin_debug.log
+echo "Caller: $(ps -o command= -p $PPID)" >> /tmp/eterm_plugin_debug.log
+echo "" >> /tmp/eterm_plugin_debug.log
+
 # 导出环境变量供 build.sh 使用
 export BUNDLE_OUTPUT_DIR
 export CONFIGURATION="${CONFIGURATION:-Debug}"

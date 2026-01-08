@@ -64,9 +64,13 @@ build_plugin() {
     local config_lower=$(echo "$CONFIGURATION" | tr '[:upper:]' '[:lower:]')
     swift build -c "$config_lower"
 
-    # 创建 bundle 结构
-    local bundle_dir="$OUTPUT_DIR/$plugin_name.bundle"
-    rm -rf "$bundle_dir"
+    # 从 manifest.json 读取 bundle_id
+    local bundle_id=$(grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' "Resources/manifest.json" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || echo "com.eterm.$plugin_name")
+
+    # 创建 bundle 结构: {id}/{name}.bundle
+    local plugin_dir="$OUTPUT_DIR/$bundle_id"
+    local bundle_dir="$plugin_dir/$plugin_name.bundle"
+    rm -rf "$plugin_dir"
     mkdir -p "$bundle_dir/Contents/MacOS"
     mkdir -p "$bundle_dir/Contents/Resources"
 
@@ -87,8 +91,7 @@ build_plugin() {
         cp "Resources/manifest.json" "$bundle_dir/Contents/Resources/"
     fi
 
-    # 创建 Info.plist
-    local bundle_id=$(grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' "Resources/manifest.json" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || echo "com.eterm.$plugin_name")
+    # 创建 Info.plist（bundle_id 已在上面从 manifest.json 读取）
     local version=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "Resources/manifest.json" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)".*/\1/' || echo "1.0.0")
 
     cat > "$bundle_dir/Contents/Info.plist" << EOF

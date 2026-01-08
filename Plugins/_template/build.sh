@@ -5,11 +5,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_NAME="__PLUGIN_NAME__"
+BUNDLE_ID="__PLUGIN_ID__"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
-# Output directory
-OUTPUT_DIR="${HOME}/.vimo/eterm/plugins"
-BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
+# Output directory: {plugins}/{id}/{name}.bundle
+OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
+PLUGIN_DIR="${OUTPUT_DIR}/${BUNDLE_ID}"
+BUNDLE_PATH="${PLUGIN_DIR}/${BUNDLE_NAME}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -26,7 +28,7 @@ swift build
 
 # Create Bundle structure
 log_info "Creating bundle..."
-rm -rf "$BUNDLE_PATH"
+rm -rf "$PLUGIN_DIR"
 mkdir -p "${BUNDLE_PATH}/Contents/MacOS"
 mkdir -p "${BUNDLE_PATH}/Contents/Resources"
 
