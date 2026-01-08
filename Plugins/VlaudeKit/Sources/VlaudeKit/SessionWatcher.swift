@@ -30,6 +30,29 @@ protocol SessionWatcherDelegate: AnyObject {
     )
 }
 
+// MARK: - PendingToolUse
+
+/// 待处理的 tool_use（等待用户确认）
+struct PendingToolUse {
+    let toolId: String
+    let toolName: String
+    let input: [String: Any]
+    let timestamp: Date
+
+    /// 获取 Bash 命令（如果是 Bash tool_use）
+    var command: String? {
+        if toolName == "Bash" || toolName.lowercased().contains("bash") {
+            return input["command"] as? String
+        }
+        return nil
+    }
+
+    /// 获取操作描述（如果有）
+    var description: String? {
+        return input["description"] as? String
+    }
+}
+
 // MARK: - WatchedSession
 
 /// 单个会话的监听状态
@@ -96,6 +119,10 @@ final class SessionWatcher {
 
     /// 目录监听（directoryPath -> DirectoryWatch）
     private var directoryWatches: [String: DirectoryWatch] = [:]
+
+    /// 待处理的 tool_use 缓存（sessionId -> PendingToolUse）
+    /// 收到 assistant 消息有 tool_use 时存入，收到 tool_result 时移除
+    private var pendingToolUses: [String: PendingToolUse] = [:]
 
     /// 监听队列
     private let watchQueue = DispatchQueue(label: "com.eterm.vlaudekit.sessionwatcher", qos: .utility)
@@ -273,6 +300,62 @@ final class SessionWatcher {
         lock.lock()
         defer { lock.unlock() }
         return watchedSessions[sessionId] != nil
+    }
+
+    // MARK: - Pending Tool Use
+
+    /// 获取待处理的 tool_use（用于权限请求场景）
+    ///
+    /// - Parameter sessionId: 会话 ID
+    /// - Returns: 待处理的 tool_use，不存在返回 nil
+    func getPendingToolUse(sessionId: String) -> PendingToolUse? {
+        lock.lock()
+        defer { lock.unlock() }
+        return pendingToolUses[sessionId]
+    }
+
+    /// 清除待处理的 tool_use
+    ///
+    /// - Parameter sessionId: 会话 ID
+    func clearPendingToolUse(sessionId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        pendingToolUses.removeValue(forKey: sessionId)
+    }
+
+    /// 从 JSONL 文件主动读取最新的 tool_use
+    ///
+    /// 当缓存中没有 pending tool_use 时（时序问题），可以用此方法主动读取
+    ///
+    /// - Parameter transcriptPath: JSONL 文件路径
+    /// - Returns: 最新的 tool_use，不存在返回 nil
+    func readLatestToolUse(transcriptPath: String) -> PendingToolUse? {
+        // 读取最后几条消息（倒序）
+        guard let result = sessionReader.readMessages(
+            sessionPath: transcriptPath,
+            limit: 5,
+            offset: 0,
+            orderAsc: false
+        ) else {
+            return nil
+        }
+
+        // 从最新的消息开始查找 assistant 消息中的 tool_use
+        for msg in result.messages {
+            guard msg.messageType == 1 else { continue }  // 只看 assistant 消息
+
+            // 解析 content JSON
+            guard let contentData = msg.content.data(using: .utf8),
+                  let contentJson = try? JSONSerialization.jsonObject(with: contentData) as? [String: Any] else {
+                continue
+            }
+
+            if let toolUse = extractToolUse(from: contentJson) {
+                return toolUse
+            }
+        }
+
+        return nil
     }
 
     // MARK: - Directory Watching
@@ -596,7 +679,76 @@ final class SessionWatcher {
             session.lastMessageUUID = lastMsg.uuid
         }
 
+        // 处理 tool_use / tool_result 缓存
+        updatePendingToolUse(sessionId: session.sessionId, messages: newMessages)
+
         return newMessages
+    }
+
+    /// 解析消息中的 tool_use 和 tool_result，更新缓存
+    private func updatePendingToolUse(sessionId: String, messages: [RawMessage]) {
+        for msg in messages {
+            // 解析 content JSON
+            guard let contentData = msg.content.data(using: .utf8),
+                  let contentJson = try? JSONSerialization.jsonObject(with: contentData) as? [String: Any] else {
+                continue
+            }
+
+            // assistant 消息可能包含 tool_use
+            if msg.messageType == 1 {  // assistant
+                if let toolUse = extractToolUse(from: contentJson) {
+                    lock.lock()
+                    pendingToolUses[sessionId] = toolUse
+                    lock.unlock()
+                }
+            }
+            // user 消息可能包含 tool_result
+            else if msg.messageType == 0 {  // user
+                if hasToolResult(in: contentJson) {
+                    lock.lock()
+                    pendingToolUses.removeValue(forKey: sessionId)
+                    lock.unlock()
+                }
+            }
+        }
+    }
+
+    /// 从 assistant 消息的 content 中提取 tool_use
+    private func extractToolUse(from content: [String: Any]) -> PendingToolUse? {
+        // Claude Code 消息格式：content 是数组，包含多个 content block
+        // 例如：[{"type": "tool_use", "id": "toolu_xxx", "name": "Bash", "input": {...}}, ...]
+        if let contentArray = content["content"] as? [[String: Any]] {
+            // 取最后一个 tool_use（最新的）
+            for block in contentArray.reversed() {
+                if let type = block["type"] as? String, type == "tool_use" {
+                    if let id = block["id"] as? String,
+                       let name = block["name"] as? String {
+                        let input = block["input"] as? [String: Any] ?? [:]
+                        return PendingToolUse(
+                            toolId: id,
+                            toolName: name,
+                            input: input,
+                            timestamp: Date()
+                        )
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// 检查 user 消息是否包含 tool_result
+    private func hasToolResult(in content: [String: Any]) -> Bool {
+        // user 消息格式：content 是数组，包含 tool_result block
+        // 例如：[{"type": "tool_result", "tool_use_id": "toolu_xxx", ...}]
+        if let contentArray = content["content"] as? [[String: Any]] {
+            for block in contentArray {
+                if let type = block["type"] as? String, type == "tool_result" {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     deinit {

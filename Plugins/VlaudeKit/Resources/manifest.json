@@ -25,6 +25,7 @@
         "claude.promptSubmit",
         "claude.responseComplete",
         "claude.sessionEnd",
+        "claude.permissionPrompt",
         "terminal.didClose"
     ],
     "tabSlots": [

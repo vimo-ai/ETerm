@@ -170,6 +170,9 @@ public final class VlaudePlugin: NSObject, Plugin {
         case "claude.sessionEnd":
             handleClaudeSessionEnd(payload)
 
+        case "claude.permissionPrompt":
+            handleClaudePermissionPrompt(payload)
+
         case "terminal.didClose":
             handleTerminalClosed(payload)
 
@@ -331,6 +334,35 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // Redis 模式：移除活跃 Session
         client?.removeActiveSession(sessionId: sessionId)
+    }
+
+    private func handleClaudePermissionPrompt(_ payload: [String: Any]) {
+        guard let terminalId = payload["terminalId"] as? Int,
+              let sessionId = payload["sessionId"] as? String,
+              let toolName = payload["toolName"] as? String,
+              let toolInput = payload["toolInput"] as? [String: Any] else {
+            return
+        }
+
+        // 从 PermissionRequest hook 直接获取完整的工具信息
+        // 不需要从 JSONL 读取或缓存，无时序问题
+        var toolUseInfo: [String: Any] = [
+            "name": toolName,
+            "input": toolInput
+        ]
+
+        // 可选字段
+        if let toolUseId = payload["toolUseId"] as? String {
+            toolUseInfo["id"] = toolUseId
+        }
+
+        // 推送权限请求给 iOS
+        client?.emitPermissionRequest(
+            sessionId: sessionId,
+            terminalId: terminalId,
+            message: payload["message"] as? String,  // 可选
+            toolUse: toolUseInfo
+        )
     }
 
     public func handleCommand(_ commandId: String) {

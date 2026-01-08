@@ -413,6 +413,39 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         try? socketBridge?.sendCheckLoadingResult(requestId: requestId, loading: loading)
     }
 
+    /// 发送权限请求到 iOS
+    /// - Parameters:
+    ///   - sessionId: 会话 ID
+    ///   - terminalId: 终端 ID
+    ///   - message: 权限请求消息（可选，PermissionRequest hook 没有）
+    ///   - toolUse: 工具详情（包含 name, input, id）
+    func emitPermissionRequest(
+        sessionId: String,
+        terminalId: Int,
+        message: String?,
+        toolUse: [String: Any]? = nil
+    ) {
+        guard isConnected else { return }
+
+        var data: [String: Any] = [
+            "sessionId": sessionId,
+            "terminalId": terminalId,
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+
+        // message 可选（PermissionRequest hook 没有 message 字段）
+        if let message = message {
+            data["message"] = message
+        }
+
+        // toolUse 包含完整工具信息（来自 PermissionRequest hook）
+        if let toolUse = toolUse {
+            data["toolUse"] = toolUse
+        }
+
+        try? socketBridge?.emit(event: "daemon:permissionRequest", data: data)
+    }
+
     // MARK: - Connection Test
 
     /// 测试连接（用于设置页面）
