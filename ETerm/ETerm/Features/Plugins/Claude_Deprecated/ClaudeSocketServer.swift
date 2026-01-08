@@ -7,13 +7,27 @@
 //
 
 import Foundation
+import ETermKit
 
 /// Claude Hook 调用的事件
 struct ClaudeResponseCompleteEvent: Codable {
-    let event_type: String?  // "stop", "notification", "user_prompt_submit" 等
+    let event_type: String?  // "stop", "notification", "user_prompt_submit", "permission_request" 等
     let session_id: String
     let terminal_id: Int
     let prompt: String?  // 用户提交的问题（仅 user_prompt_submit 事件）
+
+    // Notification 事件扩展字段
+    let notification_type: String?  // "elicitation_dialog" 等（permission_prompt 由 PermissionRequest 处理）
+    let message: String?  // 通知消息内容
+
+    // PermissionRequest 事件字段（直接来自 hook，无需读 JSONL）
+    let tool_name: String?  // 工具名称：Bash, Write, Edit, Task 等
+    let tool_input: [String: AnyCodable]?  // 工具输入：{"command": "..."} 等（使用 ETermKit.AnyCodable）
+    let tool_use_id: String?  // 工具调用 ID
+
+    // 通用字段
+    let transcript_path: String?  // JSONL 文件路径
+    let cwd: String?  // 工作目录
 }
 
 /// Socket Server - 接收来自 Claude Hook 的调用
@@ -160,19 +174,27 @@ class ClaudeSocketServer {
             close(fd)
         }
 
-        // 读取数据（最多 8KB）
-        var buffer = [UInt8](repeating: 0, count: 8192)
-        let bytesRead = read(fd, &buffer, buffer.count)
+        // 循环读取数据（支持大 payload，如 Write 工具的文件内容）
+        // 最大 1MB，防止恶意大数据
+        var allData = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)  // 64KB 每次
+        let maxSize = 1024 * 1024  // 1MB 上限
 
-        guard bytesRead > 0 else {
+        while allData.count < maxSize {
+            let bytesRead = read(fd, &buffer, buffer.count)
+            if bytesRead <= 0 {
+                break  // EOF 或错误
+            }
+            allData.append(contentsOf: buffer.prefix(bytesRead))
+        }
+
+        guard !allData.isEmpty else {
             return
         }
 
-        let data = Data(buffer.prefix(bytesRead))
-
         // 解析 JSON
         do {
-            let event = try JSONDecoder().decode(ClaudeResponseCompleteEvent.self, from: data)
+            let event = try JSONDecoder().decode(ClaudeResponseCompleteEvent.self, from: allData)
 
             // 在主线程处理事件
             DispatchQueue.main.async { [weak self] in
@@ -180,8 +202,12 @@ class ClaudeSocketServer {
             }
 
         } catch {
-            if let json = String(data: data, encoding: .utf8) {
+            // 记录解码错误（便于调试）
+            #if DEBUG
+            if let json = String(data: allData.prefix(500), encoding: .utf8) {
+                print("⚠️ [ClaudeSocketServer] JSON decode failed, preview: \(json.prefix(200))...")
             }
+            #endif
         }
     }
 
@@ -229,11 +255,33 @@ class ClaudeSocketServer {
                 sessionId: event.session_id
             ))
 
+        case "permission_request":
+            // 权限请求事件（来自 PermissionRequest hook，包含完整工具信息）
+            ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
+
+            // 转换 tool_input 为 [String: Any]
+            var toolInputDict: [String: Any] = [:]
+            if let toolInput = event.tool_input {
+                toolInputDict = toolInput.mapValues { $0.value }
+            }
+
+            // 发射权限请求事件（包含工具详情）
+            EventBus.shared.emit(ClaudeEvents.PermissionPrompt(
+                terminalId: event.terminal_id,
+                sessionId: event.session_id,
+                message: nil,  // PermissionRequest hook 没有 message
+                toolName: event.tool_name ?? "Unknown",
+                toolInput: toolInputDict,
+                toolUseId: event.tool_use_id,
+                transcriptPath: event.transcript_path,
+                cwd: event.cwd
+            ))
+
         case "notification":
             // 建立/更新映射关系
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
-            // 发射等待用户输入事件
+            // 其他通知类型（permission_prompt 已在 hook 中过滤），发射等待用户输入事件
             EventBus.shared.emit(ClaudeEvents.WaitingInput(
                 terminalId: event.terminal_id,
                 sessionId: event.session_id
