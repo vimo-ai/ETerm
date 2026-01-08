@@ -33,6 +33,13 @@ struct InstalledPlugin: Codable {
     }
 }
 
+/// 插件状态
+enum PluginStatus: Equatable {
+    case notInstalled           // 显示"安装"按钮
+    case installed              // 显示"已安装"标签
+    case updateAvailable(from: String, to: String)  // 显示"更新"按钮
+}
+
 /// version.json 数据结构
 struct VersionFile: Codable {
     var runtimeVersion: String
@@ -91,14 +98,49 @@ final class VersionManager {
 
     // MARK: - 插件查询
 
-    /// 检查插件是否已安装
+    /// 检查插件是否已安装（兼容旧代码，检查文件存在性）
     func isPluginInstalled(_ id: String) -> Bool {
-        versionFile.plugins[id] != nil
+        isPluginFileExists(id)
     }
 
     /// 获取已安装插件的版本
     func getPluginVersion(_ id: String) -> String? {
         versionFile.plugins[id]?.version
+    }
+
+    /// 获取插件状态（用于 UI 显示）
+    /// - Parameters:
+    ///   - id: 插件 ID
+    ///   - remoteVersion: 远程版本号
+    /// - Returns: 插件状态
+    func getPluginStatus(id: String, remoteVersion: String) -> PluginStatus {
+        let fileExists = isPluginFileExists(id)
+
+        guard fileExists else {
+            // 插件文件不存在 → notInstalled
+            return .notInstalled
+        }
+
+        // 插件文件存在，检查版本记录
+        guard let localVersion = versionFile.plugins[id]?.version else {
+            // 文件存在但 version.json 无记录 → 视为本地 build，已安装
+            return .installed
+        }
+
+        // 比较版本
+        if compareVersions(localVersion, remoteVersion) < 0 {
+            // 本地版本 < 远程版本 → 有更新
+            return .updateAvailable(from: localVersion, to: remoteVersion)
+        }
+
+        // 版本 >= 远程版本 → 已安装
+        return .installed
+    }
+
+    /// 检查插件文件是否存在
+    private func isPluginFileExists(_ id: String) -> Bool {
+        let pluginDir = ETermPaths.plugins + "/\(id)"
+        return FileManager.default.fileExists(atPath: pluginDir)
     }
 
     // MARK: - 组件注册

@@ -10,12 +10,8 @@ import Combine
 
 /// 可下载插件列表视图
 struct DownloadablePluginsView: View {
-    @StateObject private var downloader = PluginDownloader.shared
+    @ObservedObject private var downloader = PluginDownloader.shared
     @State private var availablePlugins: [DownloadablePlugin] = []
-    @State private var downloadingPluginId: String?
-    @State private var downloadProgress: Double = 0
-    @State private var errorMessage: String?
-    @State private var lastFailedPluginId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -36,37 +32,25 @@ struct DownloadablePluginsView: View {
                 VStack(spacing: 12) {
                     DownloadablePluginItemView(
                         plugin: Self.vlaudeKitPlugin,
-                        isDownloading: downloadingPluginId == Self.vlaudeKitPlugin.id,
-                        progress: downloadProgress,
-                        errorMessage: downloadingPluginId == nil ? errorMessage : nil,
-                        lastFailedPluginId: lastFailedPluginId,
-                        onInstall: { await installPlugin(Self.vlaudeKitPlugin) }
+                        downloader: downloader
                     )
 
                     DownloadablePluginItemView(
                         plugin: Self.memexKitPlugin,
-                        isDownloading: downloadingPluginId == Self.memexKitPlugin.id,
-                        progress: downloadProgress,
-                        errorMessage: downloadingPluginId == nil ? errorMessage : nil,
-                        lastFailedPluginId: lastFailedPluginId,
-                        onInstall: { await installPlugin(Self.memexKitPlugin) }
+                        downloader: downloader
                     )
                 }
             } else {
                 ForEach(availablePlugins) { plugin in
                     DownloadablePluginItemView(
                         plugin: plugin,
-                        isDownloading: downloadingPluginId == plugin.id,
-                        progress: downloadProgress,
-                        errorMessage: downloadingPluginId == nil ? errorMessage : nil,
-                        lastFailedPluginId: lastFailedPluginId,
-                        onInstall: { await installPlugin(plugin) }
+                        downloader: downloader
                     )
                 }
             }
 
             // 错误提示
-            if let error = errorMessage {
+            if let error = downloader.errorMessage {
                 HStack {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.orange)
@@ -75,7 +59,7 @@ struct DownloadablePluginsView: View {
                         .foregroundColor(.secondary)
                     Spacer()
                     Button("关闭") {
-                        errorMessage = nil
+                        downloader.clearError()
                     }
                     .buttonStyle(.borderless)
                 }
@@ -89,34 +73,6 @@ struct DownloadablePluginsView: View {
     private func refreshPluginList() {
         // MVP: 暂时使用硬编码列表
         // TODO: 从远程获取插件索引
-    }
-
-    private func installPlugin(_ plugin: DownloadablePlugin) async {
-        downloadingPluginId = plugin.id
-        downloadProgress = 0
-        errorMessage = nil
-        lastFailedPluginId = nil
-
-        do {
-            let result = try await downloader.installPlugin(plugin) { progress in
-                Task { @MainActor in
-                    downloadProgress = progress.progress
-                }
-            }
-
-            if result.success {
-                // 刷新插件列表
-                PluginManager.shared.objectWillChange.send()
-            }
-        } catch let error as DownloadError {
-            errorMessage = error.errorDescription
-            lastFailedPluginId = plugin.id
-        } catch {
-            errorMessage = error.localizedDescription
-            lastFailedPluginId = plugin.id
-        }
-
-        downloadingPluginId = nil
     }
 
     // MARK: - 硬编码的插件信息（MVP）
@@ -177,27 +133,28 @@ struct DownloadablePluginsView: View {
 /// 可下载插件项视图
 struct DownloadablePluginItemView: View {
     let plugin: DownloadablePlugin
-    let isDownloading: Bool
-    let progress: Double
-    let errorMessage: String?
-    let lastFailedPluginId: String?
-    let onInstall: () async -> Void
+    @ObservedObject var downloader: PluginDownloader
 
-    @State private var isInstalled = false
+    @State private var pluginStatus: PluginStatus = .notInstalled
+
+    /// 当前插件是否正在下载
+    private var isDownloading: Bool {
+        downloader.isDownloading && downloader.downloadingPluginId == plugin.id
+    }
 
     /// 当前插件是否安装失败
     private var hasInstallError: Bool {
-        lastFailedPluginId == plugin.id && errorMessage != nil
+        downloader.lastFailedPluginId == plugin.id && downloader.errorMessage != nil
     }
 
     var body: some View {
         HStack(spacing: 16) {
             // 图标
-            Image(systemName: "arrow.down.circle.fill")
+            Image(systemName: iconName)
                 .font(.system(size: 24))
-                .foregroundColor(.blue)
+                .foregroundColor(iconColor)
                 .frame(width: 40, height: 40)
-                .background(Color.blue.opacity(0.1))
+                .background(iconColor.opacity(0.1))
                 .cornerRadius(8)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -236,43 +193,121 @@ struct DownloadablePluginItemView: View {
             // 安装按钮/进度
             if isDownloading {
                 VStack(spacing: 4) {
-                    ProgressView(value: progress)
-                        .frame(width: 80)
-                    Text("\(Int(progress * 100))%")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                    // 当前下载文件名
+                    if let fileName = downloader.currentFileName {
+                        Text(fileName)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    HStack(spacing: 8) {
+                        ProgressView(value: downloader.downloadProgress)
+                            .frame(width: 80)
+                        Text("\(Int(downloader.downloadProgress * 100))%")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .frame(width: 32, alignment: .trailing)
+                    }
+
+                    // 取消按钮
+                    Button("取消") {
+                        downloader.cancelDownload()
+                    }
+                    .font(.caption2)
+                    .buttonStyle(.borderless)
+                    .foregroundColor(.red)
                 }
             } else if hasInstallError {
                 // 安装失败，显示重试按钮
                 Button("重试") {
-                    Task {
-                        await onInstall()
-                        isInstalled = VersionManager.shared.isPluginInstalled(plugin.id)
-                    }
+                    downloader.startInstall(plugin)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
-            } else if isInstalled || VersionManager.shared.isPluginInstalled(plugin.id) {
-                Label("已安装", systemImage: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundColor(.green)
             } else {
-                Button("安装") {
-                    Task {
-                        await onInstall()
-                        // 安装后重新检查 VersionManager，而不是盲目设为 true
-                        isInstalled = VersionManager.shared.isPluginInstalled(plugin.id)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
+                actionButton
             }
         }
         .padding()
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
         .onAppear {
-            isInstalled = VersionManager.shared.isPluginInstalled(plugin.id)
+            refreshStatus()
         }
+        .onChange(of: downloader.isDownloading) { _, isDownloading in
+            // 下载完成后刷新安装状态
+            if !isDownloading {
+                refreshStatus()
+            }
+        }
+    }
+
+    // MARK: - 状态相关的视图属性
+
+    /// 根据状态显示不同的操作按钮
+    @ViewBuilder
+    private var actionButton: some View {
+        switch pluginStatus {
+        case .notInstalled:
+            Button("安装") {
+                downloader.startInstall(plugin)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(downloader.isDownloading)
+
+        case .installed:
+            Label("已安装", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundColor(.green)
+
+        case .updateAvailable(let from, let to):
+            Button {
+                downloader.startInstall(plugin)
+            } label: {
+                VStack(spacing: 2) {
+                    Text("更新")
+                    Text("\(from) → \(to)")
+                        .font(.caption2)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+            .disabled(downloader.isDownloading)
+        }
+    }
+
+    /// 图标名称
+    private var iconName: String {
+        switch pluginStatus {
+        case .notInstalled:
+            return "arrow.down.circle.fill"
+        case .installed:
+            return "checkmark.circle.fill"
+        case .updateAvailable:
+            return "arrow.up.circle.fill"
+        }
+    }
+
+    /// 图标颜色
+    private var iconColor: Color {
+        switch pluginStatus {
+        case .notInstalled:
+            return .blue
+        case .installed:
+            return .green
+        case .updateAvailable:
+            return .orange
+        }
+    }
+
+    /// 刷新插件状态
+    private func refreshStatus() {
+        pluginStatus = VersionManager.shared.getPluginStatus(
+            id: plugin.id,
+            remoteVersion: plugin.version
+        )
     }
 }
 
