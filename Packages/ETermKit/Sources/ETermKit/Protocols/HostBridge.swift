@@ -83,6 +83,20 @@ public protocol HostBridge: AnyObject, Sendable {
     ///   - data: 要写入的字符串数据
     func writeToTerminal(terminalId: Int, data: String)
 
+    /// 发送输入到终端
+    ///
+    /// 与 `writeToTerminal` 的区别：
+    /// - 支持 `pressEnter` 参数，延迟 50ms 后自动发送回车
+    /// - 适用于需要模拟用户输入的场景（如响应 Claude Code 权限请求）
+    ///
+    /// 需要 capability: `terminal.write`
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - text: 输入文本
+    ///   - pressEnter: 是否在文本后追加回车（延迟 50ms 发送）
+    func sendInput(terminalId: Int, text: String, pressEnter: Bool)
+
     /// 创建终端 Tab
     ///
     /// 在当前窗口的当前 Panel 创建新终端 Tab。

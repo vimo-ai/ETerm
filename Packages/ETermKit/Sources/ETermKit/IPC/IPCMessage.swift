@@ -103,6 +103,9 @@ public struct IPCMessage: Sendable, Codable, Equatable {
         /// 写入终端
         case writeTerminal
 
+        /// 发送输入到终端（支持 pressEnter）
+        case sendInput
+
         /// 获取终端信息
         case getTerminalInfo
 

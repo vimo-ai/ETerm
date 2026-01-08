@@ -444,17 +444,51 @@ final class SDKPluginLoader {
     /// 扫描插件目录
     private func scanPluginDirectories() -> [String] {
         var paths: [String] = []
+        var seenIds: Set<String> = []
 
-        // 用户插件目录
+        // 1. 优先扫描 app 内置插件目录（BuiltinPlugins）
+        if let builtinPath = Bundle.main.resourcePath.map({ $0 + "/BuiltinPlugins" }),
+           FileManager.default.fileExists(atPath: builtinPath) {
+            let builtinBundles = scanDirectory(builtinPath)
+            for bundlePath in builtinBundles {
+                // 提取插件 ID（从 manifest 或目录名）
+                let pluginId = extractPluginId(from: bundlePath)
+                if !seenIds.contains(pluginId) {
+                    paths.append(bundlePath)
+                    seenIds.insert(pluginId)
+                }
+            }
+        }
+
+        // 2. 用户插件目录（用户安装的插件优先级低于内置）
         let userPluginsPath = ETermPaths.plugins
-        paths.append(contentsOf: scanDirectory(userPluginsPath))
+        let userBundles = scanDirectory(userPluginsPath)
+        for bundlePath in userBundles {
+            let pluginId = extractPluginId(from: bundlePath)
+            if !seenIds.contains(pluginId) {
+                paths.append(bundlePath)
+                seenIds.insert(pluginId)
+            }
+        }
 
-        // 开发插件目录（通过环境变量）
+        // 3. 开发插件目录（通过环境变量，最高优先级覆盖）
         if let devPath = ProcessInfo.processInfo.environment["ETERM_PLUGIN_PATH"] {
             paths.append(contentsOf: scanDirectory(devPath))
         }
 
         return paths
+    }
+
+    /// 从 bundle 路径提取插件 ID
+    private func extractPluginId(from bundlePath: String) -> String {
+        let manifestPath = (bundlePath as NSString).appendingPathComponent("Contents/Resources/manifest.json")
+        if let data = FileManager.default.contents(atPath: manifestPath),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let id = json["id"] as? String {
+            return id
+        }
+        // fallback: 使用 bundle 名
+        return (bundlePath as NSString).lastPathComponent.replacingOccurrences(of: ".bundle", with: "")
     }
 
     /// 扫描单个目录

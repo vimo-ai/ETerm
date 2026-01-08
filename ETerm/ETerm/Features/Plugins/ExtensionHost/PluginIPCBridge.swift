@@ -298,6 +298,9 @@ actor PluginIPCBridge {
         case .writeTerminal:
             await handleWriteTerminal(message)
 
+        case .sendInput:
+            await handleSendInput(message)
+
         case .getTerminalInfo:
             await handleGetTerminalInfo(message)
 
@@ -485,6 +488,35 @@ actor PluginIPCBridge {
         }
 
         await sendResponse(to: message, payload: ["success": success])
+    }
+
+    private func handleSendInput(_ message: IPCMessage) async {
+        guard let pluginId = message.pluginId else { return }
+
+        guard capabilityChecker.hasCapability(pluginId: pluginId, capability: "terminal.write") else {
+            await sendError(to: message, code: "PERMISSION_DENIED", message: "Missing capability: terminal.write")
+            return
+        }
+
+        guard let terminalId = message.rawPayload["terminalId"] as? Int,
+              let text = message.rawPayload["text"] as? String else {
+            await sendError(to: message, code: "INVALID_PARAMS", message: "Missing terminalId or text")
+            return
+        }
+
+        let pressEnter = message.rawPayload["pressEnter"] as? Bool ?? false
+
+        await MainActor.run {
+            Task {
+                _ = await CoreTerminalService.sendInput(
+                    terminalId: terminalId,
+                    text: text,
+                    pressEnter: pressEnter
+                )
+            }
+        }
+
+        await sendResponse(to: message, payload: ["success": true])
     }
 
     private func handleGetTerminalInfo(_ message: IPCMessage) async {
