@@ -6,8 +6,9 @@
 # 优雅降级：非 ETerm 环境下静默跳过，不影响后续 hooks
 #
 
-# 确保日志目录存在
+# 确保日志目录存在（权限 0700，防止敏感信息泄露给其他用户）
 mkdir -p /tmp/eterm
+chmod 700 /tmp/eterm 2>/dev/null || true
 
 # 日志文件（自动轮转，保留最近 100 条）
 LOG_FILE="/tmp/eterm/claude-hook.log"
@@ -93,15 +94,45 @@ case "$hook_event_name" in
     "Stop")
         event_type="stop"
         ;;
+    "PermissionRequest")
+        # 权限请求事件（主要入口）- 直接提供 tool_name + tool_input
+        tool_name=$(echo "$input" | jq -r '.tool_name // ""')
+        tool_input=$(echo "$input" | jq -c '.tool_input // {}')
+        tool_use_id=$(echo "$input" | jq -r '.tool_use_id // ""')
+
+        # JSON 转义所有字符串字段（防止路径中含引号/反斜杠导致 JSON 无效）
+        escaped_session_id=$(echo "$session_id" | jq -Rs '.')
+        escaped_tool_name=$(echo "$tool_name" | jq -Rs '.')
+        escaped_tool_use_id=$(echo "$tool_use_id" | jq -Rs '.')
+        escaped_transcript_path=$(echo "$transcript_path" | jq -Rs '.')
+        escaped_cwd=$(echo "$cwd" | jq -Rs '.')
+
+        # 异步发送，不阻塞（不返回决策，让 Claude Code 显示正常 UI）
+        (echo "{\"event_type\": \"permission_request\", \"session_id\": $escaped_session_id, \"terminal_id\": $terminal_id, \"tool_name\": $escaped_tool_name, \"tool_input\": $tool_input, \"tool_use_id\": $escaped_tool_use_id, \"transcript_path\": $escaped_transcript_path, \"cwd\": $escaped_cwd}" | nc -w 2 -U "$socket_path") &
+        echo "✅ [permission_request] tool=$tool_name, sent async" >> "$LOG_FILE"
+        exit 0
+        ;;
     "Notification")
         # 过滤掉 idle_prompt（60秒空闲提醒，不需要用户操作）
-        # 保留：permission_prompt, elicitation_dialog 等需要用户操作的
+        # 过滤掉 permission_prompt（由 PermissionRequest hook 处理，避免重复）
         notification_type=$(echo "$input" | jq -r '.notification_type // "unknown"')
         if [ "$notification_type" = "idle_prompt" ]; then
             echo "⏭️ Skipping idle_prompt (60s idle, no action needed)" >> "$LOG_FILE"
             exit 0
         fi
-        event_type="notification"
+        if [ "$notification_type" = "permission_prompt" ]; then
+            echo "⏭️ Skipping permission_prompt (handled by PermissionRequest hook)" >> "$LOG_FILE"
+            exit 0
+        fi
+
+        # 提取 message 字段（用于其他通知场景）
+        message=$(echo "$input" | jq -r '.message // ""')
+        escaped_message=$(echo "$message" | jq -Rs '.')
+
+        # 异步发送，包含完整通知信息
+        (echo "{\"event_type\": \"notification\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"notification_type\": \"$notification_type\", \"message\": $escaped_message, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}" | nc -w 2 -U "$socket_path") &
+        echo "✅ [notification] type=$notification_type, sent async" >> "$LOG_FILE"
+        exit 0
         ;;
     *)
         event_type="unknown"
