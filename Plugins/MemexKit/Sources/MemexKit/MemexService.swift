@@ -83,16 +83,17 @@ public final class MemexService: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
 
-        // 数据目录（统一在 ~/.vimo/memex 下，与 memex-rs 独立运行时一致）
+        // 数据目录（统一在 ~/.vimo/db 下，与 memex-rs 默认配置一致）
+        // 不设置 MEMEX_DATA_DIR，让 memex-rs 使用默认值 ~/.vimo/db
         let dataDir = URL(fileURLWithPath: ETermPaths.vimoRoot)
-            .appendingPathComponent("memex")
+            .appendingPathComponent("db")
         try? FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
 
-        // 设置环境变量（通过 MEMEX_DATA_DIR 告诉 memex-rs 数据目录位置）
+        // 设置环境变量
         var env = ProcessInfo.processInfo.environment
         env["PORT"] = String(port)
         env["RUST_LOG"] = "memex=info"
-        env["MEMEX_DATA_DIR"] = dataDir.path
+        // MEMEX_DATA_DIR 不设置，使用默认值 ~/.vimo/db
         // 确保 PATH 包含 homebrew 和常用工具路径（归档需要 xz 等外部命令）
         let extraPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         if let existingPath = env["PATH"] {
@@ -182,21 +183,16 @@ public final class MemexService: @unchecked Sendable {
 
     /// 查找 memex 二进制
     private func findBinary() -> String? {
-        // 1. ~/.vimo/eterm/bin/memex（主要路径，build.sh 部署位置）
+        // 1. ~/.vimo/eterm/bin/memex（开发模式，build.sh 部署位置）
         let etermBin = ETermPaths.root + "/bin/memex"
         if FileManager.default.isExecutableFile(atPath: etermBin) {
             return etermBin
         }
 
-        // 2. 插件 Bundle 内 Contents/Lib/memex（发布模式）
-        let bundlePath = Bundle(for: MemexService.self).bundlePath + "/Contents/Lib/memex"
-        if FileManager.default.isExecutableFile(atPath: bundlePath) {
-            return bundlePath
-        }
-
-        // 3. /usr/local/bin/memex（全局安装）
-        if FileManager.default.isExecutableFile(atPath: "/usr/local/bin/memex") {
-            return "/usr/local/bin/memex"
+        // 2. ~/.vimo/bin/memex（发布模式，memex release CI 安装位置）
+        let releaseBin = NSHomeDirectory() + "/.vimo/bin/memex"
+        if FileManager.default.isExecutableFile(atPath: releaseBin) {
+            return releaseBin
         }
 
         return nil

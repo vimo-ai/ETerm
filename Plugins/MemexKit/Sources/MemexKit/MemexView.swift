@@ -60,6 +60,15 @@ struct MemexStatusView: View {
                     StatsCard(stats: stats)
                 }
 
+                // 向量索引卡片
+                if let embeddingStats = viewModel.embeddingStats {
+                    EmbeddingStatsCard(
+                        stats: embeddingStats,
+                        isTriggering: viewModel.isIndexing,
+                        onTrigger: { Task { await viewModel.triggerIndexing() } }
+                    )
+                }
+
                 // MCP 信息卡片
                 if viewModel.isServiceRunning {
                     MCPInfoCard(port: viewModel.port)
@@ -214,7 +223,9 @@ private struct WebUIContentView: View {
 final class MemexViewModel: ObservableObject {
     @Published var isServiceRunning = false
     @Published var stats: MemexStats?
+    @Published var embeddingStats: EmbeddingStats?
     @Published var errorMessage: String?
+    @Published var isIndexing = false
 
     var port: UInt16 { MemexService.shared.port }
 
@@ -224,12 +235,20 @@ final class MemexViewModel: ObservableObject {
         if isServiceRunning {
             do {
                 stats = try await MemexService.shared.getStats()
+                embeddingStats = try await fetchEmbeddingStats()
                 errorMessage = nil
+
+                // 如果索引正在运行，启动自动刷新
+                if embeddingStats?.isRunning == true {
+                    startAutoRefresh()
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }
         } else {
             stats = nil
+            embeddingStats = nil
+            stopAutoRefresh()
         }
     }
 
@@ -248,6 +267,90 @@ final class MemexViewModel: ObservableObject {
         MemexService.shared.stop()
         await refresh()
     }
+
+    /// 触发全量索引
+    func triggerIndexing() async {
+        isIndexing = true
+
+        do {
+            _ = try await triggerEmbeddingAll()
+            // 刷新状态
+            embeddingStats = try await fetchEmbeddingStats()
+            errorMessage = nil
+
+            // 启动自动刷新
+            startAutoRefresh()
+        } catch {
+            errorMessage = "索引失败: \(error.localizedDescription)"
+        }
+
+        isIndexing = false
+    }
+
+    /// 自动刷新任务
+    private var autoRefreshTask: Task<Void, Never>?
+
+    /// 启动自动刷新（每 2 秒刷新一次，直到索引完成）
+    func startAutoRefresh() {
+        // 取消已有任务
+        autoRefreshTask?.cancel()
+
+        autoRefreshTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)  // 2 秒
+
+                guard !Task.isCancelled else { break }
+
+                // 刷新 embedding stats
+                if let stats = try? await fetchEmbeddingStats() {
+                    embeddingStats = stats
+
+                    // 如果不再运行，停止刷新
+                    if !stats.isRunning {
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    /// 停止自动刷新
+    func stopAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
+    }
+
+    /// 获取 embedding 统计
+    private func fetchEmbeddingStats() async throws -> EmbeddingStats {
+        let url = MemexService.shared.baseURL.appendingPathComponent("api/embedding/stats")
+        let (data, _) = try await URLSession.shared.data(from: url)
+        return try JSONDecoder().decode(EmbeddingStats.self, from: data)
+    }
+
+    /// 触发全量索引 API
+    private func triggerEmbeddingAll() async throws -> EmbeddingTriggerResult {
+        let url = MemexService.shared.baseURL.appendingPathComponent("api/embedding/trigger-all")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let (data, _) = try await URLSession.shared.data(for: request)
+        return try JSONDecoder().decode(EmbeddingTriggerResult.self, from: data)
+    }
+}
+
+// MARK: - Embedding Types
+
+struct EmbeddingStats: Decodable {
+    let pending: Int
+    let failed: Int
+    let indexed: Int
+    let ollamaAvailable: Bool
+    let embeddingModel: String
+    let isRunning: Bool
+}
+
+struct EmbeddingTriggerResult: Decodable {
+    let triggered: Bool
+    let message: String
 }
 
 // MARK: - Service Status Card
@@ -443,6 +546,160 @@ private struct ErrorCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.1))
         .cornerRadius(8)
+    }
+}
+
+// MARK: - Embedding Stats Card
+
+private struct EmbeddingStatsCard: View {
+    let stats: EmbeddingStats
+    let isTriggering: Bool  // 本地触发状态（点击按钮到收到响应之间）
+    let onTrigger: () -> Void
+
+    /// 是否正在索引（服务端运行中 或 本地触发中）
+    private var isIndexing: Bool {
+        stats.isRunning || isTriggering
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
+            HStack {
+                Image(systemName: "cube.transparent")
+                    .foregroundColor(.indigo)
+                Text("向量索引")
+                    .font(.headline)
+
+                Spacer()
+
+                // 运行状态指示
+                if stats.isRunning {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 10, height: 10)
+                        Text("运行中")
+                            .font(.caption2)
+                            .foregroundColor(.indigo)
+                    }
+                } else {
+                    // Ollama 状态指示
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(stats.ollamaAvailable ? Color.green : Color.red)
+                            .frame(width: 6, height: 6)
+                        Text(stats.embeddingModel)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            // 统计数据
+            HStack(spacing: 12) {
+                EmbeddingStatItem(
+                    value: formatNumber(stats.indexed),
+                    label: "已索引",
+                    color: .green
+                )
+
+                EmbeddingStatItem(
+                    value: formatNumber(stats.pending),
+                    label: "待索引",
+                    color: .orange
+                )
+
+                EmbeddingStatItem(
+                    value: formatNumber(stats.failed),
+                    label: "失败",
+                    color: .red
+                )
+            }
+
+            // 索引按钮 / 运行状态
+            if stats.isRunning {
+                // 正在运行，显示进度提示
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 14, height: 14)
+                    Text("后台索引中，剩余 \(formatNumber(stats.pending)) 条...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color.indigo.opacity(0.05))
+                .cornerRadius(6)
+            } else if stats.pending > 0 {
+                Button(action: onTrigger) {
+                    HStack {
+                        if isTriggering {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .frame(width: 14, height: 14)
+                        } else {
+                            Image(systemName: "play.fill")
+                        }
+                        Text(isTriggering ? "启动中..." : "开始全量索引")
+                    }
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(stats.ollamaAvailable ? Color.indigo.opacity(0.1) : Color.gray.opacity(0.1))
+                    .foregroundColor(stats.ollamaAvailable ? .indigo : .gray)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.plain)
+                .disabled(isIndexing || !stats.ollamaAvailable)
+
+                if !stats.ollamaAvailable {
+                    Text("⚠️ Ollama 不可用，请先启动 Ollama")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+            } else if stats.indexed > 0 {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("所有消息已索引完成")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(12)
+    }
+
+    private func formatNumber(_ n: Int) -> String {
+        if n >= 10000 {
+            return String(format: "%.1fw", Double(n) / 10000)
+        } else if n >= 1000 {
+            return String(format: "%.1fk", Double(n) / 1000)
+        }
+        return "\(n)"
+    }
+}
+
+private struct EmbeddingStatItem: View {
+    let value: String
+    let label: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.title3)
+                .fontWeight(.semibold)
+                .foregroundColor(color)
+
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
