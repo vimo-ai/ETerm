@@ -5,11 +5,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGIN_NAME="MCPRouterKit"
+BUNDLE_ID="com.eterm.mcp-router"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
-# Output directory (can be overridden by BUNDLE_OUTPUT_DIR env var)
+# Output directory: {plugins}/{id}/{name}.bundle
 OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
-BUNDLE_PATH="${OUTPUT_DIR}/${BUNDLE_NAME}"
+PLUGIN_DIR="${OUTPUT_DIR}/${BUNDLE_ID}"
+BUNDLE_PATH="${PLUGIN_DIR}/${BUNDLE_NAME}"
 
 # MCP Router Core library (no extension, like memex)
 CORE_LIB="${SCRIPT_DIR}/Lib/mcp_router_core"
@@ -40,7 +42,7 @@ swift build -Xlinker "${CORE_LIB}"
 
 # Create Bundle structure
 log_info "Creating bundle..."
-rm -rf "$BUNDLE_PATH"
+rm -rf "$PLUGIN_DIR"
 mkdir -p "${BUNDLE_PATH}/Contents/MacOS"
 mkdir -p "${BUNDLE_PATH}/Contents/Resources"
 mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"

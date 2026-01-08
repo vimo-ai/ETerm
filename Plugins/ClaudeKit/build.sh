@@ -8,6 +8,7 @@ cd "$SCRIPT_DIR"
 
 # 配置
 BUNDLE_NAME="ClaudeKit"
+BUNDLE_ID="com.eterm.claude"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 BUNDLE_OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-$HOME/.vimo/eterm/plugins}"
 
@@ -16,9 +17,10 @@ echo "Building $BUNDLE_NAME ($CONFIGURATION)..."
 # 构建
 swift build -c $(echo $CONFIGURATION | tr '[:upper:]' '[:lower:]')
 
-# 创建 bundle 结构
-BUNDLE_DIR="$BUNDLE_OUTPUT_DIR/$BUNDLE_NAME.bundle"
-rm -rf "$BUNDLE_DIR"
+# 创建 bundle 结构: {plugins}/{id}/{name}.bundle
+PLUGIN_DIR="$BUNDLE_OUTPUT_DIR/$BUNDLE_ID"
+BUNDLE_DIR="$PLUGIN_DIR/$BUNDLE_NAME.bundle"
+rm -rf "$PLUGIN_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
 mkdir -p "$BUNDLE_DIR/Contents/Resources"
 
