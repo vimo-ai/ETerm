@@ -123,6 +123,24 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
+    func sendInput(terminalId: Int, text: String, pressEnter: Bool) {
+        let termId = terminalId
+        let t = text
+        let enter = pressEnter
+
+        Task { @Sendable in
+            await MainActor.run {
+                Task {
+                    _ = await CoreTerminalService.sendInput(
+                        terminalId: termId,
+                        text: t,
+                        pressEnter: enter
+                    )
+                }
+            }
+        }
+    }
+
     func createTerminalTab(cwd: String?) -> Int? {
         if Thread.isMainThread {
             return MainActor.assumeIsolated {

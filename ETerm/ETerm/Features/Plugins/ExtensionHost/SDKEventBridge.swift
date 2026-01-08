@@ -63,6 +63,15 @@ final class SDKEventBridge {
         }
         subscriptions.append(tabActivateSub)
 
+        // 监听 Claude 权限请求事件
+        let permissionPromptSub = EventBus.shared.subscribe(
+            ClaudeEvents.PermissionPrompt.self,
+            options: .default
+        ) { [weak self] event in
+            self?.handleClaudePermissionPrompt(event)
+        }
+        subscriptions.append(permissionPromptSub)
+
         // 监听插件发射的事件，分发给订阅的插件
         NotificationCenter.default.addObserver(
             self,
@@ -105,6 +114,21 @@ final class SDKEventBridge {
             "terminalId": event.terminalId
         ]
         dispatchEvent("tab.didActivate", payload: payload)
+    }
+
+    private func handleClaudePermissionPrompt(_ event: ClaudeEvents.PermissionPrompt) {
+        var payload: [String: Any] = [
+            "terminalId": event.terminalId,
+            "sessionId": event.sessionId,
+            "message": event.message
+        ]
+        if let transcriptPath = event.transcriptPath {
+            payload["transcriptPath"] = transcriptPath
+        }
+        if let cwd = event.cwd {
+            payload["cwd"] = cwd
+        }
+        dispatchEvent("claude.permissionPrompt", payload: payload)
     }
 
     /// 分发事件给订阅的 SDK 插件

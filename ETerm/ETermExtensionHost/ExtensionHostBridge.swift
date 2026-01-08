@@ -120,6 +120,23 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
+    public func sendInput(terminalId: Int, text: String, pressEnter: Bool) {
+        let termId = terminalId
+        let t = text
+        let enter = pressEnter
+
+        Task { @Sendable in
+            try? await self.connection.send(IPCMessage(
+                type: .sendInput,
+                payload: [
+                    "terminalId": termId,
+                    "text": t,
+                    "pressEnter": enter
+                ]
+            ))
+        }
+    }
+
     public func createTerminalTab(cwd: String?) -> Int? {
         // isolated 模式暂不支持创建终端 Tab（需要访问 WindowManager）
         // 如果需要支持，可添加 IPC 消息类型 .createTerminalTab
