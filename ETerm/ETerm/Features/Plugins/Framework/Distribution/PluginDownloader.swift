@@ -68,31 +68,112 @@ struct InstallResult {
 final class PluginDownloader: ObservableObject {
     static let shared = PluginDownloader()
 
+    // MARK: - 全局下载状态（View 观察这些属性）
+
     @Published var isDownloading = false
-    @Published var currentProgress: DownloadProgress?
-    @Published var error: DownloadError?
+    @Published var downloadingPluginId: String?
+    @Published var downloadProgress: Double = 0
+    @Published var currentFileName: String?
+    @Published var errorMessage: String?
+    @Published var lastFailedPluginId: String?
 
     private let versionManager = VersionManager.shared
     private let fileManager = FileManager.default
-    private var downloadTask: URLSessionDataTask?
+    private var downloadTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     private init() {}
 
     // MARK: - 公开 API
 
-    /// 安装插件
+    /// 开始安装插件（非阻塞，状态通过 @Published 属性发布）
+    func startInstall(_ plugin: DownloadablePlugin) {
+        // 如果已经在下载，忽略
+        guard !isDownloading else { return }
+
+        // 重置状态
+        isDownloading = true
+        downloadingPluginId = plugin.id
+        downloadProgress = 0
+        currentFileName = nil
+        errorMessage = nil
+        lastFailedPluginId = nil
+
+        // 启动下载任务
+        downloadTask = Task {
+            do {
+                let result = try await performInstall(plugin)
+                await MainActor.run {
+                    if result.success {
+                        PluginManager.shared.objectWillChange.send()
+                    }
+                    self.resetState()
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    self.errorMessage = "下载已取消"
+                    self.resetState()
+                }
+            } catch let error as DownloadError {
+                await MainActor.run {
+                    self.errorMessage = error.errorDescription
+                    self.lastFailedPluginId = plugin.id
+                    self.resetState()
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = error.localizedDescription
+                    self.lastFailedPluginId = plugin.id
+                    self.resetState()
+                }
+            }
+        }
+    }
+
+    /// 取消当前下载
+    func cancelDownload() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        errorMessage = "下载已取消"
+        resetState()
+    }
+
+    /// 清除错误状态
+    func clearError() {
+        errorMessage = nil
+        lastFailedPluginId = nil
+    }
+
+    /// 同步安装插件（用于批量安装场景，如 OnboardingView）
     /// - Parameters:
     ///   - plugin: 可下载的插件信息
-    ///   - progressHandler: 进度回调
+    ///   - progressHandler: 进度回调（0.0 ~ 1.0）
     /// - Returns: 安装结果
     func installPlugin(
         _ plugin: DownloadablePlugin,
-        progressHandler: ((DownloadProgress) -> Void)? = nil
+        progressHandler: ((Double) -> Void)? = nil
     ) async throws -> InstallResult {
-        isDownloading = true
-        error = nil
-        defer { isDownloading = false }
+        // 设置进度回调（临时存储）
+        let originalHandler = self.batchProgressHandler
+        self.batchProgressHandler = progressHandler
+        defer { self.batchProgressHandler = originalHandler }
+
+        return try await performInstall(plugin)
+    }
+
+    /// 批量安装的进度回调（临时存储）
+    private var batchProgressHandler: ((Double) -> Void)?
+
+    private func resetState() {
+        isDownloading = false
+        downloadingPluginId = nil
+        currentFileName = nil
+    }
+
+    /// 执行安装（内部方法）
+    private func performInstall(_ plugin: DownloadablePlugin) async throws -> InstallResult {
+        // 检查取消
+        try Task.checkCancellation()
 
         var installedComponents: [String] = []
         var skippedComponents: [String] = []
@@ -100,6 +181,8 @@ final class PluginDownloader: ObservableObject {
         // 1. 安装运行时依赖
         if let deps = plugin.runtimeDeps {
             for dep in deps {
+                try Task.checkCancellation()
+
                 // 检查是否已安装且版本满足
                 if versionManager.isComponentVersionSatisfied(dep.name, minVersion: dep.minVersion) {
                     skippedComponents.append(dep.name)
@@ -107,10 +190,12 @@ final class PluginDownloader: ObservableObject {
                 }
 
                 // 下载并安装组件
-                try await installComponent(dep, installedBy: plugin.id, progressHandler: progressHandler)
+                try await installComponent(dep, installedBy: plugin.id)
                 installedComponents.append(dep.name)
             }
         }
+
+        try Task.checkCancellation()
 
         // 2. 下载插件 bundle
         let bundleUrl = plugin.downloadUrl
@@ -120,8 +205,7 @@ final class PluginDownloader: ObservableObject {
         try await downloadAndInstall(
             url: bundleUrl,
             targetPath: bundlePath,
-            sha256: plugin.sha256,
-            progressHandler: progressHandler
+            sha256: plugin.sha256
         )
 
         // 3. 注册插件
@@ -152,23 +236,14 @@ final class PluginDownloader: ObservableObject {
         // 注意：不删除共享组件（lib/, bin/），因为可能被其他插件使用
     }
 
-    /// 取消下载
-    func cancel() {
-        downloadTask?.cancel()
-        downloadTask = nil
-        isDownloading = false
-        error = .cancelled
-    }
-
     // MARK: - 私有方法
 
     /// 安装组件
     private func installComponent(
         _ dep: RuntimeDependency,
-        installedBy: String,
-        progressHandler: ((DownloadProgress) -> Void)?
+        installedBy: String
     ) async throws {
-        guard let urlString = dep.downloadUrl, let url = URL(string: urlString) else {
+        guard let urlString = dep.downloadUrl else {
             throw DownloadError.invalidUrl(dep.downloadUrl ?? "nil")
         }
 
@@ -177,8 +252,7 @@ final class PluginDownloader: ObservableObject {
         try await downloadAndInstall(
             url: urlString,
             targetPath: targetPath,
-            sha256: dep.sha256,
-            progressHandler: progressHandler
+            sha256: dep.sha256
         )
 
         // 如果是可执行文件，添加执行权限
@@ -202,8 +276,7 @@ final class PluginDownloader: ObservableObject {
     private func downloadAndInstall(
         url: String,
         targetPath: String,
-        sha256: String?,
-        progressHandler: ((DownloadProgress) -> Void)?
+        sha256: String?
     ) async throws {
         guard let downloadUrl = URL(string: url) else {
             throw DownloadError.invalidUrl(url)
@@ -223,12 +296,11 @@ final class PluginDownloader: ObservableObject {
             try? fileManager.removeItem(atPath: tmpPath)
         }
 
-        // 下载到临时文件（带进度回调）
+        // 下载到临时文件（进度会自动更新到全局状态）
         try await downloadWithProgress(
             from: downloadUrl,
             to: tmpPath,
-            fileName: (url as NSString).lastPathComponent,
-            progressHandler: progressHandler
+            fileName: (url as NSString).lastPathComponent
         )
 
         // 校验 SHA256
@@ -284,13 +356,18 @@ final class PluginDownloader: ObservableObject {
         }
     }
 
-    /// 带进度回调的下载
+    /// 带进度的下载（直接更新全局状态）
     private func downloadWithProgress(
         from url: URL,
         to destinationPath: String,
-        fileName: String,
-        progressHandler: ((DownloadProgress) -> Void)?
+        fileName: String
     ) async throws {
+        // 更新当前文件名
+        await MainActor.run {
+            self.currentFileName = fileName
+            self.downloadProgress = 0
+        }
+
         let request = URLRequest(url: url)
         let (asyncBytes, response) = try await URLSession.shared.bytes(for: request)
 
@@ -320,6 +397,9 @@ final class PluginDownloader: ObservableObject {
 
         // 流式下载并报告进度
         for try await byte in asyncBytes {
+            // 检查取消
+            try Task.checkCancellation()
+
             buffer.append(byte)
             downloadedBytes += 1
 
@@ -328,14 +408,10 @@ final class PluginDownloader: ObservableObject {
                 try fileHandle.write(contentsOf: buffer)
                 buffer.removeAll(keepingCapacity: true)
 
-                let progress = DownloadProgress(
-                    bytesDownloaded: downloadedBytes,
-                    totalBytes: totalBytes,
-                    currentFile: fileName
-                )
+                let progress = totalBytes > 0 ? Double(downloadedBytes) / Double(totalBytes) : 0
                 await MainActor.run {
-                    progressHandler?(progress)
-                    self.currentProgress = progress
+                    self.downloadProgress = progress
+                    self.batchProgressHandler?(progress)
                 }
             }
         }
@@ -345,15 +421,9 @@ final class PluginDownloader: ObservableObject {
             try fileHandle.write(contentsOf: buffer)
         }
 
-        // 最终进度
-        let finalProgress = DownloadProgress(
-            bytesDownloaded: downloadedBytes,
-            totalBytes: downloadedBytes,
-            currentFile: fileName
-        )
+        // 完成
         await MainActor.run {
-            progressHandler?(finalProgress)
-            self.currentProgress = finalProgress
+            self.downloadProgress = 1.0
         }
     }
 }

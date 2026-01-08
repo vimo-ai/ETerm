@@ -278,7 +278,7 @@ struct OnboardingView: View {
             do {
                 let result = try await downloader.installPlugin(plugin) { progress in
                     Task { @MainActor in
-                        downloadProgress[plugin.id] = progress.progress
+                        downloadProgress[plugin.id] = progress
                     }
                 }
 
