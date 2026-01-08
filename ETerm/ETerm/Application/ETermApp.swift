@@ -78,15 +78,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 清理上次运行残留的剪贴板临时文件
         CoreCommandsBootstrap.cleanupClipboardTempFiles()
 
-        // [SDK Migration] 暂停内置插件加载，改用 SDK 插件
-        // PluginManager.shared.loadBuiltinPlugins()
-
-        // [SDK Migration] 暂停 Bundle 插件加载
-        // PluginLoader.shared.loadAllPlugins()
-
-        // 安装/更新内置插件（从 app bundle 复制到用户目录）
-        BuiltinPluginInstaller.installIfNeeded()
-
         // 启动会话录制器
         SessionRecorder.shared.setupIntegration()
 
