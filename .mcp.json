@@ -6,6 +6,11 @@
       },
       "type" : "http",
       "url" : "http:\/\/localhost:19104"
+    },
+    "lsp" : {
+      "type" : "stdio",
+      "command" : "node",
+      "args" : ["/Users/higuaifan/Desktop/vimo/lsp/index.js"]
     }
   }
 }
