@@ -120,8 +120,13 @@ final class SDKEventBridge {
         var payload: [String: Any] = [
             "terminalId": event.terminalId,
             "sessionId": event.sessionId,
-            "message": event.message
+            "message": event.message as Any,
+            "toolName": event.toolName,
+            "toolInput": event.toolInput
         ]
+        if let toolUseId = event.toolUseId {
+            payload["toolUseId"] = toolUseId
+        }
         if let transcriptPath = event.transcriptPath {
             payload["transcriptPath"] = transcriptPath
         }

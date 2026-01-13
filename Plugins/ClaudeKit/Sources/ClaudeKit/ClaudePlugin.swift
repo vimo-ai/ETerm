@@ -106,6 +106,24 @@ public final class ClaudePlugin: NSObject, Plugin {
             self?.handleWaitForResponse(params: params)
         }
 
+        // 注册 getTerminalId 服务（供其他插件查询 sessionId -> terminalId 映射）
+        host.registerService(name: "getTerminalId") { params in
+            guard let sessionId = params["sessionId"] as? String else { return nil }
+            if let terminalId = ClaudeSessionMapper.shared.getTerminalId(for: sessionId) {
+                return ["terminalId": terminalId]
+            }
+            return nil
+        }
+
+        // 注册 getSessionId 服务（供其他插件查询 terminalId -> sessionId 映射）
+        host.registerService(name: "getSessionId") { params in
+            guard let terminalId = params["terminalId"] as? Int else { return nil }
+            if let sessionId = ClaudeSessionMapper.shared.getSessionId(for: terminalId) {
+                return ["sessionId": sessionId]
+            }
+            return nil
+        }
+
         // 监听插件加载完成通知，检查已有终端是否需要恢复
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("ETerm.PluginsLoaded"),
@@ -139,7 +157,14 @@ public final class ClaudePlugin: NSObject, Plugin {
         guard !sessionsToResume.isEmpty else { return }
 
         for (terminalId, tabId, sessionId) in sessionsToResume {
-            // 延迟恢复
+            // 立即重建运行时映射（即使 Claude 已在运行，也能正确响应权限请求等）
+            ClaudeSessionMapper.shared.establish(
+                terminalId: terminalId,
+                sessionId: sessionId,
+                tabId: tabId
+            )
+
+            // 延迟恢复（如果 Claude 不在运行，会启动它）
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self = self else { return }
 
@@ -250,6 +275,21 @@ public final class ClaudePlugin: NSObject, Plugin {
         case "session_end":
             handleSessionEnd(terminalId: terminalId)
             host?.emit(eventName: "claude.sessionEnd", payload: makePayload(event))
+
+        case "permission_request":
+            // 权限请求事件 - 转发给 VlaudeKit 处理（远程审批）
+            var payload = makePayload(event)
+            payload["toolName"] = event.tool_name ?? ""
+            // 将 [String: AnyCodable] 转换为 [String: Any]
+            if let toolInput = event.tool_input {
+                payload["toolInput"] = toolInput.mapValues { $0.value }
+            } else {
+                payload["toolInput"] = [String: Any]()
+            }
+            if let toolUseId = event.tool_use_id {
+                payload["toolUseId"] = toolUseId
+            }
+            host?.emit(eventName: "claude.permissionPrompt", payload: payload)
 
         default:
             break

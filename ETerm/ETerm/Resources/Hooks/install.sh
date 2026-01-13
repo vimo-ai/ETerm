@@ -55,7 +55,7 @@ if grep -q "$HOOK_SCRIPT" "$SETTINGS_FILE" 2>/dev/null; then
 fi
 
 # 使用 jq 添加 hook
-# 为 Stop 和 Notification 都添加 ETerm hook
+# 为所有必要的事件添加 ETerm hook
 
 TMP_FILE=$(mktemp)
 
@@ -69,7 +69,15 @@ jq --arg hook "$HOOK_SCRIPT" '
 
 # 处理 Notification hooks
 .hooks.Notification //= [{"matcher": "", "hooks": []}] |
-.hooks.Notification[0].hooks += [{"type": "command", "command": ("bash " + $hook)}]
+.hooks.Notification[0].hooks += [{"type": "command", "command": ("bash " + $hook)}] |
+
+# 处理 UserPromptSubmit hooks (用于显示用户输入)
+.hooks.UserPromptSubmit //= [{"matcher": "", "hooks": []}] |
+.hooks.UserPromptSubmit[0].hooks += [{"type": "command", "command": ("bash " + $hook)}] |
+
+# 处理 PermissionRequest hooks (用于远程权限审批)
+.hooks.PermissionRequest //= [{"matcher": "", "hooks": []}] |
+.hooks.PermissionRequest[0].hooks += [{"type": "command", "command": ("bash " + $hook)}]
 ' "$SETTINGS_FILE" > "$TMP_FILE"
 
 if [ $? -eq 0 ]; then
@@ -77,8 +85,10 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ ETerm hook 安装成功！${NC}"
     echo ""
     echo "已添加到:"
-    echo "  - Stop hook"
-    echo "  - Notification hook"
+    echo "  - Stop hook (会话完成通知)"
+    echo "  - Notification hook (各类通知)"
+    echo "  - UserPromptSubmit hook (用户输入同步)"
+    echo "  - PermissionRequest hook (远程权限审批)"
     echo ""
     echo "Hook 脚本位置: $HOOK_SCRIPT"
 else
