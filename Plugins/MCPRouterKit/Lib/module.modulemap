@@ -1,4 +1,5 @@
-module MCPRouterCore {
+module MCPRouterCore [system] {
     header "mcp_router_core.h"
+    link "mcp_router_core"
     export *
 }

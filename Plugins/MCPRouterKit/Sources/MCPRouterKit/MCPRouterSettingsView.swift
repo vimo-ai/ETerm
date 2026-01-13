@@ -381,6 +381,25 @@ private struct BasicSettingsTab: View {
                     }
                 }
 
+                Divider()
+
+                // Full Mode 开关
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(isOn: Binding(
+                        get: { viewModel.fullMode },
+                        set: { viewModel.setExposeManagementTools($0) }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Full Mode")
+                                .font(.subheadline)
+                            Text("允许 AI 通过 MCP 管理服务器（添加/删除/更新）")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
+
                 Spacer()
 
                 // 使用说明
@@ -1104,6 +1123,7 @@ private struct MCPWorkspaceConfigView: View {
                     WorkspaceRowView(
                         workspace: workspace,
                         isDefault: workspace.isDefault,
+                        port: viewModel.port,
                         onTap: { selectedWorkspace = workspace }
                     )
                 }
@@ -1116,10 +1136,12 @@ private struct MCPWorkspaceConfigView: View {
 private struct WorkspaceRowView: View {
     let workspace: MCPWorkspaceDTO
     let isDefault: Bool
+    let port: Int
     let onTap: () -> Void
 
     @State private var isHovered = false
     @State private var showCopiedToast = false
+    @State private var isInstalled = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1129,8 +1151,21 @@ private struct WorkspaceRowView: View {
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(workspace.name)
-                    .font(.system(size: 13, weight: .medium))
+                HStack(spacing: 6) {
+                    Text(workspace.name)
+                        .font(.system(size: 13, weight: .medium))
+
+                    // 安装状态标签
+                    if !isDefault && isInstalled {
+                        Text("已安装")
+                            .font(.caption2)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.green)
+                            .cornerRadius(3)
+                    }
+                }
 
                 if isDefault {
                     Text("默认配置")
@@ -1178,6 +1213,9 @@ private struct WorkspaceRowView: View {
         .background(isHovered ? Color.primary.opacity(0.05) : (isDefault ? Color.yellow.opacity(0.05) : Color.clear))
         .onHover { isHovered = $0 }
         .onTapGesture(perform: onTap)
+        .onAppear {
+            checkInstallStatus()
+        }
     }
 
     private func copyToken() {
@@ -1188,6 +1226,12 @@ private struct WorkspaceRowView: View {
             showCopiedToast = false
         }
     }
+
+    private func checkInstallStatus() {
+        guard !isDefault else { return }
+        let result = MCPConfigManager.hasRouterConfig(at: workspace.projectPath)
+        isInstalled = result.exists
+    }
 }
 
 private struct MCPWorkspaceDetailView: View {
@@ -1197,6 +1241,10 @@ private struct MCPWorkspaceDetailView: View {
     @ObservedObject var viewModel: MCPRouterViewState
 
     @Environment(\.dismiss) private var dismiss
+    @State private var isInstalled = false
+    @State private var installedToken: String?
+    @State private var showError = false
+    @State private var errorMessage = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1216,11 +1264,34 @@ private struct MCPWorkspaceDetailView: View {
 
             Divider()
 
-            tokenSection
-            Divider()
-            serverListSection
+            ScrollView {
+                VStack(spacing: 0) {
+                    tokenSection
+                    Divider()
+                    if !workspace.isDefault {
+                        projectConfigSection
+                        Divider()
+                    }
+                    serverListSection
+                }
+            }
         }
         .frame(minWidth: 450, minHeight: 400)
+        .onAppear {
+            checkInstallStatus()
+        }
+        .alert("错误", isPresented: $showError) {
+            Button("确定", role: .cancel) {}
+        } message: {
+            Text(errorMessage)
+        }
+    }
+
+    private func checkInstallStatus() {
+        guard !workspace.isDefault else { return }
+        let result = MCPConfigManager.hasRouterConfig(at: workspace.projectPath)
+        isInstalled = result.exists
+        installedToken = result.token
     }
 
     private var tokenSection: some View {
@@ -1265,6 +1336,110 @@ private struct MCPWorkspaceDetailView: View {
                 .foregroundColor(.secondary)
         }
         .padding(12)
+    }
+
+    private var projectConfigSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("项目配置")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+
+                        if isInstalled {
+                            Text("已安装")
+                                .font(.caption2)
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.green)
+                                .cornerRadius(4)
+                        }
+                    }
+
+                    Text(".mcp.json")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                if isInstalled {
+                    Button("卸载") {
+                        uninstallFromProject()
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.secondary.opacity(0.2))
+                    .foregroundColor(.primary)
+                    .cornerRadius(6)
+                } else {
+                    Button("安装") {
+                        installToProject()
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor)
+                    .foregroundColor(.white)
+                    .cornerRadius(6)
+                }
+            }
+
+            // Token 匹配检查
+            if isInstalled, let installedToken = installedToken, installedToken != workspace.token {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.caption)
+                    Text("已安装的 Token 与当前不匹配，建议重新安装")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            // 配置预览
+            VStack(alignment: .leading, spacing: 4) {
+                Text("配置预览")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Text(MCPConfigManager.generateConfigPreview(token: workspace.token, port: viewModel.port))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.03))
+                    .cornerRadius(6)
+            }
+        }
+        .padding(12)
+    }
+
+    private func installToProject() {
+        do {
+            try MCPConfigManager.installToProject(
+                at: workspace.projectPath,
+                token: workspace.token,
+                port: viewModel.port
+            )
+            checkInstallStatus()
+        } catch {
+            errorMessage = "安装失败: \(error.localizedDescription)"
+            showError = true
+        }
+    }
+
+    private func uninstallFromProject() {
+        do {
+            try MCPConfigManager.uninstallFromProject(at: workspace.projectPath)
+            checkInstallStatus()
+        } catch {
+            errorMessage = "卸载失败: \(error.localizedDescription)"
+            showError = true
+        }
     }
 
     private var serverListSection: some View {

@@ -32,6 +32,12 @@ let package = Package(
             swiftSettings: [
                 .swiftLanguageMode(.v5)
             ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "Lib/libmcp_router_core.dylib",
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Lib"
+                ])
+            ],
             plugins: [
                 .plugin(name: "ValidateManifest", package: "ETermKit")
             ]

@@ -13,8 +13,8 @@ OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
 PLUGIN_DIR="${OUTPUT_DIR}/${BUNDLE_ID}"
 BUNDLE_PATH="${PLUGIN_DIR}/${BUNDLE_NAME}"
 
-# MCP Router Core library (no extension, like memex)
-CORE_LIB="${SCRIPT_DIR}/Lib/mcp_router_core"
+# MCP Router Core library
+CORE_LIB="${SCRIPT_DIR}/Lib/libmcp_router_core.dylib"
 
 # Colors
 GREEN='\033[0;32m'
@@ -37,8 +37,8 @@ fi
 log_info "Building Swift package..."
 cd "$SCRIPT_DIR"
 
-# Link directly to the core library (no extension, like memex)
-swift build -Xlinker "${CORE_LIB}"
+# Build using Package.swift linkerSettings
+swift build
 
 # Create Bundle structure
 log_info "Creating bundle..."
@@ -50,8 +50,8 @@ mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"
 # Copy plugin dylib
 cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 
-# Copy MCP Router Core library to Frameworks (no extension, like memex)
-cp "$CORE_LIB" "${BUNDLE_PATH}/Contents/Frameworks/mcp_router_core"
+# Copy MCP Router Core library to Frameworks
+cp "$CORE_LIB" "${BUNDLE_PATH}/Contents/Frameworks/"
 
 # Fix ETermKit link path: SPM dylib -> Xcode framework
 log_info "Fixing link paths..."
@@ -60,16 +60,16 @@ install_name_tool -change \
     "@executable_path/../Frameworks/ETermKit.framework/ETermKit" \
     "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
-# Fix MCP Router Core link path (no extension)
+# Fix MCP Router Core link path
 install_name_tool -change \
-    "mcp_router_core" \
-    "@loader_path/../Frameworks/mcp_router_core" \
+    "Lib/libmcp_router_core.dylib" \
+    "@loader_path/../Frameworks/libmcp_router_core.dylib" \
     "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
 # Re-sign after modification
 log_info "Re-signing..."
 codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
-codesign -f -s - "${BUNDLE_PATH}/Contents/Frameworks/mcp_router_core"
+codesign -f -s - "${BUNDLE_PATH}/Contents/Frameworks/libmcp_router_core.dylib"
 
 # Copy manifest.json
 cp "Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"

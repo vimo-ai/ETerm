@@ -1,5 +1,0 @@
-module SessionReaderFFI {
-    header "session_reader_ffi.h"
-    link "session_reader_ffi"
-    export *
-}
