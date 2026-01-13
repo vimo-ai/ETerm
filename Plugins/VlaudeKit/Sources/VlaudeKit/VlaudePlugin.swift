@@ -24,14 +24,8 @@ public final class VlaudePlugin: NSObject, Plugin {
     private weak var host: HostBridge?
     private var client: VlaudeClient?
 
-    /// Session 映射：terminalId -> sessionId
-    /// 从 claude.responseComplete 事件中收集
-    private var sessionMap: [Int: String] = [:]
-
-    /// 反向映射：sessionId -> terminalId
-    private var reverseSessionMap: [String: Int] = [:]
-
     /// Session 文件路径映射：sessionId -> transcriptPath
+    /// 注意：session ↔ terminal 映射由 ClaudeKit 的 ClaudeSessionMapper 维护
     private var sessionPaths: [String: String] = [:]
 
     /// 待上报的创建请求：terminalId -> (requestId, projectPath)
@@ -117,9 +111,8 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 更新状态
         VlaudeConfigManager.shared.updateConnectionStatus(.disconnected)
 
-        sessionMap.removeAll()
-        reverseSessionMap.removeAll()
-        sessionPaths.removeAll()
+        // 映射由 ClaudeKit 维护，这里只清理 VlaudeKit 本地状态
+        // sessionPaths 保留，重连后还能用
         pendingRequests.removeAll()
         mobileViewingTerminals.removeAll()
         loadingSessions.removeAll()
@@ -186,29 +179,15 @@ public final class VlaudePlugin: NSObject, Plugin {
               let sessionId = payload["sessionId"] as? String,
               let transcriptPath = payload["transcriptPath"] as? String else { return }
 
-        // 提前建立映射（不等 responseComplete）
-        sessionMap[terminalId] = sessionId
-        reverseSessionMap[sessionId] = terminalId
+        // 映射由 ClaudeKit 的 ClaudeSessionMapper 维护，这里只保存 transcriptPath
         sessionPaths[sessionId] = transcriptPath
 
-        // 上报 session 可用
+        // 发送 daemon:sessionStart 事件（更新 StatusManager，iOS 显示在线状态）
         let projectPath = payload["cwd"] as? String ?? ""
-        client?.reportSessionAvailable(
-            sessionId: sessionId,
-            terminalId: terminalId,
-            projectPath: projectPath.isEmpty ? nil : projectPath
-        )
-
-        // Redis 模式：添加活跃 Session
-        client?.addActiveSession(sessionId: sessionId, projectPath: projectPath)
+        client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
 
         // 开始监听文件变化
         sessionWatcher?.startWatching(sessionId: sessionId, transcriptPath: transcriptPath)
-
-        // 发送 projectUpdate 事件
-        if !projectPath.isEmpty {
-            client?.reportProjectUpdate(projectPath: projectPath)
-        }
     }
 
     private func handleClaudePromptSubmit(_ payload: [String: Any]) {
@@ -224,40 +203,28 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 清除 loading 状态
         loadingSessions.remove(sessionId)
 
-        // 检查是否已经在 sessionStart 中处理过
-        let oldSessionId = sessionMap[terminalId]
-        let isNewSession = oldSessionId == nil
-        let isSessionChanged = oldSessionId != nil && oldSessionId != sessionId
-
-        // 如果该终端之前有不同的 sessionId，先清理旧的映射并上报不可用
-        if isSessionChanged, let oldId = oldSessionId {
-            reverseSessionMap.removeValue(forKey: oldId)
-            sessionPaths.removeValue(forKey: oldId)
-            sessionWatcher?.stopWatching(sessionId: oldId)
-            client?.reportSessionUnavailable(sessionId: oldId)
+        // 检查是否有旧的 sessionPaths 需要清理（session 改变的情况）
+        // 先收集要清理的 sessionId，避免迭代时修改字典
+        let sessionsToClean = sessionPaths.keys.filter { oldSessionId in
+            oldSessionId != sessionId &&
+            getTerminalId(for: oldSessionId) == terminalId
         }
-
-        // 更新映射（如果 sessionStart 没有处理过）
-        if isNewSession || isSessionChanged {
-            sessionMap[terminalId] = sessionId
-            reverseSessionMap[sessionId] = terminalId
-
-            let projectPath = payload["cwd"] as? String
-            client?.reportSessionAvailable(
-                sessionId: sessionId,
-                terminalId: terminalId,
-                projectPath: projectPath
-            )
-
-            // 发送 projectUpdate 事件
-            if let projectPath = projectPath {
-                client?.reportProjectUpdate(projectPath: projectPath)
-            }
+        for oldSessionId in sessionsToClean {
+            sessionPaths.removeValue(forKey: oldSessionId)
+            sessionWatcher?.stopWatching(sessionId: oldSessionId)
+            client?.emitSessionEnd(sessionId: oldSessionId)
         }
 
         // 更新 transcriptPath 并确保文件监听已启动
         if let transcriptPath = payload["transcriptPath"] as? String {
+            let isNewSession = sessionPaths[sessionId] == nil
             sessionPaths[sessionId] = transcriptPath
+
+            // 如果是新 session，发送 daemon:sessionStart 事件
+            if isNewSession {
+                let projectPath = payload["cwd"] as? String ?? ""
+                client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
+            }
 
             // 如果还没有在监听，启动监听
             let alreadyWatching = sessionWatcher?.isWatching(sessionId: sessionId) ?? false
@@ -266,7 +233,7 @@ public final class VlaudePlugin: NSObject, Plugin {
             }
         }
 
-        // 检查是否有待上报的 requestId（新方式）
+        // 检查是否有待上报的 requestId
         if let pending = pendingRequests.removeValue(forKey: terminalId) {
             let encodedDirName = payload["encodedDirName"] as? String
             let transcriptPath = payload["transcriptPath"] as? String
@@ -290,23 +257,18 @@ public final class VlaudePlugin: NSObject, Plugin {
         guard let terminalId = payload["terminalId"] as? Int,
               let sessionId = payload["sessionId"] as? String else { return }
 
-        // 防御：检查当前映射是否匹配，避免乱序事件清错映射
-        guard sessionMap[terminalId] == sessionId else { return }
+        // 注意：ClaudeKit 先清理映射再 emit 事件，所以这里不能依赖 getSessionId()
+        // 直接使用 payload 中的 sessionId 进行清理
 
         // 停止文件监听
         sessionWatcher?.stopWatching(sessionId: sessionId)
 
-        // 清理映射
-        sessionMap.removeValue(forKey: terminalId)
-        reverseSessionMap.removeValue(forKey: sessionId)
+        // 清理本地数据（映射由 ClaudeKit 维护）
         sessionPaths.removeValue(forKey: sessionId)
         pendingRequests.removeValue(forKey: terminalId)
 
-        // 上报 session 不可用
-        client?.reportSessionUnavailable(sessionId: sessionId)
-
-        // Redis 模式：移除活跃 Session
-        client?.removeActiveSession(sessionId: sessionId)
+        // 发送 daemon:sessionEnd 事件（通知 StatusManager session 结束）
+        client?.emitSessionEnd(sessionId: sessionId)
     }
 
     private func handleTerminalClosed(_ payload: [String: Any]) {
@@ -318,22 +280,26 @@ public final class VlaudePlugin: NSObject, Plugin {
         pendingRequests.removeValue(forKey: terminalId)
         mobileViewingTerminals.remove(terminalId)
 
-        // 获取 sessionId 并清理映射
-        guard let sessionId = sessionMap.removeValue(forKey: terminalId) else {
-            return
+        // 注意：ClaudeKit 可能已经清理了映射，所以不能依赖 getSessionId()
+        // 从本地 sessionPaths 中查找属于这个 terminal 的 session
+        // 需要遍历 sessionPaths，通过 getTerminalId 找到匹配的 session
+        // 但 getTerminalId 也依赖 ClaudeKit 映射，所以这里需要用 payload 中的 sessionId（如果有）
+        // 或者从 sessionPaths 中根据已知信息清理
+
+        // 尝试从 payload 获取 sessionId
+        if let sessionId = payload["sessionId"] as? String {
+            sessionWatcher?.stopWatching(sessionId: sessionId)
+            sessionPaths.removeValue(forKey: sessionId)
+            client?.emitSessionEnd(sessionId: sessionId)
+        } else {
+            // payload 中没有 sessionId，尝试从 sessionPaths 中查找
+            // 这种情况下映射可能还存在
+            if let sessionId = getSessionId(for: terminalId) {
+                sessionWatcher?.stopWatching(sessionId: sessionId)
+                sessionPaths.removeValue(forKey: sessionId)
+                client?.emitSessionEnd(sessionId: sessionId)
+            }
         }
-
-        // 停止文件监听
-        sessionWatcher?.stopWatching(sessionId: sessionId)
-
-        reverseSessionMap.removeValue(forKey: sessionId)
-        sessionPaths.removeValue(forKey: sessionId)
-
-        // 上报 session 不可用
-        client?.reportSessionUnavailable(sessionId: sessionId)
-
-        // Redis 模式：移除活跃 Session
-        client?.removeActiveSession(sessionId: sessionId)
     }
 
     private func handleClaudePermissionPrompt(_ payload: [String: Any]) {
@@ -367,6 +333,30 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     public func handleCommand(_ commandId: String) {
         // 暂无命令
+    }
+
+    // MARK: - ClaudeKit 服务调用
+
+    /// 通过 ClaudeKit 服务查询 sessionId -> terminalId 映射
+    private func getTerminalId(for sessionId: String) -> Int? {
+        guard let host = host else { return nil }
+        guard let result = host.callService(
+            pluginId: "com.eterm.claude",
+            name: "getTerminalId",
+            params: ["sessionId": sessionId]
+        ) else { return nil }
+        return result["terminalId"] as? Int
+    }
+
+    /// 通过 ClaudeKit 服务查询 terminalId -> sessionId 映射
+    private func getSessionId(for terminalId: Int) -> String? {
+        guard let host = host else { return nil }
+        guard let result = host.callService(
+            pluginId: "com.eterm.claude",
+            name: "getSessionId",
+            params: ["terminalId": terminalId]
+        ) else { return nil }
+        return result["sessionId"] as? String
     }
 
     // MARK: - View Providers
@@ -425,16 +415,16 @@ extension VlaudePlugin: VlaudeClientDelegate {
         // 更新连接状态
         VlaudeConfigManager.shared.updateConnectionStatus(.connected)
 
-        // 连接成功后，上报所有已存在的 session
-        for (terminalId, sessionId) in sessionMap {
-            // 获取项目路径
-            let projectPath = host?.getTerminalInfo(terminalId: terminalId)?.cwd
-            client.reportSessionAvailable(
-                sessionId: sessionId,
-                terminalId: terminalId,
-                projectPath: projectPath
-            )
+        // 连接成功后，上报所有已存在的 session（StatusManager 架构）
+        // 遍历 sessionPaths，通过 ClaudeKit 服务查询 terminalId
+        var reportedCount = 0
+        for sessionId in sessionPaths.keys {
+            guard let terminalId = getTerminalId(for: sessionId) else { continue }
+            let projectPath = host?.getTerminalInfo(terminalId: terminalId)?.cwd ?? ""
+            client.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
+            reportedCount += 1
         }
+
     }
 
     func vlaudeClientDidDisconnect(_ client: VlaudeClient) {
@@ -446,20 +436,13 @@ extension VlaudePlugin: VlaudeClientDelegate {
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String, clientMessageId: String?) {
-        print("💉 [VlaudePlugin] didReceiveInject: sessionId=\(sessionId.prefix(8))..., text='\(text)', clientMsgId=\(clientMessageId ?? "nil")")
-        print("💉 [VlaudePlugin] reverseSessionMap keys: \(reverseSessionMap.keys.map { String($0.prefix(8)) })")
-
-        guard let terminalId = reverseSessionMap[sessionId] else {
-            print("❌ [VlaudePlugin] sessionId not found in reverseSessionMap!")
+        guard let terminalId = getTerminalId(for: sessionId) else {
             return
         }
-
-        print("✅ [VlaudePlugin] Found terminalId: \(terminalId), writing to terminal...")
 
         // 存储 clientMessageId，等待 SessionWatcher 检测到 user 消息后一起推送
         if let clientMsgId = clientMessageId {
             pendingClientMessageIds[sessionId] = clientMsgId
-            print("💾 [VlaudePlugin] Stored clientMessageId: \(clientMsgId) for session: \(sessionId.prefix(8))...")
         }
 
         // 写入终端
@@ -472,7 +455,7 @@ extension VlaudePlugin: VlaudeClientDelegate {
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveMobileViewing sessionId: String, isViewing: Bool) {
-        guard let terminalId = reverseSessionMap[sessionId] else {
+        guard let terminalId = getTerminalId(for: sessionId) else {
             return
         }
 
@@ -540,7 +523,7 @@ extension VlaudePlugin: VlaudeClientDelegate {
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveSendMessage sessionId: String, text: String, projectPath: String?, clientId: String?, requestId: String) {
-        guard let terminalId = reverseSessionMap[sessionId] else {
+        guard let terminalId = getTerminalId(for: sessionId) else {
             client.emitSendMessageResult(requestId: requestId, success: false, message: "Session not in ETerm")
             return
         }
@@ -558,6 +541,29 @@ extension VlaudePlugin: VlaudeClientDelegate {
     func vlaudeClient(_ client: VlaudeClient, didReceiveCheckLoading sessionId: String, projectPath: String?, requestId: String) {
         let isLoading = loadingSessions.contains(sessionId)
         client.emitCheckLoadingResult(requestId: requestId, loading: isLoading)
+    }
+
+    func vlaudeClient(_ client: VlaudeClient, didReceivePermissionResponse sessionId: String, action: String, toolUseId: String) {
+        guard let terminalId = getTerminalId(for: sessionId) else {
+            // 即使找不到终端，也发送失败的 ack
+            if !toolUseId.isEmpty {
+                client.emitApprovalAck(toolUseId: toolUseId, sessionId: sessionId, success: false, message: "终端未找到")
+            }
+            return
+        }
+
+        // 写入终端（action 可以是 y/n/a 或 "n: 理由"）
+        host?.writeToTerminal(terminalId: terminalId, data: action)
+
+        // 延迟发送回车，然后发送 ack
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.host?.writeToTerminal(terminalId: terminalId, data: "\r")
+
+            // 发送 approval-ack 通知 iOS
+            if !toolUseId.isEmpty {
+                client.emitApprovalAck(toolUseId: toolUseId, sessionId: sessionId, success: true)
+            }
+        }
     }
 }
 
@@ -579,9 +585,6 @@ extension VlaudePlugin: SessionWatcherDelegate {
             if message.type == "user" {
                 // 取出并消费 clientMessageId（一次性使用）
                 clientMsgId = pendingClientMessageIds.removeValue(forKey: sessionId)
-                if let id = clientMsgId {
-                    print("📤 [VlaudePlugin] Pushing user message with clientMessageId: \(id)")
-                }
             }
 
             client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks, clientMessageId: clientMsgId)

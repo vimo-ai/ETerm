@@ -52,25 +52,6 @@ enum SocketClientError: Error, LocalizedError {
     }
 }
 
-// MARK: - Event Types
-
-/// 服务器下行事件
-enum ServerEvent: String {
-    // 数据请求
-    case requestProjectData = "server:requestProjectData"
-    case requestSessionMetadata = "server:requestSessionMetadata"
-    case requestSessionMessages = "server:requestSessionMessages"
-    case requestSearch = "server:requestSearch"
-
-    // ETerm 控制（需要在 VlaudeClient 层处理）
-    case createSession = "server:createSession"
-    case createSessionInEterm = "server:createSessionInEterm"
-    case sendMessage = "server:sendMessage"
-    case checkLoading = "server:checkLoading"
-    case injectToEterm = "server:injectToEterm"
-    case mobileViewing = "server:mobileViewing"
-}
-
 // MARK: - Event Callback Protocol
 
 protocol SocketClientBridgeDelegate: AnyObject {

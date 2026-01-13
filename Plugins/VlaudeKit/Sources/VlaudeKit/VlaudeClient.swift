@@ -46,6 +46,16 @@ protocol VlaudeClientDelegate: AnyObject {
 
     /// 收到检查 loading 状态请求
     func vlaudeClient(_ client: VlaudeClient, didReceiveCheckLoading sessionId: String, projectPath: String?, requestId: String)
+
+    // MARK: - 权限响应
+
+    /// 收到权限响应（iOS 审批结果）
+    /// - Parameters:
+    ///   - client: VlaudeClient 实例
+    ///   - sessionId: 会话 ID
+    ///   - action: 响应动作 (y/n/a 或自定义输入如 "n: 理由")
+    ///   - toolUseId: 工具调用 ID（用于返回 ack）
+    func vlaudeClient(_ client: VlaudeClient, didReceivePermissionResponse sessionId: String, action: String, toolUseId: String)
 }
 
 // MARK: - VlaudeClient
@@ -66,8 +76,13 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     /// 共享数据库桥接（可选，用于缓存查询和搜索）
     private var sharedDb: SharedDbBridge?
 
-    /// 当前活跃的 Session 列表（用于 Redis 更新）
-    private var activeSessions: [String: String] = [:]  // sessionId -> projectPath
+    /// 当前打开的 Session 列表（用于重连时重新上报）
+    /// 注意：状态由 Server 的 StatusManager 统一管理，此处仅用于重连上报
+    private var openSessions: [String: (projectPath: String, terminalId: Int)] = [:]
+
+    /// 心跳定时器（每 30 秒发送一次，保持 Redis TTL 不过期）
+    private var heartbeatTimer: Timer?
+    private let heartbeatInterval: TimeInterval = 30.0
 
     // MARK: - Init
 
@@ -135,16 +150,19 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     /// 断开连接
     func disconnect() {
+        // Bug #1 修复：停止心跳定时器
+        stopHeartbeatTimer()
+
         if isConnected {
-            // 发送离线通知
-            try? socketBridge?.reportOffline()
+            // 发送离线通知（新架构：daemon:offline 事件）
+            emitDaemonOffline()
         }
 
         socketBridge?.disconnect()
         socketBridge = nil
         isConnected = false
         serverURL = nil
-        activeSessions.removeAll()
+        openSessions.removeAll()
 
         // 释放 SharedDbBridge Writer（确保 daemon 能接管）
         releaseSharedDb()
@@ -154,69 +172,142 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     func reconnect() {
         let config = VlaudeConfigManager.shared.config
         guard config.isValid else { return }
+
+        // 保留 openSessions，重连后需要重新上报
+        let savedSessions = openSessions
         connect(config: config)
+        openSessions = savedSessions
     }
 
-    // MARK: - Redis Session Tracking
+    // MARK: - Status Events (新架构：ETerm 只发事件，Server 管理状态)
 
-    /// 添加活跃 Session（用于 Redis 模式）
-    func addActiveSession(sessionId: String, projectPath: String) {
-        activeSessions[sessionId] = projectPath
-        syncSessionsToRedis()
+    /// 发送 daemon:online 事件
+    private func emitDaemonOnline() {
+        guard isConnected else { return }
 
-        // 立即创建 Session 记录到 SQLite（确保 iOS 刷新时能看到）
-        createSessionRecord(sessionId: sessionId, projectPath: projectPath)
+        let config = VlaudeConfigManager.shared.config
+        let data: [String: Any] = [
+            "deviceId": config.deviceId,
+            "deviceName": config.deviceName,
+            "platform": "darwin",
+            "version": "1.0.0"
+        ]
 
-        // 通知 iOS 端刷新 session 列表
-        notifySessionListUpdate(projectPath: projectPath)
+        try? socketBridge?.emit(event: DaemonEvents.online, data: data)
     }
 
-    /// 创建 Session 记录到 SQLite（用于 sessionStart 时立即创建空记录）
-    private func createSessionRecord(sessionId: String, projectPath: String) {
-        guard let sharedDb = sharedDb, !projectPath.isEmpty else { return }
+    /// 发送 daemon:offline 事件
+    private func emitDaemonOffline() {
+        guard isConnected else { return }
 
-        let projectName = (projectPath as NSString).lastPathComponent
+        let config = VlaudeConfigManager.shared.config
+        let data: [String: Any] = [
+            "deviceId": config.deviceId
+        ]
+
+        try? socketBridge?.emit(event: DaemonEvents.offline, data: data)
+    }
+
+    /// 发送 daemon:sessionStart 事件
+    func emitSessionStart(sessionId: String, projectPath: String, terminalId: Int) {
+        // 记录到 openSessions（用于重连上报）
+        openSessions[sessionId] = (projectPath: projectPath, terminalId: terminalId)
+
+        guard isConnected else { return }
+
+        let config = VlaudeConfigManager.shared.config
+        let data: [String: Any] = [
+            "deviceId": config.deviceId,
+            "sessionId": sessionId,
+            "projectPath": projectPath,
+            "terminalId": terminalId
+        ]
+
+        try? socketBridge?.emit(event: DaemonEvents.sessionStart, data: data)
+    }
+
+    /// 发送 daemon:sessionEnd 事件
+    func emitSessionEnd(sessionId: String) {
+        // 从 openSessions 移除
+        openSessions.removeValue(forKey: sessionId)
+
+        guard isConnected else { return }
+
+        let config = VlaudeConfigManager.shared.config
+        let data: [String: Any] = [
+            "deviceId": config.deviceId,
+            "sessionId": sessionId
+        ]
+
+        try? socketBridge?.emit(event: DaemonEvents.sessionEnd, data: data)
+    }
+
+    /// 发送 daemon:heartbeat 事件
+    func emitHeartbeat() {
+        guard isConnected else {
+            reconnect()
+            return
+        }
+
+        let config = VlaudeConfigManager.shared.config
+        let data: [String: Any] = [
+            "deviceId": config.deviceId
+        ]
 
         do {
-            let projectId = try sharedDb.upsertProject(
-                path: projectPath,
-                name: projectName,
-                source: "claude"
-            )
-            try sharedDb.upsertSession(sessionId: sessionId, projectId: projectId)
+            try socketBridge?.emit(event: DaemonEvents.heartbeat, data: data)
         } catch {
-            // Silently fail
+            reconnect()
         }
     }
 
-    /// 通知会话列表更新
+    /// 启动心跳定时器
+    private func startHeartbeatTimer() {
+        stopHeartbeatTimer()
+
+        // 在主线程创建定时器
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.heartbeatTimer = Timer.scheduledTimer(withTimeInterval: self.heartbeatInterval, repeats: true) { [weak self] _ in
+                self?.emitHeartbeat()
+            }
+            // 确保定时器在 RunLoop 中运行
+            if let timer = self.heartbeatTimer {
+                RunLoop.current.add(timer, forMode: .common)
+            }
+        }
+    }
+
+    /// 停止心跳定时器
+    private func stopHeartbeatTimer() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+    }
+
+    /// 重连时重新上报所有 session（按架构文档 7.3 节）
+    private func reportAllSessionsOnReconnect() {
+        guard isConnected else { return }
+
+        // 先发送 daemon:online
+        emitDaemonOnline()
+
+        // 再上报所有当前打开的 session
+        let config = VlaudeConfigManager.shared.config
+        for (sessionId, info) in openSessions {
+            let data: [String: Any] = [
+                "deviceId": config.deviceId,
+                "sessionId": sessionId,
+                "projectPath": info.projectPath,
+                "terminalId": info.terminalId
+            ]
+            try? socketBridge?.emit(event: DaemonEvents.sessionStart, data: data)
+        }
+    }
+
+    /// 通知会话列表更新（保留：iOS 需要刷新列表）
     private func notifySessionListUpdate(projectPath: String) {
         guard isConnected, !projectPath.isEmpty else { return }
         try? socketBridge?.notifySessionListUpdate(projectPath: projectPath)
-    }
-
-    /// 移除活跃 Session（用于 Redis 模式）
-    func removeActiveSession(sessionId: String) {
-        // 先获取 projectPath 用于通知
-        let projectPath = activeSessions[sessionId]
-        activeSessions.removeValue(forKey: sessionId)
-        syncSessionsToRedis()
-
-        // 通知 iOS 端刷新 session 列表
-        if let path = projectPath {
-            notifySessionListUpdate(projectPath: path)
-        }
-    }
-
-    /// 同步 Session 列表到 Redis
-    private func syncSessionsToRedis() {
-        guard isConnected else { return }
-
-        let sessions = activeSessions.map { (sessionId, projectPath) in
-            SessionInfo(sessionId: sessionId, projectPath: projectPath)
-        }
-
-        try? socketBridge?.updateSessions(sessions)
     }
 
     /// 释放 SharedDbBridge（线程安全）
@@ -231,20 +322,22 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     func socketClientDidConnect(_ bridge: SocketClientBridge) {
         isConnected = true
 
-        // 发送注册和上线通知
-        do {
-            try socketBridge?.register(hostname: deviceName, platform: "darwin", version: "1.0.0")
-            try socketBridge?.reportOnline()
-        } catch {
-            // Registration failed silently
-        }
+        // 发送注册
+        try? socketBridge?.register(hostname: deviceName, platform: "darwin", version: "1.0.0")
 
-        pushInitialData()
+        // 新架构：发送 daemon:online 事件（替代 reportOnline）
+        reportAllSessionsOnReconnect()
+
+        // Bug #1 修复：启动心跳定时器
+        startHeartbeatTimer()
+
         delegate?.vlaudeClientDidConnect(self)
     }
 
     func socketClientDidDisconnect(_ bridge: SocketClientBridge) {
         isConnected = false
+        // Bug #1 修复：停止心跳定时器
+        stopHeartbeatTimer()
         delegate?.vlaudeClientDidDisconnect(self)
     }
 
@@ -253,30 +346,30 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         case "server-shutdown":
             isConnected = false
 
-        case ServerEvent.injectToEterm.rawValue:
+        case ServerEvents.injectToEterm:
             guard let sessionId = data["sessionId"] as? String,
                   let text = data["text"] as? String else { return }
             let clientMessageId = data["clientMessageId"] as? String
             delegate?.vlaudeClient(self, didReceiveInject: sessionId, text: text, clientMessageId: clientMessageId)
 
-        case ServerEvent.mobileViewing.rawValue:
+        case ServerEvents.mobileViewing:
             guard let sessionId = data["sessionId"] as? String,
                   let isViewing = data["isViewing"] as? Bool else { return }
             delegate?.vlaudeClient(self, didReceiveMobileViewing: sessionId, isViewing: isViewing)
 
-        case ServerEvent.createSessionInEterm.rawValue:
+        case ServerEvents.createSessionInEterm:
             guard let projectPath = data["projectPath"] as? String else { return }
             let prompt = data["prompt"] as? String
             let requestId = data["requestId"] as? String
             delegate?.vlaudeClient(self, didReceiveCreateSession: projectPath, prompt: prompt, requestId: requestId)
 
-        case ServerEvent.createSession.rawValue:
+        case ServerEvents.createSession:
             guard let projectPath = data["projectPath"] as? String,
                   let requestId = data["requestId"] as? String else { return }
             let prompt = data["prompt"] as? String
             delegate?.vlaudeClient(self, didReceiveCreateSessionNew: projectPath, prompt: prompt, requestId: requestId)
 
-        case ServerEvent.sendMessage.rawValue:
+        case ServerEvents.sendMessage:
             guard let sessionId = data["sessionId"] as? String,
                   let text = data["text"] as? String,
                   let requestId = data["requestId"] as? String else { return }
@@ -284,23 +377,29 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             let clientId = data["clientId"] as? String
             delegate?.vlaudeClient(self, didReceiveSendMessage: sessionId, text: text, projectPath: projectPath, clientId: clientId, requestId: requestId)
 
-        case ServerEvent.checkLoading.rawValue:
+        case ServerEvents.checkLoading:
             guard let sessionId = data["sessionId"] as? String,
                   let requestId = data["requestId"] as? String else { return }
             let projectPath = data["projectPath"] as? String
             delegate?.vlaudeClient(self, didReceiveCheckLoading: sessionId, projectPath: projectPath, requestId: requestId)
 
-        case ServerEvent.requestProjectData.rawValue:
+        case ServerEvents.requestProjectData:
             handleRequestProjectData(data)
 
-        case ServerEvent.requestSessionMetadata.rawValue:
+        case ServerEvents.requestSessionMetadata:
             handleRequestSessionMetadata(data)
 
-        case ServerEvent.requestSessionMessages.rawValue:
+        case ServerEvents.requestSessionMessages:
             handleRequestSessionMessages(data)
 
-        case ServerEvent.requestSearch.rawValue:
+        case ServerEvents.requestSearch:
             handleRequestSearch(data)
+
+        case ServerEvents.permissionResponse:
+            guard let sessionId = (data["sessionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let action = data["action"] as? String else { return }
+            let toolUseId = data["toolUseId"] as? String ?? ""
+            delegate?.vlaudeClient(self, didReceivePermissionResponse: sessionId, action: action, toolUseId: toolUseId)
 
         default:
             break
@@ -310,67 +409,20 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     func socketClientDidReconnect(_ bridge: SocketClientBridge) {
         isConnected = true
 
-        do {
-            try socketBridge?.register(hostname: deviceName, platform: "darwin", version: "1.0.0")
-            try socketBridge?.reportOnline()
-        } catch {
-            // Reconnection registration failed silently
-        }
+        // 发送注册
+        try? socketBridge?.register(hostname: deviceName, platform: "darwin", version: "1.0.0")
 
-        pushInitialData()
+        // 新架构：重连时重新上报所有状态（按架构文档 7.3 节）
+        reportAllSessionsOnReconnect()
+
+        // Bug #1 修复：启动心跳定时器
+        startHeartbeatTimer()
+
         delegate?.vlaudeClientDidConnect(self)
     }
 
     func socketClient(_ bridge: SocketClientBridge, reconnectFailed error: String) {
         // Keep isConnected = false, wait for next server online event
-    }
-
-    // MARK: - Uplink Events (VlaudeKit → Server)
-
-    /// 上报 session 可用
-    func reportSessionAvailable(sessionId: String, terminalId: Int, projectPath: String? = nil) {
-        guard isConnected else { return }
-
-        var data: [String: Any] = [
-            "sessionId": sessionId,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
-        ]
-
-        if let path = projectPath {
-            data["projectPath"] = path
-        }
-
-        try? socketBridge?.emit(event: "daemon:etermSessionAvailable", data: data)
-    }
-
-    /// 上报 session 不可用
-    func reportSessionUnavailable(sessionId: String, projectPath: String? = nil) {
-        guard isConnected else { return }
-
-        var data: [String: Any] = [
-            "sessionId": sessionId,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
-        ]
-
-        if let path = projectPath {
-            data["projectPath"] = path
-        }
-
-        try? socketBridge?.emit(event: "daemon:etermSessionUnavailable", data: data)
-    }
-
-    /// 上报 session 创建完成（旧方式）
-    func reportSessionCreated(requestId: String, sessionId: String, projectPath: String) {
-        guard isConnected else { return }
-
-        let data: [String: Any] = [
-            "requestId": requestId,
-            "sessionId": sessionId,
-            "projectPath": projectPath,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
-        ]
-
-        try? socketBridge?.emit(event: "daemon:etermSessionCreated", data: data)
     }
 
     // MARK: - V3 Write Operation Results
@@ -417,7 +469,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     /// - Parameters:
     ///   - sessionId: 会话 ID
     ///   - terminalId: 终端 ID
-    ///   - message: 权限请求消息（可选，PermissionRequest hook 没有）
+    ///   - message: 权限请求消息（可选）
     ///   - toolUse: 工具详情（包含 name, input, id）
     func emitPermissionRequest(
         sessionId: String,
@@ -427,23 +479,59 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     ) {
         guard isConnected else { return }
 
-        var data: [String: Any] = [
+        // 生成唯一请求 ID
+        let requestId = UUID().uuidString
+
+        // 从 toolUse 中提取字段（匹配 Server/iOS 期望的格式）
+        let toolName = toolUse?["name"] as? String ?? "Unknown"
+        let toolInput = toolUse?["input"] as? [String: Any] ?? [:]
+        let toolUseId = toolUse?["id"] as? String ?? ""
+
+        // 构建 description（显示在 iOS 上的内容）
+        var description = toolName
+        if let command = toolInput["command"] as? String {
+            // Bash 工具：显示命令
+            description = "\(toolName): \(command)"
+        } else if let filePath = toolInput["file_path"] as? String {
+            // 文件操作工具：显示路径
+            description = "\(toolName): \(filePath)"
+        } else if let pattern = toolInput["pattern"] as? String {
+            // 搜索工具：显示模式
+            description = "\(toolName): \(pattern)"
+        }
+
+        let data: [String: Any] = [
+            "requestId": requestId,
             "sessionId": sessionId,
             "terminalId": terminalId,
+            "toolName": toolName,
+            "input": toolInput,
+            "toolUseID": toolUseId,
+            "description": description,
             "timestamp": ISO8601DateFormatter().string(from: Date())
         ]
 
-        // message 可选（PermissionRequest hook 没有 message 字段）
-        if let message = message {
-            data["message"] = message
-        }
+        try? socketBridge?.emit(event: DaemonEvents.permissionRequest, data: data)
+    }
 
-        // toolUse 包含完整工具信息（来自 PermissionRequest hook）
-        if let toolUse = toolUse {
-            data["toolUse"] = toolUse
-        }
+    /// 发送审批确认到 Server（转发给 iOS）
+    /// - Parameters:
+    ///   - toolUseId: 工具调用 ID
+    ///   - sessionId: 会话 ID
+    ///   - success: 是否成功写入终端
+    ///   - message: 可选的消息
+    func emitApprovalAck(toolUseId: String, sessionId: String, success: Bool, message: String? = nil) {
+        guard isConnected else { return }
 
-        try? socketBridge?.emit(event: "daemon:permissionRequest", data: data)
+        let data: [String: Any] = [
+            "toolUseId": toolUseId,
+            "sessionId": sessionId,
+            "success": success,
+            "message": message ?? (success ? "已写入终端" : "写入失败"),
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+
+        try? socketBridge?.emit(event: DaemonEvents.approvalAck, data: data)
     }
 
     // MARK: - Connection Test
@@ -564,8 +652,22 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         let orderStr = (data["order"] as? String) ?? "asc"
         let requestId = data["requestId"] as? String
 
-        // 获取会话文件路径
-        guard let sessionPath = sessionReader.getSessionPath(sessionId: sessionId) else { return }
+        // 通过 listSessions 查找会话路径（更可靠）
+        guard let sessions = sessionReader.listSessions(projectPath: projectPath),
+              let session = sessions.first(where: { $0.id == sessionId }),
+              let sessionPath = session.sessionPath else {
+            // 发送空响应避免超时
+            reportSessionMessages(
+                sessionId: sessionId,
+                projectPath: projectPath,
+                messages: [],
+                total: 0,
+                hasMore: false,
+                requestId: requestId,
+                transcriptPath: nil
+            )
+            return
+        }
 
         guard let result = sessionReader.readMessages(
             sessionPath: sessionPath,
@@ -573,6 +675,16 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             offset: UInt32(offset),
             orderAsc: orderStr == "asc"
         ) else {
+            // 发送空响应避免超时
+            reportSessionMessages(
+                sessionId: sessionId,
+                projectPath: projectPath,
+                messages: [],
+                total: 0,
+                hasMore: false,
+                requestId: requestId,
+                transcriptPath: sessionPath
+            )
             return
         }
 
@@ -649,6 +761,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             if let name = session.projectName { dict["projectName"] = name }
             if let encoded = session.encodedDirName { dict["encodedDirName"] = encoded }
             if let modified = session.lastModified { dict["lastModified"] = modified }
+            if let count = session.messageCount { dict["messageCount"] = count }
             return dict
         }
 
@@ -761,16 +874,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             data["error"] = error
         }
 
-        try? socketBridge?.emit(event: "daemon:searchResults", data: data)
-    }
-
-    // MARK: - Project Update
-
-    /// 上报项目更新（当有新活动时通知服务器）
-    /// - Parameter projectPath: 项目路径
-    func reportProjectUpdate(projectPath: String) {
-        guard isConnected else { return }
-        try? socketBridge?.notifyProjectUpdate(projectPath: projectPath, metadata: nil)
+        try? socketBridge?.emit(event: DaemonEvents.searchResults, data: data)
     }
 
     // MARK: - Real-time Message Push
@@ -872,10 +976,11 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     }
 
     /// 推送初始数据（连接成功后调用）
-    /// 注意：VlaudeKit 只负责报告 ETerm 中当前打开的会话，不推送历史数据
-    /// 历史数据由 Rust daemon 负责推送
+    /// 注意：新架构下，状态上报由 reportAllSessionsOnReconnect() 处理
+    /// 此方法保留为空，兼容旧代码
     func pushInitialData() {
-        syncSessionsToRedis()
+        // 新架构：状态上报已移至 reportAllSessionsOnReconnect()
+        // 历史数据由 Rust daemon 负责推送
     }
 
     // MARK: - SharedDb Write Operations
