@@ -96,9 +96,11 @@ case "$hook_event_name" in
         ;;
     "PermissionRequest")
         # 权限请求事件（主要入口）- 直接提供 tool_name + tool_input
+        echo "🔐 [PermissionRequest] raw input: $input" >> "$LOG_FILE"
         tool_name=$(echo "$input" | jq -r '.tool_name // ""')
         tool_input=$(echo "$input" | jq -c '.tool_input // {}')
         tool_use_id=$(echo "$input" | jq -r '.tool_use_id // ""')
+        echo "🔐 [PermissionRequest] extracted tool_use_id: '$tool_use_id'" >> "$LOG_FILE"
 
         # JSON 转义所有字符串字段（防止路径中含引号/反斜杠导致 JSON 无效）
         escaped_session_id=$(echo "$session_id" | jq -Rs '.')

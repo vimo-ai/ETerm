@@ -196,6 +196,8 @@ class ClaudeSocketServer {
         do {
             let event = try JSONDecoder().decode(ClaudeResponseCompleteEvent.self, from: allData)
 
+            print("📥 [ClaudeSocketServer] 收到事件: \(event.event_type ?? "unknown"), session: \(event.session_id)")
+
             // 在主线程处理事件
             DispatchQueue.main.async { [weak self] in
                 self?.handleResponseComplete(event: event)
@@ -203,11 +205,10 @@ class ClaudeSocketServer {
 
         } catch {
             // 记录解码错误（便于调试）
-            #if DEBUG
             if let json = String(data: allData.prefix(500), encoding: .utf8) {
-                print("⚠️ [ClaudeSocketServer] JSON decode failed, preview: \(json.prefix(200))...")
+                print("⚠️ [ClaudeSocketServer] JSON decode failed: \(error)")
+                print("⚠️ [ClaudeSocketServer] JSON preview: \(json.prefix(300))...")
             }
-            #endif
         }
     }
 
@@ -257,6 +258,7 @@ class ClaudeSocketServer {
 
         case "permission_request":
             // 权限请求事件（来自 PermissionRequest hook，包含完整工具信息）
+            print("🔐 [ClaudeSocketServer] 处理权限请求: tool=\(event.tool_name ?? "unknown")")
             ClaudeSessionMapper.shared.map(terminalId: event.terminal_id, sessionId: event.session_id)
 
             // 转换 tool_input 为 [String: Any]
@@ -264,6 +266,7 @@ class ClaudeSocketServer {
             if let toolInput = event.tool_input {
                 toolInputDict = toolInput.mapValues { $0.value }
             }
+            print("🔐 [ClaudeSocketServer] toolInput: \(toolInputDict)")
 
             // 发射权限请求事件（包含工具详情）
             EventBus.shared.emit(ClaudeEvents.PermissionPrompt(
