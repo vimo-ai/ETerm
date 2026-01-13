@@ -30,7 +30,6 @@ echo "📦 复制到 ETerm/ETerm/Libs/Sugarloaf/..."
 # dev-fast profile 的产物在 target/dev-fast/ 目录
 mkdir -p "$ETERM_DIR/ETerm/Libs/Sugarloaf"
 cp "$RIO_DIR/target/dev-fast/libsugarloaf_ffi.a" "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.a"
-cp "$RIO_DIR/target/dev-fast/libsugarloaf_ffi.dylib" "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.dylib" 2>/dev/null || true
 
 echo "✅ 库文件已更新到 ETerm/ETerm/Libs/Sugarloaf/"
 ls -lh "$ETERM_DIR/ETerm/Libs/Sugarloaf/libsugarloaf_ffi.a"
