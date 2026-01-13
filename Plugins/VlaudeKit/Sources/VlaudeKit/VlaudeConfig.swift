@@ -7,7 +7,6 @@
 
 import Foundation
 import Combine
-import IOKit
 import ETermKit
 
 // MARK: - 配置结构
@@ -59,33 +58,12 @@ public struct VlaudeConfig: Codable, Equatable {
         return !redisHost.isEmpty
     }
 
-    /// 生成唯一设备 ID
+    /// 生成设备 ID
     private static func generateDeviceId() -> String {
-        // 优先使用硬件 UUID
-        if let uuid = getHardwareUUID() {
-            return "eterm-\(uuid.prefix(8))"
-        }
-        // 降级使用随机 UUID
-        return "eterm-\(UUID().uuidString.prefix(8))"
+        // ETerm 固定使用 "eterm" 作为 deviceId
+        return "eterm"
     }
 
-    /// 获取硬件 UUID
-    private static func getHardwareUUID() -> String? {
-        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPlatformExpertDevice"))
-        guard service != 0 else { return nil }
-        defer { IOObjectRelease(service) }
-
-        guard let uuidData = IORegistryEntryCreateCFProperty(
-            service,
-            kIOPlatformUUIDKey as CFString,
-            kCFAllocatorDefault,
-            0
-        )?.takeRetainedValue() as? String else {
-            return nil
-        }
-
-        return uuidData
-    }
 }
 
 // MARK: - 连接状态
@@ -165,7 +143,7 @@ public final class VlaudeConfigManager: ObservableObject {
             let data = try encoder.encode(config)
             try data.write(to: URL(fileURLWithPath: configFilePath))
         } catch {
-            // Save failed silently
+            // 静默处理保存失败
         }
     }
 

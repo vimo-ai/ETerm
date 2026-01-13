@@ -37,6 +37,7 @@ struct SessionMeta: Codable {
     let encodedDirName: String?
     let sessionPath: String?
     let lastModified: Int64?
+    let messageCount: Int64?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -45,6 +46,7 @@ struct SessionMeta: Codable {
         case encodedDirName = "encoded_dir_name"
         case sessionPath = "session_path"
         case lastModified = "last_modified"
+        case messageCount = "message_count"
     }
 }
 
@@ -256,7 +258,8 @@ final class SessionReader {
                     projectName: s.project_name != nil ? String(cString: s.project_name) : nil,
                     encodedDirName: s.encoded_dir_name != nil ? String(cString: s.encoded_dir_name) : nil,
                     sessionPath: s.session_path != nil ? String(cString: s.session_path) : nil,
-                    lastModified: s.file_mtime >= 0 ? s.file_mtime : nil
+                    lastModified: s.file_mtime >= 0 ? s.file_mtime : nil,
+                    messageCount: s.message_count >= 0 ? s.message_count : nil
                 ))
             }
         }
@@ -297,7 +300,8 @@ final class SessionReader {
             projectName: s.project_name != nil ? String(cString: s.project_name) : nil,
             encodedDirName: s.encoded_dir_name != nil ? String(cString: s.encoded_dir_name) : nil,
             sessionPath: s.session_path != nil ? String(cString: s.session_path) : nil,
-            lastModified: s.file_mtime >= 0 ? s.file_mtime : nil
+            lastModified: s.file_mtime >= 0 ? s.file_mtime : nil,
+            messageCount: s.message_count >= 0 ? s.message_count : nil
         )
     }
 
