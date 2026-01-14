@@ -3,6 +3,9 @@
 
 import PackageDescription
 
+// ETermKit framework 路径（由 build.sh etermkit 产出）
+let etermkitPath = "../../Build"
+
 let package = Package(
     name: "VlaudeKit",
     platforms: [
@@ -15,9 +18,6 @@ let package = Package(
             targets: ["VlaudeKit"]
         ),
     ],
-    dependencies: [
-        .package(path: "../../Packages/ETermKit"),
-    ],
     targets: [
         .systemLibrary(
             name: "SharedDbFFI",
@@ -27,26 +27,31 @@ let package = Package(
             name: "SocketClientFFI",
             path: "Libs/SocketClient"
         ),
+        .systemLibrary(
+            name: "VlaudeFFI",
+            path: "Libs/VlaudeFfi"
+        ),
         .target(
             name: "VlaudeKit",
             dependencies: [
-                "ETermKit",
                 "SharedDbFFI",
-                "SocketClientFFI"
+                "SocketClientFFI",
+                "VlaudeFFI"
             ],
             swiftSettings: [
-                .swiftLanguageMode(.v5)
+                .swiftLanguageMode(.v5),
+                .unsafeFlags(["-F", etermkitPath])
             ],
             linkerSettings: [
                 .unsafeFlags([
+                    "-F", etermkitPath, "-framework", "ETermKit",
                     "Libs/SharedDB/libclaude_session_db.dylib",
                     "Libs/SocketClient/libsocket_client_ffi.dylib",
+                    "Libs/VlaudeFfi/libvlaude_ffi.dylib",
                     "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SharedDB",
-                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SocketClient"
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/SocketClient",
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs/VlaudeFfi"
                 ])
-            ],
-            plugins: [
-                .plugin(name: "ValidateManifest", package: "ETermKit")
             ]
         ),
     ]

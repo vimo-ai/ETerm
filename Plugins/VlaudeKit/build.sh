@@ -53,14 +53,23 @@ mkdir -p "${BUNDLE_PATH}/Contents/Frameworks"
 # Copy plugin dylib
 cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 
-# Copy SharedDB (claude-session-db FFI)
+# Copy FFI dylibs
 mkdir -p "${BUNDLE_PATH}/Contents/Libs"
+
 log_info "Copying SharedDB..."
 if [ -f "Libs/SharedDB/libclaude_session_db.dylib" ]; then
     cp "Libs/SharedDB/libclaude_session_db.dylib" "${BUNDLE_PATH}/Contents/Libs/"
     log_info "Copied libclaude_session_db.dylib"
 else
     log_warn "libclaude_session_db.dylib not found - SharedDb features will be disabled"
+fi
+
+log_info "Copying VlaudeFFI..."
+if [ -f "Libs/VlaudeFfi/libvlaude_ffi.dylib" ]; then
+    cp "Libs/VlaudeFfi/libvlaude_ffi.dylib" "${BUNDLE_PATH}/Contents/Libs/"
+    log_info "Copied libvlaude_ffi.dylib"
+else
+    log_warn "libvlaude_ffi.dylib not found - VlaudeFfi features will be disabled"
 fi
 
 # Copy Socket.IO dependencies
@@ -128,6 +137,21 @@ if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
         "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" 2>/dev/null || true
 fi
 
+# Fix VlaudeFfi link path
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib" ]; then
+    OLD_PATH=$(otool -L "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" | grep vlaude_ffi | awk '{print $1}')
+    if [ -n "$OLD_PATH" ]; then
+        install_name_tool -change \
+            "$OLD_PATH" \
+            "@loader_path/../Libs/libvlaude_ffi.dylib" \
+            "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" 2>/dev/null || true
+    fi
+
+    install_name_tool -id \
+        "@loader_path/../Libs/libvlaude_ffi.dylib" \
+        "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib" 2>/dev/null || true
+fi
+
 # Re-sign after modification
 log_info "Re-signing..."
 codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
@@ -138,6 +162,9 @@ for lib in "${SOCKETIO_LIBS[@]}"; do
 done
 if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
     codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib"
+fi
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib" ]; then
+    codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib"
 fi
 
 # Copy manifest.json

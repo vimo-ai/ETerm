@@ -10,7 +10,11 @@ cd "$SCRIPT_DIR"
 BUNDLE_NAME="WritingKit"
 BUNDLE_ID="com.eterm.writing"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-BUNDLE_OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-$HOME/.vimo/eterm/plugins}"
+# 内置插件必须通过 Xcode 编译
+if [ -z "${BUNDLE_OUTPUT_DIR:-}" ]; then
+    echo "Error: BUNDLE_OUTPUT_DIR not set. Build via Xcode." >&2
+    exit 1
+fi
 
 echo "Building $BUNDLE_NAME ($CONFIGURATION)..."
 
