@@ -7,11 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4800A1582F18045800C4ECDC /* ETermKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4800A1572F18045800C4ECDC /* ETermKit.framework */; };
+		4800A1592F18045800C4ECDC /* ETermKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4800A1572F18045800C4ECDC /* ETermKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		4800A15B2F18055A00C4ECDC /* ETermKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4800A1572F18045800C4ECDC /* ETermKit.framework */; };
 		481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */ = {isa = PBXBuildFile; productRef = 481CC84B2ECD995E009F969C /* PanelLayoutKit */; };
-		4825DE232EFCF6C2003AE32C /* ETermKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE222EFCF6C2003AE32C /* ETermKit */; };
-		4825DE272EFD2E56003AE32C /* ETermKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE222EFCF6C2003AE32C /* ETermKit */; };
-		4825DE3B2EFD322E003AE32C /* ETermKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE3A2EFD322E003AE32C /* ETermKit */; };
-		4825DE3C2EFD322E003AE32C /* ETermKit in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 4825DE3A2EFD322E003AE32C /* ETermKit */; };
 		4825DE3F2EFD329A003AE32C /* ETermExtensionHost in Copy Files */ = {isa = PBXBuildFile; fileRef = 4825DE2F2EFD304B003AE32C /* ETermExtensionHost */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		482F3D712EFADA4500B33236 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 482F3D702EFADA4500B33236 /* SystemConfiguration.framework */; };
 		48979A022EE6B451006ECB59 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 48979A012EE6B451006ECB59 /* SocketIO */; };
@@ -42,13 +41,13 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		4825DE282EFD2E56003AE32C /* Embed Frameworks */ = {
+		4800A15A2F18045800C4ECDC /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				4825DE272EFD2E56003AE32C /* ETermKit in Embed Frameworks */,
+				4800A1592F18045800C4ECDC /* ETermKit.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -61,17 +60,6 @@
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 1;
-		};
-		4825DE3D2EFD322E003AE32C /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				4825DE3C2EFD322E003AE32C /* ETermKit in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		4825DE3E2EFD3284003AE32C /* Copy Files */ = {
 			isa = PBXCopyFilesBuildPhase;
@@ -87,6 +75,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4800A1572F18045800C4ECDC /* ETermKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ETermKit.framework; path = ../Build/ETermKit.framework; sourceTree = "<group>"; };
 		481CC2B92EC7B632009F969C /* ETerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ETerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		481CC2C82EC7B633009F969C /* ETermTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ETermTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		481CC2D22EC7B633009F969C /* ETermUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ETermUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -121,11 +110,6 @@
 			path = ETermTests;
 			sourceTree = "<group>";
 		};
-		481CC2D52EC7B633009F969C /* ETermUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ETermUITests;
-			sourceTree = "<group>";
-		};
 		4825DE302EFD304B003AE32C /* ETermExtensionHost */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ETermExtensionHost;
@@ -138,7 +122,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4825DE232EFCF6C2003AE32C /* ETermKit in Frameworks */,
+				4800A1582F18045800C4ECDC /* ETermKit.framework in Frameworks */,
 				482F3D712EFADA4500B33236 /* SystemConfiguration.framework in Frameworks */,
 				481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */,
 				48979A022EE6B451006ECB59 /* SocketIO in Frameworks */,
@@ -163,7 +147,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4825DE3B2EFD322E003AE32C /* ETermKit in Frameworks */,
+				4800A15B2F18055A00C4ECDC /* ETermKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -175,7 +159,6 @@
 			children = (
 				481CC2BB2EC7B632009F969C /* ETerm */,
 				481CC2CB2EC7B633009F969C /* ETermTests */,
-				481CC2D52EC7B633009F969C /* ETermUITests */,
 				4825DE302EFD304B003AE32C /* ETermExtensionHost */,
 				481CC2E62EC7B6A5009F969C /* Frameworks */,
 				481CC2BA2EC7B632009F969C /* Products */,
@@ -196,6 +179,7 @@
 		481CC2E62EC7B6A5009F969C /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				4800A1572F18045800C4ECDC /* ETermKit.framework */,
 				482F3D702EFADA4500B33236 /* SystemConfiguration.framework */,
 			);
 			name = Frameworks;
@@ -212,10 +196,10 @@
 				481CC2B52EC7B632009F969C /* Sources */,
 				481CC2B62EC7B632009F969C /* Frameworks */,
 				481CC2B72EC7B632009F969C /* Resources */,
-				4825DE282EFD2E56003AE32C /* Embed Frameworks */,
 				4825DE3E2EFD3284003AE32C /* Copy Files */,
 				4825E2762EFDBF41003AE32C /* Run Script */,
 				4825F3122EFF116D003AE32C /* Run Script */,
+				4800A15A2F18045800C4ECDC /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -229,7 +213,6 @@
 			packageProductDependencies = (
 				481CC84B2ECD995E009F969C /* PanelLayoutKit */,
 				48979A012EE6B451006ECB59 /* SocketIO */,
-				4825DE222EFCF6C2003AE32C /* ETermKit */,
 			);
 			productName = ETerm;
 			productReference = 481CC2B92EC7B632009F969C /* ETerm.app */;
@@ -271,9 +254,6 @@
 			dependencies = (
 				481CC2D42EC7B633009F969C /* PBXTargetDependency */,
 			);
-			fileSystemSynchronizedGroups = (
-				481CC2D52EC7B633009F969C /* ETermUITests */,
-			);
 			name = ETermUITests;
 			packageProductDependencies = (
 			);
@@ -288,7 +268,6 @@
 				4825DE2B2EFD304B003AE32C /* Sources */,
 				4825DE2C2EFD304B003AE32C /* Frameworks */,
 				4825DE2D2EFD304B003AE32C /* CopyFiles */,
-				4825DE3D2EFD322E003AE32C /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -299,7 +278,6 @@
 			);
 			name = ETermExtensionHost;
 			packageProductDependencies = (
-				4825DE3A2EFD322E003AE32C /* ETermKit */,
 			);
 			productName = ETermExtensionHost;
 			productReference = 4825DE2F2EFD304B003AE32C /* ETermExtensionHost */;
@@ -344,7 +322,6 @@
 			packageReferences = (
 				481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */,
 				48979A002EE6B3EC006ECB59 /* XCRemoteSwiftPackageReference "socket" */,
-				4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 481CC2BA2EC7B632009F969C /* Products */;
@@ -530,6 +507,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -595,6 +573,7 @@
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -639,6 +618,7 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ETerm/Info.plist;
 				INFOPLIST_KEY_NSBluetoothWhileInUseUsageDescription = "need Bluetooth";
@@ -673,6 +653,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_OBJC_BRIDGING_HEADER = "ETerm/ETerm-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -705,6 +686,7 @@
 				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = ETerm/Info.plist;
 				INFOPLIST_KEY_NSBluetoothWhileInUseUsageDescription = "need Bluetooth";
@@ -739,6 +721,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_OBJC_BRIDGING_HEADER = "ETerm/ETerm-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -831,8 +814,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				"LD_RUNPATH_SEARCH_PATHS[arch=*]" = "@executable_path/../Frameworks";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -845,8 +830,10 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
+				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -908,10 +895,6 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../Packages/PanelLayoutKit;
 		};
-		4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../Packages/ETermKit;
-		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -930,16 +913,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */;
 			productName = PanelLayoutKit;
-		};
-		4825DE222EFCF6C2003AE32C /* ETermKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */;
-			productName = ETermKit;
-		};
-		4825DE3A2EFD322E003AE32C /* ETermKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4825DE212EFCF6BA003AE32C /* XCLocalSwiftPackageReference "../Packages/ETermKit" */;
-			productName = ETermKit;
 		};
 		48979A012EE6B451006ECB59 /* SocketIO */ = {
 			isa = XCSwiftPackageProductDependency;
