@@ -3,6 +3,9 @@
 
 import PackageDescription
 
+// ETermKit framework 路径（由 build.sh etermkit 产出）
+let etermkitPath = "../../Build"
+
 let package = Package(
     name: "ClaudeMonitorKit",
     platforms: [
@@ -15,18 +18,15 @@ let package = Package(
             targets: ["ClaudeMonitorKit"]
         ),
     ],
-    dependencies: [
-        .package(path: "../../Packages/ETermKit"),
-    ],
     targets: [
         .target(
             name: "ClaudeMonitorKit",
-            dependencies: ["ETermKit"],
             swiftSettings: [
-                .swiftLanguageMode(.v5)
+                .swiftLanguageMode(.v5),
+                .unsafeFlags(["-F", etermkitPath])
             ],
-            plugins: [
-                .plugin(name: "ValidateManifest", package: "ETermKit")
+            linkerSettings: [
+                .unsafeFlags(["-F", etermkitPath, "-framework", "ETermKit"])
             ]
         ),
     ]

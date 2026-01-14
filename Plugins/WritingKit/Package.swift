@@ -1,6 +1,10 @@
 // swift-tools-version: 6.0
+// WritingKit - ETerm Plugin
 
 import PackageDescription
+
+// ETermKit framework 路径（由 build.sh etermkit 产出）
+let etermkitPath = "../../Build"
 
 let package = Package(
     name: "WritingKit",
@@ -14,21 +18,18 @@ let package = Package(
             targets: ["WritingKit"]
         ),
     ],
-    dependencies: [
-        .package(path: "../../Packages/ETermKit"),
-    ],
     targets: [
         .target(
             name: "WritingKit",
-            dependencies: ["ETermKit"],
             resources: [
                 .copy("../../Resources/manifest.json")
             ],
             swiftSettings: [
-                .swiftLanguageMode(.v5)
+                .swiftLanguageMode(.v5),
+                .unsafeFlags(["-F", etermkitPath])
             ],
-            plugins: [
-                .plugin(name: "ValidateManifest", package: "ETermKit")
+            linkerSettings: [
+                .unsafeFlags(["-F", etermkitPath, "-framework", "ETermKit"])
             ]
         ),
     ]

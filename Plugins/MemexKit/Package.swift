@@ -3,6 +3,9 @@
 
 import PackageDescription
 
+// ETermKit framework 路径（由 build.sh etermkit 产出）
+let etermkitPath = "../../Build"
+
 let package = Package(
     name: "MemexKit",
     platforms: [
@@ -15,9 +18,6 @@ let package = Package(
             targets: ["MemexKit"]
         ),
     ],
-    dependencies: [
-        .package(path: "../../Packages/ETermKit"),
-    ],
     targets: [
         .systemLibrary(
             name: "SharedDbFFI",
@@ -26,20 +26,18 @@ let package = Package(
         .target(
             name: "MemexKit",
             dependencies: [
-                "ETermKit",
                 "SharedDbFFI"
             ],
             swiftSettings: [
-                .swiftLanguageMode(.v5)
+                .swiftLanguageMode(.v5),
+                .unsafeFlags(["-F", etermkitPath])
             ],
             linkerSettings: [
                 .unsafeFlags([
+                    "-F", etermkitPath, "-framework", "ETermKit",
                     "Libs/SharedDB/libclaude_session_db.dylib",
                     "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs"
                 ])
-            ],
-            plugins: [
-                .plugin(name: "ValidateManifest", package: "ETermKit")
             ]
         ),
     ]

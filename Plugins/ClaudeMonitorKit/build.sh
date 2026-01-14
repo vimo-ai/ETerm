@@ -9,7 +9,12 @@ BUNDLE_ID="com.eterm.claude-monitor"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
 # Output directory: {plugins}/{id}/{name}.bundle
-OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
+# 内置插件必须通过 Xcode 编译
+if [ -z "${BUNDLE_OUTPUT_DIR:-}" ]; then
+    echo "Error: BUNDLE_OUTPUT_DIR not set. Build via Xcode." >&2
+    exit 1
+fi
+OUTPUT_DIR="${BUNDLE_OUTPUT_DIR}"
 PLUGIN_DIR="${OUTPUT_DIR}/${BUNDLE_ID}"
 BUNDLE_PATH="${PLUGIN_DIR}/${BUNDLE_NAME}"
 
