@@ -1,0 +1,5 @@
+module VlaudeFFI {
+    header "vlaude_ffi.h"
+    link "vlaude_ffi"
+    export *
+}

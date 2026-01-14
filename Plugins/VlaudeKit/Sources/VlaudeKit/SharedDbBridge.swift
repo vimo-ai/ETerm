@@ -132,6 +132,32 @@ struct SharedStats {
     let messageCount: Int64
 }
 
+// MARK: - Approval Status
+
+/// 权限审批状态
+/// 值需要与 ApprovalStatusC 枚举一致
+enum ApprovalStatus: Int32 {
+    case pending = 0
+    case approved = 1
+    case rejected = 2
+    case timeout = 3
+
+    /// 转换为 C 枚举
+    var toC: ApprovalStatusC {
+        ApprovalStatusC(rawValue: UInt32(self.rawValue))
+    }
+
+    /// 字符串表示
+    var stringValue: String {
+        switch self {
+        case .pending: return "pending"
+        case .approved: return "approved"
+        case .rejected: return "rejected"
+        case .timeout: return "timeout"
+        }
+    }
+}
+
 // MARK: - SharedDbBridge
 
 /// Swift bridge for claude-session-db
@@ -657,6 +683,41 @@ final class SharedDbBridge {
             }
 
             return Int(inserted)
+        }
+    }
+
+    // MARK: - Approval Operations
+
+    /// Update approval status by tool call ID
+    /// - Parameters:
+    ///   - toolCallId: Tool call ID
+    ///   - status: New approval status
+    ///   - resolvedAt: Timestamp when resolved (0 for pending)
+    /// - Returns: Number of rows updated
+    func updateApprovalStatusByToolCallId(
+        toolCallId: String,
+        status: ApprovalStatus,
+        resolvedAt: Int64
+    ) throws -> Int {
+        try queue.sync {
+            guard let handle = handle else { throw SharedDbError.nullPointer }
+
+            var updated: UInt = 0
+            let error = toolCallId.withCString { cstr in
+                session_db_update_approval_status_by_tool_call_id(
+                    handle,
+                    cstr,
+                    status.toC,
+                    resolvedAt,
+                    &updated
+                )
+            }
+
+            if let err = SharedDbError.from(error) {
+                throw err
+            }
+
+            return Int(updated)
         }
     }
 }

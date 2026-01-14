@@ -58,19 +58,22 @@ struct MessagesResult {
 }
 
 /// Raw message from session file
-struct RawMessage: Codable {
+struct RawMessage {
     let uuid: String
     let sessionId: String
     let messageType: Int  // 0 = User, 1 = Assistant
     let content: String
     let timestamp: String?
+    /// FFI 返回的 contentBlocks（已解析）
+    let contentBlocks: [[String: Any]]?
 
-    enum CodingKeys: String, CodingKey {
-        case uuid
-        case sessionId = "session_id"
-        case messageType = "message_type"
-        case content
-        case timestamp
+    init(uuid: String, sessionId: String, messageType: Int, content: String, timestamp: String?, contentBlocks: [[String: Any]]? = nil) {
+        self.uuid = uuid
+        self.sessionId = sessionId
+        self.messageType = messageType
+        self.content = content
+        self.timestamp = timestamp
+        self.contentBlocks = contentBlocks
     }
 
     // Computed property for compatibility
@@ -363,15 +366,23 @@ final class SessionReader {
             return nil
         }
 
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        guard let data = try? encoder.encode(result.messages) else {
-            return nil
+        // 手动转换 RawMessage 到字典
+        let messagesArray: [[String: Any]] = result.messages.map { msg in
+            var dict: [String: Any] = [
+                "uuid": msg.uuid,
+                "session_id": msg.sessionId,
+                "message_type": msg.messageType,
+                "content": msg.content
+            ]
+            if let ts = msg.timestamp {
+                dict["timestamp"] = ts
+            }
+            return dict
         }
 
         // Wrap in MessagesResult format
         let json: [String: Any] = [
-            "messages": (try? JSONSerialization.jsonObject(with: data)) ?? [],
+            "messages": messagesArray,
             "total": result.total,
             "has_more": result.hasMore
         ]
