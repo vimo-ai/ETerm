@@ -446,12 +446,10 @@ final class SDKPluginLoader {
         var paths: [String] = []
         var seenIds: Set<String> = []
 
-        // 1. 优先扫描 app 内置插件目录（BuiltinPlugins）
-        if let builtinPath = Bundle.main.resourcePath.map({ $0 + "/BuiltinPlugins" }),
-           FileManager.default.fileExists(atPath: builtinPath) {
-            let builtinBundles = scanDirectory(builtinPath)
-            for bundlePath in builtinBundles {
-                // 提取插件 ID（从 manifest 或目录名）
+        // 1. 开发插件目录（环境变量，最高优先级覆盖）
+        if let devPath = ProcessInfo.processInfo.environment["ETERM_PLUGIN_PATH"] {
+            let devBundles = scanDirectory(devPath)
+            for bundlePath in devBundles {
                 let pluginId = extractPluginId(from: bundlePath)
                 if !seenIds.contains(pluginId) {
                     paths.append(bundlePath)
@@ -460,7 +458,20 @@ final class SDKPluginLoader {
             }
         }
 
-        // 2. 用户插件目录（用户安装的插件优先级低于内置）
+        // 2. app 内置插件目录（BuiltinPlugins，核心插件）
+        if let builtinPath = Bundle.main.resourcePath.map({ $0 + "/BuiltinPlugins" }),
+           FileManager.default.fileExists(atPath: builtinPath) {
+            let builtinBundles = scanDirectory(builtinPath)
+            for bundlePath in builtinBundles {
+                let pluginId = extractPluginId(from: bundlePath)
+                if !seenIds.contains(pluginId) {
+                    paths.append(bundlePath)
+                    seenIds.insert(pluginId)
+                }
+            }
+        }
+
+        // 3. 用户插件目录（扩展插件，增量加载）
         let userPluginsPath = ETermPaths.plugins
         let userBundles = scanDirectory(userPluginsPath)
         for bundlePath in userBundles {
@@ -469,11 +480,6 @@ final class SDKPluginLoader {
                 paths.append(bundlePath)
                 seenIds.insert(pluginId)
             }
-        }
-
-        // 3. 开发插件目录（通过环境变量，最高优先级覆盖）
-        if let devPath = ProcessInfo.processInfo.environment["ETERM_PLUGIN_PATH"] {
-            paths.append(contentsOf: scanDirectory(devPath))
         }
 
         return paths
@@ -654,6 +660,7 @@ final class SDKPluginLoader {
     /// 加载主进程模式插件
     private func loadMainModePlugin(_ manifest: PluginManifest) async {
         let pluginId = manifest.id
+        print("[SDKPluginLoader] >>> Loading main mode plugin: \(pluginId)")
         let start = CFAbsoluteTimeGetCurrent()
         func elapsed() -> String {
             String(format: "%.0fms", (CFAbsoluteTimeGetCurrent() - start) * 1000)
