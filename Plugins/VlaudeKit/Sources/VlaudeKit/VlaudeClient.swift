@@ -70,8 +70,11 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     private var serverURL: String?
     private var deviceName: String = "Mac"
 
-    /// Session 读取器（FFI）
+    /// Session 读取器（FFI）- 用于文件操作（pushNewMessages, indexSession）
     private lazy var sessionReader = SessionReader()
+
+    /// Vlaude FFI Bridge（优先使用，DB 查询更快）
+    private let vlaudeFfi = VlaudeFfiBridge.shared
 
     /// 共享数据库桥接（可选，用于缓存查询和搜索）
     private var sharedDb: SharedDbBridge?
@@ -618,10 +621,11 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     /// 处理项目列表请求
     private func handleRequestProjectData(_ data: [String: Any]) {
-        let limit = (data["limit"] as? Int) ?? 0
         let requestId = data["requestId"] as? String
+        let limit = UInt32((data["limit"] as? Int) ?? 1000)
+        let offset = UInt32((data["offset"] as? Int) ?? 0)
 
-        guard let projects = sessionReader.listProjects(limit: UInt32(limit)) else {
+        guard let projects = vlaudeFfi.listProjectsLegacy(limit: limit, offset: offset) else {
             return
         }
 
@@ -630,10 +634,14 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     /// 处理会话列表请求
     private func handleRequestSessionMetadata(_ data: [String: Any]) {
-        let projectPath = data["projectPath"] as? String
+        guard let projectPath = data["projectPath"] as? String else {
+            return
+        }
         let requestId = data["requestId"] as? String
+        let limit = UInt32((data["limit"] as? Int) ?? 1000)
+        let offset = UInt32((data["offset"] as? Int) ?? 0)
 
-        guard let sessions = sessionReader.listSessions(projectPath: projectPath) else {
+        guard let sessions = vlaudeFfi.listSessionsLegacy(projectPath: projectPath, limit: limit, offset: offset) else {
             return
         }
 
@@ -649,13 +657,9 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
         let limit = (data["limit"] as? Int) ?? 50
         let offset = (data["offset"] as? Int) ?? 0
-        let orderStr = (data["order"] as? String) ?? "asc"
         let requestId = data["requestId"] as? String
 
-        // 通过 listSessions 查找会话路径（更可靠）
-        guard let sessions = sessionReader.listSessions(projectPath: projectPath),
-              let session = sessions.first(where: { $0.id == sessionId }),
-              let sessionPath = session.sessionPath else {
+        guard let result = vlaudeFfi.getMessagesLegacy(sessionId: sessionId, limit: UInt32(limit), offset: UInt32(offset)) else {
             // 发送空响应避免超时
             reportSessionMessages(
                 sessionId: sessionId,
@@ -663,27 +667,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
                 messages: [],
                 total: 0,
                 hasMore: false,
-                requestId: requestId,
-                transcriptPath: nil
-            )
-            return
-        }
-
-        guard let result = sessionReader.readMessages(
-            sessionPath: sessionPath,
-            limit: UInt32(limit),
-            offset: UInt32(offset),
-            orderAsc: orderStr == "asc"
-        ) else {
-            // 发送空响应避免超时
-            reportSessionMessages(
-                sessionId: sessionId,
-                projectPath: projectPath,
-                messages: [],
-                total: 0,
-                hasMore: false,
-                requestId: requestId,
-                transcriptPath: sessionPath
+                requestId: requestId
             )
             return
         }
@@ -694,8 +678,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             messages: result.messages,
             total: result.total,
             hasMore: result.hasMore,
-            requestId: requestId,
-            transcriptPath: sessionPath
+            requestId: requestId
         )
     }
 
@@ -737,11 +720,10 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
         let projectsData: [[String: Any]] = projects.map { project in
             [
-                "path": project.path,
-                "encodedName": project.encodedName,
+                "projectPath": project.path,
                 "name": project.name,
                 "sessionCount": project.sessionCount,
-                "lastModified": project.lastActive
+                "lastActive": project.lastActive as Any
             ]
         }
 
@@ -775,8 +757,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         messages: [RawMessage],
         total: Int,
         hasMore: Bool,
-        requestId: String?,
-        transcriptPath: String? = nil
+        requestId: String?
     ) {
         guard isConnected else { return }
 
@@ -794,38 +775,9 @@ final class VlaudeClient: SocketClientBridgeDelegate {
                 dict["message"] = msgDict
             }
 
-            // 解析结构化内容块
-            if let path = transcriptPath,
-               let blocks = ContentBlockParser.readMessage(from: path, uuid: msg.uuid) {
-                dict["contentBlocks"] = blocks.map { block -> [String: Any] in
-                    switch block {
-                    case .text(let text):
-                        return ["type": "text", "text": text]
-                    case .toolUse(let tool):
-                        return [
-                            "type": "tool_use",
-                            "id": tool.id,
-                            "name": tool.name,
-                            "displayText": tool.displayText,
-                            "iconName": tool.iconName,
-                            "input": tool.input
-                        ]
-                    case .toolResult(let result):
-                        return [
-                            "type": "tool_result",
-                            "toolUseId": result.toolUseId,
-                            "isError": result.isError,
-                            "preview": result.preview,
-                            "hasMore": result.hasMore,
-                            "sizeDescription": result.sizeDescription,
-                            "content": result.content
-                        ]
-                    case .thinking(let text):
-                        return ["type": "thinking", "text": text]
-                    case .unknown(let raw):
-                        return ["type": "unknown", "raw": raw]
-                    }
-                }
+            // 使用 FFI 返回的 contentBlocks（已在 Rust 层解析）
+            if let blocks = msg.contentBlocks {
+                dict["contentBlocks"] = blocks
             }
 
             return dict
@@ -932,7 +884,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
                         "content": result.content
                     ]
                 case .thinking(let text):
-                    return ["type": "thinking", "text": text]
+                    return ["type": "thinking", "thinking": text]
                 case .unknown(let raw):
                     return ["type": "unknown", "raw": raw]
                 }

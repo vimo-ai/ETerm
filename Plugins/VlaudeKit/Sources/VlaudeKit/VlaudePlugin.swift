@@ -16,6 +16,7 @@ import Foundation
 import AppKit
 import SwiftUI
 import ETermKit
+import SocketClientFFI
 
 @objc(VlaudePlugin)
 public final class VlaudePlugin: NSObject, Plugin {
@@ -41,8 +42,15 @@ public final class VlaudePlugin: NSObject, Plugin {
     /// 当收到 iOS 发送的消息注入请求时存储，推送 user 消息时携带并清除
     private var pendingClientMessageIds: [String: String] = [:]
 
+    /// 待标记为 pending 的审批请求：toolUseId -> (sessionId, timestamp)
+    /// 当收到 permissionPrompt 时存储，等待 SessionWatcher 扫描到对应消息后标记为 pending
+    private var pendingApprovals: [String: (sessionId: String, timestamp: Int64)] = [:]
+
     /// 会话文件监听器
     private var sessionWatcher: SessionWatcher?
+
+    /// Shared database bridge (用于权限持久化)
+    private var dbBridge: SharedDbBridge?
 
     /// 配置变更观察
     private var configObserver: NSObjectProtocol?
@@ -59,6 +67,9 @@ public final class VlaudePlugin: NSObject, Plugin {
     public func activate(host: HostBridge) {
         self.host = host
 
+        // 设置 Rust 日志回调（将日志转发到 LogManager）
+        setupVlaudeLogCallback()
+
         // 初始化客户端（使用 Rust FFI）
         client = VlaudeClient()
         client?.delegate = self
@@ -66,6 +77,15 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 初始化会话文件监听器
         sessionWatcher = SessionWatcher()
         sessionWatcher?.delegate = self
+
+        // 初始化 SharedDbBridge（用于权限持久化）
+        do {
+            dbBridge = try SharedDbBridge()
+            _ = try dbBridge?.register()  // 注册为 Writer 或 Reader
+        } catch {
+            // 记录错误但不阻止插件激活
+            print("[VlaudeKit] SharedDbBridge 初始化失败: \(error)")
+        }
 
         // 监听配置变更
         configObserver = NotificationCenter.default.addObserver(
@@ -310,23 +330,28 @@ public final class VlaudePlugin: NSObject, Plugin {
             return
         }
 
-        // 从 PermissionRequest hook 直接获取完整的工具信息
-        // 不需要从 JSONL 读取或缓存，无时序问题
+        let toolUseId = payload["toolUseId"] as? String ?? ""
+
+        // 1. 先存储到 pendingApprovals（等待 SessionWatcher 扫描到消息后标记为 pending）
+        if !toolUseId.isEmpty {
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            pendingApprovals[toolUseId] = (sessionId: sessionId, timestamp: now)
+        }
+
+        // 2. 推送权限请求给 iOS
         var toolUseInfo: [String: Any] = [
             "name": toolName,
             "input": toolInput
         ]
 
-        // 可选字段
-        if let toolUseId = payload["toolUseId"] as? String {
+        if !toolUseId.isEmpty {
             toolUseInfo["id"] = toolUseId
         }
 
-        // 推送权限请求给 iOS
         client?.emitPermissionRequest(
             sessionId: sessionId,
             terminalId: terminalId,
-            message: payload["message"] as? String,  // 可选
+            message: payload["message"] as? String,
             toolUse: toolUseInfo
         )
     }
@@ -552,7 +577,35 @@ extension VlaudePlugin: VlaudeClientDelegate {
             return
         }
 
-        // 写入终端（action 可以是 y/n/a 或 "n: 理由"）
+        // 解析 action 为审批状态
+        let status: ApprovalStatus
+        if action.hasPrefix("y") || action.hasPrefix("a") {
+            status = .approved
+        } else if action.hasPrefix("n") {
+            status = .rejected
+        } else {
+            status = .rejected  // 默认拒绝
+        }
+
+        // 1. 写回 DB（使用 tool_call_id 更新）
+        if let dbBridge = dbBridge, !toolUseId.isEmpty {
+            do {
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                let count = try dbBridge.updateApprovalStatusByToolCallId(
+                    toolCallId: toolUseId,
+                    status: status,
+                    resolvedAt: now
+                )
+
+                if count == 0 {
+                    print("[VlaudeKit] 警告：未找到 tool_call_id=\(toolUseId) 的消息")
+                }
+            } catch {
+                print("[VlaudeKit] 更新审批状态失败: \(error)")
+            }
+        }
+
+        // 2. 写入终端（action 可以是 y/n/a 或 "n: 理由"）
         host?.writeToTerminal(terminalId: terminalId, data: action)
 
         // 延迟发送回车，然后发送 ack
@@ -580,6 +633,35 @@ extension VlaudePlugin: SessionWatcherDelegate {
         for message in messages {
             let blocks = ContentBlockParser.readMessage(from: transcriptPath, uuid: message.uuid)
 
+            // 检查是否有待标记为 pending 的审批请求
+            // 遍历 blocks 查找 tool_use 的 id
+            if let blocks = blocks {
+                for block in blocks {
+                    if case .toolUse(let toolUse) = block {
+                        let toolCallId = toolUse.id
+                        if pendingApprovals[toolCallId] != nil {
+                            // 标记为 pending
+                            if let dbBridge = dbBridge {
+                                do {
+                                    let count = try dbBridge.updateApprovalStatusByToolCallId(
+                                        toolCallId: toolCallId,
+                                        status: .pending,
+                                        resolvedAt: 0  // pending 状态时为 0
+                                    )
+                                    if count == 0 {
+                                        print("[VlaudeKit] 警告：未找到 tool_call_id=\(toolCallId) 的消息")
+                                    }
+                                } catch {
+                                    print("[VlaudeKit] 标记 pending 失败: \(error)")
+                                }
+                            }
+                            // 移除已处理的待审批项
+                            pendingApprovals.removeValue(forKey: toolCallId)
+                        }
+                    }
+                }
+            }
+
             // 对于 user 类型消息，携带 clientMessageId（如果有）
             var clientMsgId: String? = nil
             if message.type == "user" {
@@ -590,4 +672,30 @@ extension VlaudePlugin: SessionWatcherDelegate {
             client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks, clientMessageId: clientMsgId)
         }
     }
+}
+
+// MARK: - Rust Log Bridge
+
+/// 设置 VlaudeKit Rust 日志回调
+private func setupVlaudeLogCallback() {
+    let callback: @convention(c) (VlaudeLogLevel, UnsafePointer<CChar>?) -> Void = { level, message in
+        guard let message = message else { return }
+        let text = String(cString: message)
+
+        // 根据日志级别转发到 LogManager
+        switch level {
+        case DEBUG:
+            LogManager.shared.debug(text)
+        case INFO:
+            LogManager.shared.info(text)
+        case WARN:
+            LogManager.shared.warn(text)
+        case ERROR:
+            LogManager.shared.error(text)
+        default:
+            LogManager.shared.info(text)
+        }
+    }
+
+    vlaude_set_log_callback(callback)
 }
