@@ -24,6 +24,16 @@ typedef enum SocketClientError {
 } SocketClientError;
 
 /**
+ * 日志级别（与 Swift LogLevel 对应）
+ */
+typedef enum VlaudeLogLevel {
+  DEBUG = 0,
+  INFO = 1,
+  WARN = 2,
+  ERROR = 3,
+} VlaudeLogLevel;
+
+/**
  * 不透明句柄
  */
 typedef struct SocketClientHandle SocketClientHandle;
@@ -32,6 +42,11 @@ typedef struct SocketClientHandle SocketClientHandle;
  * 事件回调类型
  */
 typedef void (*EventCallbackFn)(const char *event, const char *data, void *user_data);
+
+/**
+ * 日志回调函数类型
+ */
+typedef void (*VlaudeLogCallback)(enum VlaudeLogLevel level, const char *message);
 
 /**
  * 连接到服务器
@@ -320,5 +335,17 @@ enum SocketClientError socket_client_update_sessions(struct SocketClientHandle *
  * 返回静态字符串，无需释放
  */
 const char *socket_client_version(void);
+
+/**
+ * 清除日志回调
+ */
+void vlaude_clear_log_callback(void);
+
+/**
+ * 设置日志回调
+ *
+ * Swift 端应该在初始化时调用此函数设置回调
+ */
+void vlaude_set_log_callback(VlaudeLogCallback callback);
 
 #endif  /* SOCKET_CLIENT_FFI_H */
