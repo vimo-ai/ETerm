@@ -70,6 +70,15 @@ enum WriterTypeValue: Int32 {
     case vlaudeKit = 3
 }
 
+// MARK: - Search Order
+
+/// 搜索排序方式
+public enum SharedSearchOrderBy: Int32 {
+    case score = 0      // 相关性排序（默认）
+    case timeDesc = 1   // 时间倒序（最新优先）
+    case timeAsc = 2    // 时间正序（最早优先）
+}
+
 // MARK: - Data Types
 
 struct SharedProject {
@@ -505,6 +514,116 @@ final class SharedDbBridge {
             var arrayPtr: UnsafeMutablePointer<SearchResultArray>?
             let error = query.withCString { cstr in
                 session_db_search_fts_with_project(handle, cstr, UInt(limit), projectId, &arrayPtr)
+            }
+
+            if let err = SharedDbError.from(error) {
+                throw err
+            }
+
+            guard let array = arrayPtr?.pointee else {
+                return []
+            }
+
+            defer { session_db_free_search_results(arrayPtr) }
+
+            var result: [SharedSearchResult] = []
+            for i in 0..<Int(array.len) {
+                let r = array.data[i]
+                result.append(SharedSearchResult(
+                    messageId: r.message_id,
+                    sessionId: try safeString(r.session_id),
+                    projectId: r.project_id,
+                    projectName: try safeString(r.project_name),
+                    role: try safeString(r.role),
+                    content: try safeString(r.content),
+                    snippet: try safeString(r.snippet),
+                    score: r.score,
+                    timestamp: r.timestamp >= 0 ? r.timestamp : nil
+                ))
+            }
+
+            return result
+        }
+    }
+
+    /// Full-text search with options (thread-safe)
+    /// - Parameters:
+    ///   - query: Search keywords
+    ///   - orderBy: Sort order (score/timeDesc/timeAsc)
+    ///   - projectId: Optional project filter (-1 for all)
+    ///   - limit: Max results
+    func search(query: String, orderBy: SharedSearchOrderBy, projectId: Int64 = -1, limit: Int = 20) throws -> [SharedSearchResult] {
+        try queue.sync {
+            guard let handle = handle else { throw SharedDbError.nullPointer }
+
+            var arrayPtr: UnsafeMutablePointer<SearchResultArray>?
+            let error = query.withCString { cstr in
+                session_db_search_fts_with_options(handle, cstr, UInt(limit), projectId, SearchOrderByC(rawValue: UInt32(orderBy.rawValue)), &arrayPtr)
+            }
+
+            if let err = SharedDbError.from(error) {
+                throw err
+            }
+
+            guard let array = arrayPtr?.pointee else {
+                return []
+            }
+
+            defer { session_db_free_search_results(arrayPtr) }
+
+            var result: [SharedSearchResult] = []
+            for i in 0..<Int(array.len) {
+                let r = array.data[i]
+                result.append(SharedSearchResult(
+                    messageId: r.message_id,
+                    sessionId: try safeString(r.session_id),
+                    projectId: r.project_id,
+                    projectName: try safeString(r.project_name),
+                    role: try safeString(r.role),
+                    content: try safeString(r.content),
+                    snippet: try safeString(r.snippet),
+                    score: r.score,
+                    timestamp: r.timestamp >= 0 ? r.timestamp : nil
+                ))
+            }
+
+            return result
+        }
+    }
+
+    /// FTS search with date range filter (thread-safe)
+    /// - Parameters:
+    ///   - query: Search keywords
+    ///   - orderBy: Sort order (score/timeDesc/timeAsc)
+    ///   - startTimestamp: Start timestamp in ms (nil for no filter)
+    ///   - endTimestamp: End timestamp in ms (nil for no filter)
+    ///   - projectId: Optional project filter (-1 for all)
+    ///   - limit: Max results
+    func searchFull(
+        query: String,
+        orderBy: SharedSearchOrderBy,
+        startTimestamp: Int64? = nil,
+        endTimestamp: Int64? = nil,
+        projectId: Int64 = -1,
+        limit: Int = 20
+    ) throws -> [SharedSearchResult] {
+        try queue.sync {
+            guard let handle = handle else { throw SharedDbError.nullPointer }
+
+            var arrayPtr: UnsafeMutablePointer<SearchResultArray>?
+            let startTs = startTimestamp ?? -1
+            let endTs = endTimestamp ?? -1
+            let error = query.withCString { cstr in
+                session_db_search_fts_full(
+                    handle,
+                    cstr,
+                    UInt(limit),
+                    projectId,
+                    SearchOrderByC(rawValue: UInt32(orderBy.rawValue)),
+                    startTs,
+                    endTs,
+                    &arrayPtr
+                )
             }
 
             if let err = SharedDbError.from(error) {

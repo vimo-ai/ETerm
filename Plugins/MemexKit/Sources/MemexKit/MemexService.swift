@@ -12,6 +12,23 @@
 import Foundation
 import ETermKit
 
+// MARK: - Search Order
+
+/// 搜索排序方式
+public enum MemexSearchOrderBy: String, Sendable {
+    case score = "score"           // 相关性排序（默认）
+    case timeDesc = "time_desc"    // 时间倒序（最新优先）
+    case timeAsc = "time_asc"      // 时间正序（最早优先）
+
+    func toSharedOrderBy() -> SharedSearchOrderBy {
+        switch self {
+        case .score: return .score
+        case .timeDesc: return .timeDesc
+        case .timeAsc: return .timeAsc
+        }
+    }
+}
+
 // MARK: - MemexService
 
 /// Memex 服务管理器
@@ -183,19 +200,8 @@ public final class MemexService: @unchecked Sendable {
 
     /// 查找 memex 二进制
     private func findBinary() -> String? {
-        // 1. ~/.vimo/eterm/bin/memex（开发模式，build.sh 部署位置）
-        let etermBin = ETermPaths.root + "/bin/memex"
-        if FileManager.default.isExecutableFile(atPath: etermBin) {
-            return etermBin
-        }
-
-        // 2. ~/.vimo/bin/memex（发布模式，memex release CI 安装位置）
-        let releaseBin = NSHomeDirectory() + "/.vimo/bin/memex"
-        if FileManager.default.isExecutableFile(atPath: releaseBin) {
-            return releaseBin
-        }
-
-        return nil
+        let bin = ETermPaths.root + "/bin/memex"
+        return FileManager.default.isExecutableFile(atPath: bin) ? bin : nil
     }
 
     // MARK: - Port Detection
@@ -238,47 +244,98 @@ public final class MemexService: @unchecked Sendable {
 
 extension MemexService {
 
-    /// 搜索（优先使用 SharedDb，回退到 HTTP API）
-    public func search(query: String, limit: Int = 20) async throws -> [MemexSearchResult] {
-        // 优先使用 SharedDb
-        if let sharedDb = sharedDb {
+    /// 搜索（优先使用 HTTP API 获得向量搜索能力，回退到 FFI）
+    /// - Parameters:
+    ///   - query: 搜索关键词
+    ///   - orderBy: 排序方式 (score/timeDesc/timeAsc)
+    ///   - startDate: 开始日期（格式：YYYY-MM-DD，可选）
+    ///   - endDate: 结束日期（格式：YYYY-MM-DD，可选）
+    ///   - limit: 返回数量
+    public func search(
+        query: String,
+        orderBy: MemexSearchOrderBy = .score,
+        startDate: String? = nil,
+        endDate: String? = nil,
+        limit: Int = 20
+    ) async throws -> [MemexSearchResult] {
+        // 优先使用 HTTP API（有向量搜索 + RRF 融合 + 日期过滤）
+        if isRunning || isPortInUse(port) {
             do {
-                let safeLimit = max(1, min(limit, 100))
-                let results = try sharedDb.search(query: query, limit: safeLimit)
-                return results.map { r in
-                    MemexSearchResult(
-                        id: r.messageId,
-                        sessionId: r.sessionId,
-                        projectId: r.projectId,
-                        projectName: r.projectName,
-                        messageType: r.role,
-                        content: r.content,
-                        snippet: r.snippet,
-                        score: r.score,
-                        timestamp: r.timestamp.map { String($0) }
-                    )
+                var components = URLComponents(url: baseURL.appendingPathComponent("api/search"), resolvingAgainstBaseURL: false)!
+                var queryItems = [
+                    URLQueryItem(name: "q", value: query),
+                    URLQueryItem(name: "limit", value: String(limit)),
+                    URLQueryItem(name: "orderBy", value: orderBy.rawValue)
+                ]
+                if let startDate = startDate {
+                    queryItems.append(URLQueryItem(name: "startDate", value: startDate))
                 }
+                if let endDate = endDate {
+                    queryItems.append(URLQueryItem(name: "endDate", value: endDate))
+                }
+                components.queryItems = queryItems
+
+                let (data, response) = try await URLSession.shared.data(from: components.url!)
+
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    throw MemexServiceError.requestFailed
+                }
+
+                let results = try JSONDecoder().decode([MemexSearchResultDTO].self, from: data)
+                return results.map { $0.toModel() }
             } catch {
-                // Fall through to HTTP
+                // HTTP 失败，fallback 到 FFI
             }
         }
 
-        // 回退到 HTTP API
-        var components = URLComponents(url: baseURL.appendingPathComponent("api/search"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "limit", value: String(limit))
-        ]
-
-        let (data, response) = try await URLSession.shared.data(from: components.url!)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw MemexServiceError.requestFailed
+        // 降级到 FFI（FTS only，无向量搜索，支持日期过滤）
+        if let sharedDb = sharedDb {
+            let safeLimit = max(1, min(limit, 100))
+            let startTs = startDate.flatMap { dateToTimestamp($0, isStart: true) }
+            let endTs = endDate.flatMap { dateToTimestamp($0, isStart: false) }
+            let results = try sharedDb.searchFull(
+                query: query,
+                orderBy: orderBy.toSharedOrderBy(),
+                startTimestamp: startTs,
+                endTimestamp: endTs,
+                limit: safeLimit
+            )
+            return results.map { r in
+                MemexSearchResult(
+                    id: r.messageId,
+                    sessionId: r.sessionId,
+                    projectId: r.projectId,
+                    projectName: r.projectName,
+                    messageType: r.role,
+                    content: r.content,
+                    snippet: r.snippet,
+                    score: r.score,
+                    timestamp: r.timestamp.map { String($0) }
+                )
+            }
         }
 
-        let results = try JSONDecoder().decode([MemexSearchResultDTO].self, from: data)
-        return results.map { $0.toModel() }
+        throw MemexServiceError.serviceNotRunning
+    }
+
+    /// 将日期字符串 (YYYY-MM-DD) 转换为时间戳（毫秒）
+    private func dateToTimestamp(_ date: String, isStart: Bool) -> Int64? {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone.current
+        guard let parsed = formatter.date(from: date) else { return nil }
+
+        let calendar = Calendar.current
+        if isStart {
+            // 一天的开始 00:00:00
+            guard let startOfDay = calendar.date(bySettingHour: 0, minute: 0, second: 0, of: parsed) else { return nil }
+            return Int64(startOfDay.timeIntervalSince1970 * 1000)
+        } else {
+            // 一天的结束 23:59:59.999
+            guard let endOfDay = calendar.date(bySettingHour: 23, minute: 59, second: 59, of: parsed) else { return nil }
+            return Int64(endOfDay.timeIntervalSince1970 * 1000) + 999
+        }
     }
 
     /// 获取统计信息（优先使用 SharedDb，回退到 HTTP API）
