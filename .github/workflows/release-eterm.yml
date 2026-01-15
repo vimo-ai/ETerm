@@ -96,6 +96,10 @@ jobs:
           codesign -f -s - "$FRAMEWORK_DIR"
           echo "ETermKit.framework built at $FRAMEWORK_DIR"
 
+          # Debug: show created files
+          echo "=== Build directory structure ==="
+          ls -laR "$(pwd)/../../Build/"
+
       - name: Build builtin plugins
         run: |
           # Build all builtin plugins that ship with the app
