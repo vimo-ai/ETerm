@@ -1762,16 +1762,13 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         let location = convert(event.locationInWindow, from: nil)
 
-        // Cmd+click：打开超链接（OSC 8 或自动检测的 URL）
         if event.modifierFlags.contains(.command) {
-            // 优先检查 OSC 8 超链接
             if let hyperlink = currentHoveredHyperlink {
                 openHyperlink(hyperlink.uri)
                 clearHyperlinkHover()
                 return
             }
 
-            // 检查自动检测的 URL
             if let coordinator = coordinator,
                let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
                let panel = coordinator.terminalWindow.getPanel(panelId),
@@ -1795,7 +1792,6 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 根据位置找到对应的 Panel
         guard let panelId = coordinator.findPanel(at: location, containerBounds: bounds) else {
             super.mouseDown(with: event)
             return
@@ -1816,33 +1812,49 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
-        // 设置激活的 Panel
         coordinator.setActivePanel(panelId)
 
-        // 转换为网格坐标（使用当前 terminalId，确保坐标与终端绑定）
         let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: Int(terminalId))
 
-        // 双击选中单词
+        guard let pool = terminalPool else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let hasMouseTracking = pool.hasMouseTrackingMode(terminalId: Int(terminalId))
+        
+        if hasMouseTracking {
+            // macOS buttonNumber: 0=左键, 1=右键, 2=中键
+            // SGR 1006 button:    0=左键, 1=中键, 2=右键
+            let button: UInt8
+            switch event.buttonNumber {
+            case 0: button = 0  // 左键
+            case 1: button = 2  // macOS 右键 → SGR 右键
+            case 2: button = 1  // macOS 中键 → SGR 中键
+            default: return
+            }
+            let col = UInt16(gridPos.col) + 1
+            let row = UInt16(gridPos.row) + 1
+            _ = pool.sendMouseSGR(terminalId: Int(terminalId), button: button, col: col, row: row, pressed: true)
+            return
+        }
+
         if event.clickCount == 2 {
             selectWordAt(gridPos: gridPos, activeTab: activeTab, terminalId: terminalId, panelId: panelId, event: event)
             return
         }
 
-        // 单击：开始拖拽选择
-        // 将 Screen 坐标转换为真实行号（新架构使用 terminalPool）
-        guard let pool = terminalPool,
-              let (absoluteRow, col) = pool.screenToAbsolute(
-                  terminalId: Int(terminalId),
-                  screenRow: Int(gridPos.row),
-                  screenCol: Int(gridPos.col)
-              ) else {
+        guard let (absoluteRow, col) = pool.screenToAbsolute(
+            terminalId: Int(terminalId),
+            screenRow: Int(gridPos.row),
+            screenCol: Int(gridPos.col)
+        ) else {
             super.mouseDown(with: event)
             return
         }
 
         activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
-        // 通知 Rust 层渲染高亮（新架构使用 terminalPool）
         if let selection = activeTab.textSelection {
             _ = pool.setSelection(
                 terminalId: Int(terminalId),
@@ -1853,16 +1865,13 @@ class RioMetalView: NSView, RenderViewProtocol {
             )
         }
 
-        // 触发渲染
         requestRender()
 
-        // 记录选中状态（快照 terminalId，避免后续 activeTab 变化导致坐标错位）
         isDraggingSelection = true
         selectionPanelId = panelId
         selectionTab = activeTab
         selectionTerminalId = Int(terminalId)
     }
-
     // MARK: - 双击选中单词
 
     /// 双击选中单词（使用 WordBoundaryDetector 支持中文分词）
@@ -1972,6 +1981,34 @@ class RioMetalView: NSView, RenderViewProtocol {
     }
 
     override func mouseUp(with event: NSEvent) {
+        // 检查鼠标追踪模式（SGR 1006）- 需要在 isDraggingSelection 之前处理
+        if let pool = terminalPool,
+           let coordinator = coordinator {
+            let location = convert(event.locationInWindow, from: nil)
+            if let panelId = coordinator.findPanel(at: location, containerBounds: bounds),
+               let panel = coordinator.terminalWindow.getPanel(panelId),
+               let activeTab = panel.activeTab,
+               let terminalId = activeTab.rustTerminalId {
+                let hasMouseTracking = pool.hasMouseTrackingMode(terminalId: Int(terminalId))
+                if hasMouseTracking {
+                    // macOS buttonNumber: 0=左键, 1=右键, 2=中键
+                    // SGR 1006 button:    0=左键, 1=中键, 2=右键
+                    let button: UInt8
+                    switch event.buttonNumber {
+                    case 0: button = 0  // 左键
+                    case 1: button = 2  // macOS 右键 → SGR 右键
+                    case 2: button = 1  // macOS 中键 → SGR 中键
+                    default: return
+                    }
+                    let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: Int(terminalId))
+                    let col = UInt16(gridPos.col) + 1
+                    let row = UInt16(gridPos.row) + 1
+                    _ = pool.sendMouseSGR(terminalId: Int(terminalId), button: button, col: col, row: row, pressed: false)
+                    return
+                }
+            }
+        }
+
         guard isDraggingSelection else {
             super.mouseUp(with: event)
             return
@@ -2169,6 +2206,23 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         guard let terminalId else {
             super.scrollWheel(with: event)
+            return
+        }
+
+        // 检查鼠标追踪模式（SGR 1006）
+        let hasMouseTracking = pool.hasMouseTrackingMode(terminalId: Int(terminalId))
+        if hasMouseTracking {
+            let deltaY = event.scrollingDeltaY
+            guard deltaY != 0 else { return }
+
+            // 滚轮按钮：64=up, 65=down（只发送 pressed=true，不发送 release）
+            let button: UInt8 = deltaY > 0 ? 64 : 65
+            if let panelId = coordinator.findPanel(at: locationInView, containerBounds: bounds) {
+                let gridPos = screenToGrid(location: locationInView, panelId: panelId, terminalId: Int(terminalId))
+                let col = UInt16(gridPos.col) + 1
+                let row = UInt16(gridPos.row) + 1
+                _ = pool.sendMouseSGR(terminalId: Int(terminalId), button: button, col: col, row: row, pressed: true)
+            }
             return
         }
 

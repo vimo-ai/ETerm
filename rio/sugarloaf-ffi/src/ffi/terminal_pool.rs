@@ -1,8 +1,8 @@
 //! TerminalPool FFI - 多终端管理 + 统一渲染
 
-use crate::app::{TerminalPool, AppConfig};
-use crate::app::ffi::TerminalPoolEventCallback;
 use crate::SugarloafFontMetrics;
+use crate::app::ffi::TerminalPoolEventCallback;
+use crate::app::{AppConfig, TerminalPool};
 use std::ffi::c_void;
 
 /// TerminalPool 句柄（不透明指针）
@@ -74,7 +74,12 @@ pub extern "C" fn terminal_pool_create_terminal_with_cwd(
     let working_dir_opt = if working_dir.is_null() {
         None
     } else {
-        unsafe { std::ffi::CStr::from_ptr(working_dir).to_str().ok().map(|s| s.to_string()) }
+        unsafe {
+            std::ffi::CStr::from_ptr(working_dir)
+                .to_str()
+                .ok()
+                .map(|s| s.to_string())
+        }
     };
 
     pool.create_terminal_with_cwd(cols, rows, working_dir_opt)
@@ -120,7 +125,12 @@ pub extern "C" fn terminal_pool_create_terminal_with_id_and_cwd(
     let working_dir_opt = if working_dir.is_null() {
         None
     } else {
-        unsafe { std::ffi::CStr::from_ptr(working_dir).to_str().ok().map(|s| s.to_string()) }
+        unsafe {
+            std::ffi::CStr::from_ptr(working_dir)
+                .to_str()
+                .ok()
+                .map(|s| s.to_string())
+        }
     };
 
     pool.create_terminal_with_id_and_cwd(id as usize, cols, rows, working_dir_opt)
@@ -409,10 +419,7 @@ pub extern "C" fn terminal_pool_resize_sugarloaf(
 /// - 选区坐标转换正确
 /// - 渲染位置计算正确
 #[no_mangle]
-pub extern "C" fn terminal_pool_set_scale(
-    handle: *mut TerminalPoolHandle,
-    scale: f32,
-) {
+pub extern "C" fn terminal_pool_set_scale(handle: *mut TerminalPoolHandle, scale: f32) {
     if handle.is_null() {
         return;
     }
@@ -544,9 +551,7 @@ pub extern "C" fn terminal_pool_change_font_size(
 /// # 返回
 /// - 当前字体大小（pt），如果句柄无效返回 0.0
 #[no_mangle]
-pub extern "C" fn terminal_pool_get_font_size(
-    handle: *mut TerminalPoolHandle,
-) -> f32 {
+pub extern "C" fn terminal_pool_get_font_size(handle: *mut TerminalPoolHandle) -> f32 {
     if handle.is_null() {
         return 0.0;
     }
@@ -809,7 +814,9 @@ pub extern "C" fn terminal_pool_get_scroll_info(
     let pool = unsafe { &*(handle as *const TerminalPool) };
 
     // 从原子缓存读取（无锁）
-    if let Some((display_offset, history_size, total_lines)) = pool.get_scroll_cache(terminal_id) {
+    if let Some((display_offset, history_size, total_lines)) =
+        pool.get_scroll_cache(terminal_id)
+    {
         ScrollInfo {
             display_offset,
             history_size,
@@ -898,7 +905,8 @@ pub extern "C" fn terminal_pool_attach_terminal(
     }
 
     let pool = unsafe { &mut *(handle as *mut TerminalPool) };
-    let detached_terminal = unsafe { Box::from_raw(detached as *mut crate::app::DetachedTerminal) };
+    let detached_terminal =
+        unsafe { Box::from_raw(detached as *mut crate::app::DetachedTerminal) };
 
     let id = pool.attach_terminal(*detached_terminal);
     id as i64
@@ -1088,7 +1096,67 @@ pub extern "C" fn terminal_pool_get_scrollback_lines(
         let state = terminal.state();
         // grid 是字段，不是方法
         state.grid.history_size() as i64
-    }).unwrap_or(-1)
+    })
+    .unwrap_or(-1)
+}
+
+/// 检查是否启用了鼠标追踪模式（SGR 1006, X11 1000 等）
+///
+/// 应用程序通过 DECSET 序列（如 `\x1b[?1006h`）启用鼠标追踪。
+/// 启用后，终端应将鼠标事件转换为 SGR 格式发送到 PTY。
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+///
+/// # 返回值
+/// - `true`: 鼠标追踪已启用，终端应发送鼠标事件到 PTY
+/// - `false`: 鼠标追踪未启用，终端处理自己的鼠标交互（选择、滚动等）
+#[no_mangle]
+pub extern "C" fn terminal_pool_has_mouse_tracking_mode(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.has_mouse_tracking_mode(terminal_id)
+}
+
+/// 发送 SGR 格式的鼠标报告到 PTY
+///
+/// SGR 鼠标报告格式：`\x1b[<button;col;rowM` 或 `\x1b[<button;col;rowm`
+///
+/// # 参数
+/// - handle: TerminalPool 句柄
+/// - terminal_id: 终端 ID
+/// - button: 按钮编码
+///   - 0=左键, 1=中键, 2=右键
+///   - 64=滚轮向上, 65=滚轮向下
+/// - col: 网格列号（1-based）
+/// - row: 网格行号（1-based）
+/// - pressed: 是否按下（M/m）
+///
+/// # 返回值
+/// - `true`: 发送成功
+/// - `false`: 终端不存在
+#[no_mangle]
+pub extern "C" fn terminal_pool_send_mouse_sgr(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    button: u8,
+    col: u16,
+    row: u16,
+    pressed: bool,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.send_mouse_sgr(terminal_id, button, col, row, pressed)
 }
 
 /// 释放字符串数组（由 terminal_pool_get_visible_lines 分配）

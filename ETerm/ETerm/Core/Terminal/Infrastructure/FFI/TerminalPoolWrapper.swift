@@ -358,6 +358,36 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return terminal_pool_is_kitty_keyboard_enabled(handle, terminalId)
     }
 
+
+    /// 检查是否启用了鼠标追踪模式（SGR 1006, X11 1000 等）
+    ///
+    /// 应用程序通过 DECSET 序列（如 `\x1b[?1006h`）启用鼠标追踪。
+    /// 启用后，终端应将鼠标事件转换为 SGR 格式发送到 PTY。
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: true 表示鼠标追踪已启用，false 表示终端处理自己的鼠标交互
+    func hasMouseTrackingMode(terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_has_mouse_tracking_mode(handle, terminalId)
+    }
+
+    /// 发送 SGR 格式的鼠标报告到 PTY
+    ///
+    /// SGR 鼠标报告格式：`\x1b[<button;col;rowM` 或 `\x1b[<button;col;rowm`
+    ///
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - button: 按钮编码（0=左键, 1=中键, 2=右键, 64=滚轮上, 65=滚轮下）
+    ///   - col: 网格列号（1-based）
+    ///   - row: 网格行号（1-based）
+    ///   - pressed: 是否按下（M/m）
+    /// - Returns: true 表示发送成功，false 表示失败
+    @discardableResult
+    func sendMouseSGR(terminalId: Int, button: UInt8, col: UInt16, row: UInt16, pressed: Bool) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_send_mouse_sgr(handle, terminalId, button, col, row, pressed)
+    }
+
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool {
         guard let handle = handle else { return false }

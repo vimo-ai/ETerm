@@ -7,7 +7,6 @@
 //! - 封装 Crosswords：不暴露底层实现
 //! - 提供 state() 方法：返回只读快照
 
-
 use rio_backend::crosswords::Crosswords;
 
 use rio_backend::crosswords::grid::Dimensions;
@@ -24,12 +23,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-
 use crate::domain::state::TerminalState;
 
 use crate::domain::events::TerminalEvent;
 
-use crate::domain::views::{GridData, GridView, CursorView, SearchView, MatchRange};
+use crate::domain::views::{CursorView, GridData, GridView, MatchRange, SearchView};
 
 use crate::domain::primitives::AbsolutePoint;
 
@@ -68,7 +66,6 @@ pub enum TerminalMode {
 struct EventCollector {
     events: Arc<RwLock<Vec<TerminalEvent>>>,
 }
-
 
 impl EventCollector {
     fn new() -> Self {
@@ -113,7 +110,6 @@ struct SimpleDimensions {
     screen_lines: usize,
     history_size: usize,
 }
-
 
 impl Dimensions for SimpleDimensions {
     fn total_lines(&self) -> usize {
@@ -202,7 +198,6 @@ macro_rules! with_crosswords {
         }
     };
 }
-
 
 impl Terminal {
     /// 创建新的 Terminal（用于测试，不处理真实 PTY）
@@ -368,9 +363,9 @@ impl Terminal {
                 // eprintln!("   After advance, parser finished");
             } // 释放 crosswords 的锁
 
-            // 注意：生产环境中，Machine 直接写入 Crosswords，不经过这个方法
-            // 这段代码仅用于测试场景
-            // 实际的模式检查在 TerminalPool::event_queue_callback 中进行
+        // 注意：生产环境中，Machine 直接写入 Crosswords，不经过这个方法
+        // 这段代码仅用于测试场景
+        // 实际的模式检查在 TerminalPool::event_queue_callback 中进行
         } else if let Some(ref crosswords_test) = self.crosswords_test {
             // eprintln!("   Using Test crosswords");
             {
@@ -454,10 +449,7 @@ impl Terminal {
         let damaged_lines: Vec<usize> = match crosswords.peek_damage_event() {
             Some(TerminalDamage::Full) => (0..crosswords.grid.screen_lines()).collect(),
             Some(TerminalDamage::Partial(lines)) => {
-                lines.iter()
-                    .filter(|l| l.damaged)
-                    .map(|l| l.line)
-                    .collect()
+                lines.iter().filter(|l| l.damaged).map(|l| l.line).collect()
             }
             Some(TerminalDamage::CursorOnly) | None => Vec::new(),
         };
@@ -469,7 +461,11 @@ impl Terminal {
                 prev.clone()
             } else {
                 // 增量更新
-                Arc::new(GridData::incremental_from_crosswords(crosswords, prev, &damaged_lines))
+                Arc::new(GridData::incremental_from_crosswords(
+                    crosswords,
+                    prev,
+                    &damaged_lines,
+                ))
             }
         } else {
             // 首次，全量构建
@@ -500,7 +496,8 @@ impl Terminal {
             let pos = cursor.pos;
             let display_offset = crosswords.grid.display_offset();
             let history_size = crosswords.grid.history_size();
-            let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
+            let absolute_line =
+                (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
             AbsolutePoint::new(absolute_line, pos.col.0 as usize)
         };
         let cursor_state = crosswords.cursor();
@@ -515,13 +512,18 @@ impl Terminal {
                 let history_size = crosswords.grid.history_size();
                 let start_line = (sel_range.start.row.0 + history_size as i32) as usize;
                 let end_line = (sel_range.end.row.0 + history_size as i32) as usize;
-                let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
+                let start =
+                    AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
                 let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
                 let ty = match sel.ty {
-                    rio_backend::selection::SelectionType::Simple => SelectionType::Simple,
+                    rio_backend::selection::SelectionType::Simple => {
+                        SelectionType::Simple
+                    }
                     rio_backend::selection::SelectionType::Block => SelectionType::Block,
                     rio_backend::selection::SelectionType::Lines => SelectionType::Lines,
-                    rio_backend::selection::SelectionType::Semantic => SelectionType::Simple,
+                    rio_backend::selection::SelectionType::Semantic => {
+                        SelectionType::Simple
+                    }
                 };
                 crate::domain::views::SelectionView::new(start, end, ty)
             })
@@ -572,7 +574,8 @@ impl Terminal {
                 let history_size = crosswords.grid.history_size();
 
                 // 转换为绝对坐标
-                let absolute_line = (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
+                let absolute_line =
+                    (history_size as i32 + pos.row.0 - display_offset as i32) as usize;
                 AbsolutePoint::new(absolute_line, pos.col.0 as usize)
             };
             // 使用 cursor() 方法获取光标状态（会考虑 SHOW_CURSOR 模式）
@@ -598,18 +601,28 @@ impl Terminal {
                     // Grid Line → Absolute Row
                     // 公式：absolute_row = grid_line + history_size
                     // （与 start_selection 中 grid_line = absolute_row - history_size 相反）
-                    let start_line = (sel_range.start.row.0 + history_size as i32) as usize;
+                    let start_line =
+                        (sel_range.start.row.0 + history_size as i32) as usize;
                     let end_line = (sel_range.end.row.0 + history_size as i32) as usize;
 
-                    let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
+                    let start =
+                        AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
                     let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
 
                     // 转换选区类型
                     let ty = match sel.ty {
-                        rio_backend::selection::SelectionType::Simple => SelectionType::Simple,
-                        rio_backend::selection::SelectionType::Block => SelectionType::Block,
-                        rio_backend::selection::SelectionType::Lines => SelectionType::Lines,
-                        rio_backend::selection::SelectionType::Semantic => SelectionType::Simple, // Semantic 转为 Simple
+                        rio_backend::selection::SelectionType::Simple => {
+                            SelectionType::Simple
+                        }
+                        rio_backend::selection::SelectionType::Block => {
+                            SelectionType::Block
+                        }
+                        rio_backend::selection::SelectionType::Lines => {
+                            SelectionType::Lines
+                        }
+                        rio_backend::selection::SelectionType::Semantic => {
+                            SelectionType::Simple
+                        } // Semantic 转为 Simple
                     };
 
                     crate::domain::views::SelectionView::new(start, end, ty)
@@ -689,9 +702,13 @@ impl Terminal {
     /// # 返回
     /// - `Some((start_col, end_col, uri))`: 如果有超链接
     /// - `None`: 如果没有超链接
-    pub fn get_hyperlink_at(&self, screen_row: usize, screen_col: usize) -> Option<(usize, usize, String)> {
+    pub fn get_hyperlink_at(
+        &self,
+        screen_row: usize,
+        screen_col: usize,
+    ) -> Option<(usize, usize, String)> {
         with_crosswords!(self, crosswords, {
-            use rio_backend::crosswords::pos::{Line, Column};
+            use rio_backend::crosswords::pos::{Column, Line};
 
             // 计算 grid line（考虑 display_offset）
             let display_offset = crosswords.display_offset();
@@ -776,7 +793,10 @@ impl Terminal {
     ///
     /// 从 Crosswords 增量同步到 RenderState，只更新变化的行
     /// 返回是否有变化
-    pub fn sync_render_state(&self, render_state: &mut crate::domain::aggregates::render_state::RenderState) -> bool {
+    pub fn sync_render_state(
+        &self,
+        render_state: &mut crate::domain::aggregates::render_state::RenderState,
+    ) -> bool {
         with_crosswords!(self, crosswords, {
             render_state.sync_from_crosswords(&*crosswords)
         })
@@ -786,7 +806,10 @@ impl Terminal {
     ///
     /// 包括：选区、搜索、超链接悬停
     /// 应在 sync_render_state 之后调用
-    pub fn sync_overlays_to_render_state(&self, render_state: &mut crate::domain::aggregates::render_state::RenderState) {
+    pub fn sync_overlays_to_render_state(
+        &self,
+        render_state: &mut crate::domain::aggregates::render_state::RenderState,
+    ) {
         use crate::domain::primitives::AbsolutePoint;
         use crate::domain::views::SelectionType;
 
@@ -796,17 +819,27 @@ impl Terminal {
                 sel.to_range(&crosswords).map(|sel_range| {
                     let history_size = crosswords.grid.history_size();
 
-                    let start_line = (sel_range.start.row.0 + history_size as i32) as usize;
+                    let start_line =
+                        (sel_range.start.row.0 + history_size as i32) as usize;
                     let end_line = (sel_range.end.row.0 + history_size as i32) as usize;
 
-                    let start = AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
+                    let start =
+                        AbsolutePoint::new(start_line, sel_range.start.col.0 as usize);
                     let end = AbsolutePoint::new(end_line, sel_range.end.col.0 as usize);
 
                     let ty = match sel.ty {
-                        rio_backend::selection::SelectionType::Simple => SelectionType::Simple,
-                        rio_backend::selection::SelectionType::Block => SelectionType::Block,
-                        rio_backend::selection::SelectionType::Lines => SelectionType::Lines,
-                        rio_backend::selection::SelectionType::Semantic => SelectionType::Simple,
+                        rio_backend::selection::SelectionType::Simple => {
+                            SelectionType::Simple
+                        }
+                        rio_backend::selection::SelectionType::Block => {
+                            SelectionType::Block
+                        }
+                        rio_backend::selection::SelectionType::Lines => {
+                            SelectionType::Lines
+                        }
+                        rio_backend::selection::SelectionType::Semantic => {
+                            SelectionType::Simple
+                        }
                     };
 
                     crate::domain::views::SelectionView::new(start, end, ty)
@@ -829,8 +862,12 @@ impl Terminal {
     /// # 参数
     /// - `pos`: 选区起始位置（绝对坐标）
     /// - `kind`: 选区类型（Simple, Block, Semantic）
-    pub fn start_selection(&mut self, pos: crate::domain::primitives::AbsolutePoint, kind: crate::domain::views::SelectionType) {
-        use rio_backend::crosswords::pos::{Line, Column, Pos, Side};
+    pub fn start_selection(
+        &mut self,
+        pos: crate::domain::primitives::AbsolutePoint,
+        kind: crate::domain::views::SelectionType,
+    ) {
+        use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
         use rio_backend::selection::{Selection, SelectionType as BackendSelectionType};
 
         with_crosswords_mut!(self, crosswords, {
@@ -862,13 +899,16 @@ impl Terminal {
 
             // 转换选区类型
             let backend_kind = match kind {
-                crate::domain::views::SelectionType::Simple => BackendSelectionType::Simple,
+                crate::domain::views::SelectionType::Simple => {
+                    BackendSelectionType::Simple
+                }
                 crate::domain::views::SelectionType::Block => BackendSelectionType::Block,
                 crate::domain::views::SelectionType::Lines => BackendSelectionType::Lines,
             };
 
             // 创建新的 Selection
-            crosswords.selection = Some(Selection::new(backend_kind, crosswords_pos, Side::Left));
+            crosswords.selection =
+                Some(Selection::new(backend_kind, crosswords_pos, Side::Left));
 
             // 标记 damage，触发重新渲染以显示选区高亮
             crosswords.mark_fully_damaged();
@@ -880,7 +920,7 @@ impl Terminal {
     /// # 参数
     /// - `pos`: 选区结束位置（绝对坐标）
     pub fn update_selection(&mut self, pos: crate::domain::primitives::AbsolutePoint) {
-        use rio_backend::crosswords::pos::{Line, Column, Pos, Side};
+        use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
 
         with_crosswords_mut!(self, crosswords, {
             // 转换坐标（与 start_selection 相同的逻辑）
@@ -926,9 +966,7 @@ impl Terminal {
     /// - `Some(String)` - 选中的文本
     /// - `None` - 没有选区
     pub fn selection_text(&self) -> Option<String> {
-        with_crosswords!(self, crosswords, {
-            crosswords.selection_to_string()
-        })
+        with_crosswords!(self, crosswords, { crosswords.selection_to_string() })
     }
 
     /// 获取指定范围内的文本（不需要设置选区）
@@ -940,8 +978,14 @@ impl Terminal {
     /// # 返回
     /// - `Some(String)` - 范围内的文本
     /// - `None` - 范围无效
-    pub fn text_in_range(&self, start_row: i32, start_col: u32, end_row: i32, end_col: u32) -> Option<String> {
-        use rio_backend::crosswords::pos::{Line, Column, Pos};
+    pub fn text_in_range(
+        &self,
+        start_row: i32,
+        start_col: u32,
+        end_row: i32,
+        end_col: u32,
+    ) -> Option<String> {
+        use rio_backend::crosswords::pos::{Column, Line, Pos};
 
         with_crosswords!(self, crosswords, {
             let history_size = crosswords.grid.history_size() as i32;
@@ -949,7 +993,9 @@ impl Terminal {
             let columns = crosswords.grid.columns();
 
             // 规范化：确保 start <= end
-            let (sr, sc, er, ec) = if start_row < end_row || (start_row == end_row && start_col <= end_col) {
+            let (sr, sc, er, ec) = if start_row < end_row
+                || (start_row == end_row && start_col <= end_col)
+            {
                 (start_row, start_col, end_row, end_col)
             } else {
                 (end_row, end_col, start_row, start_col)
@@ -1048,12 +1094,14 @@ impl Terminal {
         let (count, search_view) = if let Some(ref cw) = self.crosswords_ffi {
             let mut crosswords = cw.write();
             let _ = crosswords.start_search(query, false, false, None);
-            let count = crosswords.search_state
+            let count = crosswords
+                .search_state
                 .as_ref()
                 .map(|s| s.all_matches.len())
                 .unwrap_or(0);
             // 提取焦点位置并滚动
-            let scroll_pos = crosswords.search_state
+            let scroll_pos = crosswords
+                .search_state
                 .as_ref()
                 .and_then(|s| s.focused_match.as_ref())
                 .map(|f| *f.start());
@@ -1065,12 +1113,14 @@ impl Terminal {
         } else if let Some(ref cw) = self.crosswords_test {
             let mut crosswords = cw.write();
             let _ = crosswords.start_search(query, false, false, None);
-            let count = crosswords.search_state
+            let count = crosswords
+                .search_state
                 .as_ref()
                 .map(|s| s.all_matches.len())
                 .unwrap_or(0);
             // 提取焦点位置并滚动
-            let scroll_pos = crosswords.search_state
+            let scroll_pos = crosswords
+                .search_state
                 .as_ref()
                 .and_then(|s| s.focused_match.as_ref())
                 .map(|f| *f.start());
@@ -1093,7 +1143,8 @@ impl Terminal {
             let mut crosswords = cw.write();
             crosswords.search_goto_next();
             // 提取焦点位置并滚动
-            let scroll_pos = crosswords.search_state
+            let scroll_pos = crosswords
+                .search_state
                 .as_ref()
                 .and_then(|s| s.focused_match.as_ref())
                 .map(|f| *f.start());
@@ -1105,7 +1156,8 @@ impl Terminal {
             let mut crosswords = cw.write();
             crosswords.search_goto_next();
             // 提取焦点位置并滚动
-            let scroll_pos = crosswords.search_state
+            let scroll_pos = crosswords
+                .search_state
                 .as_ref()
                 .and_then(|s| s.focused_match.as_ref())
                 .map(|f| *f.start());
@@ -1125,7 +1177,8 @@ impl Terminal {
             let mut crosswords = cw.write();
             crosswords.search_goto_prev();
             // 提取焦点位置并滚动
-            let scroll_pos = crosswords.search_state
+            let scroll_pos = crosswords
+                .search_state
                 .as_ref()
                 .and_then(|s| s.focused_match.as_ref())
                 .map(|f| *f.start());
@@ -1137,7 +1190,8 @@ impl Terminal {
             let mut crosswords = cw.write();
             crosswords.search_goto_prev();
             // 提取焦点位置并滚动
-            let scroll_pos = crosswords.search_state
+            let scroll_pos = crosswords
+                .search_state
                 .as_ref()
                 .and_then(|s| s.focused_match.as_ref())
                 .map(|f| *f.start());
@@ -1226,9 +1280,7 @@ impl Terminal {
     /// 直到收到 ESU (\e[?2026l) 才变为 false。
     /// 在 sync 期间，应该跳过渲染以避免闪烁。
     pub fn is_syncing(&self) -> bool {
-        with_crosswords!(self, crosswords, {
-            crosswords.is_syncing
-        })
+        with_crosswords!(self, crosswords, { crosswords.is_syncing })
     }
 
     /// 检查终端是否启用了 Bracketed Paste Mode
@@ -1251,9 +1303,7 @@ impl Terminal {
     /// - Shell 自己最清楚当前目录
     /// - 每次 cd 后立即更新
     pub fn get_current_directory(&self) -> Option<std::path::PathBuf> {
-        with_crosswords!(self, crosswords, {
-            crosswords.current_directory.clone()
-        })
+        with_crosswords!(self, crosswords, { crosswords.current_directory.clone() })
     }
 
     /// 检查是否启用了 Kitty 键盘协议
@@ -1268,6 +1318,26 @@ impl Terminal {
         use rio_backend::crosswords::Mode;
         with_crosswords!(self, crosswords, {
             crosswords.mode().contains(Mode::DISAMBIGUATE_ESC_CODES)
+        })
+    }
+
+    /// 检查是否启用了鼠标追踪模式（SGR 1006, X11 1000, 等）
+    ///
+    /// 应用通过 DECSET 序列（如 `\x1b[?1006h`）启用鼠标追踪。
+    /// 启用后，终端应将鼠标事件转换为 SGR 格式发送到 PTY。
+    ///
+    /// # 返回值
+    /// - `true`: 鼠标追踪已启用，终端应发送鼠标事件到 PTY
+    /// - `false`: 鼠标追踪未启用，终端处理自己的鼠标交互（选择、滚动等）
+    pub fn has_mouse_tracking_mode(&self) -> bool {
+        use rio_backend::crosswords::Mode;
+        with_crosswords!(self, crosswords, {
+            crosswords.mode().intersects(
+                Mode::MOUSE_REPORT_CLICK
+                    | Mode::SGR_MOUSE
+                    | Mode::MOUSE_MOTION
+                    | Mode::MOUSE_DRAG,
+            )
         })
     }
 }
@@ -1481,12 +1551,19 @@ mod tests {
         let text = terminal.selection_text();
         assert!(text.is_some(), "Selection text should exist");
         let text = text.unwrap();
-        assert!(text.contains("Hello"), "Selection should contain 'Hello', got: {}", text);
+        assert!(
+            text.contains("Hello"),
+            "Selection should contain 'Hello', got: {}",
+            text
+        );
 
         // 清除选区
         terminal.clear_selection();
         let state_after = terminal.state();
-        assert!(state_after.selection.is_none(), "Selection should be cleared");
+        assert!(
+            state_after.selection.is_none(),
+            "Selection should be cleared"
+        );
     }
 
     #[test]
@@ -1560,7 +1637,10 @@ mod tests {
 
         // 验证搜索仍然存在
         let state = terminal.state();
-        assert!(state.search.is_some(), "Search should still exist after navigation");
+        assert!(
+            state.search.is_some(),
+            "Search should still exist after navigation"
+        );
     }
 
     #[test]
@@ -1593,13 +1673,19 @@ mod tests {
         terminal.scroll(5);
         let state_up = terminal.state();
         let up_offset = state_up.grid.display_offset();
-        assert!(up_offset > initial_offset, "Scroll up should increase offset");
+        assert!(
+            up_offset > initial_offset,
+            "Scroll up should increase offset"
+        );
 
         // 滚动到底部
         terminal.scroll_to_bottom();
         let state_bottom = terminal.state();
         let bottom_offset = state_bottom.grid.display_offset();
-        assert_eq!(bottom_offset, 0, "Scroll to bottom should reset offset to 0");
+        assert_eq!(
+            bottom_offset, 0,
+            "Scroll to bottom should reset offset to 0"
+        );
 
         // 滚动到顶部
         terminal.scroll_to_top();
@@ -1629,7 +1715,10 @@ mod tests {
         let offset_after = state_after.grid.display_offset();
 
         // 验证 offset 改变
-        assert_ne!(offset_before, offset_after, "Scroll should change display offset");
+        assert_ne!(
+            offset_before, offset_after,
+            "Scroll should change display offset"
+        );
     }
 
     #[test]
@@ -1652,7 +1741,10 @@ mod tests {
         let down_offset = state_down.grid.display_offset();
 
         // 向下滚动应该减少 offset
-        assert!(down_offset < up_offset, "Scroll down should decrease offset");
+        assert!(
+            down_offset < up_offset,
+            "Scroll down should decrease offset"
+        );
     }
 
     // ==================== Step 8: Integration Tests ====================
