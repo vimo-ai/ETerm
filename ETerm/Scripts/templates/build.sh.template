@@ -12,9 +12,9 @@ KIT_NAME="$(basename "$KIT_DIR" | sed 's/Kit$//')"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 
 # 输出路径逻辑：
-# 输出到 ~/.eterm/plugins/{PluginName}/{PluginName}.bundle
+# 输出到 ~/.vimo/eterm/plugins/{PluginName}/{PluginName}.bundle
 if [ -n "${BUNDLE_OUTPUT_DIR:-}" ]; then
-    # 通过脚本构建：输出到 ~/.eterm/plugins/{PluginName}/
+    # 通过脚本构建：输出到 ~/.vimo/eterm/plugins/{PluginName}/
     PLUGIN_DIR="${BUNDLE_OUTPUT_DIR}/${KIT_NAME}"
     mkdir -p "$PLUGIN_DIR"
     OUTPUT_DIR="$PLUGIN_DIR"

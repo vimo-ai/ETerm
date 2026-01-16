@@ -39,13 +39,13 @@ Build Phases 中的 "Build All Plugins" 脚本：
 ```
 
 输出位置：
-- Debug: 直接安装到 `~/.eterm/plugins/`
+- Debug: 直接安装到 `~/.vimo/eterm/plugins/`
 - Release: 打包到 app bundle，启动时自动安装
 
 ## 内置插件分发
 
 1. Xcode 构建时打包插件到 `ETerm.app/Contents/PlugIns/`
-2. 首次启动 `BuiltinPluginInstaller` 复制到 `~/.eterm/plugins/`
+2. 首次启动 `BuiltinPluginInstaller` 复制到 `~/.vimo/eterm/plugins/`
 3. Debug 模式总是覆盖，Release 按版本号比较
 
 ## 目录约定
@@ -53,7 +53,7 @@ Build Phases 中的 "Build All Plugins" 脚本：
 | 位置 | 用途 |
 |------|------|
 | `Plugins/*Kit/` | 插件源码 |
-| `~/.eterm/plugins/` | 用户安装目录 |
+| `~/.vimo/eterm/plugins/` | 用户安装目录 |
 | `ETerm.app/Contents/PlugIns/` | 内置插件 |
 
 ## 相关文件
