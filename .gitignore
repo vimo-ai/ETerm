@@ -47,3 +47,4 @@ Plugins/*/.build/
 Plugins/*/build/
 Plugins/MemexKit/Lib/memex
 **/.swiftpm/
+.mcp.json
