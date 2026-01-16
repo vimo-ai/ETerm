@@ -52,7 +52,7 @@ MyPlugin/
 
 ```bash
 cd MyPluginKit
-./build.sh                     # 构建并安装到 ~/.eterm/plugins/
+./build.sh                     # 构建并安装到 ~/.vimo/eterm/plugins/
 ```
 
 重启 ETerm 后插件自动加载。
@@ -289,7 +289,7 @@ let package = Package(
 
 ## 内置插件分发
 
-内置插件会随 ETerm.app 打包分发，首次启动时自动安装到 `~/.eterm/plugins/`。
+内置插件会随 ETerm.app 打包分发，首次启动时自动安装到 `~/.vimo/eterm/plugins/`。
 
 **开发流程**:
 1. 修改插件代码
