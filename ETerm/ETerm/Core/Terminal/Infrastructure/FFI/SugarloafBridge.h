@@ -213,6 +213,42 @@ bool terminal_pool_is_kitty_keyboard_enabled(
     size_t terminal_id
 );
 
+/// Check if terminal has Mouse Tracking Mode enabled (SGR 1006)
+///
+/// Apps enable mouse tracking by sending `\x1b[?1006h` (SGR mode).
+/// When enabled, mouse events should be sent to the PTY instead of
+/// being handled by the terminal (selection, scrollback, etc).
+///
+/// Returns:
+/// - true: Mouse tracking enabled, send SGR mouse reports to PTY
+/// - false: Mouse tracking disabled, handle mouse events locally
+bool terminal_pool_has_mouse_tracking_mode(
+    TerminalPoolHandle handle,
+    size_t terminal_id
+);
+
+/// Send SGR format mouse report to PTY
+///
+/// SGR mouse report format: `\x1b[<button;col;rowM` (pressed) or `\x1b[<button;col;rowm` (released)
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param button Button code:
+///   - 0=left, 1=middle, 2=right
+///   - 64=scroll up, 65=scroll down
+/// @param col Grid column (1-based)
+/// @param row Grid row (1-based)
+/// @param pressed true for press (M), false for release (m)
+/// @return true on success, false if terminal not found
+bool terminal_pool_send_mouse_sgr(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    uint8_t button,
+    uint16_t col,
+    uint16_t row,
+    bool pressed
+);
+
 /// Resize terminal
 bool terminal_pool_resize_terminal(
     TerminalPoolHandle handle,

@@ -50,22 +50,27 @@
 //! 4. 优先使用 `try_lock()` 避免阻塞主线程
 
 use crate::domain::aggregates::{Terminal, TerminalId};
+use crate::render::font::FontContext;
+use crate::render::{RenderConfig, Renderer};
 use crate::rio_event::EventQueue;
 use crate::rio_machine::Machine;
-use crate::render::{Renderer, RenderConfig};
-use crate::render::font::FontContext;
 use corcovado::channel;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, Weak};
 use std::thread::JoinHandle;
 use sugarloaf::font::FontLibrary;
-use sugarloaf::{Sugarloaf, SugarloafWindow, SugarloafWindowSize, SugarloafRenderer, Object, ImageObject, layout::RootStyle};
-use std::ffi::c_void;
+use sugarloaf::{
+    ImageObject, Object, Sugarloaf, SugarloafRenderer, SugarloafWindow,
+    SugarloafWindowSize, layout::RootStyle,
+};
 
-use super::ffi::{AppConfig, ErrorCode, TerminalEvent, TerminalEventType, TerminalPoolEventCallback};
+use super::ffi::{
+    AppConfig, ErrorCode, TerminalEvent, TerminalEventType, TerminalPoolEventCallback,
+};
 
 // ============================================================================
 // 全局终端事件路由（修复跨 Pool 迁移后事件丢失问题）
@@ -86,7 +91,8 @@ struct TerminalEventTarget {
 ///
 /// 映射 terminal_id → TerminalEventTarget
 /// 用于 PTY 事件路由：无论终端在哪个 Pool，都能正确标记 dirty 和 needs_render
-static TERMINAL_REGISTRY: OnceLock<RwLock<HashMap<usize, TerminalEventTarget>>> = OnceLock::new();
+static TERMINAL_REGISTRY: OnceLock<RwLock<HashMap<usize, TerminalEventTarget>>> =
+    OnceLock::new();
 
 /// 获取全局终端注册表（懒初始化）
 fn global_terminal_registry() -> &'static RwLock<HashMap<usize, TerminalEventTarget>> {
@@ -105,7 +111,9 @@ pub fn register_terminal_event_target(
         dirty_flag,
         needs_render: Arc::downgrade(needs_render),
     };
-    global_terminal_registry().write().insert(terminal_id, target);
+    global_terminal_registry()
+        .write()
+        .insert(terminal_id, target);
 }
 
 /// 更新终端的 needs_render 指向（迁移到新 Pool 时调用）
@@ -137,11 +145,17 @@ pub fn route_wakeup_event(terminal_id: usize) -> bool {
         } else {
             // Weak 引用失效，Pool 可能已被释放
             #[cfg(debug_assertions)]
-            crate::rust_log_warn!("[RenderLoop] ⚠️ route_wakeup: needs_render.upgrade() failed for terminal {}", terminal_id);
+            crate::rust_log_warn!(
+                "[RenderLoop] ⚠️ route_wakeup: needs_render.upgrade() failed for terminal {}",
+                terminal_id
+            );
         }
     } else {
         #[cfg(debug_assertions)]
-        crate::rust_log_warn!("[RenderLoop] ⚠️ route_wakeup: terminal {} not found in registry", terminal_id);
+        crate::rust_log_warn!(
+            "[RenderLoop] ⚠️ route_wakeup: terminal {} not found in registry",
+            terminal_id
+        );
     }
     false
 }
@@ -272,7 +286,8 @@ pub struct TerminalPool {
     event_callback: Option<(TerminalPoolEventCallback, *mut c_void)>,
 
     /// 字符串事件回调（用于 CWD、Command 等）
-    string_event_callback: Option<(super::ffi::TerminalPoolStringEventCallback, *mut c_void)>,
+    string_event_callback:
+        Option<(super::ffi::TerminalPoolStringEventCallback, *mut c_void)>,
 
     /// 配置
     config: AppConfig,
@@ -294,7 +309,6 @@ pub struct TerminalPool {
     // 主线程使用 try_lock 尝试更新，如果锁被占用则存入 pending_*
     // CVDisplayLink 线程在 render_all() 开始时检查并应用这些更新
     // 这样既避免了死锁，又保证更新不会丢失
-
     /// 待处理的 Sugarloaf resize (width, height)
     pending_resize: Mutex<Option<(f32, f32)>>,
 
@@ -339,8 +353,8 @@ impl TerminalPool {
         #[cfg(target_os = "macos")]
         {
             use skia_safe::{
-                gpu::{SurfaceOrigin, surfaces, Budgeted},
-                ColorType, ImageInfo, AlphaType, ColorSpace,
+                AlphaType, ColorSpace, ColorType, ImageInfo,
+                gpu::{Budgeted, SurfaceOrigin, surfaces},
             };
 
             let image_info = ImageInfo::new(
@@ -356,7 +370,7 @@ impl TerminalPool {
                 &mut skia_context,
                 Budgeted::Yes,
                 &image_info,
-                None,  // sample_count
+                None, // sample_count
                 SurfaceOrigin::TopLeft,
                 None,  // surface_props
                 false, // should_create_with_mips
@@ -416,7 +430,7 @@ impl TerminalPool {
 
         Ok(Self {
             terminals: RwLock::new(HashMap::new()),
-            next_id: 1,  // 从 1 开始，0 表示无效
+            next_id: 1, // 从 1 开始，0 表示无效
             sugarloaf: Mutex::new(sugarloaf),
             renderer: Mutex::new(renderer),
             pending_objects: Vec::new(),
@@ -508,13 +522,14 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine
-        let (machine_handle, pty_tx, pty_fd, shell_pid) = match Self::create_pty_and_machine(&terminal, self.event_queue.clone()) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
-                return -1;
-            }
-        };
+        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+            match Self::create_pty_and_machine(&terminal, self.event_queue.clone()) {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
+                    return -1;
+                }
+            };
 
         // 3. 存储条目
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
@@ -527,17 +542,19 @@ impl TerminalPool {
             pty_fd,
             shell_pid,
             render_cache: None,  // 首次渲染时创建
-            surface_cache: None,  // P4: 首次渲染时创建 Surface 缓存
+            surface_cache: None, // P4: 首次渲染时创建 Surface 缓存
             cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
-            is_background: Arc::new(AtomicBool::new(false)),  // 默认为 Active 模式
+            is_background: Arc::new(AtomicBool::new(false)), // 默认为 Active 模式
             selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: dirty_flag.clone(),
-            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
-                cols as usize,
-                rows as usize,
-            ))),  // 增量同步用，首次 sync 时全量同步
+            render_state: Arc::new(Mutex::new(
+                crate::domain::aggregates::render_state::RenderState::new(
+                    cols as usize,
+                    rows as usize,
+                ),
+            )), // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
         };
@@ -555,7 +572,12 @@ impl TerminalPool {
     /// 创建新终端（指定工作目录）
     ///
     /// 返回终端 ID，失败返回 -1
-    pub fn create_terminal_with_cwd(&mut self, cols: u16, rows: u16, working_dir: Option<String>) -> i32 {
+    pub fn create_terminal_with_cwd(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        working_dir: Option<String>,
+    ) -> i32 {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -569,13 +591,18 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine（带工作目录）
-        let (machine_handle, pty_tx, pty_fd, shell_pid) = match Self::create_pty_and_machine_with_cwd(&terminal, self.event_queue.clone(), working_dir) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
-                return -1;
-            }
-        };
+        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+            match Self::create_pty_and_machine_with_cwd(
+                &terminal,
+                self.event_queue.clone(),
+                working_dir,
+            ) {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
+                    return -1;
+                }
+            };
 
         // 3. 存储条目
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
@@ -588,17 +615,19 @@ impl TerminalPool {
             pty_fd,
             shell_pid,
             render_cache: None,  // 首次渲染时创建
-            surface_cache: None,  // P4: 首次渲染时创建 Surface 缓存
+            surface_cache: None, // P4: 首次渲染时创建 Surface 缓存
             cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
-            is_background: Arc::new(AtomicBool::new(false)),  // 默认为 Active 模式
+            is_background: Arc::new(AtomicBool::new(false)), // 默认为 Active 模式
             selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: dirty_flag.clone(),
-            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
-                cols as usize,
-                rows as usize,
-            ))),  // 增量同步用，首次 sync 时全量同步
+            render_state: Arc::new(Mutex::new(
+                crate::domain::aggregates::render_state::RenderState::new(
+                    cols as usize,
+                    rows as usize,
+                ),
+            )), // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
         };
@@ -632,13 +661,14 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine
-        let (machine_handle, pty_tx, pty_fd, shell_pid) = match Self::create_pty_and_machine(&terminal, self.event_queue.clone()) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
-                return -1;
-            }
-        };
+        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+            match Self::create_pty_and_machine(&terminal, self.event_queue.clone()) {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
+                    return -1;
+                }
+            };
 
         // 3. 存储条目
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
@@ -658,10 +688,12 @@ impl TerminalPool {
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: dirty_flag.clone(),
-            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
-                cols as usize,
-                rows as usize,
-            ))),
+            render_state: Arc::new(Mutex::new(
+                crate::domain::aggregates::render_state::RenderState::new(
+                    cols as usize,
+                    rows as usize,
+                ),
+            )),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
         };
@@ -683,7 +715,13 @@ impl TerminalPool {
     ///
     /// 用于 Session 恢复，确保 ID 在重启后保持一致
     /// 返回终端 ID，失败返回 -1
-    pub fn create_terminal_with_id_and_cwd(&mut self, id: usize, cols: u16, rows: u16, working_dir: Option<String>) -> i64 {
+    pub fn create_terminal_with_id_and_cwd(
+        &mut self,
+        id: usize,
+        cols: u16,
+        rows: u16,
+        working_dir: Option<String>,
+    ) -> i64 {
         // 检查 ID 是否已存在
         if self.terminals.read().contains_key(&id) {
             eprintln!("❌ [TerminalPool] Terminal ID {} already exists", id);
@@ -700,13 +738,18 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine（带工作目录）
-        let (machine_handle, pty_tx, pty_fd, shell_pid) = match Self::create_pty_and_machine_with_cwd(&terminal, self.event_queue.clone(), working_dir) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
-                return -1;
-            }
-        };
+        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+            match Self::create_pty_and_machine_with_cwd(
+                &terminal,
+                self.event_queue.clone(),
+                working_dir,
+            ) {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!("❌ [TerminalPool] Failed to create PTY: {:?}", e);
+                    return -1;
+                }
+            };
 
         // 3. 存储条目
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
@@ -726,10 +769,12 @@ impl TerminalPool {
             title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
             scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
             dirty_flag: dirty_flag.clone(),
-            render_state: Arc::new(Mutex::new(crate::domain::aggregates::render_state::RenderState::new(
-                cols as usize,
-                rows as usize,
-            ))),
+            render_state: Arc::new(Mutex::new(
+                crate::domain::aggregates::render_state::RenderState::new(
+                    cols as usize,
+                    rows as usize,
+                ),
+            )),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
         };
@@ -753,7 +798,15 @@ impl TerminalPool {
     fn create_pty_and_machine(
         terminal: &Terminal,
         event_queue: EventQueue,
-    ) -> Result<(JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>, channel::Sender<rio_backend::event::Msg>, i32, u32), ErrorCode> {
+    ) -> Result<
+        (
+            JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>,
+            channel::Sender<rio_backend::event::Msg>,
+            i32,
+            u32,
+        ),
+        ErrorCode,
+    > {
         // 默认使用用户 home 目录
         let home = std::env::var("HOME").ok();
         Self::create_pty_and_machine_with_cwd(terminal, event_queue, home)
@@ -766,12 +819,21 @@ impl TerminalPool {
         terminal: &Terminal,
         event_queue: EventQueue,
         working_dir: Option<String>,
-    ) -> Result<(JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>, channel::Sender<rio_backend::event::Msg>, i32, u32), ErrorCode> {
-        use teletypewriter::create_pty_with_spawn;
+    ) -> Result<
+        (
+            JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>,
+            channel::Sender<rio_backend::event::Msg>,
+            i32,
+            u32,
+        ),
+        ErrorCode,
+    > {
         use crate::rio_event::FFIEventListener;
         use std::env;
+        use teletypewriter::create_pty_with_spawn;
 
-        let crosswords = terminal.inner_crosswords()
+        let crosswords = terminal
+            .inner_crosswords()
             .ok_or(ErrorCode::InvalidConfig)?;
 
         let cols = terminal.cols() as u16;
@@ -780,8 +842,8 @@ impl TerminalPool {
 
         // 注入 ETERM 环境变量
         let terminal_id_str = terminal.id().0.to_string();
-        env::set_var("ETERM_TERMINAL_ID", &terminal_id_str);  // 用于 Claude Hook 调用
-        env::set_var("ETERM_SESSION_ID", &terminal_id_str);   // 用于 AI 自动补全
+        env::set_var("ETERM_TERMINAL_ID", &terminal_id_str); // 用于 Claude Hook 调用
+        env::set_var("ETERM_SESSION_ID", &terminal_id_str); // 用于 AI 自动补全
 
         // 统一使用 spawn 创建 PTY（支持指定工作目录）
         // 如果未指定工作目录，默认使用 $HOME
@@ -801,7 +863,8 @@ impl TerminalPool {
             terminal.id().0,
             pty_fd,
             shell_pid,
-        ).map_err(|_| ErrorCode::RenderError)?;
+        )
+        .map_err(|_| ErrorCode::RenderError)?;
 
         let pty_tx = machine.channel();
         let handle = machine.spawn();
@@ -936,12 +999,9 @@ impl TerminalPool {
     pub fn get_foreground_process_name(&self, id: usize) -> Option<String> {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            let name = teletypewriter::foreground_process_name(entry.pty_fd, entry.shell_pid);
-            if name.is_empty() {
-                None
-            } else {
-                Some(name)
-            }
+            let name =
+                teletypewriter::foreground_process_name(entry.pty_fd, entry.shell_pid);
+            if name.is_empty() { None } else { Some(name) }
         } else {
             None
         }
@@ -953,7 +1013,8 @@ impl TerminalPool {
     pub fn has_running_process(&self, id: usize) -> bool {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            let fg_name = teletypewriter::foreground_process_name(entry.pty_fd, entry.shell_pid);
+            let fg_name =
+                teletypewriter::foreground_process_name(entry.pty_fd, entry.shell_pid);
             if fg_name.is_empty() {
                 return false;
             }
@@ -993,6 +1054,53 @@ impl TerminalPool {
         }
     }
 
+    /// 检查是否启用了鼠标追踪模式（SGR 1006, X11 1000, 等）
+    ///
+    /// 应用程序通过 DECSET 序列（如 `\x1b[?1006h`）启用鼠标追踪。
+    /// 启用后，终端应将鼠标事件转换为 SGR 格式发送到 PTY。
+    ///
+    /// # 返回值
+    /// - `true`: 鼠标追踪已启用，终端应发送鼠标事件到 PTY
+    /// - `false`: 鼠标追踪未启用，终端处理自己的鼠标交互（选择、滚动等）
+    pub fn has_mouse_tracking_mode(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            terminal.has_mouse_tracking_mode()
+        } else {
+            false
+        }
+    }
+
+    /// 发送 SGR 格式的鼠标报告到 PTY
+    ///
+    /// SGR 鼠标报告格式：`\x1b[<button;col;rowM` 或 `\x1b[<button;col;rowm`
+    ///
+    /// # 参数
+    /// - `id`: 终端 ID
+    /// - `button`: 按钮编码
+    ///   - 0=左键, 1=中键, 2=右键
+    ///   - 64=滚轮向上, 65=滚轮向下
+    /// - `col`: 网格列号（1-based）
+    /// - `row`: 网格行号（1-based）
+    /// - `pressed`: 是否按下（M/m）
+    ///
+    /// # 返回值
+    /// - `true`: 发送成功
+    /// - `false`: 终端不存在
+    pub fn send_mouse_sgr(
+        &self,
+        id: usize,
+        button: u8,
+        col: u16,
+        row: u16,
+        pressed: bool,
+    ) -> bool {
+        let c = if pressed { 'M' } else { 'm' };
+        let msg = format!("\x1b[<{};{};{}{}", button, col, row, c);
+        self.input(id, msg.as_bytes())
+    }
+
     /// 调整终端大小
     ///
     /// 分两阶段执行以避免死锁：
@@ -1003,21 +1111,31 @@ impl TerminalPool {
     /// - PTY-1 可能持有 crosswords 锁并等待 terminals 读锁
     /// - 如果我们在持有 terminals 写锁时调用 terminal.resize()（需要 crosswords 锁）
     /// - 就会形成死锁
-    pub fn resize_terminal(&mut self, id: usize, cols: u16, rows: u16, width: f32, height: f32) -> bool {
+    pub fn resize_terminal(
+        &mut self,
+        id: usize,
+        cols: u16,
+        rows: u16,
+        width: f32,
+        height: f32,
+    ) -> bool {
         use std::time::Duration;
 
         // 阶段 1：快速更新 entry 字段（持有写锁时间尽量短）
         // 使用 try_write_for 让 writer 实际排队，parking_lot 对排队的 writer 是公平的
         let (terminal_arc, pty_tx) = {
-            let mut terminals = match self.terminals.try_write_for(Duration::from_micros(200)) {
-                Some(t) => t,
-                None => {
-                    // 写锁超时，排队待处理
-                    self.pending_terminal_resizes.lock().push((id, cols, rows, width, height));
-                    self.needs_render.store(true, Ordering::Release);
-                    return true;
-                }
-            };
+            let mut terminals =
+                match self.terminals.try_write_for(Duration::from_micros(200)) {
+                    Some(t) => t,
+                    None => {
+                        // 写锁超时，排队待处理
+                        self.pending_terminal_resizes
+                            .lock()
+                            .push((id, cols, rows, width, height));
+                        self.needs_render.store(true, Ordering::Release);
+                        return true;
+                    }
+                };
 
             if let Some(entry) = terminals.get_mut(&id) {
                 // 更新存储的尺寸
@@ -1108,24 +1226,33 @@ impl TerminalPool {
     /// 自动修正宽字符边界，确保选中整个宽字符：
     /// - start 在 spacer 上 → 向左修正到宽字符
     /// - end 在宽字符上 → 向右扩展到 spacer
-    pub fn set_selection(&self, id: usize, start_row: usize, start_col: usize, end_row: usize, end_col: usize) -> bool {
+    pub fn set_selection(
+        &self,
+        id: usize,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+    ) -> bool {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
             // 尝试修正宽字符边界（如果能获取锁）
-            let (adjusted_start_col, adjusted_end_col) = if let Some(terminal) = entry.terminal.try_lock() {
-                let state = terminal.state();
-                let grid = &state.grid;
+            let (adjusted_start_col, adjusted_end_col) =
+                if let Some(terminal) = entry.terminal.try_lock() {
+                    let state = terminal.state();
+                    let grid = &state.grid;
 
-                // 修正 start：spacer 向左到宽字符
-                let adj_start = Self::adjust_start_for_wide_char(start_row, start_col, grid);
-                // 修正 end：宽字符向右扩展到 spacer
-                let adj_end = Self::adjust_end_for_wide_char(end_row, end_col, grid);
+                    // 修正 start：spacer 向左到宽字符
+                    let adj_start =
+                        Self::adjust_start_for_wide_char(start_row, start_col, grid);
+                    // 修正 end：宽字符向右扩展到 spacer
+                    let adj_end = Self::adjust_end_for_wide_char(end_row, end_col, grid);
 
-                (adj_start, adj_end)
-            } else {
-                // 获取不到锁时保持原样（极少情况）
-                (start_col, end_col)
-            };
+                    (adj_start, adj_end)
+                } else {
+                    // 获取不到锁时保持原样（极少情况）
+                    (start_col, end_col)
+                };
 
             // 操作 SelectionOverlay
             entry.selection_overlay.update(
@@ -1155,7 +1282,10 @@ impl TerminalPool {
         if let Some(screen_row) = grid.absolute_to_screen(absolute_row) {
             if let Some(row) = grid.row(screen_row) {
                 let cells = row.cells();
-                if col < cells.len() && cells[col].flags & WIDE_CHAR_SPACER != 0 && col > 0 {
+                if col < cells.len()
+                    && cells[col].flags & WIDE_CHAR_SPACER != 0
+                    && col > 0
+                {
                     return col - 1;
                 }
             }
@@ -1175,7 +1305,10 @@ impl TerminalPool {
             if let Some(row) = grid.row(screen_row) {
                 let cells = row.cells();
                 // 如果在宽字符上，向右扩展到包含 spacer
-                if col < cells.len() && cells[col].flags & WIDE_CHAR != 0 && col + 1 < cells.len() {
+                if col < cells.len()
+                    && cells[col].flags & WIDE_CHAR != 0
+                    && col + 1 < cells.len()
+                {
                     return col + 1;
                 }
             }
@@ -1257,8 +1390,14 @@ impl TerminalPool {
     /// 获取选区叠加层
     ///
     /// 返回 Arc 以便调用方持有引用
-    pub fn get_selection_overlay(&self, id: usize) -> Option<Arc<crate::infra::SelectionOverlay>> {
-        self.terminals.read().get(&id).map(|e| e.selection_overlay.clone())
+    pub fn get_selection_overlay(
+        &self,
+        id: usize,
+    ) -> Option<Arc<crate::infra::SelectionOverlay>> {
+        self.terminals
+            .read()
+            .get(&id)
+            .map(|e| e.selection_overlay.clone())
     }
 
     /// 设置超链接悬停状态
@@ -1398,7 +1537,14 @@ impl TerminalPool {
     /// - width, height: 终端区域大小（逻辑坐标）
     ///   - 如果 > 0，会自动计算 cols/rows 并 resize
     ///   - 如果 = 0，不执行 resize
-    pub fn render_terminal(&mut self, id: usize, _x: f32, _y: f32, width: f32, height: f32) -> bool {
+    pub fn render_terminal(
+        &mut self,
+        id: usize,
+        _x: f32,
+        _y: f32,
+        width: f32,
+        height: f32,
+    ) -> bool {
         // 获取字体度量（物理像素）
         let font_metrics = {
             let mut renderer = self.renderer.lock();
@@ -1414,9 +1560,11 @@ impl TerminalPool {
             let physical_width = PhysicalPixels::new(width * scale);
             let physical_height = PhysicalPixels::new(height * scale);
             // 使用 line_height（= cell_height * factor）计算行数
-            let physical_line_height = font_metrics.cell_height.value * self.config.line_height;
+            let physical_line_height =
+                font_metrics.cell_height.value * self.config.line_height;
 
-            let new_cols = (physical_width.value / font_metrics.cell_width.value).floor() as u16;
+            let new_cols =
+                (physical_width.value / font_metrics.cell_width.value).floor() as u16;
             let new_rows = (physical_height.value / physical_line_height).floor() as u16;
 
             if new_cols > 0 && new_rows > 0 {
@@ -1433,8 +1581,11 @@ impl TerminalPool {
                 };
                 if needs_resize {
                     // 放入 pending 队列，由下一帧的 apply_pending_updates 处理
-                    self.pending_terminal_resizes.lock().push((id, new_cols, new_rows, width, height));
-                    self.needs_render.store(true, std::sync::atomic::Ordering::Release);
+                    self.pending_terminal_resizes
+                        .lock()
+                        .push((id, new_cols, new_rows, width, height));
+                    self.needs_render
+                        .store(true, std::sync::atomic::Ordering::Release);
                 }
             }
         }
@@ -1460,7 +1611,9 @@ impl TerminalPool {
                 Some(entry) => {
                     // 检查缓存
                     let valid = match &entry.render_cache {
-                        Some(cache) => cache.width == cache_width && cache.height == cache_height,
+                        Some(cache) => {
+                            cache.width == cache_width && cache.height == cache_height
+                        }
                         None => false,
                     };
                     // 快速路径：缓存有效且不脏且选区无变化，直接跳过
@@ -1473,7 +1626,7 @@ impl TerminalPool {
                     }
                     // 传递 dirty 状态供后续阶段使用
                     (valid, dirty, sel_dirty)
-                },
+                }
                 None => return false,
             }
         };
@@ -1486,21 +1639,28 @@ impl TerminalPool {
         // 解决：快速获取 Arc 引用后立即释放读锁，耗时操作在锁外执行
 
         // 阶段 1：快速获取 Arc 引用（读锁只持有几微秒）
-        let (terminal_arc, render_state_arc, _dirty_flag, cursor_cache, selection_cache, scroll_cache, selection_overlay, ime_state_arc) = {
+        let (
+            terminal_arc,
+            render_state_arc,
+            _dirty_flag,
+            cursor_cache,
+            selection_cache,
+            scroll_cache,
+            selection_overlay,
+            ime_state_arc,
+        ) = {
             let terminals = self.terminals.read();
             match terminals.get(&id) {
-                Some(entry) => {
-                    (
-                        entry.terminal.clone(),
-                        entry.render_state.clone(),
-                        entry.dirty_flag.clone(),
-                        entry.cursor_cache.clone(),
-                        entry.selection_cache.clone(),
-                        entry.scroll_cache.clone(),
-                        entry.selection_overlay.clone(),
-                        entry.ime_state.clone(),
-                    )
-                },
+                Some(entry) => (
+                    entry.terminal.clone(),
+                    entry.render_state.clone(),
+                    entry.dirty_flag.clone(),
+                    entry.cursor_cache.clone(),
+                    entry.selection_cache.clone(),
+                    entry.scroll_cache.clone(),
+                    entry.selection_overlay.clone(),
+                    entry.ime_state.clone(),
+                ),
                 None => return false,
             }
         };
@@ -1526,7 +1686,8 @@ impl TerminalPool {
 
                     // 检查是否需要渲染
                     let is_damaged = terminal.is_damaged();
-                    if cache_valid && !is_damaged && !dirty_cleared && !sel_dirty_cleared {
+                    if cache_valid && !is_damaged && !dirty_cleared && !sel_dirty_cleared
+                    {
                         return true;
                     }
 
@@ -1539,7 +1700,7 @@ impl TerminalPool {
                     }
 
                     (state, rows)
-                },
+                }
                 None => {
                     // 锁被占用，跳过这一帧
                     // 渲染被跳过，如果选区脏标记已清除，需要重新标记确保下帧继续渲染
@@ -1608,10 +1769,12 @@ impl TerminalPool {
             match terminals.get(&id) {
                 Some(entry) => {
                     match &entry.surface_cache {
-                        Some(cache) => cache.width != cache_width || cache.height != cache_height,
-                        None => true,  // 首次创建
+                        Some(cache) => {
+                            cache.width != cache_width || cache.height != cache_height
+                        }
+                        None => true, // 首次创建
                     }
-                },
+                }
                 None => return false,
             }
         };
@@ -1621,7 +1784,10 @@ impl TerminalPool {
             let new_surface = match self.create_temp_surface(cache_width, cache_height) {
                 Some(s) => s,
                 None => {
-                    eprintln!("❌ [TerminalPool] Failed to create surface for terminal {}", id);
+                    eprintln!(
+                        "❌ [TerminalPool] Failed to create surface for terminal {}",
+                        id
+                    );
                     return false;
                 }
             };
@@ -1663,13 +1829,19 @@ impl TerminalPool {
                         let mut renderer = self.renderer.lock();
 
                         let logical_cell_size = font_metrics.to_logical_size(scale);
-                        let logical_line_height = logical_cell_size.height * self.config.line_height;
+                        let logical_line_height =
+                            logical_cell_size.height * self.config.line_height;
 
                         for line in 0..rows {
-                            let image = renderer.render_line(line, &state, Some(&mut gpu_context));
+                            let image = renderer.render_line(
+                                line,
+                                &state,
+                                Some(&mut gpu_context),
+                            );
 
                             // 计算该行在 Surface 内的位置（物理像素）
-                            let y_offset_pixels = (logical_line_height * (line as f32)) * scale;
+                            let y_offset_pixels =
+                                (logical_line_height * (line as f32)) * scale;
                             let y_offset = y_offset_pixels.value;
 
                             canvas.draw_image(&image, (0.0f32, y_offset), None);
@@ -1680,8 +1852,11 @@ impl TerminalPool {
                         // 渲染时始终显示选区，让用户在拖拽过程中看到选区位置
                         if let Some(snapshot) = entry.selection_overlay.snapshot() {
                             use crate::domain::primitives::PhysicalPixels;
-                            let physical_cell_width = PhysicalPixels::new(logical_cell_size.width.value * scale);
-                            let physical_line_height = PhysicalPixels::new(logical_line_height.value * scale);
+                            let physical_cell_width = PhysicalPixels::new(
+                                logical_cell_size.width.value * scale,
+                            );
+                            let physical_line_height =
+                                PhysicalPixels::new(logical_line_height.value * scale);
                             self.draw_selection_overlay(
                                 canvas,
                                 &snapshot,
@@ -1696,11 +1871,16 @@ impl TerminalPool {
                         // 绘制 IME 预编辑叠加层
                         if let Some(ime) = &state.ime {
                             use crate::domain::primitives::PhysicalPixels;
-                            let physical_cell_width = PhysicalPixels::new(logical_cell_size.width.value * scale);
-                            let physical_line_height = PhysicalPixels::new(logical_line_height.value * scale);
+                            let physical_cell_width = PhysicalPixels::new(
+                                logical_cell_size.width.value * scale,
+                            );
+                            let physical_line_height =
+                                PhysicalPixels::new(logical_line_height.value * scale);
                             let font_metrics = renderer.get_font_metrics();
                             // 计算光标所在的屏幕行
-                            let cursor_screen_row = state.cursor.line()
+                            let cursor_screen_row = state
+                                .cursor
+                                .line()
                                 .saturating_sub(state.grid.history_size())
                                 .saturating_add(state.grid.display_offset());
                             self.draw_ime_overlay(
@@ -1710,7 +1890,7 @@ impl TerminalPool {
                                 cursor_screen_row,
                                 physical_cell_width,
                                 physical_line_height,
-                                font_metrics.baseline_offset.value,  // 已经是物理像素，不需要再乘 scale
+                                font_metrics.baseline_offset.value, // 已经是物理像素，不需要再乘 scale
                             );
                         }
 
@@ -1817,7 +1997,11 @@ impl TerminalPool {
     /// # 参数
     /// - layout: Vec<(terminal_id, x, y, width, height)>
     /// - container_height: 容器高度（用于坐标转换）
-    pub fn set_render_layout(&self, layout: Vec<(usize, f32, f32, f32, f32)>, container_height: f32) {
+    pub fn set_render_layout(
+        &self,
+        layout: Vec<(usize, f32, f32, f32, f32)>,
+        container_height: f32,
+    ) {
         {
             let mut render_layout = self.render_layout.lock();
             *render_layout = layout;
@@ -1828,7 +2012,8 @@ impl TerminalPool {
         }
 
         // 标记需要渲染
-        self.needs_render.store(true, std::sync::atomic::Ordering::Release);
+        self.needs_render
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// 获取渲染布局的 Arc 引用（供 RenderScheduler 使用）
@@ -1876,7 +2061,7 @@ impl TerminalPool {
                     metrics.cell_height.value,
                     metrics.cell_height.value * self.config.line_height,
                 );
-                drop(renderer);  // 先释放 renderer 锁
+                drop(renderer); // 先释放 renderer 锁
                 *self.cached_font_metrics.write().unwrap() = new_metrics;
             }
         }
@@ -1893,31 +2078,42 @@ impl TerminalPool {
                 metrics.cell_height.value,
                 metrics.cell_height.value * self.config.line_height,
             );
-            drop(renderer);  // 先释放 renderer 锁
+            drop(renderer); // 先释放 renderer 锁
             *self.cached_font_metrics.write().unwrap() = new_metrics;
         }
 
         // 4. 应用待处理的终端 resize
         // 两阶段执行：先更新 entry，释放锁后再调用 terminal.resize()
-        let pending_resizes: Vec<_> = self.pending_terminal_resizes.lock().drain(..).collect();
+        let pending_resizes: Vec<_> =
+            self.pending_terminal_resizes.lock().drain(..).collect();
         if !pending_resizes.is_empty() {
             // 阶段 1：收集需要 resize 的终端信息
             let resize_tasks: Vec<_> = {
                 if let Some(mut terminals) = self.terminals.try_write() {
-                    pending_resizes.into_iter().filter_map(|(id, cols, rows, width, height)| {
-                        if let Some(entry) = terminals.get_mut(&id) {
-                            // 更新 entry 字段
-                            entry.cols = cols;
-                            entry.rows = rows;
-                            entry.surface_cache = None;
-                            entry.render_cache = None;
-                            entry.dirty_flag.mark_dirty();
-                            // 收集需要的信息
-                            Some((entry.terminal.clone(), entry.pty_tx.clone(), cols, rows, width, height))
-                        } else {
-                            None
-                        }
-                    }).collect()
+                    pending_resizes
+                        .into_iter()
+                        .filter_map(|(id, cols, rows, width, height)| {
+                            if let Some(entry) = terminals.get_mut(&id) {
+                                // 更新 entry 字段
+                                entry.cols = cols;
+                                entry.rows = rows;
+                                entry.surface_cache = None;
+                                entry.render_cache = None;
+                                entry.dirty_flag.mark_dirty();
+                                // 收集需要的信息
+                                Some((
+                                    entry.terminal.clone(),
+                                    entry.pty_tx.clone(),
+                                    cols,
+                                    rows,
+                                    width,
+                                    height,
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
                 } else {
                     // 写锁被占用，放回队列下一帧重试
                     self.pending_terminal_resizes.lock().extend(pending_resizes);
@@ -1931,7 +2127,12 @@ impl TerminalPool {
                     terminal.resize(cols as usize, rows as usize);
                 }
                 use teletypewriter::WinsizeBuilder;
-                let winsize = WinsizeBuilder { rows, cols, width: width as u16, height: height as u16 };
+                let winsize = WinsizeBuilder {
+                    rows,
+                    cols,
+                    width: width as u16,
+                    height: height as u16,
+                };
                 crate::rio_machine::send_resize(&pty_tx, winsize);
             }
         }
@@ -1965,7 +2166,9 @@ impl TerminalPool {
             let last = LAST_EMPTY_WARN.load(Ordering::Relaxed);
             if now_secs >= last + 5 {
                 LAST_EMPTY_WARN.store(now_secs, Ordering::Relaxed);
-                crate::rust_log_warn!("[RenderLoop] ⚠️ render_all: layout is empty, skipping");
+                crate::rust_log_warn!(
+                    "[RenderLoop] ⚠️ render_all: layout is empty, skipping"
+                );
             }
             return;
         }
@@ -2022,7 +2225,8 @@ impl TerminalPool {
             *self.pending_resize.lock() = Some((width, height));
         }
         // 无论成功与否都标记需要渲染
-        self.needs_render.store(true, std::sync::atomic::Ordering::Release);
+        self.needs_render
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// 设置 DPI 缩放（窗口在不同 DPI 屏幕间移动时调用）
@@ -2036,22 +2240,30 @@ impl TerminalPool {
         self.config.scale = scale;
 
         // 尝试立即更新渲染器和 Sugarloaf，同时获取新的 font metrics
-        let (renderer_updated, new_metrics) = self.renderer.try_lock().map(|mut r| {
-            r.set_scale(scale);
-            // 获取更新后的 font metrics（scale 变化会影响物理像素值）
-            let metrics = r.get_font_metrics();
-            let cached = (
-                metrics.cell_width.value,
-                metrics.cell_height.value,
-                metrics.cell_height.value * self.config.line_height,
-            );
-            (true, Some(cached))
-        }).unwrap_or((false, None));
+        let (renderer_updated, new_metrics) = self
+            .renderer
+            .try_lock()
+            .map(|mut r| {
+                r.set_scale(scale);
+                // 获取更新后的 font metrics（scale 变化会影响物理像素值）
+                let metrics = r.get_font_metrics();
+                let cached = (
+                    metrics.cell_width.value,
+                    metrics.cell_height.value,
+                    metrics.cell_height.value * self.config.line_height,
+                );
+                (true, Some(cached))
+            })
+            .unwrap_or((false, None));
 
-        let sugarloaf_updated = self.sugarloaf.try_lock().map(|mut s| {
-            s.rescale(scale);
-            true
-        }).unwrap_or(false);
+        let sugarloaf_updated = self
+            .sugarloaf
+            .try_lock()
+            .map(|mut s| {
+                s.rescale(scale);
+                true
+            })
+            .unwrap_or(false);
 
         if renderer_updated && sugarloaf_updated {
             // 全部成功时清除待处理队列（避免旧值被回滚）
@@ -2072,25 +2284,33 @@ impl TerminalPool {
     }
 
     /// 设置事件回调
-    pub fn set_event_callback(&mut self, callback: TerminalPoolEventCallback, context: *mut c_void) {
+    pub fn set_event_callback(
+        &mut self,
+        callback: TerminalPoolEventCallback,
+        context: *mut c_void,
+    ) {
         self.event_callback = Some((callback, context));
 
         // 设置 EventQueue 回调（如果已经有字符串回调，一起设置）
         let pool_ptr = self as *mut TerminalPool as *mut c_void;
         let string_cb = if self.string_event_callback.is_some() {
-            Some(Self::string_event_queue_callback as crate::rio_event::StringEventCallback)
+            Some(
+                Self::string_event_queue_callback
+                    as crate::rio_event::StringEventCallback,
+            )
         } else {
             None
         };
-        self.event_queue.set_callback(
-            Self::event_queue_callback,
-            string_cb,
-            pool_ptr,
-        );
+        self.event_queue
+            .set_callback(Self::event_queue_callback, string_cb, pool_ptr);
     }
 
     /// 设置字符串事件回调（用于 CWD、Command 等事件）
-    pub fn set_string_event_callback(&mut self, callback: super::ffi::TerminalPoolStringEventCallback, context: *mut c_void) {
+    pub fn set_string_event_callback(
+        &mut self,
+        callback: super::ffi::TerminalPoolStringEventCallback,
+        context: *mut c_void,
+    ) {
         self.string_event_callback = Some((callback, context));
 
         // 更新 EventQueue 回调（需要重新设置，因为添加了 string_callback）
@@ -2122,8 +2342,8 @@ impl TerminalPool {
         // FFIEvent: 13=CurrentDirectoryChanged, 14=CommandExecuted, 4=Title
         // TerminalEventType: 6=CurrentDirectoryChanged, 7=CommandExecuted, 4=TitleChanged
         let swift_event_type = match event_type {
-            13 => TerminalEventType::CurrentDirectoryChanged,  // OSC 7
-            14 => TerminalEventType::CommandExecuted,          // OSC 133;C
+            13 => TerminalEventType::CurrentDirectoryChanged, // OSC 7
+            14 => TerminalEventType::CommandExecuted,         // OSC 133;C
             4 => TerminalEventType::TitleChanged,
             _ => return, // 忽略其他事件类型
         };
@@ -2139,7 +2359,10 @@ impl TerminalPool {
     /// EventQueue 回调
     ///
     /// 当收到 Wakeup/Render 事件时，标记对应终端的 dirty_lines
-    extern "C" fn event_queue_callback(context: *mut c_void, event: crate::rio_event::FFIEvent) {
+    extern "C" fn event_queue_callback(
+        context: *mut c_void,
+        event: crate::rio_event::FFIEvent,
+    ) {
         if context.is_null() {
             return;
         }
@@ -2155,14 +2378,17 @@ impl TerminalPool {
 
         // 收到 Wakeup/Render 事件时：
         // 使用全局事件路由，支持跨 Pool 迁移后的终端
-        if event_type == TerminalEventType::Wakeup || event_type == TerminalEventType::Render {
+        if event_type == TerminalEventType::Wakeup
+            || event_type == TerminalEventType::Render
+        {
             let terminal_id = event.route_id;
 
             // 首先检查本地 Pool 是否有该终端（用于 Background 模式检查）
             let is_background = unsafe {
                 let pool = &*(context as *const TerminalPool);
                 let terminals = pool.terminals.read();
-                terminals.get(&terminal_id)
+                terminals
+                    .get(&terminal_id)
                     .map(|entry| entry.is_background.load(Ordering::Acquire))
             };
 
@@ -2170,7 +2396,10 @@ impl TerminalPool {
                 Some(true) => {
                     // Background 模式，标记脏但不触发渲染
                     #[cfg(debug_assertions)]
-                    crate::rust_log_warn!("[RenderLoop] ⚠️ terminal {} is Background, skip render trigger", terminal_id);
+                    crate::rust_log_warn!(
+                        "[RenderLoop] ⚠️ terminal {} is Background, skip render trigger",
+                        terminal_id
+                    );
                     let registry = global_terminal_registry().read();
                     if let Some(target) = registry.get(&terminal_id) {
                         target.dirty_flag.mark_dirty();
@@ -2192,7 +2421,7 @@ impl TerminalPool {
         // 发送事件到 Swift（Bell、TitleChanged、Exit 等仍需通知）
         let terminal_event = TerminalEvent {
             event_type,
-            data: event.route_id as u64,  // 传递终端 ID
+            data: event.route_id as u64, // 传递终端 ID
         };
 
         unsafe {
@@ -2212,7 +2441,10 @@ impl TerminalPool {
     ///
     /// 返回 Arc<Mutex<Terminal>>，调用者需要自己获取 Mutex 锁
     pub fn get_terminal_arc(&self, id: usize) -> Option<Arc<Mutex<Terminal>>> {
-        self.terminals.read().get(&id).map(|entry| entry.terminal.clone())
+        self.terminals
+            .read()
+            .get(&id)
+            .map(|entry| entry.terminal.clone())
     }
 
     /// 获取终端并执行操作（阻塞）
@@ -2240,7 +2472,10 @@ impl TerminalPool {
     {
         let terminals = self.terminals.read();
         terminals.get(&id).and_then(|entry| {
-            entry.terminal.try_lock().map(|mut terminal| f(&mut terminal))
+            entry
+                .terminal
+                .try_lock()
+                .map(|mut terminal| f(&mut terminal))
         })
     }
 
@@ -2279,8 +2514,14 @@ impl TerminalPool {
     /// 获取终端的原子光标缓存（无锁）
     ///
     /// 返回 Arc<AtomicCursorCache>，可以无锁读取光标位置
-    pub fn get_cursor_cache(&self, id: usize) -> Option<Arc<crate::infra::AtomicCursorCache>> {
-        self.terminals.read().get(&id).map(|entry| entry.cursor_cache.clone())
+    pub fn get_cursor_cache(
+        &self,
+        id: usize,
+    ) -> Option<Arc<crate::infra::AtomicCursorCache>> {
+        self.terminals
+            .read()
+            .get(&id)
+            .map(|entry| entry.cursor_cache.clone())
     }
 
     /// 获取终端的选区缓存（无锁）
@@ -2288,7 +2529,10 @@ impl TerminalPool {
     /// 从原子缓存读取选区范围，无需获取 Terminal 锁
     /// 返回 Some((start_row, start_col, end_row, end_col)) 或 None
     pub fn get_selection_cache(&self, id: usize) -> Option<(i32, u32, i32, u32)> {
-        self.terminals.read().get(&id).and_then(|entry| entry.selection_cache.read())
+        self.terminals
+            .read()
+            .get(&id)
+            .and_then(|entry| entry.selection_cache.read())
     }
 
     /// 获取终端的滚动缓存（无锁）
@@ -2296,14 +2540,20 @@ impl TerminalPool {
     /// 从原子缓存读取滚动信息，无需获取 Terminal 锁
     /// 返回 Some((display_offset, history_size, total_lines)) 或 None
     pub fn get_scroll_cache(&self, id: usize) -> Option<(u32, u16, u16)> {
-        self.terminals.read().get(&id).and_then(|entry| entry.scroll_cache.read())
+        self.terminals
+            .read()
+            .get(&id)
+            .and_then(|entry| entry.scroll_cache.read())
     }
 
     /// 获取终端的标题缓存（无锁）
     ///
     /// 从原子缓存读取标题，无需获取 Terminal 锁
     pub fn get_title_cache(&self, id: usize) -> Option<String> {
-        self.terminals.read().get(&id).and_then(|entry| entry.title_cache.read())
+        self.terminals
+            .read()
+            .get(&id)
+            .and_then(|entry| entry.title_cache.read())
     }
 
     /// 检查是否需要渲染
@@ -2376,20 +2626,24 @@ impl TerminalPool {
 
         // 计算新字体大小
         let new_font_size = match operation {
-            0 => 14.0,  // Reset
-            1 => (self.config.font_size - 1.0).max(6.0),  // Decrease
-            2 => (self.config.font_size + 1.0).min(100.0),  // Increase
-            _ => return,  // 无效操作
+            0 => 14.0,                                     // Reset
+            1 => (self.config.font_size - 1.0).max(6.0),   // Decrease
+            2 => (self.config.font_size + 1.0).min(100.0), // Increase
+            _ => return,                                   // 无效操作
         };
 
         // 更新配置
         self.config.font_size = new_font_size;
 
         // 更新渲染器（非阻塞）
-        let updated = self.renderer.try_lock().map(|mut r| {
-            r.set_font_size(LogicalPixels::new(new_font_size));
-            true
-        }).unwrap_or(false);
+        let updated = self
+            .renderer
+            .try_lock()
+            .map(|mut r| {
+                r.set_font_size(LogicalPixels::new(new_font_size));
+                true
+            })
+            .unwrap_or(false);
 
         if updated {
             // 成功时清除待处理队列（避免旧值被回滚）
@@ -2511,12 +2765,17 @@ impl TerminalPool {
     /// - Active 模式：完整处理 + 触发渲染回调
     /// - Background 模式：完整 VTE 解析但不触发渲染回调
     /// - 切换到 Active 时会自动触发一次渲染刷新
-    pub fn set_terminal_mode(&self, terminal_id: usize, mode: crate::domain::aggregates::TerminalMode) {
+    pub fn set_terminal_mode(
+        &self,
+        terminal_id: usize,
+        mode: crate::domain::aggregates::TerminalMode,
+    ) {
         let should_wakeup = {
             let terminals = self.terminals.read();
             if let Some(entry) = terminals.get(&terminal_id) {
                 // 先更新原子标记（无锁），让 event_queue_callback 能立即看到
-                let is_background = mode == crate::domain::aggregates::TerminalMode::Background;
+                let is_background =
+                    mode == crate::domain::aggregates::TerminalMode::Background;
                 entry.is_background.store(is_background, Ordering::Release);
 
                 // 尝试更新 Terminal 内部状态（非阻塞）
@@ -2547,7 +2806,10 @@ impl TerminalPool {
     ///
     /// # 注意
     /// 优先使用原子标记（无锁），避免阻塞
-    pub fn get_terminal_mode(&self, terminal_id: usize) -> Option<crate::domain::aggregates::TerminalMode> {
+    pub fn get_terminal_mode(
+        &self,
+        terminal_id: usize,
+    ) -> Option<crate::domain::aggregates::TerminalMode> {
         let terminals = self.terminals.read();
         terminals.get(&terminal_id).map(|entry| {
             // 使用原子读取（无锁）
@@ -2586,23 +2848,36 @@ impl TerminalPool {
 
         let mut paint = skia_safe::Paint::default();
         paint.set_color4f(selection_color, None);
-        paint.set_anti_alias(false);  // 矩形不需要抗锯齿
+        paint.set_anti_alias(false); // 矩形不需要抗锯齿
 
         // 规范化选区：确保 start <= end（支持反向选择）
         let (sel_start_row, sel_start_col, sel_end_row, sel_end_col) =
             if selection.start_row < selection.end_row
-               || (selection.start_row == selection.end_row && selection.start_col <= selection.end_col) {
+                || (selection.start_row == selection.end_row
+                    && selection.start_col <= selection.end_col)
+            {
                 // 正向选择
-                (selection.start_row, selection.start_col, selection.end_row, selection.end_col)
+                (
+                    selection.start_row,
+                    selection.start_col,
+                    selection.end_row,
+                    selection.end_col,
+                )
             } else {
                 // 反向选择：交换 start 和 end
-                (selection.end_row, selection.end_col, selection.start_row, selection.start_col)
+                (
+                    selection.end_row,
+                    selection.end_col,
+                    selection.start_row,
+                    selection.start_col,
+                )
             };
 
         // 遍历可见行
         for screen_row in 0..screen_rows {
             // 计算绝对行号
-            let abs_row = (history_size + screen_row).saturating_sub(display_offset) as i32;
+            let abs_row =
+                (history_size + screen_row).saturating_sub(display_offset) as i32;
 
             // 检查是否在选区范围内
             if abs_row < sel_start_row || abs_row > sel_end_row {
@@ -2613,7 +2888,10 @@ impl TerminalPool {
             let (start_col, end_col) = match selection.ty {
                 SelectionType::Block => {
                     // 块选区：固定列范围（也需要规范化）
-                    (sel_start_col.min(sel_end_col), sel_start_col.max(sel_end_col))
+                    (
+                        sel_start_col.min(sel_end_col),
+                        sel_start_col.max(sel_end_col),
+                    )
                 }
                 SelectionType::Lines => {
                     // 行选区：整行
@@ -2638,13 +2916,11 @@ impl TerminalPool {
             // 绘制矩形
             let x = start_col as f32 * cell_width.value;
             let y = screen_row as f32 * line_height.value;
-            let w = ((end_col.saturating_sub(start_col)).min(1000) + 1) as f32 * cell_width.value;
+            let w = ((end_col.saturating_sub(start_col)).min(1000) + 1) as f32
+                * cell_width.value;
             let h = line_height.value;
 
-            canvas.draw_rect(
-                skia_safe::Rect::from_xywh(x, y, w, h),
-                &paint,
-            );
+            canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
         }
     }
 
@@ -2661,35 +2937,48 @@ impl TerminalPool {
         line_height: crate::domain::primitives::PhysicalPixels,
         baseline_offset: f32,
     ) {
-        use skia_safe::{Paint, Color4f, Point, Font, FontMgr, FontStyle};
+        use skia_safe::{Color4f, Font, FontMgr, FontStyle, Paint, Point};
 
         let ime_x = cursor_col as f32 * cell_width.value;
         let ime_y = cursor_screen_row as f32 * line_height.value;
 
         // 计算预编辑文本的显示宽度（按字符宽度）
         // 简单判断：ASCII 单宽，非 ASCII（如中文）双宽
-        let ime_display_width: f32 = ime.text.chars().map(|c| {
-            let char_width = if c.is_ascii() { 1 } else { 2 };
-            char_width as f32 * cell_width.value
-        }).sum();
+        let ime_display_width: f32 = ime
+            .text
+            .chars()
+            .map(|c| {
+                let char_width = if c.is_ascii() { 1 } else { 2 };
+                char_width as f32 * cell_width.value
+            })
+            .sum();
 
         // 1. 绘制半透明背景
         let mut bg_paint = Paint::default();
         bg_paint.set_anti_alias(true);
         bg_paint.set_color4f(Color4f::new(0.2, 0.2, 0.4, 0.85), None);
         bg_paint.set_style(skia_safe::PaintStyle::Fill);
-        let bg_rect = skia_safe::Rect::from_xywh(ime_x, ime_y, ime_display_width, line_height.value);
+        let bg_rect = skia_safe::Rect::from_xywh(
+            ime_x,
+            ime_y,
+            ime_display_width,
+            line_height.value,
+        );
         canvas.draw_rect(bg_rect, &bg_paint);
 
         // 2. 逐字符绘制预编辑文本
         let font_mgr = FontMgr::new();
-        let font_size = line_height.value * 0.75;  // 和终端字体大小保持一致
+        let font_size = line_height.value * 0.75; // 和终端字体大小保持一致
 
         // 尝试使用 Maple Mono，回退到系统字体
         let typeface = font_mgr
             .match_family_style("Maple Mono NF CN", FontStyle::normal())
             .or_else(|| font_mgr.match_family_style("Menlo", FontStyle::normal()))
-            .unwrap_or_else(|| font_mgr.legacy_make_typeface(None, FontStyle::normal()).unwrap());
+            .unwrap_or_else(|| {
+                font_mgr
+                    .legacy_make_typeface(None, FontStyle::normal())
+                    .unwrap()
+            });
 
         let font = Font::from_typeface(&typeface, font_size);
 
@@ -2713,7 +3002,10 @@ impl TerminalPool {
                     &[],
                     ch as i32,
                 ) {
-                    (Font::from_typeface(&fallback_tf, font_size), fallback_tf.family_name().to_lowercase().contains("emoji"))
+                    (
+                        Font::from_typeface(&fallback_tf, font_size),
+                        fallback_tf.family_name().to_lowercase().contains("emoji"),
+                    )
                 } else {
                     (font.clone(), false)
                 }
@@ -2722,7 +3014,12 @@ impl TerminalPool {
             // 绘制字符
             let text_y = ime_y + baseline_offset;
             let char_str = ch.to_string();
-            canvas.draw_str(&char_str, Point::new(x_offset, text_y), &draw_font, &text_paint);
+            canvas.draw_str(
+                &char_str,
+                Point::new(x_offset, text_y),
+                &draw_font,
+                &text_paint,
+            );
 
             x_offset += char_cell_width;
         }
@@ -2742,7 +3039,9 @@ impl TerminalPool {
         );
 
         // 4. 绘制预编辑内光标（竖线）
-        let cursor_x_in_ime: f32 = ime.text.chars()
+        let cursor_x_in_ime: f32 = ime
+            .text
+            .chars()
             .take(ime.cursor_offset)
             .map(|c| {
                 let w = if c.is_ascii() { 1 } else { 2 };
@@ -2755,7 +3054,12 @@ impl TerminalPool {
         cursor_paint.set_anti_alias(true);
         cursor_paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, 0.9), None);
         cursor_paint.set_style(skia_safe::PaintStyle::Fill);
-        let cursor_rect = skia_safe::Rect::from_xywh(ime_cursor_x, ime_y + 2.0, 2.0, line_height.value - 4.0);
+        let cursor_rect = skia_safe::Rect::from_xywh(
+            ime_cursor_x,
+            ime_y + 2.0,
+            2.0,
+            line_height.value - 4.0,
+        );
         canvas.draw_rect(cursor_rect, &cursor_paint);
     }
 }
@@ -2792,7 +3096,7 @@ mod tests {
             font_size: 14.0,
             line_height: DEFAULT_LINE_HEIGHT,
             scale: 2.0,
-            window_handle: std::ptr::null_mut(),  // 测试环境
+            window_handle: std::ptr::null_mut(), // 测试环境
             display_handle: std::ptr::null_mut(),
             window_width: 800.0,
             window_height: 600.0,
@@ -2804,7 +3108,7 @@ mod tests {
     fn test_terminal_pool_create_fails_without_window() {
         let config = create_test_config();
         let result = TerminalPool::new(config);
-        assert!(result.is_err());  // 没有 window_handle 应该失败
+        assert!(result.is_err()); // 没有 window_handle 应该失败
     }
 
     /// 测试字体大小计算逻辑（不需要 TerminalPool 实例）
@@ -2813,7 +3117,7 @@ mod tests {
         let initial_size = 14.0f32;
 
         // Test reset (operation = 0)
-        let reset_size = 14.0f32;  // Reset 固定为 14.0
+        let reset_size = 14.0f32; // Reset 固定为 14.0
         assert_eq!(reset_size, 14.0);
 
         // Test decrease (operation = 1)
@@ -2823,7 +3127,7 @@ mod tests {
         // Test decrease at minimum
         let at_min = 6.0f32;
         let decreased_at_min = (at_min - 1.0).max(6.0);
-        assert_eq!(decreased_at_min, 6.0);  // 不能低于 6.0
+        assert_eq!(decreased_at_min, 6.0); // 不能低于 6.0
 
         // Test increase (operation = 2)
         let increased = (initial_size + 1.0).min(100.0);
@@ -2832,7 +3136,7 @@ mod tests {
         // Test increase at maximum
         let at_max = 100.0f32;
         let increased_at_max = (at_max + 1.0).min(100.0);
-        assert_eq!(increased_at_max, 100.0);  // 不能超过 100.0
+        assert_eq!(increased_at_max, 100.0); // 不能超过 100.0
     }
 
     /// 测试字体大小操作序列
@@ -2863,13 +3167,13 @@ mod tests {
     #[test]
     fn test_selection_change_full_pipeline() {
         use crate::domain::aggregates::{Terminal, TerminalId};
-        use crate::domain::{SelectionView, SelectionType, AbsolutePoint};
-        use crate::render::{Renderer, RenderConfig};
-        use crate::render::font::FontContext;
         use crate::domain::primitives::LogicalPixels;
-        use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
+        use crate::domain::{AbsolutePoint, SelectionType, SelectionView};
+        use crate::render::font::FontContext;
+        use crate::render::{RenderConfig, Renderer};
         use rio_backend::config::colors::Colors;
         use std::sync::Arc;
+        use sugarloaf::font::{FontLibrary, fonts::SugarloafFonts};
 
         // 1. 创建 100 行的 Terminal
         let mut terminal = Terminal::new_for_test(TerminalId(1), 80, 100);
@@ -2901,8 +3205,13 @@ mod tests {
         let frame1_time = frame1_start.elapsed();
         let frame1_stats = renderer.stats.clone();
 
-        eprintln!("Frame 1: {:?} | misses={} hits={} layout_hits={}",
-            frame1_time, frame1_stats.cache_misses, frame1_stats.cache_hits, frame1_stats.layout_hits);
+        eprintln!(
+            "Frame 1: {:?} | misses={} hits={} layout_hits={}",
+            frame1_time,
+            frame1_stats.cache_misses,
+            frame1_stats.cache_hits,
+            frame1_stats.layout_hits
+        );
 
         renderer.reset_stats();
 
@@ -2927,23 +3236,34 @@ mod tests {
 
         let total_time = state_start.elapsed();
 
-        eprintln!("Frame 2: total={:?} | state={:?} render={:?}",
-            total_time, state_time, render_time);
-        eprintln!("Frame 2 stats: misses={} hits={} layout_hits={}",
-            frame2_stats.cache_misses, frame2_stats.cache_hits, frame2_stats.layout_hits);
+        eprintln!(
+            "Frame 2: total={:?} | state={:?} render={:?}",
+            total_time, state_time, render_time
+        );
+        eprintln!(
+            "Frame 2 stats: misses={} hits={} layout_hits={}",
+            frame2_stats.cache_misses, frame2_stats.cache_hits, frame2_stats.layout_hits
+        );
 
         // 5. 验证
         // 第一帧应该全部 miss
-        assert_eq!(frame1_stats.cache_misses, 100, "Frame 1: all lines should miss");
+        assert_eq!(
+            frame1_stats.cache_misses, 100,
+            "Frame 1: all lines should miss"
+        );
 
         // 第二帧：只有 row3 需要重绘
-        assert_eq!(frame2_stats.cache_hits, 99,
+        assert_eq!(
+            frame2_stats.cache_hits, 99,
             "Frame 2: 99 lines should hit cache, got {} hits {} misses {} layout_hits",
-            frame2_stats.cache_hits, frame2_stats.cache_misses, frame2_stats.layout_hits);
+            frame2_stats.cache_hits, frame2_stats.cache_misses, frame2_stats.layout_hits
+        );
 
-        eprintln!("Speedup: {:.1}x (render only: {:.1}x)",
+        eprintln!(
+            "Speedup: {:.1}x (render only: {:.1}x)",
             frame1_time.as_micros() as f64 / total_time.as_micros() as f64,
-            frame1_time.as_micros() as f64 / render_time.as_micros() as f64);
+            frame1_time.as_micros() as f64 / render_time.as_micros() as f64
+        );
     }
 
     /// 测试：方案 0 - AtomicDirtyFlag 快速检查
@@ -3004,7 +3324,11 @@ mod tests {
         let elapsed = start.elapsed();
         let avg_micros = elapsed.as_micros() / iterations;
 
-        eprintln!("state() 平均耗时: {}μs ({:.2}ms)", avg_micros, avg_micros as f64 / 1000.0);
+        eprintln!(
+            "state() 平均耗时: {}μs ({:.2}ms)",
+            avg_micros,
+            avg_micros as f64 / 1000.0
+        );
 
         // 验证：优化后应该 < 5ms (之前是 60ms)
         // 注意：测试环境性能可能不稳定，使用较宽松的阈值
@@ -3069,8 +3393,8 @@ mod tests {
     /// 修复后：使用 RwLock 保护，读写操作是线程安全的
     #[test]
     fn test_rwlock_hashmap_thread_safety() {
-        use std::collections::HashMap;
         use parking_lot::RwLock;
+        use std::collections::HashMap;
         use std::sync::Arc;
         use std::thread;
 
@@ -3079,7 +3403,8 @@ mod tests {
             value: String,
         }
 
-        let map: Arc<RwLock<HashMap<usize, MockEntry>>> = Arc::new(RwLock::new(HashMap::new()));
+        let map: Arc<RwLock<HashMap<usize, MockEntry>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         // 写线程：模拟主线程 create_terminal / close_terminal
         let map_write = Arc::clone(&map);
@@ -3088,7 +3413,12 @@ mod tests {
                 // 写入
                 {
                     let mut terminals = map_write.write();
-                    terminals.insert(i, MockEntry { value: format!("terminal_{}", i) });
+                    terminals.insert(
+                        i,
+                        MockEntry {
+                            value: format!("terminal_{}", i),
+                        },
+                    );
                 }
                 // 删除部分
                 if i % 3 == 0 && i > 0 {
@@ -3161,7 +3491,8 @@ mod tests {
         use std::time::Duration;
 
         // 创建 Terminal
-        let terminal = Arc::new(Mutex::new(Terminal::new_for_test(TerminalId(1), 80, 24)));
+        let terminal =
+            Arc::new(Mutex::new(Terminal::new_for_test(TerminalId(1), 80, 24)));
         let dirty_flag = Arc::new(AtomicDirtyFlag::new());
 
         // 写入初始内容
@@ -3222,7 +3553,8 @@ mod tests {
         use std::thread;
         use std::time::Duration;
 
-        let terminal = Arc::new(Mutex::new(Terminal::new_for_test(TerminalId(1), 80, 24)));
+        let terminal =
+            Arc::new(Mutex::new(Terminal::new_for_test(TerminalId(1), 80, 24)));
         let write_count = Arc::new(AtomicUsize::new(0));
         let render_count = Arc::new(AtomicUsize::new(0));
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -3330,13 +3662,13 @@ mod tests {
     fn test_p4_surface_cache_rebuild_on_resize() {
         // 模拟 resize_terminal 清除 Surface 缓存的逻辑
         struct MockEntry {
-            surface_cache: Option<()>,  // 简化为 Option<()>
+            surface_cache: Option<()>, // 简化为 Option<()>
             cols: u16,
             rows: u16,
         }
 
         let mut entry = MockEntry {
-            surface_cache: Some(()),  // 假设已有 Surface 缓存
+            surface_cache: Some(()), // 假设已有 Surface 缓存
             cols: 80,
             rows: 24,
         };
@@ -3347,10 +3679,13 @@ mod tests {
         // 模拟 resize
         entry.cols = 100;
         entry.rows = 30;
-        entry.surface_cache = None;  // resize 时清除缓存
+        entry.surface_cache = None; // resize 时清除缓存
 
         // 验证缓存已清除
-        assert!(entry.surface_cache.is_none(), "resize 后 Surface 缓存应该被清除");
+        assert!(
+            entry.surface_cache.is_none(),
+            "resize 后 Surface 缓存应该被清除"
+        );
 
         eprintln!("✅ P4 Surface 缓存在 resize 时正确清除");
     }
