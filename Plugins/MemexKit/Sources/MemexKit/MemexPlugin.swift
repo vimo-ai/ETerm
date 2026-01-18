@@ -45,8 +45,8 @@ public final class MemexPlugin: NSObject, Plugin {
     // MARK: - Event Handling
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        // 处理 Claude 响应完成事件，触发精确索引
-        guard eventName == "claude.responseComplete" else { return }
+        // 处理 AI CLI 响应完成事件，触发精确索引
+        guard eventName == "aicli.responseComplete" else { return }
         guard let transcriptPath = payload["transcriptPath"] as? String else { return }
 
         // 异步调用索引 API（静默失败，不阻断主流程）

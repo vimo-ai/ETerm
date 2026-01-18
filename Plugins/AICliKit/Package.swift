@@ -6,20 +6,20 @@ import PackageDescription
 let etermkitPath = "../../Build"
 
 let package = Package(
-    name: "ClaudeKit",
+    name: "AICliKit",
     platforms: [
         .macOS(.v14)
     ],
     products: [
         .library(
-            name: "ClaudeKit",
+            name: "AICliKit",
             type: .dynamic,
-            targets: ["ClaudeKit"]
+            targets: ["AICliKit"]
         ),
     ],
     targets: [
         .target(
-            name: "ClaudeKit",
+            name: "AICliKit",
             swiftSettings: [
                 .swiftLanguageMode(.v5),
                 .unsafeFlags(["-F", etermkitPath])

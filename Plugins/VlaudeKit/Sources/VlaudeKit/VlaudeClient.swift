@@ -937,7 +937,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     // MARK: - SharedDb Write Operations
 
-    /// 索引会话到 SharedDb（当收到 claude.responseComplete 事件时调用）
+    /// 索引会话到 SharedDb（当收到 aicli.responseComplete 事件时调用）
     /// 使用 session-reader-ffi 正确解析路径（支持中文路径）
     /// - Parameter path: JSONL 会话文件路径
     func indexSession(path: String) {

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ClaudeKit build script
+# AICliKit build script
 
 set -e
 
@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # 配置
-BUNDLE_NAME="ClaudeKit"
-BUNDLE_ID="com.eterm.claude"
+BUNDLE_NAME="AICliKit"
+BUNDLE_ID="com.eterm.aicli"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 # 内置插件必须通过 Xcode 编译
 if [ -z "${BUNDLE_OUTPUT_DIR:-}" ]; then
@@ -48,7 +48,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.eterm.claude</string>
+    <string>com.eterm.aicli</string>
     <key>CFBundleName</key>
     <string>$BUNDLE_NAME</string>
     <key>CFBundleExecutable</key>
