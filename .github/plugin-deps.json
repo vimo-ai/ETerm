@@ -17,7 +17,7 @@
       },
       "libvlaude_ffi": {
         "repo": "vimo-ai/vlaude",
-        "tag": "vlaude-ffi-v0.0.1-beta.1-test",
+        "tag": "vlaude-ffi-v0.0.1-beta.1",
         "asset": "libvlaude_ffi.dylib",
         "dest": "Libs/VlaudeFfi/"
       }
