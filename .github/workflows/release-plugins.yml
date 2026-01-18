@@ -91,6 +91,57 @@ jobs:
         with:
           xcode-version: 'latest-stable'
 
+      - name: Build ETermKit.framework
+        run: |
+          cd Packages/ETermKit
+          swift build -c release
+
+          BUILD_DIR="$(pwd)/.build/release"
+          FRAMEWORK_DIR="$(pwd)/../../Build/ETermKit.framework"
+          ARCH=$(uname -m)
+
+          # Create framework structure with Modules directory
+          rm -rf "$FRAMEWORK_DIR"
+          mkdir -p "$FRAMEWORK_DIR/Versions/A/Resources"
+          mkdir -p "$FRAMEWORK_DIR/Versions/A/Modules/ETermKit.swiftmodule"
+
+          # Copy dylib
+          cp "$BUILD_DIR/libETermKit.dylib" "$FRAMEWORK_DIR/Versions/A/ETermKit"
+
+          # Copy swiftmodule - provide both macosx and macos naming for toolchain compatibility
+          for triple in "${ARCH}-apple-macosx" "${ARCH}-apple-macos"; do
+            cp "$BUILD_DIR/Modules/ETermKit.swiftmodule" "$FRAMEWORK_DIR/Versions/A/Modules/ETermKit.swiftmodule/${triple}.swiftmodule"
+            cp "$BUILD_DIR/Modules/ETermKit.swiftdoc" "$FRAMEWORK_DIR/Versions/A/Modules/ETermKit.swiftmodule/${triple}.swiftdoc"
+            cp "$BUILD_DIR/Modules/ETermKit.abi.json" "$FRAMEWORK_DIR/Versions/A/Modules/ETermKit.swiftmodule/${triple}.abi.json"
+          done
+
+          # Create Info.plist
+          cat > "$FRAMEWORK_DIR/Versions/A/Resources/Info.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key>
+              <string>com.vimo.ETermKit</string>
+              <key>CFBundleName</key>
+              <string>ETermKit</string>
+              <key>CFBundlePackageType</key>
+              <string>FMWK</string>
+          </dict>
+          </plist>
+          EOF
+
+          # Fix install name
+          install_name_tool -id "@rpath/ETermKit.framework/ETermKit" "$FRAMEWORK_DIR/Versions/A/ETermKit"
+
+          # Create symlinks
+          (cd "$FRAMEWORK_DIR/Versions" && ln -sfh A Current)
+          (cd "$FRAMEWORK_DIR" && ln -sfh Versions/Current/ETermKit ETermKit && ln -sfh Versions/Current/Resources Resources && ln -sfh Versions/Current/Modules Modules)
+
+          # Sign
+          codesign -f -s - "$FRAMEWORK_DIR"
+          echo "ETermKit.framework built at $FRAMEWORK_DIR"
+
       - name: Build plugin
         run: |
           PLUGIN_PATH="${{ steps.config.outputs.PLUGIN_PATH }}"
