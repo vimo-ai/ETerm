@@ -1,25 +1,124 @@
 //
-//  ClaudeSocketServer.swift
-//  ClaudeKit
+//  ClaudeProvider.swift
+//  AICliKit
 //
-//  Claude CLI Integration - Socket Server
-//  接收来自 Claude Hook 的通知
+//  Claude Code Provider - 通过 Unix Socket 接收 Claude Hook 事件
+//
 
 import Foundation
+import ETermKit
 
-/// Claude Hook 调用的事件
+/// Claude Provider - 实现 AICliProvider 协议
+///
+/// 通过 Unix Domain Socket 接收 Claude Code hooks 事件，
+/// 将原始事件转换为标准 AICliEvent。
+@MainActor
+public final class ClaudeProvider: AICliProvider {
+    public static let providerId = "claude"
+
+    public static let capabilities = AICliCapabilities.claude
+
+    public var onEvent: ((AICliEvent) -> Void)?
+
+    private var socketServer: ClaudeSocketServer?
+    private var config: AICliProviderConfig?
+
+    public var isRunning: Bool {
+        socketServer?.socketPath != nil
+    }
+
+    public required init() {}
+
+    public func start(config: AICliProviderConfig) {
+        self.config = config
+
+        socketServer = ClaudeSocketServer()
+        socketServer?.onEvent = { [weak self] rawEvent in
+            guard let self = self else { return }
+            if let event = self.mapEvent(rawEvent) {
+                self.onEvent?(event)
+            }
+        }
+
+        let socketPath = config.socketDirectory + "/claude.sock"
+        socketServer?.start(at: socketPath)
+    }
+
+    public func stop() {
+        socketServer?.stop()
+        socketServer = nil
+    }
+
+    // MARK: - Event Mapping
+
+    /// 将 Claude 原始事件映射为标准 AICliEvent
+    private func mapEvent(_ raw: ClaudeHookEvent) -> AICliEvent? {
+        let eventType: AICliEventType
+        var payload: [String: Any] = [:]
+
+        switch raw.event_type {
+        case "session_start":
+            eventType = .sessionStart
+
+        case "user_prompt_submit":
+            eventType = .userInput
+            if let prompt = raw.prompt {
+                payload["prompt"] = prompt
+            }
+
+        case "notification":
+            eventType = .waitingInput
+
+        case "stop":
+            eventType = .responseComplete
+
+        case "session_end":
+            eventType = .sessionEnd
+
+        case "permission_request":
+            eventType = .permissionRequest
+            if let toolName = raw.tool_name {
+                payload["toolName"] = toolName
+            }
+            if let toolInput = raw.tool_input {
+                payload["toolInput"] = toolInput.mapValues { $0.value }
+            }
+            if let toolUseId = raw.tool_use_id {
+                payload["toolUseId"] = toolUseId
+            }
+
+        default:
+            // 未知事件类型，忽略
+            return nil
+        }
+
+        return AICliEvent(
+            source: Self.providerId,
+            type: eventType,
+            terminalId: raw.terminal_id,
+            sessionId: raw.session_id,
+            transcriptPath: raw.transcript_path,
+            cwd: raw.cwd,
+            payload: payload
+        )
+    }
+}
+
+// MARK: - Claude Hook Event (原始格式)
+
+/// Claude Hook 调用的原始事件
 struct ClaudeHookEvent: Codable {
-    let event_type: String?  // "stop", "notification", "user_prompt_submit", "permission_request" 等
+    let event_type: String?
     let session_id: String
     let terminal_id: Int
-    let prompt: String?  // 用户提交的问题（仅 user_prompt_submit 事件）
-    let transcript_path: String?  // JSONL 文件路径（用于 MemexKit 索引）
-    let cwd: String?  // 工作目录
+    let prompt: String?
+    let transcript_path: String?
+    let cwd: String?
 
-    // 权限请求相关字段（仅 permission_request 事件）
-    let tool_name: String?     // 工具名称：Bash, Write, Edit, Task 等
-    let tool_input: [String: AnyCodable]?  // 工具输入：{"command": "..."} 等
-    let tool_use_id: String?   // 工具调用 ID
+    // 权限请求相关字段
+    let tool_name: String?
+    let tool_input: [String: AnyCodable]?
+    let tool_use_id: String?
 }
 
 /// 用于解码任意 JSON 值
@@ -74,6 +173,8 @@ struct AnyCodable: Codable {
     }
 }
 
+// MARK: - Claude Socket Server (内部实现)
+
 /// Socket Server - 接收来自 Claude Hook 的调用
 final class ClaudeSocketServer {
 
@@ -89,8 +190,6 @@ final class ClaudeSocketServer {
     init() {}
 
     /// 启动 Socket Server
-    ///
-    /// - Parameter path: socket 文件路径（如 ~/.vimo/eterm/run/sockets/claude.sock）
     func start(at path: String) {
         // 确保目录存在（权限 0700）
         let socketDir = (path as NSString).deletingLastPathComponent
@@ -176,7 +275,7 @@ final class ClaudeSocketServer {
     // MARK: - Connection Handling
 
     private func startAcceptingConnections() {
-        acceptQueue = DispatchQueue(label: "com.eterm.claude-socket-accept")
+        acceptQueue = DispatchQueue(label: "com.eterm.aicli.claude-socket")
 
         acceptSource = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: acceptQueue!)
 

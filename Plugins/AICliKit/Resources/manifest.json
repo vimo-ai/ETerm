@@ -1,6 +1,6 @@
 {
-    "id": "com.eterm.claude",
-    "name": "Claude Integration",
+    "id": "com.eterm.aicli",
+    "name": "AI CLI Integration",
     "version": "1.0.0",
     "minHostVersion": "0.0.1-beta.1",
     "sdkVersion": "0.0.1-beta.1",
@@ -12,32 +12,34 @@
         "ui.tabTitle",
         "terminal.write"
     ],
-    "principalClass": "ClaudePlugin",
+    "principalClass": "AICliKitPlugin",
     "sidebarTabs": [],
     "infoPanelContents": [],
     "commands": [],
     "subscribes": [
-        "claude.sessionStart",
-        "claude.promptSubmit",
-        "claude.waitingInput",
-        "claude.responseComplete",
-        "claude.sessionEnd",
+        "aicli.sessionStart",
+        "aicli.promptSubmit",
+        "aicli.waitingInput",
+        "aicli.responseComplete",
+        "aicli.sessionEnd",
+        "aicli.permissionRequest",
         "tab.didActivate",
         "terminal.didCreate",
         "terminal.didClose"
     ],
     "pageSlots": [
         {
-            "id": "claude-stats",
+            "id": "aicli-stats",
             "position": "trailing"
         }
     ],
-    "sockets": ["claude"],
+    "sockets": ["claude", "gemini", "codex", "opencode"],
     "emits": [
-        "claude.sessionStart",
-        "claude.promptSubmit",
-        "claude.waitingInput",
-        "claude.responseComplete",
-        "claude.sessionEnd"
+        "aicli.sessionStart",
+        "aicli.promptSubmit",
+        "aicli.waitingInput",
+        "aicli.responseComplete",
+        "aicli.sessionEnd",
+        "aicli.permissionRequest"
     ]
 }

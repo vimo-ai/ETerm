@@ -1,8 +1,8 @@
 //
-//  ClaudeTitleGenerator.swift
-//  ClaudeKit
+//  AICliTitleGenerator.swift
+//  AICliKit
 //
-//  Claude Tab 智能标题生成器
+//  AI CLI Tab 智能标题生成器
 //  使用 Ollama 本地模型根据用户 prompt 生成简短标题
 //
 
@@ -25,13 +25,13 @@ private struct OllamaConfig: Codable {
     }
 }
 
-/// Claude Tab 标题生成器
+/// AI CLI Tab 标题生成器
 ///
 /// 使用 Ollama 本地模型根据用户问题生成简短标题。
 /// 异步执行，不阻塞主流程。Ollama 不可用时返回 nil。
 /// 配置从 ~/.vimo/eterm/config/ollama.json 读取，与主程序共享。
-final class ClaudeTitleGenerator {
-    static let shared = ClaudeTitleGenerator()
+final class AICliTitleGenerator {
+    static let shared = AICliTitleGenerator()
 
     /// Ollama 配置（懒加载，每次生成时重新读取以支持热更新）
     private var config: OllamaConfig {
@@ -68,7 +68,7 @@ final class ClaudeTitleGenerator {
             return title
 
         } catch {
-            logError("[ClaudeTitleGenerator] Error: \(error)")
+            logError("[AICliTitleGenerator] Error: \(error)")
             return nil
         }
     }

@@ -7,7 +7,7 @@
     "runMode": "main",
     "loadPriority": "immediate",
     "dependencies": [
-        {"id": "com.eterm.claude", "minVersion": "1.0.0"}
+        {"id": "com.eterm.aicli", "minVersion": "1.0.0"}
     ],
     "capabilities": ["socket.client"],
     "principalClass": "VlaudePlugin",
@@ -21,11 +21,11 @@
         }
     ],
     "subscribes": [
-        "claude.sessionStart",
-        "claude.promptSubmit",
-        "claude.responseComplete",
-        "claude.sessionEnd",
-        "claude.permissionPrompt",
+        "aicli.sessionStart",
+        "aicli.promptSubmit",
+        "aicli.responseComplete",
+        "aicli.sessionEnd",
+        "aicli.permissionRequest",
         "terminal.didClose"
     ],
     "tabSlots": [

@@ -6,7 +6,7 @@
     "sdkVersion": "0.0.1-beta.1",
     "runMode": "main",
     "loadPriority": "immediate",
-    "dependencies": [{"id": "com.eterm.claude", "minVersion": "1.0.0"}],
+    "dependencies": [{"id": "com.eterm.aicli", "minVersion": "1.0.0"}],
     "capabilities": [],
     "principalClass": "MemexPlugin",
     "sidebarTabs": [
@@ -30,7 +30,7 @@
     "infoPanelContents": [],
     "commands": [],
     "subscribes": [
-        "claude.responseComplete"
+        "aicli.responseComplete"
     ],
     "pageSlots": [],
     "sockets": [],

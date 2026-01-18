@@ -171,19 +171,19 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
         switch eventName {
-        case "claude.sessionStart":
+        case "aicli.sessionStart":
             handleClaudeSessionStart(payload)
 
-        case "claude.promptSubmit":
+        case "aicli.promptSubmit":
             handleClaudePromptSubmit(payload)
 
-        case "claude.responseComplete":
+        case "aicli.responseComplete":
             handleClaudeResponseComplete(payload)
 
-        case "claude.sessionEnd":
+        case "aicli.sessionEnd":
             handleClaudeSessionEnd(payload)
 
-        case "claude.permissionPrompt":
+        case "aicli.permissionRequest":
             handleClaudePermissionPrompt(payload)
 
         case "terminal.didClose":
