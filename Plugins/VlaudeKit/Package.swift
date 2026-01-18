@@ -45,6 +45,7 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags([
                     "-F", etermkitPath, "-framework", "ETermKit",
+                    "-L", "Libs/SharedDB", "-L", "Libs/SocketClient", "-L", "Libs/VlaudeFfi",
                     "Libs/SharedDB/libclaude_session_db.dylib",
                     "Libs/SocketClient/libsocket_client_ffi.dylib",
                     "Libs/VlaudeFfi/libvlaude_ffi.dylib",
