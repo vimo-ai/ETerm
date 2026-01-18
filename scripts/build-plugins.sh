@@ -22,7 +22,7 @@ OUTPUT_DIR="${2:-$HOME/.vimo/eterm/plugins}"
 # 内置插件列表（纯 Swift，无 native 依赖）
 # 注意：MCPRouterKit 需要 mcp-router-core FFI，暂不包含
 BUILTIN_PLUGINS=(
-    "ClaudeKit"
+    "AICliKit"
     "ClaudeMonitorKit"
     "DevHelperKit"
     "HistoryKit"
