@@ -5,7 +5,7 @@
     "deps": {
       "libclaude_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.1",
+        "tag": "v0.0.1-beta.2",
         "asset": "libclaude_session_db.dylib",
         "dest": "Libs/SharedDB/"
       },
@@ -17,7 +17,7 @@
       },
       "libvlaude_ffi": {
         "repo": "vimo-ai/vlaude",
-        "tag": "vlaude-ffi-v0.0.1-test",
+        "tag": "vlaude-ffi-v0.0.1-beta.1-test",
         "asset": "libvlaude_ffi.dylib",
         "dest": "Libs/VlaudeFfi/"
       }
@@ -29,7 +29,7 @@
     "deps": {
       "libclaude_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.1",
+        "tag": "v0.0.1-beta.2",
         "asset": "libclaude_session_db.dylib",
         "dest": "Libs/SharedDB/"
       }
