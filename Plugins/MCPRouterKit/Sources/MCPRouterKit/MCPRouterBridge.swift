@@ -262,6 +262,144 @@ public final class MCPRouterBridge {
         }
     }
 
+    // MARK: - Gemini Global Config
+
+    /// 检查 mcp-router 是否已安装到 Gemini 全局配置
+    public static func isInstalledToGeminiGlobal() -> Bool {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let result = mcp_router_is_installed_to_gemini_global(&errorPtr)
+        if let errorPtr = errorPtr {
+            mcp_router_free_string(errorPtr)
+        }
+        return result
+    }
+
+    /// 安装 mcp-router 到 Gemini 全局配置
+    public static func installToGeminiGlobal(port: UInt16) throws {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let success = mcp_router_install_to_gemini_global(port, &errorPtr)
+
+        if !success {
+            let message: String
+            if let errorPtr = errorPtr {
+                message = String(cString: errorPtr)
+                mcp_router_free_string(errorPtr)
+            } else {
+                message = "Unknown error"
+            }
+            throw MCPRouterError.operationFailed(message)
+        }
+    }
+
+    /// 从 Gemini 全局配置卸载 mcp-router
+    public static func uninstallFromGeminiGlobal() throws {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let success = mcp_router_uninstall_from_gemini_global(&errorPtr)
+
+        if !success {
+            let message: String
+            if let errorPtr = errorPtr {
+                message = String(cString: errorPtr)
+                mcp_router_free_string(errorPtr)
+            } else {
+                message = "Unknown error"
+            }
+            throw MCPRouterError.operationFailed(message)
+        }
+    }
+
+    // MARK: - OpenCode Global Config
+
+    /// 检查 mcp-router 是否已安装到 OpenCode 全局配置
+    public static func isInstalledToOpenCodeGlobal() -> Bool {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let result = mcp_router_is_installed_to_opencode_global(&errorPtr)
+        if let errorPtr = errorPtr {
+            mcp_router_free_string(errorPtr)
+        }
+        return result
+    }
+
+    /// 安装 mcp-router 到 OpenCode 全局配置
+    public static func installToOpenCodeGlobal(port: UInt16) throws {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let success = mcp_router_install_to_opencode_global(port, &errorPtr)
+
+        if !success {
+            let message: String
+            if let errorPtr = errorPtr {
+                message = String(cString: errorPtr)
+                mcp_router_free_string(errorPtr)
+            } else {
+                message = "Unknown error"
+            }
+            throw MCPRouterError.operationFailed(message)
+        }
+    }
+
+    /// 从 OpenCode 全局配置卸载 mcp-router
+    public static func uninstallFromOpenCodeGlobal() throws {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let success = mcp_router_uninstall_from_opencode_global(&errorPtr)
+
+        if !success {
+            let message: String
+            if let errorPtr = errorPtr {
+                message = String(cString: errorPtr)
+                mcp_router_free_string(errorPtr)
+            } else {
+                message = "Unknown error"
+            }
+            throw MCPRouterError.operationFailed(message)
+        }
+    }
+
+    // MARK: - Codex Global Config
+
+    /// 检查 mcp-router 是否已安装到 Codex 全局配置
+    public static func isInstalledToCodexGlobal() -> Bool {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let result = mcp_router_is_installed_to_codex_global(&errorPtr)
+        if let errorPtr = errorPtr {
+            mcp_router_free_string(errorPtr)
+        }
+        return result
+    }
+
+    /// 安装 mcp-router 到 Codex 全局配置
+    public static func installToCodexGlobal(port: UInt16) throws {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let success = mcp_router_install_to_codex_global(port, &errorPtr)
+
+        if !success {
+            let message: String
+            if let errorPtr = errorPtr {
+                message = String(cString: errorPtr)
+                mcp_router_free_string(errorPtr)
+            } else {
+                message = "Unknown error"
+            }
+            throw MCPRouterError.operationFailed(message)
+        }
+    }
+
+    /// 从 Codex 全局配置卸载 mcp-router
+    public static func uninstallFromCodexGlobal() throws {
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let success = mcp_router_uninstall_from_codex_global(&errorPtr)
+
+        if !success {
+            let message: String
+            if let errorPtr = errorPtr {
+                message = String(cString: errorPtr)
+                mcp_router_free_string(errorPtr)
+            } else {
+                message = "Unknown error"
+            }
+            throw MCPRouterError.operationFailed(message)
+        }
+    }
+
     /// 添加服务器并持久化到配置文件
     /// - Parameters:
     ///   - config: 服务器配置

@@ -1621,7 +1621,7 @@ private struct IntegrationTab: View {
                 Text("全局配置集成")
                     .font(.headline)
 
-                Text("将 MCP Router 安装到 Claude CLI 或 Codex 的全局配置中。")
+                Text("将 MCP Router 安装到各 AI CLI 工具的全局配置中。")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -1629,6 +1629,8 @@ private struct IntegrationTab: View {
 
                 ClaudeIntegrationRowView(port: viewModel.port)
                 CodexIntegrationRowView(port: viewModel.port)
+                GeminiIntegrationRowView(port: viewModel.port)
+                OpenCodeIntegrationRowView(port: viewModel.port)
 
                 Spacer()
             }
@@ -1644,7 +1646,7 @@ private struct ClaudeIntegrationRowView: View {
     private let configPath = "~/.claude.json"
 
     @State private var isInstalled = false
-    @State private var configExists = false
+    @State private var errorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1667,32 +1669,26 @@ private struct ClaudeIntegrationRowView: View {
 
                 Spacer()
 
-                if configExists {
-                    Button(isInstalled ? "卸载" : "安装") {
-                        toggleInstall()
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(isInstalled ? Color.secondary.opacity(0.2) : Color.accentColor)
-                    .foregroundColor(isInstalled ? .primary : .white)
-                    .cornerRadius(6)
-                } else {
-                    Button("创建配置") {
-                        createConfig()
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Color.accentColor)
-                    .foregroundColor(.white)
-                    .cornerRadius(6)
+                Button(isInstalled ? "卸载" : "安装") {
+                    toggleInstall()
                 }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isInstalled ? Color.secondary.opacity(0.2) : Color.accentColor)
+                .foregroundColor(isInstalled ? .primary : .white)
+                .cornerRadius(6)
             }
 
             Text(configPath)
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
         }
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
@@ -1703,60 +1699,20 @@ private struct ClaudeIntegrationRowView: View {
     }
 
     private func checkStatus() {
-        let expandedPath = NSString(string: configPath).expandingTildeInPath
-        configExists = FileManager.default.fileExists(atPath: expandedPath)
-
-        if configExists {
-            if let data = FileManager.default.contents(atPath: expandedPath),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let mcpServers = json["mcpServers"] as? [String: Any] {
-                isInstalled = mcpServers["mcp-router"] != nil
-            }
-        }
-    }
-
-    private func createConfig() {
-        let expandedPath = NSString(string: configPath).expandingTildeInPath
-
-        let initialConfig: [String: Any] = [
-            "mcpServers": [
-                "mcp-router": [
-                    "type": "http",
-                    "url": "http://127.0.0.1:\(port)"
-                ]
-            ]
-        ]
-
-        if let jsonData = try? JSONSerialization.data(withJSONObject: initialConfig, options: [.prettyPrinted, .sortedKeys]) {
-            try? jsonData.write(to: URL(fileURLWithPath: expandedPath))
-            checkStatus()
-        }
+        isInstalled = MCPRouterBridge.isInstalledToClaudeGlobal()
     }
 
     private func toggleInstall() {
-        let expandedPath = NSString(string: configPath).expandingTildeInPath
-
-        guard let data = FileManager.default.contents(atPath: expandedPath),
-              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return
-        }
-
-        var mcpServers = json["mcpServers"] as? [String: Any] ?? [:]
-
-        if isInstalled {
-            mcpServers.removeValue(forKey: "mcp-router")
-        } else {
-            mcpServers["mcp-router"] = [
-                "type": "http",
-                "url": "http://127.0.0.1:\(port)"
-            ]
-        }
-
-        json["mcpServers"] = mcpServers
-
-        if let newData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) {
-            try? newData.write(to: URL(fileURLWithPath: expandedPath))
-            isInstalled.toggle()
+        errorMessage = nil
+        do {
+            if isInstalled {
+                try MCPRouterBridge.uninstallFromClaudeGlobal()
+            } else {
+                try MCPRouterBridge.installToClaudeGlobal(port: UInt16(port))
+            }
+            checkStatus()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -1768,7 +1724,7 @@ private struct CodexIntegrationRowView: View {
     private let configPath = "~/.codex/config.toml"
 
     @State private var isInstalled = false
-    @State private var configExists = false
+    @State private var errorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1791,26 +1747,26 @@ private struct CodexIntegrationRowView: View {
 
                 Spacer()
 
-                if configExists {
-                    Button(isInstalled ? "卸载" : "安装") {
-                        toggleInstall()
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(isInstalled ? Color.secondary.opacity(0.2) : Color.accentColor)
-                    .foregroundColor(isInstalled ? .primary : .white)
-                    .cornerRadius(6)
-                } else {
-                    Text("配置文件不存在")
-                        .font(.caption)
-                        .foregroundColor(.orange)
+                Button(isInstalled ? "卸载" : "安装") {
+                    toggleInstall()
                 }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isInstalled ? Color.secondary.opacity(0.2) : Color.accentColor)
+                .foregroundColor(isInstalled ? .primary : .white)
+                .cornerRadius(6)
             }
 
             Text(configPath)
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
         }
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
@@ -1821,44 +1777,176 @@ private struct CodexIntegrationRowView: View {
     }
 
     private func checkStatus() {
-        let expandedPath = NSString(string: configPath).expandingTildeInPath
-        configExists = FileManager.default.fileExists(atPath: expandedPath)
-
-        if configExists {
-            if let content = try? String(contentsOfFile: expandedPath, encoding: .utf8) {
-                isInstalled = content.contains("[mcp_servers.mcp-router]")
-            }
-        }
+        isInstalled = MCPRouterBridge.isInstalledToCodexGlobal()
     }
 
     private func toggleInstall() {
-        let expandedPath = NSString(string: configPath).expandingTildeInPath
-
-        guard var content = try? String(contentsOfFile: expandedPath, encoding: .utf8) else {
-            return
-        }
-
-        if isInstalled {
-            let pattern = #"\[mcp_servers\.mcp-router\]\n(?:(?!\[)[^\n]*\n)*"#
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []) {
-                content = regex.stringByReplacingMatches(
-                    in: content,
-                    options: [],
-                    range: NSRange(content.startIndex..., in: content),
-                    withTemplate: ""
-                )
+        errorMessage = nil
+        do {
+            if isInstalled {
+                try MCPRouterBridge.uninstallFromCodexGlobal()
+            } else {
+                try MCPRouterBridge.installToCodexGlobal(port: UInt16(port))
             }
-        } else {
-            let mcpConfig = """
-
-            [mcp_servers.mcp-router]
-            type = "http"
-            url = "http://127.0.0.1:\(port)"
-            """
-            content += mcpConfig
+            checkStatus()
+        } catch {
+            errorMessage = error.localizedDescription
         }
+    }
+}
 
-        try? content.write(toFile: expandedPath, atomically: true, encoding: .utf8)
-        isInstalled.toggle()
+// MARK: - Gemini Integration (JSON)
+
+private struct GeminiIntegrationRowView: View {
+    let port: Int
+    private let configPath = "~/.gemini/settings.json"
+
+    @State private var isInstalled = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "sparkles")
+                    .foregroundColor(.purple)
+
+                Text("Gemini CLI")
+                    .font(.headline)
+
+                if isInstalled {
+                    Text("已安装")
+                        .font(.caption2)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green)
+                        .cornerRadius(4)
+                }
+
+                Spacer()
+
+                Button(isInstalled ? "卸载" : "安装") {
+                    toggleInstall()
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isInstalled ? Color.secondary.opacity(0.2) : Color.accentColor)
+                .foregroundColor(isInstalled ? .primary : .white)
+                .cornerRadius(6)
+            }
+
+            Text(configPath)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(8)
+        .onAppear {
+            checkStatus()
+        }
+    }
+
+    private func checkStatus() {
+        isInstalled = MCPRouterBridge.isInstalledToGeminiGlobal()
+    }
+
+    private func toggleInstall() {
+        errorMessage = nil
+        do {
+            if isInstalled {
+                try MCPRouterBridge.uninstallFromGeminiGlobal()
+            } else {
+                try MCPRouterBridge.installToGeminiGlobal(port: UInt16(port))
+            }
+            checkStatus()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - OpenCode Integration (JSON)
+
+private struct OpenCodeIntegrationRowView: View {
+    let port: Int
+    private let configPath = "~/.config/opencode/opencode.json"
+
+    @State private var isInstalled = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .foregroundColor(.orange)
+
+                Text("OpenCode")
+                    .font(.headline)
+
+                if isInstalled {
+                    Text("已安装")
+                        .font(.caption2)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green)
+                        .cornerRadius(4)
+                }
+
+                Spacer()
+
+                Button(isInstalled ? "卸载" : "安装") {
+                    toggleInstall()
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isInstalled ? Color.secondary.opacity(0.2) : Color.accentColor)
+                .foregroundColor(isInstalled ? .primary : .white)
+                .cornerRadius(6)
+            }
+
+            Text(configPath)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(8)
+        .onAppear {
+            checkStatus()
+        }
+    }
+
+    private func checkStatus() {
+        isInstalled = MCPRouterBridge.isInstalledToOpenCodeGlobal()
+    }
+
+    private func toggleInstall() {
+        errorMessage = nil
+        do {
+            if isInstalled {
+                try MCPRouterBridge.uninstallFromOpenCodeGlobal()
+            } else {
+                try MCPRouterBridge.installToOpenCodeGlobal(port: UInt16(port))
+            }
+            checkStatus()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
