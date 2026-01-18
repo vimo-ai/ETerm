@@ -11,7 +11,7 @@
       },
       "libsocket_client_ffi": {
         "repo": "vimo-ai/vlaude",
-        "tag": "socket-ffi-v0.0.1-beta.1",
+        "tag": "socket-ffi-v0.0.1-beta.2",
         "asset": "libsocket_client_ffi.dylib",
         "dest": "Libs/SocketClient/"
       },
