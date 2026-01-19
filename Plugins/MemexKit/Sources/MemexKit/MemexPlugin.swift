@@ -45,13 +45,22 @@ public final class MemexPlugin: NSObject, Plugin {
     // MARK: - Event Handling
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        // 处理 AI CLI 响应完成事件，触发精确索引
+        // 处理 AI CLI 响应完成事件，触发精确索引和 Compact
         guard eventName == "aicli.responseComplete" else { return }
         guard let transcriptPath = payload["transcriptPath"] as? String else { return }
 
-        // 异步调用索引 API（静默失败，不阻断主流程）
+        // 从路径中提取 session ID（文件名不含扩展名）
+        // 路径格式: ~/.claude/projects/{encoded-project-path}/{session-uuid}.jsonl
+        let sessionId = (transcriptPath as NSString).lastPathComponent
+            .replacingOccurrences(of: ".jsonl", with: "")
+
+        // 异步调用索引和 Compact API（静默失败，不阻断主流程）
         Task {
+            // 1. 索引会话（更新 FTS）
             try? await MemexService.shared.indexSession(path: transcriptPath)
+
+            // 2. 触发 Compact（L1 + L2，如果启用的话）
+            try? await MemexService.shared.triggerCompact(sessionId: sessionId)
         }
     }
 

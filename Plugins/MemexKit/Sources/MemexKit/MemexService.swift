@@ -419,6 +419,32 @@ extension MemexService {
         }
     }
 
+    /// 触发 Compact 任务
+    /// - Parameter sessionId: 会话 ID
+    ///
+    /// 通过 HTTP API 触发 compact（L1 + L2）
+    /// 静默失败，不影响主流程
+    public func triggerCompact(sessionId: String) async throws {
+        guard isRunning || isPortInUse(port) else {
+            throw MemexServiceError.serviceNotRunning
+        }
+
+        let url = baseURL.appendingPathComponent("api/compact/trigger")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body = ["session_id": sessionId]
+        request.httpBody = try JSONEncoder().encode(body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw MemexServiceError.requestFailed
+        }
+    }
+
     /// 通过 SharedDb 直接写入会话
     private func indexSessionViaSharedDb(path: String) async throws {
         guard let sharedDb = sharedDb else {
