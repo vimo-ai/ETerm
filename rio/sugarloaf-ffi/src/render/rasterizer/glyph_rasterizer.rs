@@ -71,8 +71,14 @@ impl GlyphRasterizer {
             let glyph_width = bounds.width() + 2.0;
             let total_width = base_width.max(glyph_width);
 
+            // 计算 bitmap 高度：使用当前字体的度量来确保能容纳字形
+            // 这对于 CJK 等 fallback 字体特别重要，它们可能比主字体更高
+            let (_, metrics) = glyph.font.metrics();
+            let font_height = -metrics.ascent + metrics.descent;
+            let total_height = cell_height.max(font_height);
+
             let w = (total_width.ceil() as i32).min(self.max_size);
-            let h = (cell_height.ceil() as i32).min(self.max_size);
+            let h = (total_height.ceil() as i32).min(self.max_size);
             (w, h)
         };
 
@@ -134,20 +140,29 @@ impl GlyphRasterizer {
     /// 处理斜体等字符的左/右溢出：
     /// - 如果有左溢出（bounds.left < 0），向右偏移以避免被切
     /// - 加 1px padding 配合 bitmap 尺寸计算中的 +2
+    ///
+    /// 注意：使用当前字体自己的 ascent 来计算 baseline 位置，
+    /// 而不是使用基于主字体计算的 baseline_offset。
+    /// 这确保 CJK 等 fallback 字体的字形能够正确地在 bitmap 中顶部对齐。
     fn rasterize_normal(
         &self,
         canvas: &skia_safe::Canvas,
         glyph: &GlyphInfo,
-        baseline_offset: f32,
+        _baseline_offset: f32, // 保留参数签名兼容性，但使用字体自己的 ascent
         paint: &Paint,
     ) {
         // 检查是否有左溢出，+1 是 padding
         let (_, bounds) = glyph.font.measure_str(&glyph.grapheme, None);
         let x_offset = if bounds.left < 0.0 { -bounds.left + 1.0 } else { 1.0 };
 
+        // 使用当前字体自己的 ascent 计算 baseline
+        // 这样 CJK 字体的字形会在 bitmap 顶部对齐，而不是垂直居中
+        let (_, metrics) = glyph.font.metrics();
+        let font_baseline = -metrics.ascent;
+
         canvas.draw_str(
             &glyph.grapheme,
-            Point::new(x_offset, baseline_offset),
+            Point::new(x_offset, font_baseline),
             &glyph.font,
             paint,
         );
@@ -164,7 +179,7 @@ impl GlyphRasterizer {
         &self,
         canvas: &skia_safe::Canvas,
         glyph: &GlyphInfo,
-        cell_width: f32,
+        _cell_width: f32,
         cell_height: f32,
         paint: &Paint,
     ) {
@@ -722,5 +737,127 @@ mod tests {
             }
             println!();
         }
+    }
+
+    /// 验证 CJK 字符使用字体自己的 baseline 而不是主字体的 baseline
+    /// 这确保 CJK 字符顶部对齐而不是垂直居中
+    #[test]
+    fn test_cjk_uses_own_font_baseline() {
+        use skia_safe::{Font, FontMgr, FontStyle};
+
+        let font_mgr = FontMgr::new();
+
+        // 尝试加载 CJK 字体
+        let cjk_typeface = font_mgr
+            .match_family_style("PingFang SC", FontStyle::default())
+            .or_else(|| font_mgr.match_family_style("Hiragino Sans GB", FontStyle::default()))
+            .or_else(|| font_mgr.match_family_style("STHeiti", FontStyle::default()))
+            .or_else(|| font_mgr.match_family_style("Noto Sans CJK SC", FontStyle::default()));
+
+        // 加载拉丁字体
+        let latin_typeface = font_mgr
+            .match_family_style("Menlo", FontStyle::default())
+            .or_else(|| font_mgr.match_family_style("SF Mono", FontStyle::default()));
+
+        let (cjk_typeface, latin_typeface) = match (cjk_typeface, latin_typeface) {
+            (Some(c), Some(l)) => (c, l),
+            _ => {
+                println!("⚠️ 未找到 CJK 或 Latin 字体，跳过测试");
+                return;
+            }
+        };
+
+        let font_size = 14.0;
+        let cjk_font = Font::from_typeface(cjk_typeface, font_size);
+        let latin_font = Font::from_typeface(latin_typeface, font_size);
+
+        // 获取两种字体的 metrics
+        let (_, cjk_metrics) = cjk_font.metrics();
+        let (_, latin_metrics) = latin_font.metrics();
+
+        println!("\n========== CJK Baseline 对齐验证 ==========\n");
+        println!("Latin 字体: ascent={:.2}, descent={:.2}", latin_metrics.ascent, latin_metrics.descent);
+        println!("CJK 字体: ascent={:.2}, descent={:.2}", cjk_metrics.ascent, cjk_metrics.descent);
+
+        // 主字体的 baseline_offset（模拟 renderer 中的计算）
+        let primary_baseline_offset = -latin_metrics.ascent;
+
+        // CJK 字体自己的 baseline
+        let cjk_own_baseline = -cjk_metrics.ascent;
+
+        println!("\n主字体 baseline_offset: {:.2}", primary_baseline_offset);
+        println!("CJK 字体自己的 baseline: {:.2}", cjk_own_baseline);
+
+        // 验证修复：rasterize_normal 现在使用字体自己的 baseline
+        // 而不是传入的 baseline_offset
+        let rasterizer = GlyphRasterizer::new();
+
+        // 创建 CJK 字形
+        let mut cjk_glyph = GlyphInfo {
+            grapheme: "中".to_string(),
+            font: cjk_font.clone(),
+            x: 0.0,
+            color: Color4f::new(1.0, 1.0, 1.0, 1.0),
+            background_color: None,
+            width: 2.0,
+            decoration: None,
+        };
+
+        // 模拟主字体的 cell 尺寸
+        let cell_width = 8.0;
+        let cell_height = -latin_metrics.ascent + latin_metrics.descent + latin_metrics.leading;
+
+        println!("\n主字体 cell_height: {:.2}", cell_height);
+
+        // 光栅化 CJK 字形
+        let bitmap = rasterizer.rasterize(&cjk_glyph, cell_width, cell_height, primary_baseline_offset);
+
+        assert!(bitmap.is_some(), "CJK 字形应该能够光栅化");
+        let bm = bitmap.unwrap();
+
+        println!("CJK bitmap 尺寸: {}x{}", bm.width, bm.height);
+
+        // 关键验证：bitmap 高度应该至少能容纳 CJK 字体的完整高度
+        let cjk_font_height = -cjk_metrics.ascent + cjk_metrics.descent;
+        println!("CJK 字体高度: {:.2}", cjk_font_height);
+
+        // 修复后，bitmap 高度应该是 max(cell_height, cjk_font_height)
+        let expected_min_height = cell_height.max(cjk_font_height).ceil() as u16;
+        assert!(
+            bm.height >= expected_min_height,
+            "bitmap 高度 ({}) 应该至少为 {} 以容纳 CJK 字形",
+            bm.height, expected_min_height
+        );
+
+        // 验证像素数据中顶部区域有内容（字形从顶部开始，而不是居中）
+        // 检查 bitmap 顶部 1/4 区域是否有非零像素
+        let row_bytes = bm.row_bytes;
+        let top_quarter_rows = (bm.height / 4) as usize;
+        let mut top_has_content = false;
+
+        for row in 0..top_quarter_rows {
+            let row_start = row * row_bytes;
+            let row_end = row_start + (bm.width as usize * 4); // RGBA
+            if row_end <= bm.data.len() {
+                for pixel in bm.data[row_start..row_end].chunks(4) {
+                    // 检查 alpha 通道是否非零
+                    if pixel.len() == 4 && pixel[3] > 0 {
+                        top_has_content = true;
+                        break;
+                    }
+                }
+            }
+            if top_has_content {
+                break;
+            }
+        }
+
+        println!("\n顶部 1/4 区域有内容: {}", top_has_content);
+        assert!(
+            top_has_content,
+            "CJK 字形应该从 bitmap 顶部开始绘制，而不是垂直居中"
+        );
+
+        println!("\n✅ 验证通过：CJK 字符使用字体自己的 baseline，顶部对齐正确");
     }
 }
