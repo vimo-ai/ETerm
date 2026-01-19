@@ -343,7 +343,7 @@ struct EmbeddingStats: Decodable {
     let pending: Int
     let failed: Int
     let indexed: Int
-    let ollamaAvailable: Bool
+    let embeddingAvailable: Bool
     let embeddingModel: String
     let isRunning: Bool
 }
@@ -586,7 +586,7 @@ private struct EmbeddingStatsCard: View {
                     // Ollama 状态指示
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(stats.ollamaAvailable ? Color.green : Color.red)
+                            .fill(stats.embeddingAvailable ? Color.green : Color.red)
                             .frame(width: 6, height: 6)
                         Text(stats.embeddingModel)
                             .font(.caption2)
@@ -646,14 +646,14 @@ private struct EmbeddingStatsCard: View {
                     .font(.caption)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
-                    .background(stats.ollamaAvailable ? Color.indigo.opacity(0.1) : Color.gray.opacity(0.1))
-                    .foregroundColor(stats.ollamaAvailable ? .indigo : .gray)
+                    .background(stats.embeddingAvailable ? Color.indigo.opacity(0.1) : Color.gray.opacity(0.1))
+                    .foregroundColor(stats.embeddingAvailable ? .indigo : .gray)
                     .cornerRadius(6)
                 }
                 .buttonStyle(.plain)
-                .disabled(isIndexing || !stats.ollamaAvailable)
+                .disabled(isIndexing || !stats.embeddingAvailable)
 
-                if !stats.ollamaAvailable {
+                if !stats.embeddingAvailable {
                     Text("⚠️ Ollama 不可用，请先启动 Ollama")
                         .font(.caption2)
                         .foregroundColor(.orange)
