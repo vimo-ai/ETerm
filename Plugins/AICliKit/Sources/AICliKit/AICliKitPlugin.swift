@@ -210,26 +210,25 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
                 guard let currentSessionId = AICliSessionMapper.shared.getSessionIdForTab(tabId),
                       currentSessionId == sessionId else { return }
 
-                // 根据 provider 选择恢复命令
-                let resumeCommand = self.getResumeCommand(providerId: providerId, sessionId: sessionId)
+                // 根据 provider 选择恢复命令（只有支持 --resume 的 CLI 才会返回命令）
+                guard let resumeCommand = self.getResumeCommand(providerId: providerId, sessionId: sessionId) else {
+                    return
+                }
                 self.host?.writeToTerminal(terminalId: terminalId, data: resumeCommand)
             }
         }
     }
 
     /// 获取恢复命令
-    private func getResumeCommand(providerId: String, sessionId: String) -> String {
+    ///
+    /// 目前只有 Claude 支持 --resume 参数，其他 CLI 暂不支持。
+    private func getResumeCommand(providerId: String, sessionId: String) -> String? {
         switch providerId {
         case "claude":
             return "claude --resume \(sessionId)\n"
-        case "gemini":
-            return "gemini --resume \(sessionId)\n"
-        case "codex":
-            return "codex --resume \(sessionId)\n"
-        case "opencode":
-            return "opencode --resume \(sessionId)\n"
+        // TODO: Gemini/OpenCode/Codex 的 --resume 支持待确认
         default:
-            return ""
+            return nil
         }
     }
 
@@ -466,7 +465,9 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
             guard let currentTabId = self.getTabId(for: terminalId),
                   currentTabId == tabId else { return }
 
-            let resumeCommand = self.getResumeCommand(providerId: providerId, sessionId: sessionId)
+            guard let resumeCommand = self.getResumeCommand(providerId: providerId, sessionId: sessionId) else {
+                return
+            }
             self.host?.writeToTerminal(terminalId: terminalId, data: resumeCommand)
         }
     }
