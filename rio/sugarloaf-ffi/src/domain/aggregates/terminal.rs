@@ -80,7 +80,6 @@ impl EventCollector {
 }
 
 /// 实现 rio_backend::event::EventListener trait
-
 impl EventListener for EventCollector {
     fn event(&self) -> (Option<BackendRioEvent>, bool) {
         (None, false)
@@ -104,7 +103,6 @@ impl EventListener for EventCollector {
 }
 
 /// 简单的 Dimensions 实现（用于测试）
-
 struct SimpleDimensions {
     columns: usize,
     screen_lines: usize,
@@ -126,7 +124,6 @@ impl Dimensions for SimpleDimensions {
 }
 
 /// Terminal 聚合根
-
 pub struct Terminal {
     /// 终端 ID
     id: TerminalId,
@@ -161,14 +158,12 @@ pub struct Terminal {
 }
 
 /// 事件监听器类型
-
 enum EventListenerType {
     FFI(FFIEventListener),
     Test(EventCollector),
 }
 
 /// 宏：访问可变 Crosswords（write）
-
 macro_rules! with_crosswords_mut {
     ($self:expr, $crosswords:ident, $body:expr) => {
         if let Some(ref cw) = $self.crosswords_ffi {
@@ -184,7 +179,6 @@ macro_rules! with_crosswords_mut {
 }
 
 /// 宏：访问只读 Crosswords（read）
-
 macro_rules! with_crosswords {
     ($self:expr, $crosswords:ident, $body:expr) => {
         if let Some(ref cw) = $self.crosswords_ffi {
@@ -966,7 +960,7 @@ impl Terminal {
     /// - `Some(String)` - 选中的文本
     /// - `None` - 没有选区
     pub fn selection_text(&self) -> Option<String> {
-        with_crosswords!(self, crosswords, { crosswords.selection_to_string() })
+        with_crosswords!(self, crosswords, crosswords.selection_to_string())
     }
 
     /// 获取指定范围内的文本（不需要设置选区）
@@ -1280,7 +1274,7 @@ impl Terminal {
     /// 直到收到 ESU (\e[?2026l) 才变为 false。
     /// 在 sync 期间，应该跳过渲染以避免闪烁。
     pub fn is_syncing(&self) -> bool {
-        with_crosswords!(self, crosswords, { crosswords.is_syncing })
+        with_crosswords!(self, crosswords, crosswords.is_syncing)
     }
 
     /// 检查终端是否启用了 Bracketed Paste Mode
@@ -1303,7 +1297,7 @@ impl Terminal {
     /// - Shell 自己最清楚当前目录
     /// - 每次 cd 后立即更新
     pub fn get_current_directory(&self) -> Option<std::path::PathBuf> {
-        with_crosswords!(self, crosswords, { crosswords.current_directory.clone() })
+        with_crosswords!(self, crosswords, crosswords.current_directory.clone())
     }
 
     /// 检查是否启用了 Kitty 键盘协议

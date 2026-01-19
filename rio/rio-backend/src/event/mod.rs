@@ -30,6 +30,7 @@ impl From<u64> for WindowId {
 }
 
 /// 事件循环代理（简化版）
+#[allow(clippy::result_unit_err)]
 pub trait EventLoopProxy<T>: Clone {
     fn send_event(&self, event: T) -> Result<(), ()>;
 }

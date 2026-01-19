@@ -359,8 +359,8 @@ impl Grid {
             match mode {
                 LineClearMode::Right => {
                     // 清除光标右侧（含光标位置）
-                    for i in cursor_col.0..row.len() {
-                        row[i] = Cell::default();
+                    for cell in row.iter_mut().skip(cursor_col.0) {
+                        *cell = Cell::default();
                     }
                 }
                 LineClearMode::Left => {
@@ -635,7 +635,7 @@ impl RenderState {
         let delta = new_offset as i32 - self.synced_display_offset as i32;
         let screen_lines = self.screen_lines();
 
-        if delta.abs() as usize >= screen_lines {
+        if delta.unsigned_abs() as usize >= screen_lines {
             // 滚动太大，全量同步
             self.full_sync(crosswords);
         } else if delta > 0 {
@@ -715,10 +715,10 @@ impl RenderState {
             target_row.resize(columns, Cell::default());
 
             // 复制每个单元格
-            for col in 0..columns {
+            for (col, target_cell) in target_row.iter_mut().enumerate().take(columns) {
                 let col_idx = Column(col);
                 let square = &crosswords_grid[grid_line][col_idx];
-                target_row[col] = Cell::from_square(square);
+                *target_cell = Cell::from_square(square);
             }
         }
     }
@@ -1143,9 +1143,9 @@ impl RenderState {
         self.ime = ime;
     }
 
-    /// 获取历史大小
+    /// 获取当前历史行数（实际使用的历史行数，可能小于配置的历史大小）
     #[inline]
-    pub fn history_size(&self) -> usize {
+    pub fn current_history_lines(&self) -> usize {
         self.active_grid().current_history_lines
     }
 

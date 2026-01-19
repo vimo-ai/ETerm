@@ -220,7 +220,7 @@ fn find_word_boundary(cells: &[crate::domain::views::grid::CellData], position: 
 #[derive(Debug, PartialEq, Eq)]
 enum CharType {
     /// 中日韩字符（CJK）
-    CJK,
+    Cjk,
     /// 字母数字下划线
     Alphanumeric,
     /// 其他符号
@@ -231,7 +231,7 @@ enum CharType {
 fn classify_char(ch: char) -> CharType {
     // 中日韩字符（Unicode CJK 块）
     if is_cjk(ch) {
-        return CharType::CJK;
+        return CharType::Cjk;
     }
 
     // 字母、数字、下划线
@@ -324,13 +324,13 @@ mod tests {
     #[test]
     fn test_classify_char_cjk() {
         // 中文
-        assert_eq!(classify_char('中'), CharType::CJK);
-        assert_eq!(classify_char('文'), CharType::CJK);
+        assert_eq!(classify_char('中'), CharType::Cjk);
+        assert_eq!(classify_char('文'), CharType::Cjk);
         // 日文假名
-        assert_eq!(classify_char('あ'), CharType::CJK);
-        assert_eq!(classify_char('ア'), CharType::CJK);
+        assert_eq!(classify_char('あ'), CharType::Cjk);
+        assert_eq!(classify_char('ア'), CharType::Cjk);
         // 韩文
-        assert_eq!(classify_char('한'), CharType::CJK);
+        assert_eq!(classify_char('한'), CharType::Cjk);
     }
 
     #[test]
