@@ -30,6 +30,12 @@ pub struct RenderScheduler {
     render_callback: Arc<Mutex<Option<RenderAllCallback>>>,
 }
 
+impl Default for RenderScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RenderScheduler {
     /// 创建渲染调度器
     pub fn new() -> Self {

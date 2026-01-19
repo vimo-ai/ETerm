@@ -3346,8 +3346,8 @@ impl<U: EventListener> Crosswords<U> {
         let start = Pos::new(Line(start_line), Column(0));
         let end = Pos::new(Line(end_line), self.grid.last_column());
 
-        let mut iter = search::RegexIter::new(start, end, Direction::Right, self, regex);
-        while let Some(m) = iter.next() {
+        let iter = search::RegexIter::new(start, end, Direction::Right, self, regex);
+        for m in iter {
             matches.push(m);
             // 安全保护：超过 10000 个匹配就停止
             if matches.len() >= 10000 {

@@ -130,6 +130,7 @@ pub struct SugarloafWindow {
     pub scale: f32,
 }
 
+#[derive(Default)]
 pub struct SugarloafRenderer {
     pub font_features: Option<Vec<String>>,
     pub colorspace: Colorspace,
@@ -158,14 +159,6 @@ impl Default for Colorspace {
 //     }
 // }
 
-impl Default for SugarloafRenderer {
-    fn default() -> SugarloafRenderer {
-        SugarloafRenderer {
-            font_features: None,
-            colorspace: Colorspace::default(),
-        }
-    }
-}
 
 impl SugarloafWindow {
     fn raw_window_handle(&self) -> raw_window_handle::RawWindowHandle {
