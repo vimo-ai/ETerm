@@ -725,7 +725,15 @@ public final class MCPRouterBridge {
     // MARK: - HTTP Server Control
 
     /// 启动 HTTP 服务
+    /// 如果 handle 已被销毁，会自动重建
     public func startServer(port: UInt16) throws {
+        // 如果 handle 为 nil，重新创建
+        if handle == nil {
+            handle = mcp_router_create()
+            loadAllServers()
+            loadWorkspacesFromFile()
+        }
+
         guard let handle = handle else {
             throw MCPRouterError.invalidHandle
         }
@@ -736,16 +744,26 @@ public final class MCPRouterBridge {
         try checkResult(success: success, errorPtr: errorPtr)
     }
 
-    /// 停止 HTTP 服务
+    /// 停止 HTTP 服务并销毁 handle（完全清理，包括所有缓存）
     public func stopServer() throws {
         guard let handle = handle else {
             throw MCPRouterError.invalidHandle
         }
 
+        // 1. 停止 HTTP server
         var errorPtr: UnsafeMutablePointer<CChar>?
         let success = mcp_router_stop_server(handle, &errorPtr)
 
-        try checkResult(success: success, errorPtr: errorPtr)
+        // 即使停止失败也继续销毁 handle
+        if !success, let errorPtr = errorPtr {
+            let error = String(cString: errorPtr)
+            mcp_router_free_string(errorPtr)
+            logError("[MCPRouter] Failed to stop server: \(error)")
+        }
+
+        // 2. 销毁 handle（清除所有 MCP clients 和缓存）
+        mcp_router_destroy(handle)
+        self.handle = nil
     }
 
     /// 获取状态
