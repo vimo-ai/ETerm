@@ -96,7 +96,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     /// 初始化共享数据库（最佳努力）
     ///
     /// 使用 registerAndCollect() 统一的接口，成为 Writer 时自动触发采集。
-    /// 采集逻辑已下沉到 claude-session-db，所有组件（VlaudeKit、MemexKit、daemon）共享同一份代码。
+    /// 采集逻辑已下沉到 ai-cli-session-db，所有组件（VlaudeKit、MemexKit、daemon）共享同一份代码。
     private func initSharedDb() {
         do {
             sharedDb = try SharedDbBridge()

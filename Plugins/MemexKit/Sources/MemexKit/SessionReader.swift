@@ -2,7 +2,7 @@
 //  SessionReader.swift
 //  MemexKit
 //
-//  Swift wrapper for claude-session-db FFI (统一入口)
+//  Swift wrapper for ai-cli-session-db FFI (统一入口)
 //  Provides Claude session file parsing capabilities
 //
 
@@ -32,7 +32,7 @@ struct IndexableMessage {
 
 // MARK: - SessionReader
 
-/// Swift wrapper for claude-session-db FFI (统一入口)
+/// Swift wrapper for ai-cli-session-db FFI (统一入口)
 final class SessionReader {
 
     // MARK: - Lifecycle

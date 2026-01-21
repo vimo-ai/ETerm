@@ -57,11 +57,11 @@ cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 mkdir -p "${BUNDLE_PATH}/Contents/Libs"
 
 log_info "Copying SharedDB..."
-if [ -f "Libs/SharedDB/libclaude_session_db.dylib" ]; then
-    cp "Libs/SharedDB/libclaude_session_db.dylib" "${BUNDLE_PATH}/Contents/Libs/"
-    log_info "Copied libclaude_session_db.dylib"
+if [ -f "Libs/SharedDB/libai_cli_session_db.dylib" ]; then
+    cp "Libs/SharedDB/libai_cli_session_db.dylib" "${BUNDLE_PATH}/Contents/Libs/"
+    log_info "Copied libai_cli_session_db.dylib"
 else
-    log_warn "libclaude_session_db.dylib not found - SharedDb features will be disabled"
+    log_warn "libai_cli_session_db.dylib not found - SharedDb features will be disabled"
 fi
 
 log_info "Copying VlaudeFFI..."
@@ -122,19 +122,19 @@ if [ -f "${BUNDLE_PATH}/Contents/Frameworks/libSocketIO.dylib" ] && \
 fi
 
 # Fix SharedDB link path
-if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libai_cli_session_db.dylib" ]; then
     # Get the actual linked path from the dylib
-    OLD_PATH=$(otool -L "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" | grep claude_session_db | awk '{print $1}')
+    OLD_PATH=$(otool -L "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" | grep ai_cli_session_db | awk '{print $1}')
     if [ -n "$OLD_PATH" ]; then
         install_name_tool -change \
             "$OLD_PATH" \
-            "@loader_path/../Libs/libclaude_session_db.dylib" \
+            "@loader_path/../Libs/libai_cli_session_db.dylib" \
             "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" 2>/dev/null || true
     fi
 
     install_name_tool -id \
-        "@loader_path/../Libs/libclaude_session_db.dylib" \
-        "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" 2>/dev/null || true
+        "@loader_path/../Libs/libai_cli_session_db.dylib" \
+        "${BUNDLE_PATH}/Contents/Libs/libai_cli_session_db.dylib" 2>/dev/null || true
 fi
 
 # Fix VlaudeFfi link path
@@ -160,8 +160,8 @@ for lib in "${SOCKETIO_LIBS[@]}"; do
         codesign -f -s - "${BUNDLE_PATH}/Contents/Frameworks/$lib"
     fi
 done
-if [ -f "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib" ]; then
-    codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libclaude_session_db.dylib"
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libai_cli_session_db.dylib" ]; then
+    codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libai_cli_session_db.dylib"
 fi
 if [ -f "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib" ]; then
     codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib"

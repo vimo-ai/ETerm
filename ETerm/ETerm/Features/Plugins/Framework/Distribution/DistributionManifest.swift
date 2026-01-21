@@ -24,11 +24,11 @@ struct DistributionInfo: Codable {
 
 /// 运行时依赖
 struct RuntimeDependency: Codable {
-    /// 组件名称，如 "libclaude_session_db"
+    /// 组件名称，如 "libai_cli_session_db"
     let name: String
     /// 最低版本要求
     let minVersion: String
-    /// 安装路径（相对于 ~/.vimo/），如 "lib/libclaude_session_db.dylib"
+    /// 安装路径（相对于 ~/.vimo/），如 "lib/libai_cli_session_db.dylib"
     let path: String
     /// SHA256 校验值（CI 自动填充）
     let sha256: String?
