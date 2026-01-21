@@ -431,6 +431,39 @@ private struct StatsCard: View {
                     color: .orange
                 )
             }
+
+            // 数据库大小和启动耗时（仅在有数据时显示）
+            if stats.dbSizeBytes != nil || stats.startupDurationMs != nil {
+                Divider()
+
+                HStack(spacing: 16) {
+                    // 数据库大小
+                    if let dbSize = stats.dbSizeBytes {
+                        HStack(spacing: 6) {
+                            Image(systemName: "externaldrive.fill")
+                                .foregroundColor(.cyan)
+                                .font(.caption)
+                            Text(formatBytes(dbSize))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    // 启动耗时
+                    if let startupMs = stats.startupDurationMs {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bolt.fill")
+                                .foregroundColor(.yellow)
+                                .font(.caption)
+                            Text(formatStartupDuration(startupMs))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
         }
         .padding(16)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -442,6 +475,30 @@ private struct StatsCard: View {
             return String(format: "%.1fk", Double(n) / 1000)
         }
         return "\(n)"
+    }
+
+    private func formatBytes(_ bytes: UInt64) -> String {
+        let kb = Double(bytes) / 1024
+        let mb = kb / 1024
+        let gb = mb / 1024
+
+        if gb >= 1 {
+            return String(format: "%.1f GB", gb)
+        } else if mb >= 1 {
+            return String(format: "%.1f MB", mb)
+        } else if kb >= 1 {
+            return String(format: "%.0f KB", kb)
+        } else {
+            return "\(bytes) B"
+        }
+    }
+
+    private func formatStartupDuration(_ ms: UInt64) -> String {
+        if ms >= 1000 {
+            return String(format: "启动 %.1fs", Double(ms) / 1000)
+        } else {
+            return "启动 \(ms)ms"
+        }
     }
 }
 
