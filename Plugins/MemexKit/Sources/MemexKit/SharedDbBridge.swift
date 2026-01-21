@@ -660,10 +660,10 @@ final class SharedDbBridge {
 
     /// Upsert a project (thread-safe, requires Writer role)
     /// - Returns: Project ID
+    /// Note: Writer role check is now performed at the Rust FFI layer
     func upsertProject(path: String, name: String, source: String) throws -> Int64 {
         try queue.sync {
             guard let handle = handle else { throw SharedDbError.nullPointer }
-            guard role == .writer else { throw SharedDbError.permissionDenied }
 
             var projectId: Int64 = 0
             let error = name.withCString { nameCstr in
@@ -683,10 +683,10 @@ final class SharedDbBridge {
     }
 
     /// Upsert a session (thread-safe, requires Writer role)
+    /// Note: Writer role check is now performed at the Rust FFI layer
     func upsertSession(sessionId: String, projectId: Int64) throws {
         try queue.sync {
             guard let handle = handle else { throw SharedDbError.nullPointer }
-            guard role == .writer else { throw SharedDbError.permissionDenied }
 
             let error = sessionId.withCString { cstr in
                 session_db_upsert_session(handle, cstr, projectId)
@@ -700,10 +700,10 @@ final class SharedDbBridge {
 
     /// Insert messages (thread-safe, requires Writer role)
     /// - Returns: Number of messages inserted
+    /// Note: Writer role check is now performed at the Rust FFI layer
     func insertMessages(sessionId: String, messages: [MessageInput]) throws -> Int {
         try queue.sync {
             guard let handle = handle else { throw SharedDbError.nullPointer }
-            guard role == .writer else { throw SharedDbError.permissionDenied }
             guard !messages.isEmpty else { return 0 }
 
             var inserted: UInt = 0
