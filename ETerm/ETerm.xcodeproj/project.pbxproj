@@ -13,6 +13,7 @@
 		481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */ = {isa = PBXBuildFile; productRef = 481CC84B2ECD995E009F969C /* PanelLayoutKit */; };
 		4825DE3F2EFD329A003AE32C /* ETermExtensionHost in Copy Files */ = {isa = PBXBuildFile; fileRef = 4825DE2F2EFD304B003AE32C /* ETermExtensionHost */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		482F3D712EFADA4500B33236 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 482F3D702EFADA4500B33236 /* SystemConfiguration.framework */; };
+		485A8AE92F214506008DB515 /* CoreNetworkKit in Frameworks */ = {isa = PBXBuildFile; productRef = 485A8AE82F214506008DB515 /* CoreNetworkKit */; };
 		48979A022EE6B451006ECB59 /* SocketIO in Frameworks */ = {isa = PBXBuildFile; productRef = 48979A012EE6B451006ECB59 /* SocketIO */; };
 /* End PBXBuildFile section */
 
@@ -123,6 +124,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				4800A1582F18045800C4ECDC /* ETermKit.framework in Frameworks */,
+				485A8AE92F214506008DB515 /* CoreNetworkKit in Frameworks */,
 				482F3D712EFADA4500B33236 /* SystemConfiguration.framework in Frameworks */,
 				481CC84C2ECD995E009F969C /* PanelLayoutKit in Frameworks */,
 				48979A022EE6B451006ECB59 /* SocketIO in Frameworks */,
@@ -213,6 +215,7 @@
 			packageProductDependencies = (
 				481CC84B2ECD995E009F969C /* PanelLayoutKit */,
 				48979A012EE6B451006ECB59 /* SocketIO */,
+				485A8AE82F214506008DB515 /* CoreNetworkKit */,
 			);
 			productName = ETerm;
 			productReference = 481CC2B92EC7B632009F969C /* ETerm.app */;
@@ -322,6 +325,7 @@
 			packageReferences = (
 				481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */,
 				48979A002EE6B3EC006ECB59 /* XCRemoteSwiftPackageReference "socket" */,
+				485A8AE72F2140D5008DB515 /* XCRemoteSwiftPackageReference "CoreNetworkKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 481CC2BA2EC7B632009F969C /* Products */;
@@ -817,8 +821,8 @@
 				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				"LD_RUNPATH_SEARCH_PATHS[arch=*]" = "@executable_path/../Frameworks";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -833,8 +837,8 @@
 				FRAMEWORK_SEARCH_PATHS = "$(PROJECT_DIR)/../Build";
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/../Build";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -898,6 +902,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		485A8AE72F2140D5008DB515 /* XCRemoteSwiftPackageReference "CoreNetworkKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/vimo-ai/CoreNetworkKit";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 		48979A002EE6B3EC006ECB59 /* XCRemoteSwiftPackageReference "socket" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/socketio/socket.io-client-swift";
@@ -913,6 +925,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 481CC84A2ECD9922009F969C /* XCLocalSwiftPackageReference "../Packages/PanelLayoutKit" */;
 			productName = PanelLayoutKit;
+		};
+		485A8AE82F214506008DB515 /* CoreNetworkKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 485A8AE72F2140D5008DB515 /* XCRemoteSwiftPackageReference "CoreNetworkKit" */;
+			productName = CoreNetworkKit;
 		};
 		48979A012EE6B451006ECB59 /* SocketIO */ = {
 			isa = XCSwiftPackageProductDependency;

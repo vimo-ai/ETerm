@@ -1,6 +1,33 @@
 {
-  "originHash" : "e4c266d6bb41ae9f0a928c4e064aa28b58461358c6dc1666585f501c34ee7a83",
+  "originHash" : "93f6c9daf71257adfd384e9c9337e9586ca15c7aa931d6726d2715cc1f863397",
   "pins" : [
+    {
+      "identity" : "alamofire",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Alamofire/Alamofire.git",
+      "state" : {
+        "revision" : "7be73f6c2b5cd90e40798b06ebd5da8f9f79cf88",
+        "version" : "5.11.0"
+      }
+    },
+    {
+      "identity" : "corenetworkkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/vimo-ai/CoreNetworkKit",
+      "state" : {
+        "branch" : "main",
+        "revision" : "f5b2f95f7ac520836d1b2f0574c820960719afc4"
+      }
+    },
+    {
+      "identity" : "mloggerkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/vimo-ai/MLoggerKit.git",
+      "state" : {
+        "revision" : "cd942add68ced8736daa5e217dc8dc8ccd087a10",
+        "version" : "0.0.1"
+      }
+    },
     {
       "identity" : "socket.io-client-swift",
       "kind" : "remoteSourceControl",
