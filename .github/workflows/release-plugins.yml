@@ -170,8 +170,8 @@ jobs:
           cp ".build/release/lib${PLUGIN_NAME}.dylib" "$BUNDLE_DIR/Contents/MacOS/"
 
           # Copy SharedDB if exists
-          if [ -f "Libs/SharedDB/libclaude_session_db.dylib" ]; then
-            cp "Libs/SharedDB/libclaude_session_db.dylib" "$BUNDLE_DIR/Contents/Libs/"
+          if [ -f "Libs/SharedDB/libai_cli_session_db.dylib" ]; then
+            cp "Libs/SharedDB/libai_cli_session_db.dylib" "$BUNDLE_DIR/Contents/Libs/"
           fi
 
           # Copy SocketClient if exists (VlaudeKit)
@@ -235,16 +235,16 @@ jobs:
             "$MAIN_DYLIB" 2>/dev/null || true
 
           # Fix SharedDB reference
-          if [ -f "$BUNDLE_DIR/Contents/Libs/libclaude_session_db.dylib" ]; then
-            OLD_PATH=$(otool -L "$MAIN_DYLIB" | grep claude_session_db | awk '{print $1}')
+          if [ -f "$BUNDLE_DIR/Contents/Libs/libai_cli_session_db.dylib" ]; then
+            OLD_PATH=$(otool -L "$MAIN_DYLIB" | grep ai_cli_session_db | awk '{print $1}')
             if [ -n "$OLD_PATH" ]; then
               install_name_tool -change "$OLD_PATH" \
-                "@loader_path/../Libs/libclaude_session_db.dylib" \
+                "@loader_path/../Libs/libai_cli_session_db.dylib" \
                 "$MAIN_DYLIB"
             fi
             install_name_tool -id \
-              "@loader_path/../Libs/libclaude_session_db.dylib" \
-              "$BUNDLE_DIR/Contents/Libs/libclaude_session_db.dylib"
+              "@loader_path/../Libs/libai_cli_session_db.dylib" \
+              "$BUNDLE_DIR/Contents/Libs/libai_cli_session_db.dylib"
           fi
 
           # Fix SocketClient reference

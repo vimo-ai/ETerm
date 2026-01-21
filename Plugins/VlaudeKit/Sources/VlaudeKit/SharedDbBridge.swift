@@ -2,7 +2,7 @@
 //  SharedDbBridge.swift
 //  VlaudeKit
 //
-//  Swift wrapper for claude-session-db FFI
+//  Swift wrapper for ai-cli-session-db FFI
 //  Provides cached session data access via shared database
 //
 
@@ -169,7 +169,7 @@ enum ApprovalStatus: Int32 {
 
 // MARK: - SharedDbBridge
 
-/// Swift bridge for claude-session-db
+/// Swift bridge for ai-cli-session-db
 /// Provides cached session data access via shared database
 /// Thread-safe: all FFI calls are serialized on a private queue
 final class SharedDbBridge {

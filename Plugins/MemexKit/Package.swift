@@ -35,7 +35,7 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags([
                     "-F", etermkitPath, "-framework", "ETermKit",
-                    "Libs/SharedDB/libclaude_session_db.dylib",
+                    "Libs/SharedDB/libai_cli_session_db.dylib",
                     "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs"
                 ])
             ]

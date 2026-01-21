@@ -87,11 +87,11 @@ struct DownloadablePluginsView: View {
         sha256: nil,
         runtimeDeps: [
             RuntimeDependency(
-                name: "libclaude_session_db",
+                name: "libai_cli_session_db",
                 minVersion: "0.0.1-beta.1",
-                path: "lib/libclaude_session_db.dylib",
+                path: "lib/libai_cli_session_db.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libclaude_session_db.dylib"
+                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libai_cli_session_db.dylib"
             ),
             RuntimeDependency(
                 name: "libsocket_client_ffi",
@@ -113,11 +113,11 @@ struct DownloadablePluginsView: View {
         sha256: nil,
         runtimeDeps: [
             RuntimeDependency(
-                name: "libclaude_session_db",
+                name: "libai_cli_session_db",
                 minVersion: "0.0.1-beta.1",
-                path: "lib/libclaude_session_db.dylib",
+                path: "lib/libai_cli_session_db.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libclaude_session_db.dylib"
+                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libai_cli_session_db.dylib"
             ),
             RuntimeDependency(
                 name: "memex",

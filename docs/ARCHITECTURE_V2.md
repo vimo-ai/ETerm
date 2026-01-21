@@ -66,7 +66,7 @@
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      claude-session-db                           │
+│                      ai-cli-session-db                           │
 │                     (共享 libSQL 数据库)                         │
 │                                                                  │
 │  部署模式：                                                       │
@@ -109,7 +109,7 @@
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    claude-session-db (新建)                      │
+│                    ai-cli-session-db (新建)                      │
 │                                                                  │
 │  • 依赖 ai-cli-session-collector                                │
 │  • 依赖 libsql / rusqlite                                       │
@@ -125,7 +125,7 @@
 ### 3.2 Rust Feature Flags
 
 ```toml
-# claude-session-db/Cargo.toml
+# ai-cli-session-db/Cargo.toml
 [features]
 default = ["writer", "reader", "search", "coordination"]
 writer = []           # 写入能力
@@ -140,7 +140,7 @@ coordination = []     # Writer 协调逻辑
 # Vlaude server: reader, search
 ```
 
-### 3.3 claude-session-db API 设计
+### 3.3 ai-cli-session-db API 设计
 
 ```rust
 // ============================================================
@@ -755,7 +755,7 @@ memex daemon start
 
 | 任务 | 描述 | 产出 |
 |------|------|------|
-| 1.1 | 创建 claude-session-db crate | Rust 库 |
+| 1.1 | 创建 ai-cli-session-db crate | Rust 库 |
 | 1.2 | 实现 DB schema 和迁移 | SQL + 代码 |
 | 1.3 | 实现 Writer 协调逻辑（原子抢占、心跳、接管） | register/heartbeat/release/takeover |
 | 1.4 | 实现数据读写 API（含增量扫描） | upsert/insert/list/search |
@@ -837,7 +837,7 @@ memex daemon start
 
 ### 11.1 Phase 1: 共享库开发 ✅ 完成
 
-**仓库位置**: `/Users/higuaifan/Desktop/vimo/ETerm/claude-session-db`
+**仓库位置**: `/Users/higuaifan/Desktop/vimo/ETerm/ai-cli-session-db`
 
 **代码统计**:
 
@@ -919,7 +919,7 @@ ffi = []              # C FFI 导出 (Swift 绑定用)
 
 | 组件 | FFI 写入方法 | 调用写入 | 状态 |
 |------|-------------|---------|------|
-| claude-session-db | ✅ 有 | - | 基础库 OK |
+| ai-cli-session-db | ✅ 有 | - | 基础库 OK |
 | memex-rs | ✅ SharedDbAdapter | ✅ Collector.sync_to_shared_db | ✅ 完成 |
 | vlaude-core | ✅ SharedDbAdapter | ✅ service.sync_message_to_shared_db | ✅ 完成 |
 | VlaudeKit | ✅ SharedDbBridge | ⏳ 待集成 ClaudeKit | ✅ FFI 完成 |
@@ -952,8 +952,8 @@ ffi = []              # C FFI 导出 (Swift 绑定用)
 
 | 文件 | 说明 |
 |------|------|
-| `Libs/SharedDB/claude_session_db.h` | FFI C header |
-| `Libs/SharedDB/libclaude_session_db.dylib` | FFI 动态库 |
+| `Libs/SharedDB/ai_cli_session_db.h` | FFI C header |
+| `Libs/SharedDB/libai_cli_session_db.dylib` | FFI 动态库 |
 | `Sources/VlaudeKit/SharedDbBridge.swift` | Swift 包装 |
 
 **MemexKit** (`Plugins/MemexKit/`):

@@ -3,10 +3,10 @@
     "name": "VlaudeKit",
     "path": "Plugins/VlaudeKit",
     "deps": {
-      "libclaude_session_db": {
+      "libai_cli_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
         "tag": "v0.0.1-beta.2",
-        "asset": "libclaude_session_db.dylib",
+        "asset": "libai_cli_session_db.dylib",
         "dest": "Libs/SharedDB/"
       },
       "libsocket_client_ffi": {
@@ -27,10 +27,10 @@
     "name": "MemexKit",
     "path": "Plugins/MemexKit",
     "deps": {
-      "libclaude_session_db": {
+      "libai_cli_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
         "tag": "v0.0.1-beta.2",
-        "asset": "libclaude_session_db.dylib",
+        "asset": "libai_cli_session_db.dylib",
         "dest": "Libs/SharedDB/"
       }
     }

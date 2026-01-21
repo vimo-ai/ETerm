@@ -1,5 +1,5 @@
 module SharedDbFFI [system] {
-    header "claude_session_db.h"
-    link "claude_session_db"
+    header "ai_cli_session_db.h"
+    link "ai_cli_session_db"
     export *
 }

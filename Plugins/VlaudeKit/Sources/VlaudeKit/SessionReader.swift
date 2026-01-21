@@ -2,7 +2,7 @@
 //  SessionReader.swift
 //  VlaudeKit
 //
-//  Swift wrapper for claude-session-db FFI (统一入口)
+//  Swift wrapper for ai-cli-session-db FFI (统一入口)
 //  Provides Claude session file reading capabilities
 //
 
@@ -158,7 +158,7 @@ struct AnyCodable: Codable {
 
 // MARK: - SessionReader
 
-/// Swift wrapper for claude-session-db FFI (统一入口)
+/// Swift wrapper for ai-cli-session-db FFI (统一入口)
 final class SessionReader {
     private var projectsPath: String?
 
