@@ -379,7 +379,7 @@ extension MemexService {
         throw MemexServiceError.requestFailed
     }
 
-    /// 触发采集
+    /// 触发全量采集（通过 HTTP API）
     public func collect() async throws {
         let url = baseURL.appendingPathComponent("api/collect")
         var request = URLRequest(url: url)
@@ -391,6 +391,36 @@ extension MemexService {
               httpResponse.statusCode == 200 else {
             throw MemexServiceError.requestFailed
         }
+    }
+
+    /// 按路径精确采集单个会话（Writer 直接写入）
+    ///
+    /// 当收到 AI CLI Event（如 aicli.responseComplete）时调用此方法。
+    /// Writer 直接调用 FFI 写入数据库，FTS 索引通过触发器自动更新。
+    ///
+    /// **重要**: 此方法不能用 HTTP API 转发给 daemon，因为当 Kit 是 Writer 时，
+    /// daemon 是 Reader，无法执行写入操作。
+    ///
+    /// - Parameter path: JSONL 文件路径
+    public func collectByPath(_ path: String) throws {
+        guard let sharedDb = sharedDb else {
+            throw MemexServiceError.sharedDbNotAvailable
+        }
+
+        // 检查是否为 Writer，如果不是尝试接管
+        if sharedDb.role != .writer {
+            let health = try sharedDb.checkWriterHealth()
+            if health == .timeout || health == .released {
+                guard try sharedDb.tryTakeover() else {
+                    throw MemexServiceError.notWriter
+                }
+            } else {
+                // 有其他活跃的 Writer，让它来处理
+                throw MemexServiceError.notWriter
+            }
+        }
+
+        _ = try sharedDb.collectByPath(path)
     }
 
     /// 索引指定会话（精确索引，替代 file watcher 轮询）

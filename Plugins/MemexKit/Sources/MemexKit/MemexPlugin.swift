@@ -45,7 +45,7 @@ public final class MemexPlugin: NSObject, Plugin {
     // MARK: - Event Handling
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        // 处理 AI CLI 响应完成事件，触发精确索引和 Compact
+        // 处理 AI CLI 响应完成事件，触发精确采集和 Compact
         guard eventName == "aicli.responseComplete" else { return }
         guard let transcriptPath = payload["transcriptPath"] as? String else { return }
 
@@ -54,10 +54,15 @@ public final class MemexPlugin: NSObject, Plugin {
         let sessionId = (transcriptPath as NSString).lastPathComponent
             .replacingOccurrences(of: ".jsonl", with: "")
 
-        // 异步调用索引和 Compact API（静默失败，不阻断主流程）
+        // 异步调用采集和 Compact（静默失败，不阻断主流程）
         Task {
-            // 1. 索引会话（更新 FTS）
-            try? await MemexService.shared.indexSession(path: transcriptPath)
+            // 1. 精确采集会话（Writer 直接写入数据库，FTS 通过触发器自动更新）
+            //
+            // **重要**: 必须由 Writer 直接调用 collectByPath，不能依赖 HTTP API 转发给 daemon。
+            // 因为当 Kit 是 Writer 时，daemon 是 Reader，无法执行写入操作。
+            // 之前的实现通过 HTTP 调用 daemon 的 /api/index，但忽略了 daemon 可能是 Reader 的情况，
+            // 导致采集失败。daemon 的文件监控只是兜底机制（当 Kit 未运行时）。
+            try? MemexService.shared.collectByPath(transcriptPath)
 
             // 2. 触发 Compact（L1 + L2，如果启用的话）
             try? await MemexService.shared.triggerCompact(sessionId: sessionId)
