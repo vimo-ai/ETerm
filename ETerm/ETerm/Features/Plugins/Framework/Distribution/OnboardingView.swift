@@ -288,7 +288,7 @@ struct OnboardingView: View {
                         downloadProgress[plugin.id] = 1.0
                     }
                 }
-            } catch let error as DownloadError {
+            } catch let error as PluginDownloadError {
                 await MainActor.run {
                     downloadErrors[plugin.id] = error.errorDescription
                 }
