@@ -835,4 +835,55 @@ final class SharedDbBridge {
             return Int(inserted)
         }
     }
+
+    // MARK: - Collect Operations
+
+    /// 按路径采集单个会话（thread-safe, requires Writer role）
+    ///
+    /// 当收到 AI CLI Event（如 aicli.responseComplete）时调用此方法进行精确采集。
+    ///
+    /// **重要**: 此方法必须由 Writer 直接调用，不能依赖 HTTP API 转发给 daemon。
+    /// 因为当 Kit 是 Writer 时，daemon 是 Reader，无法执行写入操作。
+    /// 之前的实现通过 HTTP 调用 daemon 的 /api/index，但忽略了 daemon 可能是 Reader 的情况，
+    /// 导致采集失败。
+    ///
+    /// - Parameter path: JSONL 文件路径
+    /// - Returns: 采集结果
+    func collectByPath(_ path: String) throws -> CollectResult {
+        try queue.sync {
+            guard let handle = handle else { throw SharedDbError.nullPointer }
+
+            var resultPtr: UnsafeMutablePointer<CollectResultC>?
+            let error = path.withCString { cstr in
+                session_db_collect_by_path(handle, cstr, &resultPtr)
+            }
+
+            if let err = SharedDbError.from(error) {
+                throw err
+            }
+
+            guard let result = resultPtr?.pointee else {
+                throw SharedDbError.nullPointer
+            }
+
+            let firstError: String?
+            if let errPtr = result.first_error {
+                firstError = String(cString: errPtr)
+            } else {
+                firstError = nil
+            }
+
+            let res = CollectResult(
+                projectsScanned: Int(result.projects_scanned),
+                sessionsScanned: Int(result.sessions_scanned),
+                messagesInserted: Int(result.messages_inserted),
+                errorCount: Int(result.error_count),
+                firstError: firstError
+            )
+
+            session_db_free_collect_result(resultPtr)
+
+            return res
+        }
+    }
 }
