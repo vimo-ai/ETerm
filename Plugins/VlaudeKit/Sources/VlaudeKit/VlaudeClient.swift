@@ -94,33 +94,20 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     }
 
     /// 初始化共享数据库（最佳努力）
+    ///
+    /// 使用 registerAndCollect() 统一的接口，成为 Writer 时自动触发采集。
+    /// 采集逻辑已下沉到 claude-session-db，所有组件（VlaudeKit、MemexKit、daemon）共享同一份代码。
     private func initSharedDb() {
         do {
             sharedDb = try SharedDbBridge()
-            let role = try sharedDb?.register()
+            // 使用统一的 registerAndCollect，成为 Writer 时自动在 Rust 层执行采集
+            let (role, collectResult) = try sharedDb!.registerAndCollect()
 
-            // 成为 Writer 后触发全量采集
-            if role == .writer {
-                triggerCollectAsync()
+            if role == .writer, let result = collectResult, result.messagesInserted > 0 {
+                print("[VlaudeKit] Collect: \(result.sessionsScanned) sessions, \(result.messagesInserted) messages")
             }
         } catch {
             sharedDb = nil
-        }
-    }
-
-    /// 异步执行全量采集（后台线程，不阻塞主线程）
-    private func triggerCollectAsync() {
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let sharedDb = self?.sharedDb else { return }
-
-            do {
-                let result = try sharedDb.collect()
-                if result.messagesInserted > 0 {
-                    print("[VlaudeKit] Collect: \(result.sessionsScanned) sessions, \(result.messagesInserted) messages")
-                }
-            } catch {
-                // 静默失败，采集是 best-effort
-            }
         }
     }
 

@@ -247,6 +247,61 @@ final class SharedDbBridge {
         return assignedRole
     }
 
+    /// Register as writer and auto-collect when becoming Writer (thread-safe)
+    ///
+    /// 此方法统一了"成为 Writer 时触发采集"的逻辑，采集在 Rust 层同步执行。
+    ///
+    /// - Returns: Tuple of (role, collect result if became Writer)
+    func registerAndCollect() throws -> (WriterRole, SharedCollectResult?) {
+        let result: (WriterRole, SharedCollectResult?) = try queue.sync {
+            guard let handle = handle else { throw SharedDbError.nullPointer }
+
+            var roleValue: Int32 = 1  // Default to reader
+            var collectResultPtr: UnsafeMutablePointer<CollectResultC>?
+
+            let error = session_db_register_writer_and_collect(
+                handle,
+                WriterTypeValue.vlaudeKit.rawValue,
+                &roleValue,
+                &collectResultPtr
+            )
+
+            if let err = SharedDbError.from(error) {
+                throw err
+            }
+
+            let newRole = WriterRole(rawValue: roleValue)
+            role = newRole
+
+            // 解析采集结果（如果有）
+            var collectResult: SharedCollectResult? = nil
+            if let resultPtr = collectResultPtr {
+                let r = resultPtr.pointee
+                let firstError: String?
+                if let errPtr = r.first_error {
+                    firstError = String(cString: errPtr)
+                } else {
+                    firstError = nil
+                }
+                collectResult = SharedCollectResult(
+                    projectsScanned: Int(r.projects_scanned),
+                    sessionsScanned: Int(r.sessions_scanned),
+                    messagesInserted: Int(r.messages_inserted),
+                    errorCount: Int(r.error_count),
+                    firstError: firstError
+                )
+                session_db_free_collect_result(resultPtr)
+            }
+
+            return (newRole, collectResult)
+        }
+
+        // Writer 或 Reader 都启动定时器
+        startHeartbeat()
+
+        return result
+    }
+
     /// Release writer role (thread-safe)
     func release() throws {
         stopHeartbeat()
