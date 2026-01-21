@@ -114,6 +114,15 @@ struct MessageInput {
     }
 }
 
+/// 采集结果
+struct SharedCollectResult {
+    let projectsScanned: Int
+    let sessionsScanned: Int
+    let messagesInserted: Int
+    let errorCount: Int
+    let firstError: String?
+}
+
 struct SharedSearchResult {
     let messageId: Int64
     let sessionId: String
@@ -719,5 +728,84 @@ final class SharedDbBridge {
 
             return Int(updated)
         }
+    }
+
+    // MARK: - Collect
+
+    /// 执行全量采集
+    ///
+    /// 扫描所有 CLI 会话文件（Claude、OpenCode、Codex 等），增量写入数据库。
+    /// 必须是 Writer 角色才能调用。
+    ///
+    /// - Returns: 采集结果
+    func collect() throws -> SharedCollectResult {
+        try queue.sync {
+            try self.collectImpl()
+        }
+    }
+
+    /// 按路径采集单个会话
+    ///
+    /// - Parameter path: JSONL 文件路径
+    /// - Returns: 采集结果
+    func collectByPath(_ path: String) throws -> SharedCollectResult {
+        try queue.sync {
+            try self.collectByPathImpl(path)
+        }
+    }
+
+    // MARK: - Collect Implementation
+
+    private func collectImpl() throws -> SharedCollectResult {
+        guard let handle = handle else { throw SharedDbError.nullPointer }
+
+        var resultPtr: UnsafeMutablePointer<CollectResultC>?
+        let error = session_db_collect(handle, &resultPtr)
+
+        if let err = SharedDbError.from(error) {
+            throw err
+        }
+
+        return try parseCollectResult(resultPtr)
+    }
+
+    private func collectByPathImpl(_ path: String) throws -> SharedCollectResult {
+        guard let handle = handle else { throw SharedDbError.nullPointer }
+
+        var resultPtr: UnsafeMutablePointer<CollectResultC>?
+        let error = path.withCString { cstr in
+            session_db_collect_by_path(handle, cstr, &resultPtr)
+        }
+
+        if let err = SharedDbError.from(error) {
+            throw err
+        }
+
+        return try parseCollectResult(resultPtr)
+    }
+
+    private func parseCollectResult(_ resultPtr: UnsafeMutablePointer<CollectResultC>?) throws -> SharedCollectResult {
+        guard let result = resultPtr?.pointee else {
+            throw SharedDbError.nullPointer
+        }
+
+        let firstError: String?
+        if let errPtr = result.first_error {
+            firstError = String(cString: errPtr)
+        } else {
+            firstError = nil
+        }
+
+        let res = SharedCollectResult(
+            projectsScanned: Int(result.projects_scanned),
+            sessionsScanned: Int(result.sessions_scanned),
+            messagesInserted: Int(result.messages_inserted),
+            errorCount: Int(result.error_count),
+            firstError: firstError
+        )
+
+        session_db_free_collect_result(resultPtr)
+
+        return res
     }
 }
