@@ -68,10 +68,18 @@ public final class MemexService: @unchecked Sendable {
     }
 
     /// 初始化 SharedDb（最佳努力）
+    ///
+    /// 使用 registerAndCollect() 统一的接口，成为 Writer 时自动触发采集。
+    /// 采集逻辑已下沉到 claude-session-db，所有组件共享同一份代码。
     private func initSharedDb() {
         do {
             sharedDb = try SharedDbBridge()
-            _ = try sharedDb?.register()
+            // 使用统一的 registerAndCollect，成为 Writer 时自动在 Rust 层执行采集
+            let (role, collectResult) = try sharedDb!.registerAndCollect()
+
+            if role == .writer, let result = collectResult, result.messagesInserted > 0 {
+                print("[MemexKit] Collect: \(result.sessionsScanned) sessions, \(result.messagesInserted) messages")
+            }
         } catch {
             sharedDb = nil
         }
