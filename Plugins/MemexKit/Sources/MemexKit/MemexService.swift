@@ -338,34 +338,37 @@ extension MemexService {
         }
     }
 
-    /// 获取统计信息（优先使用 SharedDb，回退到 HTTP API）
+    /// 获取统计信息（混合模式：FFI 基础数据 + HTTP 扩展数据）
     public func getStats() async throws -> MemexStats {
-        // 优先使用 SharedDb
-        if let sharedDb = sharedDb {
-            do {
-                let stats = try sharedDb.getStats()
-                return MemexStats(
-                    projectCount: Int(stats.projectCount),
-                    sessionCount: Int(stats.sessionCount),
-                    messageCount: Int(stats.messageCount),
-                    semanticSearchEnabled: false,  // SharedDb 不支持语义搜索
-                    aiChatEnabled: false
-                )
-            } catch {
-                // Fall through to HTTP
-            }
-        }
-
-        // 回退到 HTTP API
+        // 尝试从 HTTP 获取扩展数据（dbSize, startupDuration 等）
+        var httpStats: MemexStats?
         let url = baseURL.appendingPathComponent("api/stats")
-        let (data, response) = try await URLSession.shared.data(from: url)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw MemexServiceError.requestFailed
+        if let (data, response) = try? await URLSession.shared.data(from: url),
+           let httpResponse = response as? HTTPURLResponse,
+           httpResponse.statusCode == 200 {
+            httpStats = try? JSONDecoder().decode(MemexStats.self, from: data)
         }
 
-        return try JSONDecoder().decode(MemexStats.self, from: data)
+        // 如果 HTTP 成功，直接返回完整数据
+        if let stats = httpStats {
+            return stats
+        }
+
+        // HTTP 失败时，回退到 SharedDb（只有基础数据）
+        if let sharedDb = sharedDb {
+            let stats = try sharedDb.getStats()
+            return MemexStats(
+                projectCount: Int(stats.projectCount),
+                sessionCount: Int(stats.sessionCount),
+                messageCount: Int(stats.messageCount),
+                semanticSearchEnabled: false,
+                aiChatEnabled: false,
+                dbSizeBytes: nil,
+                startupDurationMs: nil
+            )
+        }
+
+        throw MemexServiceError.requestFailed
     }
 
     /// 触发采集
@@ -514,6 +517,10 @@ public struct MemexStats: Decodable, Sendable {
     public let messageCount: Int
     public let semanticSearchEnabled: Bool?
     public let aiChatEnabled: Bool?
+    /// 数据库文件大小（字节）
+    public let dbSizeBytes: UInt64?
+    /// 启动初始化耗时（毫秒）
+    public let startupDurationMs: UInt64?
 }
 
 // MARK: - DTOs
