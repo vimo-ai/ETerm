@@ -5,7 +5,7 @@
     "deps": {
       "libai_cli_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.3",
+        "tag": "v0.0.1-beta.4",
         "asset": "libai_cli_session_db.dylib",
         "dest": "Libs/SharedDB/"
       },
@@ -23,7 +23,7 @@
       },
       "vimo-agent": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.3",
+        "tag": "v0.0.1-beta.4",
         "asset": "vimo-agent",
         "dest": "Lib/"
       }
@@ -35,7 +35,7 @@
     "deps": {
       "libai_cli_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.3",
+        "tag": "v0.0.1-beta.4",
         "asset": "libai_cli_session_db.dylib",
         "dest": "Libs/SharedDB/"
       },
@@ -47,7 +47,7 @@
       },
       "vimo-agent": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.3",
+        "tag": "v0.0.1-beta.4",
         "asset": "vimo-agent",
         "dest": "Lib/"
       }
