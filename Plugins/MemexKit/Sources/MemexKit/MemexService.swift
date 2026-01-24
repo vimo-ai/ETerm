@@ -11,6 +11,7 @@
 
 import Foundation
 import ETermKit
+import SharedDbFFI
 
 // MARK: - Search Order
 
@@ -45,6 +46,9 @@ public final class MemexService: @unchecked Sendable {
     /// SharedDb 桥接（nonisolated 以支持 stop() 跨线程释放）
     private nonisolated(unsafe) var sharedDb: SharedDbBridge?
 
+    /// Agent Client（用于接收 Agent 事件推送）
+    private nonisolated(unsafe) var agentClient: AgentClientBridge?
+
     /// Session Reader（用于解析 JSONL 文件）
     private lazy var sessionReader = SessionReader()
 
@@ -64,25 +68,83 @@ public final class MemexService: @unchecked Sendable {
     }
 
     private init() {
-        initSharedDb()
+        // 在后台线程初始化 SharedDb，完成后再初始化 AgentClient
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.initSharedDb()
+        }
     }
 
-    /// 初始化 SharedDb（最佳努力）
+    /// 初始化 SharedDb（在后台线程调用），完成后启动 AgentClient
     ///
-    /// 使用 registerAndCollect() 统一的接口，成为 Writer 时自动触发采集。
-    /// 采集逻辑已下沉到 ai-cli-session-db，所有组件共享同一份代码。
-    private func initSharedDb() {
+    /// SharedDb 现在是只读的，写入和采集由 Agent 处理。
+    private nonisolated func initSharedDb() {
         do {
-            sharedDb = try SharedDbBridge()
-            // 使用统一的 registerAndCollect，成为 Writer 时自动在 Rust 层执行采集
-            let (role, collectResult) = try sharedDb!.registerAndCollect()
+            let db = try SharedDbBridge()
 
-            if role == .writer, let result = collectResult, result.messagesInserted > 0 {
-                print("[MemexKit] Collect: \(result.sessionsScanned) sessions, \(result.messagesInserted) messages")
+            // 回到主线程设置状态，然后在后台启动 AgentClient
+            DispatchQueue.main.async { [weak self] in
+                self?.sharedDb = db
+                logInfo("[MemexKit] SharedDb connected (read-only)")
+
+                // SharedDb 就绪后，在后台启动 AgentClient
+                DispatchQueue.global(qos: .utility).async {
+                    self?.initAgentClient()
+                }
             }
         } catch {
-            sharedDb = nil
+            logWarn("[MemexKit] SharedDb init failed: \(error)")
+            // SharedDb 初始化失败，仍然尝试启动 AgentClient（部分功能可用）
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                self?.initAgentClient()
+            }
         }
+    }
+
+    /// 重连尝试次数
+    private nonisolated(unsafe) var reconnectAttempts: Int = 0
+
+    /// 最大重连次数
+    private let maxReconnectAttempts: Int = 5
+
+    /// 初始化 AgentClient（在后台线程调用，内部回到主线程设置状态）
+    ///
+    /// 连接到 vimo-agent 订阅事件推送，当收到 NewMessages 事件时触发采集。
+    private nonisolated func initAgentClient() {
+        do {
+            let client = try AgentClientBridge(component: "memexkit")
+            try client.connect()
+            try client.subscribe(events: [.newMessages])
+
+            // 回到主线程设置 delegate 和状态
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                client.delegate = self
+                self.agentClient = client
+                self.reconnectAttempts = 0
+                logInfo("[MemexKit] AgentClient 已连接并订阅 NewMessages 事件")
+            }
+        } catch {
+            DispatchQueue.main.async {
+                logWarn("[MemexKit] AgentClient 初始化失败: \(error)")
+            }
+        }
+    }
+
+    /// 尝试重连 AgentClient
+    private func attemptReconnect() async {
+        guard reconnectAttempts < maxReconnectAttempts else {
+            logWarn("[MemexKit] AgentClient 达到最大重连次数 (\(maxReconnectAttempts))，停止重连")
+            return
+        }
+
+        reconnectAttempts += 1
+        let delay = min(pow(2.0, Double(reconnectAttempts)), 30.0)  // 指数退避，最大 30 秒
+        logInfo("[MemexKit] AgentClient 将在 \(Int(delay)) 秒后尝试第 \(reconnectAttempts) 次重连")
+
+        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+        // 在后台线程执行重连（FFI 使用 block_on 会阻塞）
+        initAgentClient()
     }
 
     // MARK: - Lifecycle
@@ -91,9 +153,11 @@ public final class MemexService: @unchecked Sendable {
     public func start() throws {
         guard !isRunning else { return }
 
-        // 确保 SharedDb 已初始化（可能之前被 stop() 释放）
+        // 如果 SharedDb 未初始化，在后台重新初始化（可能之前被 stop() 释放）
         if sharedDb == nil {
-            initSharedDb()
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                self?.initSharedDb()
+            }
         }
 
         // 检查端口是否已被占用（可能外部已启动 memex）
@@ -148,24 +212,26 @@ public final class MemexService: @unchecked Sendable {
 
     /// 停止服务（同步版本，用于 app 退出时调用）
     public nonisolated func stop() {
-        // 1. 释放 SharedDbBridge Writer（必须在停止进程前释放，确保 daemon 能接管）
+        // 1. 断开 AgentClient
+        agentClient?.disconnect()
+        agentClient = nil
+
+        // 2. 释放 SharedDbBridge Writer（必须在停止进程前释放，确保 daemon 能接管）
         releaseSharedDb()
 
-        // 2. 停止自己管理的进程
+        // 3. 停止自己管理的进程
         if let process = self.process, process.isRunning {
             process.terminate()
             process.waitUntilExit()
             self.process = nil
         }
 
-        // 3. 杀掉端口上的 memex 进程（可能是外部启动的或上次未正确关闭的）
+        // 4. 杀掉端口上的 memex 进程（可能是外部启动的或上次未正确关闭的）
         killMemexOnPort()
     }
 
-    /// 释放 SharedDbBridge（线程安全，SharedDbBridge 内部用 queue.sync 保护）
+    /// 释放 SharedDbBridge（deinit 会自动关闭连接）
     private nonisolated func releaseSharedDb() {
-        guard let db = sharedDb else { return }
-        try? db.release()
         sharedDb = nil
     }
 
@@ -397,67 +463,22 @@ extension MemexService {
     ///
     /// 当收到 AI CLI Event（如 aicli.responseComplete）时调用此方法。
     /// Writer 直接调用 FFI 写入数据库，FTS 索引通过触发器自动更新。
-    ///
-    /// **重要**: 此方法不能用 HTTP API 转发给 daemon，因为当 Kit 是 Writer 时，
-    /// daemon 是 Reader，无法执行写入操作。
-    ///
     /// - Parameter path: JSONL 文件路径
+    ///
+    /// 通过 AgentClient 通知 Agent 采集指定文件
     public func collectByPath(_ path: String) throws {
-        guard let sharedDb = sharedDb else {
-            throw MemexServiceError.sharedDbNotAvailable
+        guard let agentClient = agentClient else {
+            throw MemexServiceError.agentNotConnected
         }
-
-        // 检查是否为 Writer，如果不是尝试接管
-        if sharedDb.role != .writer {
-            let health = try sharedDb.checkWriterHealth()
-            if health == .timeout || health == .released {
-                guard try sharedDb.tryTakeover() else {
-                    throw MemexServiceError.notWriter
-                }
-            } else {
-                // 有其他活跃的 Writer，让它来处理
-                throw MemexServiceError.notWriter
-            }
-        }
-
-        _ = try sharedDb.collectByPath(path)
+        try agentClient.notifyFileChange(path: path)
     }
 
-    /// 索引指定会话（精确索引，替代 file watcher 轮询）
+    /// 索引指定会话（通过 Agent 采集）
     /// - Parameter path: JSONL 会话文件路径
     ///
-    /// 优先尝试 HTTP API，失败时回退到 SharedDb 直写
+    /// 通知 Agent 采集指定文件，Agent 会处理解析和写入
     public func indexSession(path: String) async throws {
-        // 1. 如果 HTTP 服务运行中，优先用 HTTP
-        if isRunning || isPortInUse(port) {
-            do {
-                try await indexSessionViaHTTP(path: path)
-                return
-            } catch {
-                // Fall through to SharedDb
-            }
-        }
-
-        // 2. 回退到 SharedDb 直写
-        try await indexSessionViaSharedDb(path: path)
-    }
-
-    /// 通过 HTTP API 索引会话
-    private func indexSessionViaHTTP(path: String) async throws {
-        let url = baseURL.appendingPathComponent("api/index")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body = ["path": path]
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let (_, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw MemexServiceError.requestFailed
-        }
+        try collectByPath(path)
     }
 
     /// 触发 Compact 任务
@@ -486,51 +507,6 @@ extension MemexService {
         }
     }
 
-    /// 通过 SharedDb 直接写入会话
-    private func indexSessionViaSharedDb(path: String) async throws {
-        guard let sharedDb = sharedDb else {
-            throw MemexServiceError.sharedDbNotAvailable
-        }
-
-        // 检查是否为 Writer，如果不是尝试接管
-        if sharedDb.role != .writer {
-            let health = try sharedDb.checkWriterHealth()
-            if health == .timeout || health == .released {
-                guard try sharedDb.tryTakeover() else {
-                    throw MemexServiceError.notWriter
-                }
-            } else {
-                throw MemexServiceError.notWriter
-            }
-        }
-
-        // 使用 session-reader-ffi 解析会话（正确读取 cwd 解决中文路径问题）
-        guard let session = sessionReader.parseSessionForIndex(jsonlPath: path) else {
-            return
-        }
-
-        // 转换消息格式
-        let messages = session.messages.map { msg in
-            MessageInput(
-                uuid: msg.uuid,
-                role: msg.role == "user" ? "human" : "assistant",
-                content: msg.content,
-                timestamp: msg.timestamp,
-                sequence: msg.sequence
-            )
-        }
-
-        guard !messages.isEmpty else { return }
-
-        // 写入数据库
-        let projectId = try sharedDb.upsertProject(
-            path: session.projectPath,
-            name: session.projectName,
-            source: "claude-code"
-        )
-        try sharedDb.upsertSession(sessionId: session.sessionId, projectId: projectId)
-        _ = try sharedDb.insertMessages(sessionId: session.sessionId, messages: messages)
-    }
 }
 
 // MARK: - Public Types
@@ -597,7 +573,7 @@ public enum MemexServiceError: Error, LocalizedError {
     case requestFailed
     case serviceNotRunning
     case sharedDbNotAvailable
-    case notWriter
+    case agentNotConnected
     case fileReadFailed
 
     public var errorDescription: String? {
@@ -610,10 +586,54 @@ public enum MemexServiceError: Error, LocalizedError {
             return "Memex service is not running"
         case .sharedDbNotAvailable:
             return "SharedDb not available"
-        case .notWriter:
-            return "Not a Writer, cannot write to SharedDb"
+        case .agentNotConnected:
+            return "Agent not connected"
         case .fileReadFailed:
             return "Failed to read JSONL file"
         }
+    }
+}
+
+// MARK: - AgentClientDelegate
+
+extension MemexService: AgentClientDelegate {
+    nonisolated func agentClient(_ client: AgentClientBridge, didReceiveEvent event: AgentEvent) {
+        switch event {
+        case .newMessages(let data):
+            // 在后台队列处理，避免阻塞主线程
+            Task.detached(priority: .utility) {
+                await self.handleAgentNewMessages(data)
+            }
+
+        case .sessionStart, .sessionEnd:
+            // MemexKit 只关心 NewMessages 事件
+            break
+        }
+    }
+
+    nonisolated func agentClient(_ client: AgentClientBridge, didDisconnect error: Error?) {
+        logWarn("[MemexKit] AgentClient 断开连接: \(error?.localizedDescription ?? "unknown")")
+
+        // 尝试重连
+        Task.detached(priority: .utility) {
+            await self.attemptReconnect()
+        }
+    }
+
+    /// 处理 Agent 推送的新消息事件（在后台队列执行）
+    private func handleAgentNewMessages(_ data: NewMessagesEvent) async {
+        let path = data.path
+        let sessionId = data.sessionId
+
+        // 触发采集（静默失败）- 同步 IO 操作，在后台队列执行
+        do {
+            try collectByPath(path)
+            logDebug("[MemexKit] 采集成功: \(sessionId)")
+        } catch {
+            logWarn("[MemexKit] 采集失败: \(error)")
+        }
+
+        // 触发 Compact（静默失败）
+        try? await triggerCompact(sessionId: sessionId)
     }
 }

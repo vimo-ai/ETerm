@@ -73,6 +73,7 @@ final class AICliSessionMapper {
         migrateFromClaudeKit()
         migrateFromSessionManager()
         loadFromStorage()
+        cleanupInvalidSessions()
     }
 
     // MARK: - Migration
@@ -166,6 +167,74 @@ final class AICliSessionMapper {
         } catch {
             logError("[AICliKit] Migration failed: \(error)")
         }
+    }
+
+    // MARK: - Cleanup
+
+    /// ETerm session.json 路径
+    private var etermSessionPath: String {
+        return ETermPaths.config + "/session.json"
+    }
+
+    /// 清理无效的 session 记录
+    ///
+    /// 读取 ETerm 的 session.json，提取当前有效的 tabId 列表，
+    /// 删除 sessions.json 中不存在的 tabId 记录。
+    /// 这样可以清理因 ETerm 崩溃或强制退出导致的残留记录。
+    private func cleanupInvalidSessions() {
+        // 读取 ETerm session.json
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: etermSessionPath)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            logWarn("[AICliKit] Cannot read ETerm session.json, skipping cleanup")
+            return
+        }
+
+        // 递归提取所有 tabId
+        let validTabIds = extractTabIds(from: json)
+
+        lock.lock()
+        let beforeCount = tabToSession.count
+
+        // 清理不在有效列表中的记录
+        let invalidTabIds = tabToSession.keys.filter { !validTabIds.contains($0) }
+        for tabId in invalidTabIds {
+            tabToSession.removeValue(forKey: tabId)
+            tabToProvider.removeValue(forKey: tabId)
+        }
+
+        let afterCount = tabToSession.count
+        lock.unlock()
+
+        // 如果有清理，保存并记录日志
+        if beforeCount != afterCount {
+            saveQueue.async { [weak self] in
+                self?.saveToStorage()
+            }
+            logInfo("[AICliKit] Cleaned up \(beforeCount - afterCount) invalid sessions, \(afterCount) remaining")
+        }
+    }
+
+    /// 从 ETerm session.json 递归提取所有 tabId
+    private func extractTabIds(from json: Any) -> Set<String> {
+        var tabIds = Set<String>()
+
+        if let dict = json as? [String: Any] {
+            // 检查是否有 tabId 字段
+            if let tabId = dict["tabId"] as? String {
+                tabIds.insert(tabId)
+            }
+            // 递归处理所有值
+            for value in dict.values {
+                tabIds.formUnion(extractTabIds(from: value))
+            }
+        } else if let array = json as? [Any] {
+            // 递归处理数组元素
+            for element in array {
+                tabIds.formUnion(extractTabIds(from: element))
+            }
+        }
+
+        return tabIds
     }
 
     // MARK: - 写入 API

@@ -12,6 +12,7 @@ import ETermKit
 struct SettingsView: View {
     @StateObject private var configManager = AIConfigManager.shared
     @StateObject private var ollamaService = OllamaService.shared
+    @StateObject private var hookInstaller = ClaudeHookInstaller.shared
 
     @State private var apiKey: String = ""
     @State private var baseURL: String = ""
@@ -27,6 +28,10 @@ struct SettingsView: View {
     @State private var ollamaTestMessage: String = ""
     @State private var showOllamaTestResult: Bool = false
     @State private var availableModels: [String] = []
+
+    // Claude Hooks 配置
+    @State private var hookInstallError: String? = nil
+    @State private var showHookForceAlert: Bool = false
 
     // 开发者选项
     @State private var debugLogEnabled: Bool = LogManager.shared.debugEnabled
@@ -256,6 +261,98 @@ struct SettingsView: View {
                         }
                     }
 
+                    // Claude Hooks 配置
+                    SettingsSectionView(title: "Claude Hooks") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            // 状态显示
+                            HStack {
+                                Circle()
+                                    .fill(hookStatusColor)
+                                    .frame(width: 8, height: 8)
+                                Text(hookInstaller.status.displayText)
+                                    .font(.subheadline)
+                                Spacer()
+                                Button("刷新") {
+                                    hookInstaller.checkStatus()
+                                }
+                                .buttonStyle(.borderless)
+                            }
+
+                            // 已安装的 hooks 列表
+                            if !hookInstaller.installedHooks.isEmpty {
+                                Text("已注册: \(hookInstaller.installedHooks.map { $0.description }.joined(separator: ", "))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Divider()
+
+                            // 安装/更新按钮
+                            HStack {
+                                Button(action: installHooks) {
+                                    HStack {
+                                        if hookInstaller.isInstalling {
+                                            ProgressView()
+                                                .scaleEffect(0.7)
+                                                .frame(width: 14, height: 14)
+                                        } else {
+                                            Image(systemName: hookButtonIcon)
+                                        }
+                                        Text(hookButtonText)
+                                    }
+                                }
+                                .disabled(hookInstaller.isInstalling)
+
+                                Spacer()
+
+                                Button("打开脚本目录") {
+                                    hookInstaller.openScriptsDirectory()
+                                }
+                                .buttonStyle(.borderless)
+
+                                Button("打开配置文件") {
+                                    hookInstaller.openSettingsFile()
+                                }
+                                .buttonStyle(.borderless)
+                            }
+
+                            // 错误提示
+                            if let error = hookInstallError {
+                                HStack {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
+                                    Text(error)
+                                        .font(.caption)
+                                }
+                                .padding(8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.red.opacity(0.1))
+                                )
+                            }
+
+                            // 帮助信息
+                            Text("Claude Hooks 用于建立终端与会话的映射，支持自动恢复会话。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .alert("覆盖确认", isPresented: $showHookForceAlert) {
+                        Button("覆盖", role: .destructive) {
+                            Task {
+                                do {
+                                    try await hookInstaller.install(force: true)
+                                    hookInstallError = nil
+                                } catch {
+                                    hookInstallError = error.localizedDescription
+                                }
+                            }
+                        }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("脚本已被修改，是否强制覆盖？")
+                    }
+
                     // 开发者选项
                     SettingsSectionView(title: "开发者选项") {
                         VStack(alignment: .leading, spacing: 12) {
@@ -422,6 +519,68 @@ struct SettingsView: View {
                         showTestResult = false
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - Claude Hooks
+
+    private var hookStatusColor: Color {
+        switch hookInstaller.status {
+        case .installed:
+            return .green
+        case .notInstalled, .outdated, .partiallyInstalled:
+            return .orange
+        case .userModified:
+            return .blue
+        case .error:
+            return .red
+        }
+    }
+
+    private var hookButtonIcon: String {
+        switch hookInstaller.status {
+        case .installed:
+            return "checkmark.circle"
+        case .notInstalled:
+            return "arrow.down.circle"
+        case .outdated, .partiallyInstalled:
+            return "arrow.triangle.2.circlepath"
+        case .userModified:
+            return "exclamationmark.triangle"
+        case .error:
+            return "xmark.circle"
+        }
+    }
+
+    private var hookButtonText: String {
+        switch hookInstaller.status {
+        case .installed:
+            return "已是最新"
+        case .notInstalled:
+            return "安装 Hooks"
+        case .outdated, .partiallyInstalled:
+            return "更新 Hooks"
+        case .userModified:
+            return "强制更新"
+        case .error:
+            return "重试安装"
+        }
+    }
+
+    private func installHooks() {
+        // 如果用户修改过脚本，先弹窗确认
+        if case .userModified = hookInstaller.status {
+            showHookForceAlert = true
+            return
+        }
+
+        Task {
+            do {
+                try await hookInstaller.install(force: false)
+                hookInstallError = nil
+            } catch {
+                hookInstallError = error.localizedDescription
             }
         }
     }

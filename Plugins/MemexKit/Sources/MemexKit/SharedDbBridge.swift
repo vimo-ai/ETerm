@@ -20,7 +20,7 @@ enum SharedDbError: Error {
     case permissionDenied
     case unknown(Int32)
 
-    static func from(_ code: SessionDbError) -> SharedDbError? {
+    static func from(_ code: FfiError) -> SharedDbError? {
         switch code {
         case Success: return nil
         case NullPointer: return .nullPointer
@@ -31,43 +31,6 @@ enum SharedDbError: Error {
         default: return .unknown(Int32(code.rawValue))
         }
     }
-}
-
-// MARK: - Writer Role
-
-enum WriterRole {
-    case writer
-    case reader
-
-    init(rawValue: Int32) {
-        self = rawValue == 0 ? .writer : .reader
-    }
-}
-
-// MARK: - Writer Health
-
-enum WriterHealth {
-    case alive     // 心跳正常
-    case timeout   // 心跳超时
-    case released  // 已释放（没有 Writer）
-
-    init(rawValue: Int32) {
-        switch rawValue {
-        case 0: self = .alive
-        case 1: self = .timeout
-        case 2: self = .released
-        default: self = .released
-        }
-    }
-}
-
-// MARK: - Writer Type
-
-enum WriterTypeValue: Int32 {
-    case memexDaemon = 0
-    case vlaudeDaemon = 1
-    case memexKit = 2
-    case vlaudeKit = 3
 }
 
 // MARK: - Search Order
@@ -122,15 +85,6 @@ struct SharedSearchResult {
     let timestamp: Int64?
 }
 
-/// 消息输入结构体（用于写入）
-struct MessageInput {
-    let uuid: String
-    let role: String  // "human" or "assistant"
-    let content: String
-    let timestamp: Int64
-    let sequence: Int64
-}
-
 struct SharedStats {
     let projectCount: Int64
     let sessionCount: Int64
@@ -140,12 +94,11 @@ struct SharedStats {
 // MARK: - SharedDbBridge
 
 /// Swift bridge for ai-cli-session-db
-/// Provides cached session data access via shared database
+/// Provides cached session data access via shared database (read-only)
+/// Write operations should go through AgentClient
 /// Thread-safe: all FFI calls are serialized on a private queue
 final class SharedDbBridge {
     private var handle: OpaquePointer?
-    private(set) var role: WriterRole = .reader
-    private var heartbeatTimer: DispatchSourceTimer?
 
     /// 串行队列，确保所有 FFI 调用线程安全
     private let queue = DispatchQueue(label: "com.eterm.SharedDbBridge", qos: .userInitiated)
@@ -166,11 +119,6 @@ final class SharedDbBridge {
     }
 
     deinit {
-        stopHeartbeat()
-        // 释放 Writer 角色
-        if role == .writer, let handle = handle {
-            session_db_release_writer(handle)
-        }
         if let handle = handle {
             session_db_close(handle)
         }
@@ -187,205 +135,6 @@ final class SharedDbBridge {
             throw SharedDbError.invalidUtf8
         }
         return str
-    }
-
-    // MARK: - Writer Coordination
-
-    /// Register as writer (thread-safe)
-    /// - Returns: Assigned role (writer or reader)
-    func register() throws -> WriterRole {
-        let assignedRole: WriterRole = try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-
-            var roleValue: Int32 = 1  // Default to reader
-            let error = session_db_register_writer(handle, WriterTypeValue.memexKit.rawValue, &roleValue)
-
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-
-            let newRole = WriterRole(rawValue: roleValue)
-            role = newRole
-            return newRole
-        }
-
-        // Writer 或 Reader 都启动定时器：
-        // - Writer: 发送心跳
-        // - Reader: 检查 Writer 是否超时，尝试接管
-        startHeartbeat()
-
-        return assignedRole
-    }
-
-    /// 采集结果
-    struct CollectResult {
-        let projectsScanned: Int
-        let sessionsScanned: Int
-        let messagesInserted: Int
-        let errorCount: Int
-        let firstError: String?
-    }
-
-    /// Register as writer and auto-collect when becoming Writer (thread-safe)
-    ///
-    /// 此方法统一了"成为 Writer 时触发采集"的逻辑，采集在 Rust 层同步执行。
-    ///
-    /// - Returns: Tuple of (role, collect result if became Writer)
-    func registerAndCollect() throws -> (WriterRole, CollectResult?) {
-        let result: (WriterRole, CollectResult?) = try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-
-            var roleValue: Int32 = 1  // Default to reader
-            var collectResultPtr: UnsafeMutablePointer<CollectResultC>?
-
-            let error = session_db_register_writer_and_collect(
-                handle,
-                WriterTypeValue.memexKit.rawValue,
-                &roleValue,
-                &collectResultPtr
-            )
-
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-
-            let newRole = WriterRole(rawValue: roleValue)
-            role = newRole
-
-            // 解析采集结果（如果有）
-            var collectResult: CollectResult? = nil
-            if let resultPtr = collectResultPtr {
-                let r = resultPtr.pointee
-                let firstError: String?
-                if let errPtr = r.first_error {
-                    firstError = String(cString: errPtr)
-                } else {
-                    firstError = nil
-                }
-                collectResult = CollectResult(
-                    projectsScanned: Int(r.projects_scanned),
-                    sessionsScanned: Int(r.sessions_scanned),
-                    messagesInserted: Int(r.messages_inserted),
-                    errorCount: Int(r.error_count),
-                    firstError: firstError
-                )
-                session_db_free_collect_result(resultPtr)
-            }
-
-            return (newRole, collectResult)
-        }
-
-        // Writer 或 Reader 都启动定时器
-        startHeartbeat()
-
-        return result
-    }
-
-    /// Release writer role (thread-safe)
-    func release() throws {
-        stopHeartbeat()
-
-        try queue.sync {
-            guard let handle = handle else { return }
-
-            let error = session_db_release_writer(handle)
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-
-            role = .reader
-        }
-    }
-
-    /// Send heartbeat (thread-safe)
-    func heartbeat() throws {
-        var errorToThrow: SharedDbError?
-
-        queue.sync {
-            guard let handle = handle, role == .writer else { return }
-
-            let error = session_db_heartbeat(handle)
-            if let err = SharedDbError.from(error) {
-                role = .reader
-                errorToThrow = err
-            }
-        }
-
-        if let err = errorToThrow {
-            throw err
-        }
-    }
-
-    /// Check writer health status (thread-safe, Reader calls this)
-    func checkWriterHealth() throws -> WriterHealth {
-        try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-
-            var healthValue: Int32 = 0
-            let error = session_db_check_writer_health(handle, &healthValue)
-
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-
-            return WriterHealth(rawValue: healthValue)
-        }
-    }
-
-    /// Try to take over as Writer (thread-safe, Reader calls this when Writer times out)
-    /// - Returns: true if takeover succeeded
-    func tryTakeover() throws -> Bool {
-        let taken: Bool = try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-
-            var takenValue: Int32 = 0
-            let error = session_db_try_takeover(handle, &takenValue)
-
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-
-            if takenValue == 1 {
-                role = .writer
-                return true
-            }
-            return false
-        }
-
-        if taken {
-            startHeartbeat()
-        }
-
-        return taken
-    }
-
-    private func startHeartbeat() {
-        stopHeartbeat()
-
-        // 使用全局队列，避免与 queue.sync 死锁
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + 10, repeating: 10)
-        timer.setEventHandler { [weak self] in
-            guard let self = self else { return }
-
-            if self.role == .writer {
-                // Writer: 发送心跳
-                try? self.heartbeat()
-            } else {
-                // Reader: 检查 Writer 是否超时，尝试接管
-                if let health = try? self.checkWriterHealth(),
-                   health == .timeout || health == .released {
-                    _ = try? self.tryTakeover()
-                }
-            }
-        }
-        timer.resume()
-        heartbeatTimer = timer
-    }
-
-    private func stopHeartbeat() {
-        heartbeatTimer?.cancel()
-        heartbeatTimer = nil
     }
 
     // MARK: - Stats
@@ -720,170 +469,4 @@ final class SharedDbBridge {
         }
     }
 
-    // MARK: - Write Operations
-
-    /// Upsert a project (thread-safe, requires Writer role)
-    /// - Returns: Project ID
-    /// Note: Writer role check is now performed at the Rust FFI layer
-    func upsertProject(path: String, name: String, source: String) throws -> Int64 {
-        try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-
-            var projectId: Int64 = 0
-            let error = name.withCString { nameCstr in
-                path.withCString { pathCstr in
-                    source.withCString { sourceCstr in
-                        session_db_upsert_project(handle, nameCstr, pathCstr, sourceCstr, &projectId)
-                    }
-                }
-            }
-
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-
-            return projectId
-        }
-    }
-
-    /// Upsert a session (thread-safe, requires Writer role)
-    /// Note: Writer role check is now performed at the Rust FFI layer
-    func upsertSession(sessionId: String, projectId: Int64) throws {
-        try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-
-            let error = sessionId.withCString { cstr in
-                session_db_upsert_session(handle, cstr, projectId)
-            }
-
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-        }
-    }
-
-    /// Insert messages (thread-safe, requires Writer role)
-    /// - Returns: Number of messages inserted
-    /// Note: Writer role check is now performed at the Rust FFI layer
-    func insertMessages(sessionId: String, messages: [MessageInput]) throws -> Int {
-        try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-            guard !messages.isEmpty else { return 0 }
-
-            var inserted: UInt = 0
-            var ffiError: SessionDbError = Success
-
-            // 使用 ContiguousArray 保持 C 字符串生命周期
-            var uuidArrays: [ContiguousArray<CChar>] = []
-            var contentArrays: [ContiguousArray<CChar>] = []
-
-            for msg in messages {
-                uuidArrays.append(ContiguousArray(msg.uuid.utf8CString))
-                contentArrays.append(ContiguousArray(msg.content.utf8CString))
-            }
-
-            // 递归嵌套 withUnsafeBufferPointer 确保指针有效
-            func buildAndCall(
-                index: Int,
-                uuidPtrs: inout [UnsafePointer<CChar>],
-                contentPtrs: inout [UnsafePointer<CChar>]
-            ) {
-                if index == messages.count {
-                    // 所有指针准备完毕，构建 MessageInputC 数组并调用 FFI
-                    var cMessages: [MessageInputC] = []
-                    for i in 0..<messages.count {
-                        let roleValue: Int32 = messages[i].role == "human" ? 0 : 1
-                        cMessages.append(MessageInputC(
-                            uuid: uuidPtrs[i],
-                            role: roleValue,
-                            content: contentPtrs[i],
-                            timestamp: messages[i].timestamp,
-                            sequence: messages[i].sequence
-                        ))
-                    }
-
-                    ffiError = sessionId.withCString { sessionCstr in
-                        cMessages.withUnsafeBufferPointer { msgBuffer in
-                            session_db_insert_messages(
-                                handle,
-                                sessionCstr,
-                                msgBuffer.baseAddress,
-                                UInt(messages.count),
-                                &inserted
-                            )
-                        }
-                    }
-                } else {
-                    uuidArrays[index].withUnsafeBufferPointer { uuidBuf in
-                        contentArrays[index].withUnsafeBufferPointer { contentBuf in
-                            uuidPtrs.append(uuidBuf.baseAddress!)
-                            contentPtrs.append(contentBuf.baseAddress!)
-                            buildAndCall(index: index + 1, uuidPtrs: &uuidPtrs, contentPtrs: &contentPtrs)
-                        }
-                    }
-                }
-            }
-
-            var uuidPtrs: [UnsafePointer<CChar>] = []
-            var contentPtrs: [UnsafePointer<CChar>] = []
-            buildAndCall(index: 0, uuidPtrs: &uuidPtrs, contentPtrs: &contentPtrs)
-
-            if let err = SharedDbError.from(ffiError) {
-                throw err
-            }
-
-            return Int(inserted)
-        }
-    }
-
-    // MARK: - Collect Operations
-
-    /// 按路径采集单个会话（thread-safe, requires Writer role）
-    ///
-    /// 当收到 AI CLI Event（如 aicli.responseComplete）时调用此方法进行精确采集。
-    ///
-    /// **重要**: 此方法必须由 Writer 直接调用，不能依赖 HTTP API 转发给 daemon。
-    /// 因为当 Kit 是 Writer 时，daemon 是 Reader，无法执行写入操作。
-    /// 之前的实现通过 HTTP 调用 daemon 的 /api/index，但忽略了 daemon 可能是 Reader 的情况，
-    /// 导致采集失败。
-    ///
-    /// - Parameter path: JSONL 文件路径
-    /// - Returns: 采集结果
-    func collectByPath(_ path: String) throws -> CollectResult {
-        try queue.sync {
-            guard let handle = handle else { throw SharedDbError.nullPointer }
-
-            var resultPtr: UnsafeMutablePointer<CollectResultC>?
-            let error = path.withCString { cstr in
-                session_db_collect_by_path(handle, cstr, &resultPtr)
-            }
-
-            if let err = SharedDbError.from(error) {
-                throw err
-            }
-
-            guard let result = resultPtr?.pointee else {
-                throw SharedDbError.nullPointer
-            }
-
-            let firstError: String?
-            if let errPtr = result.first_error {
-                firstError = String(cString: errPtr)
-            } else {
-                firstError = nil
-            }
-
-            let res = CollectResult(
-                projectsScanned: Int(result.projects_scanned),
-                sessionsScanned: Int(result.sessions_scanned),
-                messagesInserted: Int(result.messages_inserted),
-                errorCount: Int(result.error_count),
-                firstError: firstError
-            )
-
-            session_db_free_collect_result(resultPtr)
-
-            return res
-        }
-    }
 }

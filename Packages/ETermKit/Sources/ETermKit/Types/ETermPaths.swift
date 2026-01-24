@@ -65,6 +65,17 @@ public enum ETermPaths {
     /// 插件 Socket 目录: ~/.vimo/eterm/run/sockets
     public static let sockets = run + "/sockets"
 
+    // MARK: - 脚本目录
+
+    /// 脚本目录: ~/.vimo/eterm/scripts
+    public static let scripts = root + "/scripts"
+
+    /// Claude Hook 脚本路径
+    public static let claudeHookScript = scripts + "/claude_hook.sh"
+
+    /// Claude Hook 默认版本（用于版本对比）
+    public static let claudeHookDefault = scripts + "/.claude_hook.sh.default"
+
     // MARK: - 日志文件
 
     /// 获取当天日志文件路径: ~/.vimo/eterm/logs/debug-{date}.log
