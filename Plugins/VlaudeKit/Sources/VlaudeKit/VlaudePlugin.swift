@@ -141,7 +141,9 @@ public final class VlaudePlugin: NSObject, Plugin {
     /// 初始化 AgentClient（在后台线程调用，内部回到主线程设置状态）
     private nonisolated func initializeAgentClient() {
         do {
-            let client = try AgentClientBridge(component: "vlaudekit")
+            // 使用 plugin bundle 的 Lib 目录作为 agent 源（用于首次部署）
+            let pluginBundle = Bundle(for: VlaudePlugin.self)
+            let client = try AgentClientBridge(component: "vlaudekit", bundle: pluginBundle)
             try client.connect()
             try client.subscribeAll()
 

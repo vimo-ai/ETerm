@@ -5,7 +5,7 @@
     "deps": {
       "libai_cli_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.2",
+        "tag": "v0.0.1-beta.3",
         "asset": "libai_cli_session_db.dylib",
         "dest": "Libs/SharedDB/"
       },
@@ -20,6 +20,12 @@
         "tag": "vlaude-ffi-v0.0.1-beta.1",
         "asset": "libvlaude_ffi.dylib",
         "dest": "Libs/VlaudeFfi/"
+      },
+      "vimo-agent": {
+        "repo": "vimo-ai/ai-cli-session-db",
+        "tag": "v0.0.1-beta.3",
+        "asset": "vimo-agent",
+        "dest": "Lib/"
       }
     }
   },
@@ -29,9 +35,21 @@
     "deps": {
       "libai_cli_session_db": {
         "repo": "vimo-ai/ai-cli-session-db",
-        "tag": "v0.0.1-beta.2",
+        "tag": "v0.0.1-beta.3",
         "asset": "libai_cli_session_db.dylib",
         "dest": "Libs/SharedDB/"
+      },
+      "memex": {
+        "repo": "vimo-ai/memex",
+        "tag": "v0.0.1-beta.1",
+        "asset": "memex-darwin-arm64",
+        "dest": "Lib/"
+      },
+      "vimo-agent": {
+        "repo": "vimo-ai/ai-cli-session-db",
+        "tag": "v0.0.1-beta.3",
+        "asset": "vimo-agent",
+        "dest": "Lib/"
       }
     }
   },

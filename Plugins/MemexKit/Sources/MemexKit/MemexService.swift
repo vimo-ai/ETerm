@@ -111,7 +111,9 @@ public final class MemexService: @unchecked Sendable {
     /// 连接到 vimo-agent 订阅事件推送，当收到 NewMessages 事件时触发采集。
     private nonisolated func initAgentClient() {
         do {
-            let client = try AgentClientBridge(component: "memexkit")
+            // 使用 plugin bundle 的 Lib 目录作为 agent 源（用于首次部署）
+            let pluginBundle = Bundle(for: MemexPlugin.self)
+            let client = try AgentClientBridge(component: "memexkit", bundle: pluginBundle)
             try client.connect()
             try client.subscribe(events: [.newMessages])
 

@@ -179,6 +179,11 @@ jobs:
             cp "Libs/SocketClient/libsocket_client_ffi.dylib" "$BUNDLE_DIR/Contents/Libs/"
           fi
 
+          # Copy VlaudeFfi if exists (VlaudeKit)
+          if [ -f "Libs/VlaudeFfi/libvlaude_ffi.dylib" ]; then
+            cp "Libs/VlaudeFfi/libvlaude_ffi.dylib" "$BUNDLE_DIR/Contents/Libs/"
+          fi
+
           # Copy Socket.IO dependencies if exist
           for lib in libSocketIO.dylib libStarscream.dylib; do
             if [ -f ".build/release/$lib" ]; then
@@ -189,6 +194,20 @@ jobs:
           # Copy mcp_router_core if exists (MCPRouterKit)
           if [ -f "Lib/mcp_router_core" ]; then
             cp "Lib/mcp_router_core" "$BUNDLE_DIR/Contents/Frameworks/"
+          fi
+
+          # Copy vimo-agent if exists (VlaudeKit/MemexKit)
+          if [ -f "Lib/vimo-agent" ]; then
+            mkdir -p "$BUNDLE_DIR/Contents/Lib"
+            cp "Lib/vimo-agent" "$BUNDLE_DIR/Contents/Lib/"
+            chmod +x "$BUNDLE_DIR/Contents/Lib/vimo-agent"
+          fi
+
+          # Copy memex binary if exists (MemexKit)
+          if [ -f "Lib/memex-darwin-arm64" ]; then
+            mkdir -p "$BUNDLE_DIR/Contents/Lib"
+            cp "Lib/memex-darwin-arm64" "$BUNDLE_DIR/Contents/Lib/memex"
+            chmod +x "$BUNDLE_DIR/Contents/Lib/memex"
           fi
 
           # Copy manifest.json
@@ -260,6 +279,19 @@ jobs:
               "$BUNDLE_DIR/Contents/Libs/libsocket_client_ffi.dylib"
           fi
 
+          # Fix VlaudeFfi reference
+          if [ -f "$BUNDLE_DIR/Contents/Libs/libvlaude_ffi.dylib" ]; then
+            OLD_PATH=$(otool -L "$MAIN_DYLIB" | grep vlaude_ffi | awk '{print $1}')
+            if [ -n "$OLD_PATH" ]; then
+              install_name_tool -change "$OLD_PATH" \
+                "@loader_path/../Libs/libvlaude_ffi.dylib" \
+                "$MAIN_DYLIB"
+            fi
+            install_name_tool -id \
+              "@loader_path/../Libs/libvlaude_ffi.dylib" \
+              "$BUNDLE_DIR/Contents/Libs/libvlaude_ffi.dylib"
+          fi
+
           # Fix Socket.IO references
           for lib in libSocketIO.dylib libStarscream.dylib; do
             if [ -f "$BUNDLE_DIR/Contents/Frameworks/$lib" ]; then
@@ -303,6 +335,16 @@ jobs:
           # Sign mcp_router_core if exists (no extension)
           if [ -f "$BUNDLE_DIR/Contents/Frameworks/mcp_router_core" ]; then
             codesign -f -s - "$BUNDLE_DIR/Contents/Frameworks/mcp_router_core"
+          fi
+
+          # Sign vimo-agent if exists
+          if [ -f "$BUNDLE_DIR/Contents/Lib/vimo-agent" ]; then
+            codesign -f -s - "$BUNDLE_DIR/Contents/Lib/vimo-agent"
+          fi
+
+          # Sign memex if exists
+          if [ -f "$BUNDLE_DIR/Contents/Lib/memex" ]; then
+            codesign -f -s - "$BUNDLE_DIR/Contents/Lib/memex"
           fi
 
           # Sign the bundle
