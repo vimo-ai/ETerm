@@ -17,6 +17,7 @@ import AppKit
 import SwiftUI
 import ETermKit
 import SocketClientFFI
+import SharedDbFFI
 
 @objc(VlaudePlugin)
 public final class VlaudePlugin: NSObject, Plugin {
@@ -43,11 +44,17 @@ public final class VlaudePlugin: NSObject, Plugin {
     private var pendingClientMessageIds: [String: String] = [:]
 
     /// 待标记为 pending 的审批请求：toolUseId -> (sessionId, timestamp)
-    /// 当收到 permissionPrompt 时存储，等待 SessionWatcher 扫描到对应消息后标记为 pending
+    /// 当收到 permissionPrompt 时存储，等待 Agent 推送消息后标记为 pending
     private var pendingApprovals: [String: (sessionId: String, timestamp: Int64)] = [:]
 
-    /// 会话文件监听器
-    private var sessionWatcher: SessionWatcher?
+    /// Agent Client（用于接收 Agent 推送的事件）
+    private var agentClient: AgentClientBridge?
+
+    /// Session 消息读取器
+    private let sessionReader = SessionReader()
+
+    /// 每个 session 的最后已处理消息 UUID（用于增量读取）
+    private var lastMessageUUIDs: [String: String] = [:]
 
     /// Shared database bridge (用于权限持久化)
     private var dbBridge: SharedDbBridge?
@@ -74,17 +81,10 @@ public final class VlaudePlugin: NSObject, Plugin {
         client = VlaudeClient()
         client?.delegate = self
 
-        // 初始化会话文件监听器
-        sessionWatcher = SessionWatcher()
-        sessionWatcher?.delegate = self
-
-        // 初始化 SharedDbBridge（用于权限持久化）
-        do {
-            dbBridge = try SharedDbBridge()
-            _ = try dbBridge?.register()  // 注册为 Writer 或 Reader
-        } catch {
-            // 记录错误但不阻止插件激活
-            print("[VlaudeKit] SharedDbBridge 初始化失败: \(error)")
+        // 在后台线程初始化 AgentClient 和 SharedDbBridge（FFI 调用会阻塞）
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.initializeAgentClient()
+            self?.initializeSharedDb()
         }
 
         // 监听配置变更
@@ -113,6 +113,70 @@ public final class VlaudePlugin: NSObject, Plugin {
         connectIfConfigured()
     }
 
+    /// AgentClient 重连尝试次数
+    private var agentReconnectAttempts: Int = 0
+
+    /// 最大重连次数
+    private let maxAgentReconnectAttempts: Int = 5
+
+    /// 初始化 SharedDbBridge（在后台线程调用，只读模式）
+    ///
+    /// 所有写入操作通过 AgentClient 进行，SharedDbBridge 仅用于查询。
+    private nonisolated func initializeSharedDb() {
+        do {
+            let db = try SharedDbBridge()
+
+            // 回到主线程设置状态
+            DispatchQueue.main.async { [weak self] in
+                self?.dbBridge = db
+                logInfo("[VlaudeKit] SharedDbBridge 初始化成功")
+            }
+        } catch {
+            DispatchQueue.main.async {
+                logWarn("[VlaudeKit] SharedDbBridge 初始化失败: \(error)")
+            }
+        }
+    }
+
+    /// 初始化 AgentClient（在后台线程调用，内部回到主线程设置状态）
+    private nonisolated func initializeAgentClient() {
+        do {
+            let client = try AgentClientBridge(component: "vlaudekit")
+            try client.connect()
+            try client.subscribeAll()
+
+            // 回到主线程设置 delegate 和状态
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                client.delegate = self
+                self.agentClient = client
+                self.agentReconnectAttempts = 0
+                logInfo("[VlaudeKit] AgentClient 已连接并订阅事件")
+            }
+        } catch {
+            DispatchQueue.main.async {
+                logWarn("[VlaudeKit] AgentClient 初始化失败: \(error)")
+            }
+        }
+    }
+
+    /// 尝试重连 AgentClient
+    private func attemptAgentReconnect() {
+        guard agentReconnectAttempts < maxAgentReconnectAttempts else {
+            logWarn("[VlaudeKit] AgentClient 达到最大重连次数 (\(maxAgentReconnectAttempts))，停止重连")
+            return
+        }
+
+        agentReconnectAttempts += 1
+        let delay = min(pow(2.0, Double(agentReconnectAttempts)), 30.0)  // 指数退避，最大 30 秒
+        logInfo("[VlaudeKit] AgentClient 将在 \(Int(delay)) 秒后尝试第 \(agentReconnectAttempts) 次重连")
+
+        // 延迟后在后台线程执行重连（FFI 使用 block_on 会阻塞）
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.initializeAgentClient()
+        }
+    }
+
     public func deactivate() {
         if let observer = configObserver {
             NotificationCenter.default.removeObserver(observer)
@@ -121,9 +185,9 @@ public final class VlaudePlugin: NSObject, Plugin {
             NotificationCenter.default.removeObserver(observer)
         }
 
-        // 停止所有文件监听
-        sessionWatcher?.stopAll()
-        sessionWatcher = nil
+        // 断开 AgentClient
+        agentClient?.disconnect()
+        agentClient = nil
 
         client?.disconnect()
         client = nil
@@ -137,6 +201,7 @@ public final class VlaudePlugin: NSObject, Plugin {
         mobileViewingTerminals.removeAll()
         loadingSessions.removeAll()
         pendingClientMessageIds.removeAll()
+        lastMessageUUIDs.removeAll()
     }
 
     // MARK: - Configuration
@@ -205,9 +270,6 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 发送 daemon:sessionStart 事件（更新 StatusManager，iOS 显示在线状态）
         let projectPath = payload["cwd"] as? String ?? ""
         client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
-
-        // 开始监听文件变化
-        sessionWatcher?.startWatching(sessionId: sessionId, transcriptPath: transcriptPath)
     }
 
     private func handleClaudePromptSubmit(_ payload: [String: Any]) {
@@ -231,11 +293,10 @@ public final class VlaudePlugin: NSObject, Plugin {
         }
         for oldSessionId in sessionsToClean {
             sessionPaths.removeValue(forKey: oldSessionId)
-            sessionWatcher?.stopWatching(sessionId: oldSessionId)
             client?.emitSessionEnd(sessionId: oldSessionId)
         }
 
-        // 更新 transcriptPath 并确保文件监听已启动
+        // 更新 transcriptPath
         if let transcriptPath = payload["transcriptPath"] as? String {
             let isNewSession = sessionPaths[sessionId] == nil
             sessionPaths[sessionId] = transcriptPath
@@ -244,12 +305,6 @@ public final class VlaudePlugin: NSObject, Plugin {
             if isNewSession {
                 let projectPath = payload["cwd"] as? String ?? ""
                 client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
-            }
-
-            // 如果还没有在监听，启动监听
-            let alreadyWatching = sessionWatcher?.isWatching(sessionId: sessionId) ?? false
-            if !alreadyWatching {
-                sessionWatcher?.startWatching(sessionId: sessionId, transcriptPath: transcriptPath)
             }
         }
 
@@ -267,9 +322,11 @@ public final class VlaudePlugin: NSObject, Plugin {
             )
         }
 
-        // 索引会话到 SharedDb（推送由 SessionWatcher 处理）
+        // 通知 Agent 索引会话（写入由 Agent 处理，后台执行避免阻塞主线程）
         if let transcriptPath = payload["transcriptPath"] as? String {
-            client?.indexSession(path: transcriptPath)
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                try? self?.agentClient?.notifyFileChange(path: transcriptPath)
+            }
         }
     }
 
@@ -279,9 +336,6 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 注意：ClaudeKit 先清理映射再 emit 事件，所以这里不能依赖 getSessionId()
         // 直接使用 payload 中的 sessionId 进行清理
-
-        // 停止文件监听
-        sessionWatcher?.stopWatching(sessionId: sessionId)
 
         // 清理本地数据（映射由 ClaudeKit 维护）
         sessionPaths.removeValue(forKey: sessionId)
@@ -308,14 +362,12 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 尝试从 payload 获取 sessionId
         if let sessionId = payload["sessionId"] as? String {
-            sessionWatcher?.stopWatching(sessionId: sessionId)
             sessionPaths.removeValue(forKey: sessionId)
             client?.emitSessionEnd(sessionId: sessionId)
         } else {
             // payload 中没有 sessionId，尝试从 sessionPaths 中查找
             // 这种情况下映射可能还存在
             if let sessionId = getSessionId(for: terminalId) {
-                sessionWatcher?.stopWatching(sessionId: sessionId)
                 sessionPaths.removeValue(forKey: sessionId)
                 client?.emitSessionEnd(sessionId: sessionId)
             }
@@ -332,7 +384,7 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         let toolUseId = payload["toolUseId"] as? String ?? ""
 
-        // 1. 先存储到 pendingApprovals（等待 SessionWatcher 扫描到消息后标记为 pending）
+        // 1. 先存储到 pendingApprovals（等待 Agent 推送消息后标记为 pending）
         if !toolUseId.isEmpty {
             let now = Int64(Date().timeIntervalSince1970 * 1000)
             pendingApprovals[toolUseId] = (sessionId: sessionId, timestamp: now)
@@ -465,7 +517,7 @@ extension VlaudePlugin: VlaudeClientDelegate {
             return
         }
 
-        // 存储 clientMessageId，等待 SessionWatcher 检测到 user 消息后一起推送
+        // 存储 clientMessageId，等待 Agent 推送 user 消息后一起推送
         if let clientMsgId = clientMessageId {
             pendingClientMessageIds[sessionId] = clientMsgId
         }
@@ -578,28 +630,24 @@ extension VlaudePlugin: VlaudeClientDelegate {
         }
 
         // 解析 action 为审批状态
-        let status: ApprovalStatus
+        let status: ApprovalStatusC
         if action.hasPrefix("y") || action.hasPrefix("a") {
-            status = .approved
+            status = Approved
         } else if action.hasPrefix("n") {
-            status = .rejected
+            status = Rejected
         } else {
-            status = .rejected  // 默认拒绝
+            status = Rejected  // 默认拒绝
         }
 
-        // 1. 写回 DB（使用 tool_call_id 更新）
-        if let dbBridge = dbBridge, !toolUseId.isEmpty {
+        // 1. 写回 DB（通过 AgentClient）
+        if let agentClient = agentClient, !toolUseId.isEmpty {
             do {
                 let now = Int64(Date().timeIntervalSince1970 * 1000)
-                let count = try dbBridge.updateApprovalStatusByToolCallId(
+                try agentClient.writeApproveResult(
                     toolCallId: toolUseId,
                     status: status,
                     resolvedAt: now
                 )
-
-                if count == 0 {
-                    print("[VlaudeKit] 警告：未找到 tool_call_id=\(toolUseId) 的消息")
-                }
             } catch {
                 print("[VlaudeKit] 更新审批状态失败: \(error)")
             }
@@ -620,12 +668,12 @@ extension VlaudePlugin: VlaudeClientDelegate {
     }
 }
 
-// MARK: - SessionWatcherDelegate
+// MARK: - Message Processing
 
-extension VlaudePlugin: SessionWatcherDelegate {
-    func sessionWatcher(
-        _ watcher: SessionWatcher,
-        didReceiveMessages messages: [RawMessage],
+extension VlaudePlugin {
+    /// 统一处理新消息（由 AgentClient 调用）
+    func processNewMessages(
+        _ messages: [RawMessage],
         for sessionId: String,
         transcriptPath: String
     ) {
@@ -640,19 +688,16 @@ extension VlaudePlugin: SessionWatcherDelegate {
                     if case .toolUse(let toolUse) = block {
                         let toolCallId = toolUse.id
                         if pendingApprovals[toolCallId] != nil {
-                            // 标记为 pending
-                            if let dbBridge = dbBridge {
+                            // 标记为 pending（通过 AgentClient）
+                            if let agentClient = agentClient {
                                 do {
-                                    let count = try dbBridge.updateApprovalStatusByToolCallId(
+                                    try agentClient.writeApproveResult(
                                         toolCallId: toolCallId,
-                                        status: .pending,
+                                        status: Pending,
                                         resolvedAt: 0  // pending 状态时为 0
                                     )
-                                    if count == 0 {
-                                        print("[VlaudeKit] 警告：未找到 tool_call_id=\(toolCallId) 的消息")
-                                    }
                                 } catch {
-                                    print("[VlaudeKit] 标记 pending 失败: \(error)")
+                                    logError("[VlaudeKit] 标记 pending 失败: \(error)")
                                 }
                             }
                             // 移除已处理的待审批项
@@ -671,6 +716,94 @@ extension VlaudePlugin: SessionWatcherDelegate {
 
             client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks, clientMessageId: clientMsgId)
         }
+    }
+}
+
+// MARK: - AgentClientDelegate
+
+extension VlaudePlugin: AgentClientDelegate {
+    func agentClient(_ client: AgentClientBridge, didReceiveEvent event: AgentEvent) {
+        switch event {
+        case .newMessages(let data):
+            handleAgentNewMessages(data)
+
+        case .sessionStart(let data):
+            handleAgentSessionStart(data)
+
+        case .sessionEnd(let data):
+            handleAgentSessionEnd(data)
+        }
+    }
+
+    func agentClient(_ client: AgentClientBridge, didDisconnect error: Error?) {
+        logWarn("[VlaudeKit] AgentClient 断开连接: \(error?.localizedDescription ?? "unknown")")
+
+        // 尝试重连
+        attemptAgentReconnect()
+    }
+
+    /// 处理 Agent 推送的新消息事件
+    private func handleAgentNewMessages(_ data: NewMessagesEvent) {
+        let sessionId = data.sessionId
+        let transcriptPath = data.path
+
+        // 确保 sessionPaths 中有记录
+        if sessionPaths[sessionId] == nil {
+            sessionPaths[sessionId] = transcriptPath
+        }
+
+        // 读取消息并过滤出新消息
+        guard let result = sessionReader.readMessages(
+            sessionPath: transcriptPath,
+            limit: 0,  // 读取全部
+            offset: 0,
+            orderAsc: true
+        ) else {
+            logWarn("[VlaudeKit] 读取消息失败: \(transcriptPath)")
+            return
+        }
+
+        // 找到 lastMessageUUID 之后的消息
+        var newMessages: [RawMessage] = []
+        let lastUUID = lastMessageUUIDs[sessionId]
+        var foundLast = lastUUID == nil
+
+        for msg in result.messages {
+            if foundLast {
+                newMessages.append(msg)
+            } else if msg.uuid == lastUUID {
+                foundLast = true
+            }
+        }
+
+        // 防御：如果 lastMessageUUID 在文件中找不到，返回所有消息
+        if !foundLast && lastUUID != nil {
+            newMessages = result.messages
+        }
+
+        // 更新 lastMessageUUID
+        if let lastMsg = newMessages.last ?? result.messages.last {
+            lastMessageUUIDs[sessionId] = lastMsg.uuid
+        }
+
+        // 处理新消息
+        if !newMessages.isEmpty {
+            processNewMessages(newMessages, for: sessionId, transcriptPath: transcriptPath)
+        }
+    }
+
+    /// 处理 Agent 推送的会话开始事件
+    private func handleAgentSessionStart(_ data: SessionStartEvent) {
+        logDebug("[VlaudeKit] Agent session start: \(data.sessionId) at \(data.projectPath)")
+        // 主要的 session 管理由 ClaudeKit 驱动，这里只做日志
+    }
+
+    /// 处理 Agent 推送的会话结束事件
+    private func handleAgentSessionEnd(_ data: SessionEndEvent) {
+        logDebug("[VlaudeKit] Agent session end: \(data.sessionId)")
+
+        // 清理 lastMessageUUID
+        lastMessageUUIDs.removeValue(forKey: data.sessionId)
     }
 }
 

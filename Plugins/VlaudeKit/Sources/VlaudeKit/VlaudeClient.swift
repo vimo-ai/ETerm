@@ -93,19 +93,12 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         initSharedDb()
     }
 
-    /// 初始化共享数据库（最佳努力）
+    /// 初始化共享数据库（只读模式）
     ///
-    /// 使用 registerAndCollect() 统一的接口，成为 Writer 时自动触发采集。
-    /// 采集逻辑已下沉到 ai-cli-session-db，所有组件（VlaudeKit、MemexKit、daemon）共享同一份代码。
+    /// 所有写入操作通过 AgentClient 进行，SharedDbBridge 仅用于查询。
     private func initSharedDb() {
         do {
             sharedDb = try SharedDbBridge()
-            // 使用统一的 registerAndCollect，成为 Writer 时自动在 Rust 层执行采集
-            let (role, collectResult) = try sharedDb!.registerAndCollect()
-
-            if role == .writer, let result = collectResult, result.messagesInserted > 0 {
-                print("[VlaudeKit] Collect: \(result.sessionsScanned) sessions, \(result.messagesInserted) messages")
-            }
         } catch {
             sharedDb = nil
         }
@@ -323,8 +316,6 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     /// 释放 SharedDbBridge（线程安全）
     private func releaseSharedDb() {
-        guard let db = sharedDb else { return }
-        try? db.release()
         sharedDb = nil
     }
 
@@ -839,7 +830,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     // MARK: - Real-time Message Push
 
-    /// 推送单条消息给 Server（由 SessionWatcher 调用）
+    /// 推送单条消息给 Server（由 AgentClient 调用）
     /// - Parameters:
     ///   - sessionId: 会话 ID
     ///   - message: 消息
@@ -903,7 +894,7 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     }
 
     /// 推送新消息给 Server（让 iOS 实时看到）
-    /// 注意：此方法已被 SessionWatcher + pushMessage 替代，保留用于兼容
+    /// 注意：此方法已被 AgentClient + pushMessage 替代，保留用于兼容
     /// - Parameters:
     ///   - sessionId: 会话 ID
     ///   - transcriptPath: JSONL 文件路径
@@ -943,53 +934,4 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         // 历史数据由 Rust daemon 负责推送
     }
 
-    // MARK: - SharedDb Write Operations
-
-    /// 索引会话到 SharedDb（当收到 aicli.responseComplete 事件时调用）
-    /// 使用 session-reader-ffi 正确解析路径（支持中文路径）
-    /// - Parameter path: JSONL 会话文件路径
-    func indexSession(path: String) {
-        guard let sharedDb = sharedDb else { return }
-
-        // 检查是否为 Writer，如果不是尝试接管
-        if sharedDb.role != .writer {
-            do {
-                let health = try sharedDb.checkWriterHealth()
-                if health == .timeout || health == .released {
-                    guard try sharedDb.tryTakeover() else { return }
-                } else {
-                    return
-                }
-            } catch {
-                return
-            }
-        }
-
-        // 使用 session-reader-ffi 解析会话
-        guard let session = sessionReader.parseSessionForIndex(jsonlPath: path) else { return }
-
-        // 转换消息格式
-        let messages = session.messages.map { msg in
-            MessageInput(
-                uuid: msg.uuid,
-                role: msg.role,
-                content: msg.content,
-                timestamp: msg.timestamp,
-                sequence: msg.sequence
-            )
-        }
-
-        // 写入数据库
-        do {
-            let projectId = try sharedDb.upsertProject(
-                path: session.projectPath,
-                name: session.projectName,
-                source: "claude-code"
-            )
-            try sharedDb.upsertSession(sessionId: session.sessionId, projectId: projectId)
-            _ = try sharedDb.insertMessages(sessionId: session.sessionId, messages: messages)
-        } catch {
-            // Silently fail - indexing is best-effort
-        }
-    }
 }

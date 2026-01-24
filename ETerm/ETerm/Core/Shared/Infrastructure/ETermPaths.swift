@@ -119,6 +119,17 @@ enum ETermPaths {
     /// 剪贴板临时目录: ~/.vimo/eterm/tmp/clipboard
     static let clipboard = tmp + "/clipboard"
 
+    // MARK: - 脚本目录
+
+    /// 脚本目录: ~/.vimo/eterm/scripts
+    static let scripts = root + "/scripts"
+
+    /// Claude Hook 脚本路径
+    static let claudeHookScript = scripts + "/claude_hook.sh"
+
+    /// Claude Hook 默认版本（用于版本对比）
+    static let claudeHookDefault = scripts + "/.claude_hook.sh.default"
+
     // MARK: - 运行时目录
 
     /// 运行时目录: ~/.vimo/eterm/run
@@ -185,6 +196,7 @@ enum ETermPaths {
             mcpRouterPlugin,
             clipboard,
             run,
+            scripts,
             debugExports
         ]
 

@@ -178,7 +178,7 @@ final class SessionReader {
     func listProjects(limit: UInt32 = 0) -> [ProjectInfo]? {
         var arrayPtr: UnsafeMutablePointer<ProjectInfoArray>?
 
-        let err: SessionDbError
+        let err: FfiError
         if let path = projectsPath {
             err = path.withCString { cpath in
                 session_db_list_file_projects(cpath, limit, &arrayPtr)
@@ -219,7 +219,7 @@ final class SessionReader {
     func listSessions(projectPath: String? = nil) -> [SessionMeta]? {
         var arrayPtr: UnsafeMutablePointer<SessionMetaArray>?
 
-        let err: SessionDbError
+        let err: FfiError
         if let path = self.projectsPath {
             if let projPath = projectPath {
                 err = path.withCString { cpath in
@@ -273,7 +273,7 @@ final class SessionReader {
     func findLatestSession(projectPath: String, withinSeconds: UInt64 = 0) -> SessionMeta? {
         var sessionPtr: UnsafeMutablePointer<SessionMetaC>?
 
-        let err: SessionDbError
+        let err: FfiError
         if let path = self.projectsPath {
             err = path.withCString { cpath in
                 projectPath.withCString { cproj in
