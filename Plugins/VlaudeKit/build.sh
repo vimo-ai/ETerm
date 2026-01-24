@@ -55,6 +55,18 @@ cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 
 # Copy FFI dylibs
 mkdir -p "${BUNDLE_PATH}/Contents/Libs"
+mkdir -p "${BUNDLE_PATH}/Contents/Lib"
+
+# Copy vimo-agent (for deployment to ~/.vimo/bin/)
+log_info "Copying vimo-agent..."
+AGENT_BIN="$HOME/.vimo/bin/vimo-agent"
+if [ -f "$AGENT_BIN" ]; then
+    cp "$AGENT_BIN" "${BUNDLE_PATH}/Contents/Lib/"
+    chmod +x "${BUNDLE_PATH}/Contents/Lib/vimo-agent"
+    log_info "Copied vimo-agent from $AGENT_BIN"
+else
+    log_warn "vimo-agent not found at $AGENT_BIN - run './scripts/build.sh agent' first"
+fi
 
 log_info "Copying SharedDB..."
 if [ -f "Libs/SharedDB/libai_cli_session_db.dylib" ]; then

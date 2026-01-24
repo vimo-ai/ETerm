@@ -73,6 +73,17 @@ if [ -f "$MEMEX_BINARY" ]; then
     log_info "Memex binary copied"
 fi
 
+# Copy vimo-agent (for deployment to ~/.vimo/bin/)
+log_info "Copying vimo-agent..."
+AGENT_BIN="$HOME/.vimo/bin/vimo-agent"
+if [ -f "$AGENT_BIN" ]; then
+    cp "$AGENT_BIN" "${BUNDLE_PATH}/Contents/Lib/"
+    chmod +x "${BUNDLE_PATH}/Contents/Lib/vimo-agent"
+    log_info "Copied vimo-agent from $AGENT_BIN"
+else
+    log_warn "vimo-agent not found at $AGENT_BIN - run './scripts/build.sh agent' first"
+fi
+
 # Copy SharedDB (ai-cli-session-db FFI)
 log_info "Copying SharedDB..."
 mkdir -p "${BUNDLE_PATH}/Contents/Libs"

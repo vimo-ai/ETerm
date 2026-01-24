@@ -158,17 +158,26 @@ class AgentClientBridge {
     /// - Parameters:
     ///   - component: 组件名称（如 "vlaudekit", "memexkit"）
     ///   - dataDir: 数据目录（可选，默认 ~/.vimo）
-    init(component: String, dataDir: String? = nil) throws {
+    ///   - agentSourceDir: Agent 源目录（可选，用于首次部署 vimo-agent）
+    init(component: String, dataDir: String? = nil, agentSourceDir: String? = nil) throws {
         self.component = component
 
         var handlePtr: OpaquePointer?
-        let result = component.withCString { componentPtr in
-            if let dataDir = dataDir {
-                return dataDir.withCString { dataDirPtr in
-                    agent_client_create(componentPtr, dataDirPtr, &handlePtr)
-                }
+
+        // 辅助函数：安全地处理可选 C 字符串
+        func withOptionalCString<T>(_ string: String?, _ body: (UnsafePointer<CChar>?) -> T) -> T {
+            if let s = string {
+                return s.withCString { body($0) }
             } else {
-                return agent_client_create(componentPtr, nil, &handlePtr)
+                return body(nil)
+            }
+        }
+
+        let result = component.withCString { componentPtr in
+            withOptionalCString(dataDir) { dataDirPtr in
+                withOptionalCString(agentSourceDir) { agentSourceDirPtr in
+                    agent_client_create(componentPtr, dataDirPtr, agentSourceDirPtr, &handlePtr)
+                }
             }
         }
 
@@ -178,6 +187,15 @@ class AgentClientBridge {
 
         self.handle = handlePtr
         setupCallback()
+    }
+
+    /// 便捷初始化：自动使用 bundle 的 Lib 目录作为 Agent 源
+    /// - Parameters:
+    ///   - component: 组件名称
+    ///   - bundle: Plugin bundle（用于定位 vimo-agent）
+    convenience init(component: String, bundle: Bundle) throws {
+        let agentSourceDir = bundle.bundlePath + "/Contents/Lib"
+        try self.init(component: component, agentSourceDir: agentSourceDir)
     }
 
     deinit {
