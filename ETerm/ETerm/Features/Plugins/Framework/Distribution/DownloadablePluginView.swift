@@ -80,25 +80,25 @@ struct DownloadablePluginsView: View {
     static let vlaudeKitPlugin = DownloadablePlugin(
         id: "com.eterm.vlaude",
         name: "VlaudeKit",
-        version: "0.0.1-beta.1",
+        version: "0.0.1-beta.2",
         description: "从 iOS 查看和控制 Claude",
         size: 10 * 1024 * 1024, // ~10MB
-        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/vlaudekit-v0.0.1-beta.1/VlaudeKit.bundle.zip",
+        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/vlaudekit-v0.0.1-beta.2/VlaudeKit.bundle.zip",
         sha256: nil,
         runtimeDeps: [
             RuntimeDependency(
                 name: "libai_cli_session_db",
-                minVersion: "0.0.1-beta.1",
+                minVersion: "0.0.1-beta.5",
                 path: "lib/libai_cli_session_db.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libai_cli_session_db.dylib"
+                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.5/libai_cli_session_db.dylib"
             ),
             RuntimeDependency(
                 name: "libsocket_client_ffi",
-                minVersion: "0.0.1-beta.1",
+                minVersion: "0.0.1-beta.3",
                 path: "lib/libsocket_client_ffi.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/vlaude/releases/download/socket-ffi-v0.0.1-beta.1/libsocket_client_ffi.dylib"
+                downloadUrl: "https://github.com/vimo-ai/vlaude/releases/download/socket-ffi-v0.0.1-beta.3/libsocket_client_ffi.dylib"
             )
         ]
     )
@@ -106,25 +106,25 @@ struct DownloadablePluginsView: View {
     static let memexKitPlugin = DownloadablePlugin(
         id: "com.eterm.memex",
         name: "MemexKit",
-        version: "0.0.1-beta.1",
+        version: "0.0.1-beta.2",
         description: "Claude 会话历史搜索",
-        size: 123 * 1024 * 1024, // ~123MB
-        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/memexkit-v0.0.1-beta.1/MemexKit.bundle.zip",
+        size: 70 * 1024 * 1024, // ~70MB
+        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/memexkit-v0.0.1-beta.2/MemexKit.bundle.zip",
         sha256: nil,
         runtimeDeps: [
             RuntimeDependency(
                 name: "libai_cli_session_db",
-                minVersion: "0.0.1-beta.1",
+                minVersion: "0.0.1-beta.5",
                 path: "lib/libai_cli_session_db.dylib",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.1/libai_cli_session_db.dylib"
+                downloadUrl: "https://github.com/vimo-ai/ai-cli-session-db/releases/download/v0.0.1-beta.5/libai_cli_session_db.dylib"
             ),
             RuntimeDependency(
                 name: "memex",
-                minVersion: "0.0.1-beta.1",
+                minVersion: "0.0.1-beta.3",
                 path: "bin/memex",
                 sha256: nil,
-                downloadUrl: "https://github.com/vimo-ai/memex/releases/download/v0.0.1-beta.1/memex-darwin-arm64"
+                downloadUrl: "https://github.com/vimo-ai/memex/releases/download/v0.0.1-beta.3/memex-darwin-arm64"
             )
         ]
     )
