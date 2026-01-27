@@ -39,7 +39,7 @@ cwd=$(echo "$input" | jq -r '.cwd // ""')
 terminal_id="${ETERM_TERMINAL_ID}"
 
 # vimo-agent socket 路径
-agent_socket_path="${HOME}/.vimo/db/agent.sock"
+agent_socket_path="${HOME}/.vimo/agent.sock"
 
 # 记录日志
 {

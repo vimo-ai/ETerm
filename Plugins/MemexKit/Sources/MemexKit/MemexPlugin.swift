@@ -55,7 +55,8 @@ public final class MemexPlugin: NSObject, Plugin {
             .replacingOccurrences(of: ".jsonl", with: "")
 
         // 异步调用采集和 Compact（静默失败，不阻断主流程）
-        Task {
+        // 注意：MemexService 是 @MainActor，普通 Task 会回到主线程，必须用 DispatchQueue.global
+        DispatchQueue.global(qos: .utility).async {
             // 1. 精确采集会话（Writer 直接写入数据库，FTS 通过触发器自动更新）
             //
             // **重要**: 必须由 Writer 直接调用 collectByPath，不能依赖 HTTP API 转发给 daemon。
@@ -65,7 +66,9 @@ public final class MemexPlugin: NSObject, Plugin {
             try? MemexService.shared.collectByPath(transcriptPath)
 
             // 2. 触发 Compact（L1 + L2，如果启用的话）
-            try? await MemexService.shared.triggerCompact(sessionId: sessionId)
+            Task {
+                try? await MemexService.shared.triggerCompact(sessionId: sessionId)
+            }
         }
     }
 
