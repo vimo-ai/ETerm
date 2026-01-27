@@ -75,8 +75,10 @@ impl GlyphInfo {
             0x00D7 |           // × Multiplication Sign
             0x00F7 |           // ÷ Division Sign
 
-            // General Punctuation
-            0x2010..=0x2027 |  // 各种破折号、引号
+            // General Punctuation（排除引号，引号应该走 baseline 对齐）
+            0x2010..=0x2015 |  // 破折号 (‐ ‑ ‒ – — ―)
+            // 跳过 0x2016-0x201F：引号类符号，应该顶部对齐而非居中
+            0x2020..=0x2027 |  // † ‡ • 等
             0x2030..=0x205E |  // 千分号、点等
 
             // Mathematical Operators

@@ -135,34 +135,32 @@ impl GlyphRasterizer {
         })
     }
 
-    /// 光栅化普通字符（baseline 对齐）
+    /// 光栅化普通字符（顶部对齐）
     ///
     /// 处理斜体等字符的左/右溢出：
     /// - 如果有左溢出（bounds.left < 0），向右偏移以避免被切
     /// - 加 1px padding 配合 bitmap 尺寸计算中的 +2
     ///
-    /// 注意：使用当前字体自己的 ascent 来计算 baseline 位置，
-    /// 而不是使用基于主字体计算的 baseline_offset。
-    /// 这确保 CJK 等 fallback 字体的字形能够正确地在 bitmap 中顶部对齐。
+    /// 使用传入的 baseline_offset 定位字形，渲染时 y_offset = 0 直接使用。
     fn rasterize_normal(
         &self,
         canvas: &skia_safe::Canvas,
         glyph: &GlyphInfo,
-        _baseline_offset: f32, // 保留参数签名兼容性，但使用字体自己的 ascent
+        baseline_offset: f32,
         paint: &Paint,
     ) {
-        // 检查是否有左溢出，+1 是 padding
+        // 获取字形的实际墨迹边界
         let (_, bounds) = glyph.font.measure_str(&glyph.grapheme, None);
+
+        // x 偏移：补偿左溢出 +1 padding
         let x_offset = if bounds.left < 0.0 { -bounds.left + 1.0 } else { 1.0 };
 
-        // 使用当前字体自己的 ascent 计算 baseline
-        // 这样 CJK 字体的字形会在 bitmap 顶部对齐，而不是垂直居中
-        let (_, metrics) = glyph.font.metrics();
-        let font_baseline = -metrics.ascent;
+        // y 偏移：使用 baseline_offset（基线位置）
+        let y_offset = baseline_offset;
 
         canvas.draw_str(
             &glyph.grapheme,
-            Point::new(x_offset, font_baseline),
+            Point::new(x_offset, y_offset),
             &glyph.font,
             paint,
         );
