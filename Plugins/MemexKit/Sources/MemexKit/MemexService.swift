@@ -146,7 +146,9 @@ public final class MemexService: @unchecked Sendable {
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
         // 在后台线程执行重连（FFI 使用 block_on 会阻塞）
-        initAgentClient()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.initAgentClient()
+        }
     }
 
     // MARK: - Lifecycle
@@ -622,20 +624,29 @@ extension MemexService: AgentClientDelegate {
         }
     }
 
-    /// 处理 Agent 推送的新消息事件（在后台队列执行）
+    /// 处理 Agent 推送的新消息事件
+    ///
+    /// 注意：虽然用了 Task.detached，但 MemexService 是 @MainActor，
+    /// 所以这个方法仍会在主线程执行。FFI 调用必须在后台队列执行。
     private func handleAgentNewMessages(_ data: NewMessagesEvent) async {
         let path = data.path
         let sessionId = data.sessionId
 
-        // 触发采集（静默失败）- 同步 IO 操作，在后台队列执行
-        do {
-            try collectByPath(path)
-            logDebug("[MemexKit] 采集成功: \(sessionId)")
-        } catch {
-            logWarn("[MemexKit] 采集失败: \(error)")
+        // FFI 调用（collectByPath → notifyFileChange）会阻塞，必须在后台队列执行
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                defer { continuation.resume() }
+                guard let self = self else { return }
+                do {
+                    try self.collectByPath(path)
+                    logDebug("[MemexKit] 采集成功: \(sessionId)")
+                } catch {
+                    logWarn("[MemexKit] 采集失败: \(error)")
+                }
+            }
         }
 
-        // 触发 Compact（静默失败）
+        // triggerCompact 是 HTTP 请求，不会阻塞主线程
         try? await triggerCompact(sessionId: sessionId)
     }
 }

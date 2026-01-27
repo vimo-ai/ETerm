@@ -212,7 +212,11 @@ public final class VlaudePlugin: NSObject, Plugin {
         let config = VlaudeConfigManager.shared.config
         guard config.isValid else { return }
         VlaudeConfigManager.shared.updateConnectionStatus(.connecting)
-        client?.connect(config: config)
+        // FFI 连接操作会阻塞，在后台线程执行
+        let client = self.client
+        DispatchQueue.global(qos: .utility).async {
+            client?.connect(config: config)
+        }
     }
 
     private func handleConfigChange() {
@@ -220,7 +224,11 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         if config.isValid {
             VlaudeConfigManager.shared.updateConnectionStatus(.connecting)
-            client?.connect(config: config)
+            // FFI 连接操作会阻塞，在后台线程执行
+            let client = self.client
+            DispatchQueue.global(qos: .utility).async {
+                client?.connect(config: config)
+            }
         } else {
             client?.disconnect()
             VlaudeConfigManager.shared.updateConnectionStatus(.disconnected)
@@ -231,7 +239,11 @@ public final class VlaudePlugin: NSObject, Plugin {
         let config = VlaudeConfigManager.shared.config
         guard config.isValid else { return }
         VlaudeConfigManager.shared.updateConnectionStatus(.reconnecting)
-        client?.reconnect()
+        // FFI 连接操作会阻塞，在后台线程执行
+        let client = self.client
+        DispatchQueue.global(qos: .utility).async {
+            client?.reconnect()
+        }
     }
 
     // MARK: - Event Handling
@@ -641,17 +653,19 @@ extension VlaudePlugin: VlaudeClientDelegate {
             status = Rejected  // 默认拒绝
         }
 
-        // 1. 写回 DB（通过 AgentClient）
+        // 1. 写回 DB（通过 AgentClient，后台执行避免阻塞主线程）
         if let agentClient = agentClient, !toolUseId.isEmpty {
-            do {
-                let now = Int64(Date().timeIntervalSince1970 * 1000)
-                try agentClient.writeApproveResult(
-                    toolCallId: toolUseId,
-                    status: status,
-                    resolvedAt: now
-                )
-            } catch {
-                print("[VlaudeKit] 更新审批状态失败: \(error)")
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    try agentClient.writeApproveResult(
+                        toolCallId: toolUseId,
+                        status: status,
+                        resolvedAt: now
+                    )
+                } catch {
+                    print("[VlaudeKit] 更新审批状态失败: \(error)")
+                }
             }
         }
 
@@ -679,19 +693,16 @@ extension VlaudePlugin {
         for sessionId: String,
         transcriptPath: String
     ) {
-        // 推送新消息给服务器（带结构化内容块）
         for message in messages {
-            let blocks = ContentBlockParser.readMessage(from: transcriptPath, uuid: message.uuid)
-
             // 检查是否有待标记为 pending 的审批请求
-            // 遍历 blocks 查找 tool_use 的 id
-            if let blocks = blocks {
-                for block in blocks {
-                    if case .toolUse(let toolUse) = block {
-                        let toolCallId = toolUse.id
-                        if pendingApprovals[toolCallId] != nil {
-                            // 标记为 pending（通过 AgentClient）
-                            if let agentClient = agentClient {
+            // 从 message.content 中轻量级提取 tool_use id（不解析整个文件）
+            if !pendingApprovals.isEmpty {
+                let toolUseIds = extractToolUseIds(from: message.content)
+                for toolCallId in toolUseIds {
+                    if pendingApprovals[toolCallId] != nil {
+                        // 标记为 pending（通过 AgentClient，后台执行避免阻塞主线程）
+                        if let agentClient = agentClient {
+                            DispatchQueue.global(qos: .utility).async {
                                 do {
                                     try agentClient.writeApproveResult(
                                         toolCallId: toolCallId,
@@ -702,9 +713,9 @@ extension VlaudePlugin {
                                     logError("[VlaudeKit] 标记 pending 失败: \(error)")
                                 }
                             }
-                            // 移除已处理的待审批项
-                            pendingApprovals.removeValue(forKey: toolCallId)
                         }
+                        // 移除已处理的待审批项
+                        pendingApprovals.removeValue(forKey: toolCallId)
                     }
                 }
             }
@@ -716,8 +727,28 @@ extension VlaudePlugin {
                 clientMsgId = pendingClientMessageIds.removeValue(forKey: sessionId)
             }
 
-            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: blocks, clientMessageId: clientMsgId)
+            // ContentBlock 由 iOS 按需解析（懒加载），不在这里解析
+            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: nil, clientMessageId: clientMsgId)
         }
+    }
+
+    /// 从 message content 中轻量级提取 tool_use id（不读取文件）
+    private func extractToolUseIds(from content: String) -> [String] {
+        // tool_use 格式: {"type": "tool_use", "id": "toolu_xxx", ...}
+        // 用正则提取 id，避免完整 JSON 解析
+        var ids: [String] = []
+        let pattern = #""type"\s*:\s*"tool_use"[^}]*"id"\s*:\s*"([^"]+)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return ids
+        }
+        let range = NSRange(content.startIndex..., in: content)
+        let matches = regex.matches(in: content, range: range)
+        for match in matches {
+            if let idRange = Range(match.range(at: 1), in: content) {
+                ids.append(String(content[idRange]))
+            }
+        }
+        return ids
     }
 }
 

@@ -13,7 +13,7 @@ import ETermKit
 /// 通过 vimo-agent 订阅 HookEvent，将事件转换为标准 AICliEvent。
 /// 支持从 context 提取 terminal_id 以关联正确的终端。
 @MainActor
-public final class ClaudeProvider: AICliProvider, @preconcurrency AgentClientDelegate {
+public final class ClaudeProvider: AICliProvider, AgentClientDelegate {
     public static let providerId = "claude"
 
     public static let capabilities = AICliCapabilities.claude
@@ -32,23 +32,31 @@ public final class ClaudeProvider: AICliProvider, @preconcurrency AgentClientDel
     public func start(config: AICliProviderConfig) {
         self.config = config
 
-        do {
-            // 使用 plugin bundle 的 Lib 目录作为 agent 源（用于首次部署）
-            let pluginBundle = Bundle(for: Self.self)
-            let client = try AgentClientBridge(component: "aiclikit", bundle: pluginBundle)
-            client.delegate = self
+        // 在后台线程执行连接，避免阻塞主线程
+        let pluginBundle = Bundle(for: Self.self)
+        Task.detached(priority: .utility) { [weak self] in
+            do {
+                let client = try AgentClientBridge(component: "aiclikit", bundle: pluginBundle)
 
-            // 连接到 vimo-agent
-            try client.connect()
+                // 连接到 vimo-agent（可能需要启动 agent，耗时操作）
+                try client.connect()
 
-            // 订阅 HookEvent
-            try client.subscribeHookEvent()
+                // 订阅 HookEvent
+                try client.subscribeHookEvent()
 
-            agentClient = client
-            logInfo("[ClaudeProvider] started, subscribed to HookEvent")
+                // 回到主线程设置状态
+                await MainActor.run {
+                    guard let self = self else { return }
+                    client.delegate = self
+                    self.agentClient = client
+                    logInfo("[ClaudeProvider] started, subscribed to HookEvent")
+                }
 
-        } catch {
-            logError("[ClaudeProvider] failed to start: \(error)")
+            } catch {
+                await MainActor.run {
+                    logError("[ClaudeProvider] failed to start: \(error)")
+                }
+            }
         }
     }
 
@@ -60,7 +68,7 @@ public final class ClaudeProvider: AICliProvider, @preconcurrency AgentClientDel
 
     // MARK: - AgentClientDelegate
 
-    nonisolated public func agentClient(_ client: AgentClientBridge, didReceiveHookEvent event: AgentHookEvent) {
+    nonisolated func agentClient(_ client: AgentClientBridge, didReceiveHookEvent event: AgentHookEvent) {
         Task { @MainActor in
             if let aiCliEvent = self.mapHookEvent(event) {
                 self.onEvent?(aiCliEvent)
@@ -68,7 +76,7 @@ public final class ClaudeProvider: AICliProvider, @preconcurrency AgentClientDel
         }
     }
 
-    nonisolated public func agentClient(_ client: AgentClientBridge, didDisconnect error: Error?) {
+    nonisolated func agentClient(_ client: AgentClientBridge, didDisconnect error: Error?) {
         Task { @MainActor in
             logWarn("[ClaudeProvider] disconnected: \(error?.localizedDescription ?? "unknown")")
         }
