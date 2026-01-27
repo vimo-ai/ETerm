@@ -18,14 +18,25 @@ let package = Package(
         ),
     ],
     targets: [
+        .systemLibrary(
+            name: "SharedDbFFI",
+            path: "Libs/SharedDB"
+        ),
         .target(
             name: "AICliKit",
+            dependencies: [
+                "SharedDbFFI"
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
                 .unsafeFlags(["-F", etermkitPath])
             ],
             linkerSettings: [
-                .unsafeFlags(["-F", etermkitPath, "-framework", "ETermKit"])
+                .unsafeFlags([
+                    "-F", etermkitPath, "-framework", "ETermKit",
+                    "Libs/SharedDB/libai_cli_session_db.dylib",
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Libs"
+                ])
             ]
         ),
     ]
