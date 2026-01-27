@@ -389,6 +389,13 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
     }
 
     private func handlePermissionRequest(event: AICliEvent) {
+        let terminalId = event.terminalId
+
+        // 权限请求 = 等待用户输入，设置黄色装饰（与 handleWaitingInput 相同逻辑）
+        if !isTerminalActive(terminalId) {
+            addState(.waitingInput, for: terminalId)
+        }
+
         var payload = makePayload(event)
         payload["toolName"] = event.payload["toolName"] ?? ""
         payload["toolInput"] = event.payload["toolInput"] ?? [String: Any]()
