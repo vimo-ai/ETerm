@@ -2,8 +2,12 @@
 #
 # ETerm Claude Hook
 # 支持 SessionStart, UserPromptSubmit, Stop, SessionEnd, Notification 事件
-# 通过 Unix Socket 通知 ETerm，建立 session 映射，控制 Tab 装饰
-# 优雅降级：非 ETerm 环境下静默跳过，不影响后续 hooks
+#
+# 双写架构：
+# 1. 总是通知 vimo-agent（触发即时 Collection + 广播事件）
+# 2. 如果在 ETerm 环境，额外通知 ETerm Socket（Tab 装饰等 UI 功能）
+#
+# 优雅降级：任何通知失败都静默跳过，不影响后续 hooks
 #
 
 # 确保日志目录存在（权限 0700，防止敏感信息泄露给其他用户）
@@ -21,7 +25,7 @@ input=$(cat)
 
 # 检查 jq 是否可用
 if ! command -v jq &> /dev/null; then
-    echo "⚠️ [Hook] jq not found - skipping ETerm notification" >> "$LOG_FILE"
+    echo "$(date) ⚠️ [Hook] jq not found - skipping notification" >> "$LOG_FILE"
     exit 0  # 优雅降级，不阻塞后续 hooks
 fi
 
@@ -29,9 +33,7 @@ fi
 session_id=$(echo "$input" | jq -r '.session_id')
 hook_event_name=$(echo "$input" | jq -r '.hook_event_name // "Stop"')
 source=$(echo "$input" | jq -r '.source // "unknown"')
-# 提取 prompt（用于生成智能标题）
 prompt=$(echo "$input" | jq -r '.prompt // ""')
-# 提取 transcript_path 和 cwd（用于 MemexKit 索引）
 transcript_path=$(echo "$input" | jq -r '.transcript_path // ""')
 cwd=$(echo "$input" | jq -r '.cwd // ""')
 
@@ -39,10 +41,11 @@ cwd=$(echo "$input" | jq -r '.cwd // ""')
 terminal_id="${ETERM_TERMINAL_ID}"
 socket_dir="${ETERM_SOCKET_DIR}"
 
-# 构造 socket 路径（新路径格式）
-socket_path="${socket_dir}/claude.sock"
+# 构造 socket 路径
+eterm_socket_path="${socket_dir}/claude.sock"
+agent_socket_path="${HOME}/.vimo/db/agent.sock"
 
-# 记录日志（包含完整 JSON 便于调试）
+# 记录日志
 {
     echo "==================="
     echo "Triggered at: $(date)"
@@ -50,74 +53,157 @@ socket_path="${socket_dir}/claude.sock"
     echo "Source: $source"
     echo "Session ID: $session_id"
     echo "Terminal ID: $terminal_id"
-    echo "Socket Dir: $socket_dir"
-    echo "Socket Path: $socket_path"
-    echo "Raw JSON:"
-    echo "$input" | jq '.' 2>/dev/null || echo "$input"
+    echo "Agent Socket: $agent_socket_path"
+    echo "ETerm Socket: $eterm_socket_path"
 } >> "$LOG_FILE"
 
-# 检查必要的环境变量
-if [ -z "$terminal_id" ]; then
-    echo "⚠️ Not in ETerm environment (ETERM_TERMINAL_ID not set) - skipping" >> "$LOG_FILE"
-    exit 0  # 优雅降级
-fi
+# ========================================
+# 函数：通知 vimo-agent
+# ========================================
+notify_vimo_agent() {
+    local hook_json="$1"
 
-if [ -z "$socket_dir" ]; then
-    echo "⚠️ Not in ETerm environment (ETERM_SOCKET_DIR not set) - skipping" >> "$LOG_FILE"
-    exit 0  # 优雅降级
-fi
+    if [ ! -S "$agent_socket_path" ]; then
+        echo "  ⚠️ vimo-agent socket not found, skipping" >> "$LOG_FILE"
+        return 0
+    fi
 
-# 检查 socket 文件是否存在
-if [ ! -S "$socket_path" ]; then
-    echo "⚠️ Socket file not found: $socket_path - skipping" >> "$LOG_FILE"
-    exit 0  # 优雅降级
-fi
+    # 异步发送，不阻塞 Claude Code
+    (echo "$hook_json" | nc -w 1 -U "$agent_socket_path") &
+    echo "  ✅ vimo-agent notified" >> "$LOG_FILE"
+}
 
-# 事件类型映射
+# ========================================
+# 函数：通知 ETerm Socket
+# ========================================
+notify_eterm() {
+    local eterm_json="$1"
+
+    # 检查是否在 ETerm 环境
+    if [ -z "$terminal_id" ] || [ -z "$socket_dir" ]; then
+        echo "  ℹ️ Not in ETerm environment, skipping ETerm notification" >> "$LOG_FILE"
+        return 0
+    fi
+
+    if [ ! -S "$eterm_socket_path" ]; then
+        echo "  ⚠️ ETerm socket not found: $eterm_socket_path" >> "$LOG_FILE"
+        return 0
+    fi
+
+    # 异步发送，不阻塞 Claude Code
+    (echo "$eterm_json" | nc -w 2 -U "$eterm_socket_path") &
+    echo "  ✅ ETerm notified" >> "$LOG_FILE"
+}
+
+# ========================================
+# 构造 vimo-agent HookEvent JSON
+# ========================================
+build_agent_hook_event() {
+    local event_type="$1"
+    local extra_fields="$2"
+
+    # 基础字段（使用 jq 确保正确转义）
+    local base_json=$(jq -cn \
+        --arg type "HookEvent" \
+        --arg event_type "$event_type" \
+        --arg session_id "$session_id" \
+        --arg transcript_path "$transcript_path" \
+        --arg cwd "$cwd" \
+        '{
+            type: $type,
+            event_type: $event_type,
+            session_id: $session_id,
+            transcript_path: (if $transcript_path == "" then null else $transcript_path end),
+            cwd: (if $cwd == "" then null else $cwd end)
+        }')
+
+    # 合并额外字段
+    if [ -n "$extra_fields" ]; then
+        echo "$base_json" | jq -c ". + $extra_fields"
+    else
+        echo "$base_json"
+    fi
+}
+
+# ========================================
+# 事件处理
+# ========================================
 case "$hook_event_name" in
     "SessionStart")
-        event_type="session_start"
+        echo "📍 [SessionStart]" >> "$LOG_FILE"
+
+        # 通知 vimo-agent
+        agent_json=$(build_agent_hook_event "SessionStart")
+        notify_vimo_agent "$agent_json"
+
+        # 通知 ETerm
+        eterm_json="{\"event_type\": \"session_start\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}"
+        notify_eterm "$eterm_json"
         ;;
+
     "UserPromptSubmit")
-        event_type="user_prompt_submit"
-        # UserPromptSubmit 事件包含 prompt，需要特殊处理
-        # 转义 prompt 中的特殊字符（双引号、反斜杠、换行）
+        echo "📍 [UserPromptSubmit] prompt=${#prompt} chars" >> "$LOG_FILE"
+
+        # 通知 vimo-agent（包含 prompt）
         escaped_prompt=$(echo "$prompt" | jq -Rs '.')
-        # 异步发送，不阻塞 Claude Code
-        (echo "{\"event_type\": \"$event_type\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"prompt\": $escaped_prompt, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}" | nc -w 2 -U "$socket_path") &
-        echo "✅ [$event_type] Notification sent async with prompt (${#prompt} chars)" >> "$LOG_FILE"
-        exit 0
+        extra_fields="{\"prompt\": $escaped_prompt}"
+        agent_json=$(build_agent_hook_event "UserPromptSubmit" "$extra_fields")
+        notify_vimo_agent "$agent_json"
+
+        # 通知 ETerm
+        eterm_json="{\"event_type\": \"user_prompt_submit\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"prompt\": $escaped_prompt, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}"
+        notify_eterm "$eterm_json"
         ;;
+
     "SessionEnd")
-        event_type="session_end"
+        echo "📍 [SessionEnd]" >> "$LOG_FILE"
+
+        # 通知 vimo-agent
+        agent_json=$(build_agent_hook_event "SessionEnd")
+        notify_vimo_agent "$agent_json"
+
+        # 通知 ETerm
+        eterm_json="{\"event_type\": \"session_end\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}"
+        notify_eterm "$eterm_json"
         ;;
+
     "Stop")
-        event_type="stop"
+        echo "📍 [Stop]" >> "$LOG_FILE"
+
+        # 通知 vimo-agent
+        agent_json=$(build_agent_hook_event "Stop")
+        notify_vimo_agent "$agent_json"
+
+        # 通知 ETerm
+        eterm_json="{\"event_type\": \"stop\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}"
+        notify_eterm "$eterm_json"
         ;;
+
     "PermissionRequest")
-        # 权限请求事件（主要入口）- 直接提供 tool_name + tool_input
-        echo "🔐 [PermissionRequest] raw input: $input" >> "$LOG_FILE"
         tool_name=$(echo "$input" | jq -r '.tool_name // ""')
         tool_input=$(echo "$input" | jq -c '.tool_input // {}')
         tool_use_id=$(echo "$input" | jq -r '.tool_use_id // ""')
-        echo "🔐 [PermissionRequest] extracted tool_use_id: '$tool_use_id'" >> "$LOG_FILE"
+        echo "📍 [PermissionRequest] tool=$tool_name, tool_use_id=$tool_use_id" >> "$LOG_FILE"
 
-        # JSON 转义所有字符串字段（防止路径中含引号/反斜杠导致 JSON 无效）
-        escaped_session_id=$(echo "$session_id" | jq -Rs '.')
+        # 通知 vimo-agent（包含 tool 信息）
         escaped_tool_name=$(echo "$tool_name" | jq -Rs '.')
         escaped_tool_use_id=$(echo "$tool_use_id" | jq -Rs '.')
+        extra_fields="{\"tool_name\": $escaped_tool_name, \"tool_input\": $tool_input, \"tool_use_id\": $escaped_tool_use_id}"
+        agent_json=$(build_agent_hook_event "PermissionRequest" "$extra_fields")
+        notify_vimo_agent "$agent_json"
+
+        # 通知 ETerm
+        escaped_session_id=$(echo "$session_id" | jq -Rs '.')
         escaped_transcript_path=$(echo "$transcript_path" | jq -Rs '.')
         escaped_cwd=$(echo "$cwd" | jq -Rs '.')
-
-        # 异步发送，不阻塞（不返回决策，让 Claude Code 显示正常 UI）
-        (echo "{\"event_type\": \"permission_request\", \"session_id\": $escaped_session_id, \"terminal_id\": $terminal_id, \"tool_name\": $escaped_tool_name, \"tool_input\": $tool_input, \"tool_use_id\": $escaped_tool_use_id, \"transcript_path\": $escaped_transcript_path, \"cwd\": $escaped_cwd}" | nc -w 2 -U "$socket_path") &
-        echo "✅ [permission_request] tool=$tool_name, sent async" >> "$LOG_FILE"
-        exit 0
+        eterm_json="{\"event_type\": \"permission_request\", \"session_id\": $escaped_session_id, \"terminal_id\": $terminal_id, \"tool_name\": $escaped_tool_name, \"tool_input\": $tool_input, \"tool_use_id\": $escaped_tool_use_id, \"transcript_path\": $escaped_transcript_path, \"cwd\": $escaped_cwd}"
+        notify_eterm "$eterm_json"
         ;;
+
     "Notification")
-        # 过滤掉 idle_prompt（60秒空闲提醒，不需要用户操作）
-        # 过滤掉 permission_prompt（由 PermissionRequest hook 处理，避免重复）
         notification_type=$(echo "$input" | jq -r '.notification_type // "unknown"')
+
+        # 过滤掉不需要的通知类型
         if [ "$notification_type" = "idle_prompt" ]; then
             echo "⏭️ Skipping idle_prompt (60s idle, no action needed)" >> "$LOG_FILE"
             exit 0
@@ -127,20 +213,32 @@ case "$hook_event_name" in
             exit 0
         fi
 
-        # 提取 message 字段（用于其他通知场景）
         message=$(echo "$input" | jq -r '.message // ""')
-        escaped_message=$(echo "$message" | jq -Rs '.')
+        echo "📍 [Notification] type=$notification_type" >> "$LOG_FILE"
 
-        # 异步发送，包含完整通知信息
-        (echo "{\"event_type\": \"notification\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"notification_type\": \"$notification_type\", \"message\": $escaped_message, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}" | nc -w 2 -U "$socket_path") &
-        echo "✅ [notification] type=$notification_type, sent async" >> "$LOG_FILE"
-        exit 0
+        # 通知 vimo-agent（包含通知信息）
+        escaped_notification_type=$(echo "$notification_type" | jq -Rs '.')
+        escaped_message=$(echo "$message" | jq -Rs '.')
+        extra_fields="{\"notification_type\": $escaped_notification_type, \"message\": $escaped_message}"
+        agent_json=$(build_agent_hook_event "Notification" "$extra_fields")
+        notify_vimo_agent "$agent_json"
+
+        # 通知 ETerm
+        eterm_json="{\"event_type\": \"notification\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"notification_type\": \"$notification_type\", \"message\": $escaped_message, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}"
+        notify_eterm "$eterm_json"
         ;;
+
     *)
-        event_type="unknown"
+        echo "📍 [Unknown] event=$hook_event_name" >> "$LOG_FILE"
+
+        # 通知 vimo-agent（未知事件也发送，让 agent 决定如何处理）
+        agent_json=$(build_agent_hook_event "$hook_event_name")
+        notify_vimo_agent "$agent_json"
+
+        # 通知 ETerm
+        eterm_json="{\"event_type\": \"unknown\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}"
+        notify_eterm "$eterm_json"
         ;;
 esac
 
-# 异步发送 JSON 到 ETerm Socket Server，不阻塞 Claude Code
-(echo "{\"event_type\": \"$event_type\", \"session_id\": \"$session_id\", \"terminal_id\": $terminal_id, \"transcript_path\": \"$transcript_path\", \"cwd\": \"$cwd\"}" | nc -w 2 -U "$socket_path") &
-echo "✅ [$event_type] Notification sent async" >> "$LOG_FILE"
+exit 0
