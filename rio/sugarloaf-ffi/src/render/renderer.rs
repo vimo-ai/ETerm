@@ -639,17 +639,9 @@ impl Renderer {
                     let (_, bounds) = glyph.font.measure_str(&glyph.grapheme, None);
                     let x_offset = if bounds.left < 0.0 { -bounds.left + 1.0 } else { 1.0 };
 
-                    // 计算 y 偏移：对齐不同字体的 baseline
-                    // - baseline_offset: 主字体的 baseline（= -主字体.ascent）
-                    // - glyph_baseline: 当前字体的 baseline（= -当前字体.ascent）
-                    // - y_offset: 让当前字体的 baseline 对齐到主字体的 baseline
-                    // 对于主字体字符，y_offset = 0；对于 CJK fallback 字符，y_offset 补偿 ascent 差异
-                    let (_, glyph_metrics) = glyph.font.metrics();
-                    let glyph_baseline = -glyph_metrics.ascent;
-                    let y_offset = baseline_offset - glyph_baseline;
-
-                    // RSXform: 无旋转缩放，平移时补偿 x_offset 和 y_offset
-                    xforms.push(skia_safe::RSXform::new(1.0, 0.0, skia_safe::Vector::new(glyph.x - x_offset, y_offset)));
+                    // RSXform: 无旋转缩放，平移时补偿 x_offset
+                    // y_offset = 0 因为 bitmap 中已经按 baseline_offset 定位了字形
+                    xforms.push(skia_safe::RSXform::new(1.0, 0.0, skia_safe::Vector::new(glyph.x - x_offset, 0.0)));
                     tex_rects.push(region.to_src_rect());
 
                     // 确定前景色（搜索高亮优先）
