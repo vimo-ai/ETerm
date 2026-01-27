@@ -57,9 +57,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 启动 Claude Socket Server（接收 Hook 调用）
-        ClaudeSocketServer.shared.start()
-
         // 启动 AI Socket Server（为 Shell 提供 AI 补全服务）
         startAISocketServer()
 
@@ -154,9 +151,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             await ExtensionHostManager.shared.stop()
         }
-
-        // 停止 Claude Socket Server
-        ClaudeSocketServer.shared.stop()
 
         // 停止 AI Socket Server
         AISocketServer.shared.stop()
