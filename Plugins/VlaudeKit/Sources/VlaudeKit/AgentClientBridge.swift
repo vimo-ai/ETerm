@@ -299,13 +299,14 @@ class AgentClientBridge {
 
     // MARK: - Private
 
-    /// 设置推送回调
+    /// 设置推送回调和断开连接回调
     private func setupCallback() {
         guard let handle = handle else { return }
 
         // 使用 Unmanaged 传递 self
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
+        // 设置推送回调
         agent_client_set_push_callback(handle, { eventType, dataJson, userData in
             guard let userData = userData,
                   let dataJson = dataJson else { return }
@@ -316,6 +317,27 @@ class AgentClientBridge {
 
             bridge.handleEvent(kind: eventKind, json: jsonString)
         }, selfPtr)
+
+        // 设置断开连接回调
+        agent_client_set_disconnect_callback(handle, { errorMessage, userData in
+            guard let userData = userData else { return }
+
+            let bridge = Unmanaged<AgentClientBridge>.fromOpaque(userData).takeUnretainedValue()
+            let errorString = errorMessage.map { String(cString: $0) }
+
+            bridge.handleDisconnect(errorMessage: errorString)
+        }, selfPtr)
+    }
+
+    /// 处理断开连接
+    private func handleDisconnect(errorMessage: String?) {
+        let error: Error? = errorMessage != nil ? AgentClientBridgeError.connectionFailed : nil
+
+        // 回调到主线程
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.agentClient(self, didDisconnect: error)
+        }
     }
 
     /// 处理事件
