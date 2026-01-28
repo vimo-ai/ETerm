@@ -110,6 +110,12 @@ public final class MemexService: @unchecked Sendable {
     ///
     /// 连接到 vimo-agent 订阅事件推送，当收到 NewMessages 事件时触发采集。
     private nonisolated func initAgentClient() {
+        // 先断开旧连接，避免连接泄漏
+        DispatchQueue.main.sync { [weak self] in
+            self?.agentClient?.disconnect()
+            self?.agentClient = nil
+        }
+
         do {
             // 使用 plugin bundle 的 Lib 目录作为 agent 源（用于首次部署）
             let pluginBundle = Bundle(for: MemexPlugin.self)
@@ -216,6 +222,9 @@ public final class MemexService: @unchecked Sendable {
     }
 
     /// 停止服务（同步版本，用于 app 退出时调用）
+    ///
+    /// 警告：此方法会阻塞当前线程，不要在主线程调用。
+    /// UI 交互请使用 `stopAsync()` 方法。
     public nonisolated func stop() {
         // 1. 断开 AgentClient
         agentClient?.disconnect()
@@ -224,15 +233,52 @@ public final class MemexService: @unchecked Sendable {
         // 2. 释放 SharedDbBridge Writer（必须在停止进程前释放，确保 daemon 能接管）
         releaseSharedDb()
 
-        // 3. 停止自己管理的进程
-        if let process = self.process, process.isRunning {
-            process.terminate()
-            process.waitUntilExit()
-            self.process = nil
-        }
+        // 3. 停止自己管理的进程（带超时）
+        stopProcessWithTimeout()
 
         // 4. 杀掉端口上的 memex 进程（可能是外部启动的或上次未正确关闭的）
         killMemexOnPort()
+    }
+
+    /// 停止服务（异步版本，用于 UI 交互）
+    ///
+    /// 在后台线程执行阻塞操作，不会阻塞主线程。
+    public func stopAsync() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                self?.stop()
+                continuation.resume()
+            }
+        }
+    }
+
+    /// 停止进程（带超时保护）
+    private nonisolated func stopProcessWithTimeout() {
+        guard let process = self.process, process.isRunning else {
+            self.process = nil
+            return
+        }
+
+        // 先发送 SIGTERM
+        process.terminate()
+
+        // 在后台线程等待，主线程设置超时
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            process.waitUntilExit()
+            semaphore.signal()
+        }
+
+        // 最多等待 3 秒
+        let result = semaphore.wait(timeout: .now() + 3.0)
+        if result == .timedOut {
+            // 超时，强制杀死
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+
+        self.process = nil
     }
 
     /// 释放 SharedDbBridge（deinit 会自动关闭连接）
@@ -240,7 +286,7 @@ public final class MemexService: @unchecked Sendable {
         sharedDb = nil
     }
 
-    /// 杀掉端口上的 memex 进程
+    /// 杀掉端口上的 memex 进程（带超时保护）
     private nonisolated func killMemexOnPort() {
         let lsof = Process()
         lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
@@ -251,10 +297,35 @@ public final class MemexService: @unchecked Sendable {
 
         do {
             try lsof.run()
-            lsof.waitUntilExit()
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            // 带超时的等待
+            let semaphore = DispatchSemaphore(value: 0)
+            DispatchQueue.global(qos: .utility).async {
+                lsof.waitUntilExit()
+                semaphore.signal()
+            }
+
+            // 最多等待 2 秒
+            let result = semaphore.wait(timeout: .now() + 2.0)
+            if result == .timedOut {
+                if lsof.isRunning {
+                    lsof.terminate()
+                }
+                return
+            }
+
+            // 带超时读取 pipe（避免死锁）
+            var outputData: Data?
+            let readSemaphore = DispatchSemaphore(value: 0)
+            DispatchQueue.global(qos: .utility).async {
+                outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+                readSemaphore.signal()
+            }
+
+            // 最多等待 1 秒读取
+            guard readSemaphore.wait(timeout: .now() + 1.0) == .success,
+                  let data = outputData,
+                  let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !output.isEmpty else { return }
 
             // 可能有多个 PID（一行一个）
