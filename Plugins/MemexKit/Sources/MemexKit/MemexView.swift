@@ -264,7 +264,7 @@ final class MemexViewModel: ObservableObject {
     }
 
     func stopService() async {
-        MemexService.shared.stop()
+        await MemexService.shared.stopAsync()
         await refresh()
     }
 
