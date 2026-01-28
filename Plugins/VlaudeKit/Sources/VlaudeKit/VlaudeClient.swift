@@ -743,6 +743,10 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             if let encoded = session.encodedDirName { dict["encodedDirName"] = encoded }
             if let modified = session.lastModified { dict["lastModified"] = modified }
             if let count = session.messageCount { dict["messageCount"] = count }
+            // V5: 预览字段
+            if let type = session.lastMessageType { dict["lastMessageType"] = type }
+            if let preview = session.lastMessagePreview { dict["lastMessagePreview"] = preview }
+            if let ts = session.lastMessageAt { dict["lastMessageTimestamp"] = ts }
             return dict
         }
 
@@ -835,8 +839,9 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     ///   - sessionId: 会话 ID
     ///   - message: 消息
     ///   - contentBlocks: 结构化内容块（可选）
+    ///   - preview: 消息预览文本（可选，用于列表页显示）
     ///   - clientMessageId: 客户端消息 ID（用于去重，可选）
-    func pushMessage(sessionId: String, message: RawMessage, contentBlocks: [ContentBlock]? = nil, clientMessageId: String? = nil) {
+    func pushMessage(sessionId: String, message: RawMessage, contentBlocks: [ContentBlock]? = nil, preview: String? = nil, clientMessageId: String? = nil) {
         guard isConnected else { return }
 
         // 转换消息格式
@@ -855,6 +860,11 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         // 添加 clientMessageId（用于 iOS 乐观更新去重）
         if let clientMsgId = clientMessageId {
             msgDict["clientMessageId"] = clientMsgId
+        }
+
+        // 添加消息预览（用于列表页实时更新）
+        if let previewText = preview {
+            msgDict["preview"] = previewText
         }
 
         // 添加结构化内容块

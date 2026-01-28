@@ -727,8 +727,14 @@ extension VlaudePlugin {
                 clientMsgId = pendingClientMessageIds.removeValue(forKey: sessionId)
             }
 
+            // 生成预览文本（用于列表页实时更新）
+            let preview = ContentBlockParser.generatePreview(
+                content: message.content,
+                messageType: message.messageType
+            )
+
             // ContentBlock 由 iOS 按需解析（懒加载），不在这里解析
-            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: nil, clientMessageId: clientMsgId)
+            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: nil, preview: preview, clientMessageId: clientMsgId)
         }
     }
 
