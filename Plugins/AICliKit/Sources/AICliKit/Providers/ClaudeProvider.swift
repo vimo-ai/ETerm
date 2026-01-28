@@ -32,6 +32,10 @@ public final class ClaudeProvider: AICliProvider, AgentClientDelegate {
     public func start(config: AICliProviderConfig) {
         self.config = config
 
+        // 先断开旧连接，避免连接泄漏
+        agentClient?.disconnect()
+        agentClient = nil
+
         // 在后台线程执行连接，避免阻塞主线程
         let pluginBundle = Bundle(for: Self.self)
         Task.detached(priority: .utility) { [weak self] in

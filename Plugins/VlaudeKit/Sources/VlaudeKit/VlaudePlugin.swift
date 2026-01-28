@@ -140,6 +140,12 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     /// 初始化 AgentClient（在后台线程调用，内部回到主线程设置状态）
     private nonisolated func initializeAgentClient() {
+        // 先断开旧连接，避免连接泄漏
+        DispatchQueue.main.sync { [weak self] in
+            self?.agentClient?.disconnect()
+            self?.agentClient = nil
+        }
+
         do {
             // 使用 plugin bundle 的 Lib 目录作为 agent 源（用于首次部署）
             let pluginBundle = Bundle(for: VlaudePlugin.self)
