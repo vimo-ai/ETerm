@@ -186,6 +186,7 @@ public final class MemexService: @unchecked Sendable {
         var env = ProcessInfo.processInfo.environment
         env["PORT"] = String(port)
         env["RUST_LOG"] = "memex=info"
+        env["ETERM_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         // MEMEX_DATA_DIR 不设置，使用默认值 ~/.vimo/db
         // 确保 PATH 包含 homebrew 和常用工具路径（归档需要 xz 等外部命令）
         let extraPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
@@ -277,8 +278,10 @@ public final class MemexService: @unchecked Sendable {
     // MARK: - Binary Discovery
 
     /// 查找 memex 二进制
+    ///
+    /// memex 是全局工具，安装在 ~/.vimo/bin/（与 vimo-agent 同级）
     private func findBinary() -> String? {
-        let bin = ETermPaths.root + "/bin/memex"
+        let bin = ETermPaths.vimoRoot + "/bin/memex"
         return FileManager.default.isExecutableFile(atPath: bin) ? bin : nil
     }
 

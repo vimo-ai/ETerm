@@ -48,6 +48,9 @@ struct FfiSessionInfo: Codable {
     let encodedDirName: String?
     let createdAt: Int64  // 毫秒时间戳
     let updatedAt: Int64  // 毫秒时间戳
+    // V5: 预览字段（数据库路径暂不支持，预留）
+    let lastMessageType: String?
+    let lastMessagePreview: String?
 
     /// Convert to legacy SessionMeta format (for VlaudeClient compatibility)
     func toSessionMeta() -> SessionMeta {
@@ -61,7 +64,10 @@ struct FfiSessionInfo: Codable {
             encodedDirName: encodedDirName,
             sessionPath: nil,     // Not available in SharedDb
             lastModified: lastModified,
-            messageCount: messageCount
+            messageCount: messageCount,
+            lastMessageType: lastMessageType,
+            lastMessagePreview: lastMessagePreview,
+            lastMessageAt: lastMessageAt
         )
     }
 }

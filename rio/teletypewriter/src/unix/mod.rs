@@ -426,6 +426,7 @@ pub fn create_pty_with_spawn(
     working_directory: &Option<String>,
     columns: u16,
     rows: u16,
+    terminal_id: u32,
 ) -> Result<Pty, Error> {
     #[cfg(not(any(target_os = "macos", target_os = "freebsd")))]
     let mut is_controling_terminal = true;
@@ -578,6 +579,12 @@ pub fn create_pty_with_spawn(
     // Set ETERM_SHELL_INTEGRATION to enable shell enhancements
     builder.env("ETERM_SHELL_INTEGRATION", "1");
     builder.env("TERM_PROGRAM", "ETerm");
+
+    // Set terminal-specific environment variables
+    // These are set per-process to avoid race conditions when creating multiple terminals
+    let terminal_id_str = terminal_id.to_string();
+    builder.env("ETERM_TERMINAL_ID", &terminal_id_str); // For Claude Hook calls
+    builder.env("ETERM_SESSION_ID", &terminal_id_str);  // For AI auto-completion
 
     // Set ZDOTDIR to load ETerm's zsh integration
     // This hijacks zsh config loading: ETerm's .zshrc loads user's .zshrc then our integration

@@ -38,6 +38,12 @@ struct SessionMeta: Codable {
     let sessionPath: String?
     let lastModified: Int64?
     let messageCount: Int64?
+    /// 最后一条消息类型 ("user" / "assistant")
+    let lastMessageType: String?
+    /// 最后一条消息预览（纯文本，100 字符）
+    let lastMessagePreview: String?
+    /// 最后一条消息时间戳（毫秒）
+    let lastMessageAt: Int64?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -47,6 +53,9 @@ struct SessionMeta: Codable {
         case sessionPath = "session_path"
         case lastModified = "last_modified"
         case messageCount = "message_count"
+        case lastMessageType = "last_message_type"
+        case lastMessagePreview = "last_message_preview"
+        case lastMessageAt = "last_message_at"
     }
 }
 
@@ -262,7 +271,10 @@ final class SessionReader {
                     encodedDirName: s.encoded_dir_name != nil ? String(cString: s.encoded_dir_name) : nil,
                     sessionPath: s.session_path != nil ? String(cString: s.session_path) : nil,
                     lastModified: s.file_mtime >= 0 ? s.file_mtime : nil,
-                    messageCount: s.message_count >= 0 ? s.message_count : nil
+                    messageCount: s.message_count >= 0 ? s.message_count : nil,
+                    lastMessageType: s.last_message_type != nil ? String(cString: s.last_message_type) : nil,
+                    lastMessagePreview: s.last_message_preview != nil ? String(cString: s.last_message_preview) : nil,
+                    lastMessageAt: s.last_message_at >= 0 ? s.last_message_at : nil
                 ))
             }
         }
@@ -304,7 +316,10 @@ final class SessionReader {
             encodedDirName: s.encoded_dir_name != nil ? String(cString: s.encoded_dir_name) : nil,
             sessionPath: s.session_path != nil ? String(cString: s.session_path) : nil,
             lastModified: s.file_mtime >= 0 ? s.file_mtime : nil,
-            messageCount: s.message_count >= 0 ? s.message_count : nil
+            messageCount: s.message_count >= 0 ? s.message_count : nil,
+            lastMessageType: s.last_message_type != nil ? String(cString: s.last_message_type) : nil,
+            lastMessagePreview: s.last_message_preview != nil ? String(cString: s.last_message_preview) : nil,
+            lastMessageAt: s.last_message_at >= 0 ? s.last_message_at : nil
         )
     }
 

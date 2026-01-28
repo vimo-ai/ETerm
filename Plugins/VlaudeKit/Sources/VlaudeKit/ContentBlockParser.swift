@@ -488,3 +488,117 @@ public extension ContentBlockParser {
         return results
     }
 }
+
+// MARK: - Preview Generator
+
+public extension ContentBlockParser {
+
+    /// 从 RawMessage 生成预览文本（用于列表页显示）
+    /// - Parameters:
+    ///   - content: 消息内容（字符串或 JSON）
+    ///   - messageType: 消息类型（0 = user, 1 = assistant）
+    /// - Returns: 预览文本（最多 100 字符）
+    static func generatePreview(content: String, messageType: Int) -> String {
+        if messageType == 0 {
+            // User 消息：直接截断文本
+            return truncateChars(content, maxChars: 100)
+        }
+
+        // Assistant 消息：解析 content 数组生成摘要
+        return generateAssistantPreview(content)
+    }
+
+    /// 从 content 数组生成 assistant 消息预览
+    private static func generateAssistantPreview(_ content: String) -> String {
+        // 尝试解析为 JSON
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) else {
+            // 非 JSON，直接截断
+            return truncateChars(content, maxChars: 100)
+        }
+
+        // 如果是纯字符串
+        if let text = json as? String {
+            return truncateChars(text, maxChars: 100)
+        }
+
+        // 如果是数组（content blocks）
+        guard let blocks = json as? [[String: Any]] else {
+            return truncateChars(content, maxChars: 100)
+        }
+
+        var textParts: [String] = []
+        var toolUses: [String] = []
+        var hasThinking = false
+
+        for block in blocks {
+            guard let type = block["type"] as? String else { continue }
+
+            switch type {
+            case "text":
+                if let text = block["text"] as? String, !text.isEmpty {
+                    textParts.append(text)
+                }
+            case "tool_use":
+                if let name = block["name"] as? String {
+                    let input = block["input"] as? [String: Any] ?? [:]
+                    toolUses.append(formatToolUse(name: name, input: input))
+                }
+            case "thinking":
+                hasThinking = true
+            default:
+                break
+            }
+        }
+
+        // 优先级：text > tool_use > thinking
+        if !textParts.isEmpty {
+            return truncateChars(textParts.joined(separator: " "), maxChars: 100)
+        }
+
+        if !toolUses.isEmpty {
+            return toolUses.first ?? ""
+        }
+
+        if hasThinking {
+            return "💭 思考中..."
+        }
+
+        return "（空消息）"
+    }
+
+    /// 格式化 tool_use 预览
+    private static func formatToolUse(name: String, input: [String: Any]) -> String {
+        let param: String
+        switch name {
+        case "Bash":
+            param = (input["command"] as? String).map { truncateChars($0, maxChars: 30) } ?? ""
+        case "Read":
+            param = (input["file_path"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        case "Write":
+            param = (input["file_path"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        case "Edit":
+            param = (input["file_path"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        case "Glob":
+            param = (input["pattern"] as? String) ?? ""
+        case "Grep":
+            param = (input["pattern"] as? String) ?? ""
+        default:
+            param = ""
+        }
+
+        if param.isEmpty {
+            return "🔧 \(name)"
+        }
+        return "🔧 \(name): \(param)"
+    }
+
+    /// Unicode 安全截断（避免多字节字符被截断）
+    private static func truncateChars(_ text: String, maxChars: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= maxChars {
+            return trimmed
+        }
+        return String(trimmed.prefix(maxChars))
+    }
+}
