@@ -1186,3 +1186,114 @@ pub extern "C" fn terminal_pool_free_string_array(
         let _ = Vec::from_raw_parts(lines, count, count);
     }
 }
+
+// =============================================================================
+// LogBuffer FFI (可选功能，仅当 log_buffer_size > 0 时可用)
+// =============================================================================
+
+/// 查询终端的日志缓冲
+///
+/// 仅当 `log_buffer_size > 0` 时可用。
+/// 返回 JSON 格式的日志查询结果，包含 lines、next_seq、has_more、truncated。
+///
+/// # 参数
+/// - `handle`: TerminalPool 句柄
+/// - `terminal_id`: 终端 ID
+/// - `since`: 返回 seq > since 的日志（0 表示全部）
+/// - `limit`: 最多返回的行数
+/// - `search`: 可选的搜索过滤（NULL 表示不过滤）
+///
+/// # 返回
+/// JSON 字符串，需要调用者使用 `rio_free_string` 释放。
+/// 如果 LogBuffer 未启用或终端不存在，返回 NULL。
+#[no_mangle]
+pub extern "C" fn terminal_pool_query_log(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    since: u64,
+    limit: usize,
+    search: *const std::ffi::c_char,
+) -> *mut std::ffi::c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    // 解析 search 参数
+    let search_str = if search.is_null() {
+        None
+    } else {
+        let c_str = unsafe { std::ffi::CStr::from_ptr(search) };
+        c_str.to_str().ok()
+    };
+
+    // since = 0 表示返回全部
+    let since_opt = if since == 0 { None } else { Some(since) };
+
+    if let Some(json) = pool.query_log(terminal_id, since_opt, limit, search_str) {
+        match std::ffi::CString::new(json) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// 获取终端日志的最后 N 行
+///
+/// 仅当 `log_buffer_size > 0` 时可用。
+///
+/// # 参数
+/// - `handle`: TerminalPool 句柄
+/// - `terminal_id`: 终端 ID
+/// - `count`: 返回的行数
+///
+/// # 返回
+/// JSON 数组字符串，需要调用者使用 `rio_free_string` 释放。
+/// 如果 LogBuffer 未启用或终端不存在，返回 NULL。
+#[no_mangle]
+pub extern "C" fn terminal_pool_tail_log(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    count: usize,
+) -> *mut std::ffi::c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+
+    if let Some(json) = pool.tail_log(terminal_id, count) {
+        match std::ffi::CString::new(json) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// 清空终端的日志缓冲
+///
+/// 仅当 `log_buffer_size > 0` 时可用。
+///
+/// # 参数
+/// - `handle`: TerminalPool 句柄
+/// - `terminal_id`: 终端 ID
+///
+/// # 返回
+/// true 如果成功清空，false 如果 LogBuffer 未启用或终端不存在
+#[no_mangle]
+pub extern "C" fn terminal_pool_clear_log(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+    pool.clear_log(terminal_id)
+}

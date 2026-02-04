@@ -133,7 +133,8 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
             display_handle: displayHandle,
             window_width: width,
             window_height: height,
-            history_size: 10000
+            history_size: 10000,
+            log_buffer_size: 0  // ETerm 不需要日志捕获
         )
 
         handle = terminal_pool_create(config)

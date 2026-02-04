@@ -32,6 +32,12 @@ pub struct AppConfig {
 
     // ===== 历史行数 =====
     pub history_size: u32,
+
+    // ===== 日志缓冲 (可选功能) =====
+    /// 日志缓冲区大小（行数）
+    /// - 0 = 禁用（默认，ETerm 使用）
+    /// - >0 = 启用并设置最大行数（dev-runner 使用）
+    pub log_buffer_size: u32,
 }
 
 /// 字体度量信息

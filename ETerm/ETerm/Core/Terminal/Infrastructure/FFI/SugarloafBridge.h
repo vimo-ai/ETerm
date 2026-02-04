@@ -40,6 +40,10 @@ typedef struct {
     float window_width;
     float window_height;
     uint32_t history_size;
+    /// Log buffer size (number of lines to retain)
+    /// - 0 = disabled (default, for ETerm)
+    /// - >0 = enabled (for dev-runner log capture)
+    uint32_t log_buffer_size;
 } TerminalPoolConfig;
 
 /// Terminal event types
@@ -1070,6 +1074,59 @@ int64_t terminal_pool_get_scrollback_lines(
 void terminal_pool_free_string_array(
     const char** lines,
     size_t count
+);
+
+// =============================================================================
+// LogBuffer API (Optional, only available when log_buffer_size > 0)
+// =============================================================================
+
+/// Query terminal log buffer
+///
+/// Only available when `log_buffer_size > 0` was set during pool creation.
+/// Returns JSON string with log query result containing:
+/// - lines: array of {seq, text} objects
+/// - next_seq: next sequence number for pagination
+/// - has_more: whether more lines exist
+/// - truncated: whether old logs were discarded
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param since Return lines with seq > since (0 for all)
+/// @param limit Maximum number of lines to return
+/// @param search Optional case-insensitive search filter (NULL for no filter)
+/// @return JSON string on success (must be freed with rio_free_string), NULL if disabled or error
+char* terminal_pool_query_log(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    uint64_t since,
+    size_t limit,
+    const char* search
+);
+
+/// Get last N lines from terminal log buffer
+///
+/// Only available when `log_buffer_size > 0` was set during pool creation.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @param count Number of lines to return
+/// @return JSON array string on success (must be freed with rio_free_string), NULL if disabled or error
+char* terminal_pool_tail_log(
+    TerminalPoolHandle handle,
+    size_t terminal_id,
+    size_t count
+);
+
+/// Clear terminal log buffer
+///
+/// Only available when `log_buffer_size > 0` was set during pool creation.
+///
+/// @param handle TerminalPool handle
+/// @param terminal_id Terminal ID
+/// @return true on success, false if disabled or terminal not found
+bool terminal_pool_clear_log(
+    TerminalPoolHandle handle,
+    size_t terminal_id
 );
 
 #endif /* SugarloafBridge_h */

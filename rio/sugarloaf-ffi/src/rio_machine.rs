@@ -18,6 +18,8 @@ use corcovado::{Events, PollOpt, Ready};
 use rio_backend::crosswords::Crosswords;
 use rio_backend::event::Msg;
 use rio_backend::performer::handler::Processor;
+
+use crate::infra::SharedLogBuffer;
 use teletypewriter::EventedPty;
 
 use crate::rio_event::{FFIEventListener, RioEvent};
@@ -158,6 +160,8 @@ pub struct Machine<T: EventedPty> {
     pty_fd: i32,
     #[allow(dead_code)] // Debug fields
     shell_pid: u32,
+    /// 日志缓冲（可选，来自 Terminal）
+    log_buffer: SharedLogBuffer,
 }
 
 impl<T> Machine<T>
@@ -172,6 +176,18 @@ where
         route_id: usize,
         pty_fd: i32,
         shell_pid: u32,
+    ) -> Result<Machine<T>, Box<dyn std::error::Error>> {
+        Self::new_with_log_buffer(terminal, pty, event_listener, route_id, pty_fd, shell_pid, None)
+    }
+
+    pub fn new_with_log_buffer(
+        terminal: Arc<parking_lot::RwLock<Crosswords<FFIEventListener>>>,
+        pty: T,
+        event_listener: FFIEventListener,
+        route_id: usize,
+        pty_fd: i32,
+        shell_pid: u32,
+        log_buffer: SharedLogBuffer,
     ) -> Result<Machine<T>, Box<dyn std::error::Error>> {
         let (sender, receiver) = channel::channel();
         let poll = corcovado::Poll::new()?;
@@ -188,6 +204,7 @@ where
             last_process_state: None,
             pty_fd,
             shell_pid,
+            log_buffer,
         })
     }
 
@@ -310,6 +327,11 @@ where
                     terminal.insert(lock_acquired)
                 }
             };
+
+            // 写入日志缓冲区（如果启用）
+            if let Some(ref log_buffer) = self.log_buffer {
+                log_buffer.append(&buf[..unprocessed]);
+            }
 
             // 照抄 Rio: Parse the incoming bytes.
             let parse_start = std::time::Instant::now();

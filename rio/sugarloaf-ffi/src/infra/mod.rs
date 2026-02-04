@@ -5,11 +5,13 @@
 //! 模块：
 //! - spsc_queue: 无锁单生产者单消费者队列
 //! - atomic_cache: 原子缓存（光标位置、脏标记等）
+//! - log_buffer: 终端输出日志缓冲（可选功能）
 //! - stress_tests: 压力测试（仅测试构建）
 
 pub mod spsc_queue;
 pub mod atomic_cache;
 pub mod selection_overlay;
+pub mod log_buffer;
 
 #[cfg(test)]
 mod stress_tests;
@@ -26,3 +28,4 @@ pub use atomic_cache::{
     AtomicScrollCache,
 };
 pub use selection_overlay::{SelectionOverlay, SelectionSnapshot, SelectionType};
+pub use log_buffer::{LogBuffer, LogLine, LogQueryResult, SharedLogBuffer};
