@@ -263,6 +263,8 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
     /// 处理来自任意 Provider 的事件
     public func handleEvent(_ event: AICliEvent) {
         let terminalId = event.terminalId
+        let hostAlive = host != nil
+        logInfo("[AICliSocket] handleEvent: \(event.type) tid=\(terminalId) sid=\(event.sessionId.prefix(8)) host=\(hostAlive)")
 
         // 更新 session 映射
         sessionMapLock.lock()
@@ -542,7 +544,11 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
             decoration = .completed(pluginId: Self.id)
         }
 
-        host?.setTabDecoration(terminalId: terminalId, decoration: decoration)
+        if host != nil {
+            host?.setTabDecoration(terminalId: terminalId, decoration: decoration)
+        } else {
+            logWarn("[AICliSocket] host is nil! Cannot set decoration \(topState) for tid=\(terminalId)")
+        }
     }
 
     private func isTerminalActive(_ terminalId: Int) -> Bool {

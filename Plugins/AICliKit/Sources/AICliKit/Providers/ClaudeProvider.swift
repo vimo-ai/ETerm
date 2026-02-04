@@ -34,9 +34,18 @@ public final class ClaudeProvider: AICliProvider {
 
         socketServer = ClaudeSocketServer()
         socketServer?.onEvent = { [weak self] rawEvent in
-            guard let self = self else { return }
+            guard let self = self else {
+                logWarn("[AICliSocket] ClaudeProvider deallocated, dropping event: \(rawEvent.event_type ?? "nil")")
+                return
+            }
             if let event = self.mapEvent(rawEvent) {
-                self.onEvent?(event)
+                if self.onEvent != nil {
+                    self.onEvent?(event)
+                } else {
+                    logWarn("[AICliSocket] ClaudeProvider.onEvent is nil, dropping: \(event.type) tid=\(event.terminalId)")
+                }
+            } else {
+                logWarn("[AICliSocket] mapEvent returned nil for: \(rawEvent.event_type ?? "nil")")
             }
         }
 
@@ -333,11 +342,19 @@ final class ClaudeSocketServer {
 
             // 在主线程处理事件
             DispatchQueue.main.async { [weak self] in
-                self?.onEvent?(event)
+                if let self = self {
+                    if self.onEvent != nil {
+                        self.onEvent?(event)
+                    } else {
+                        logWarn("[AICliSocket] SocketServer.onEvent is nil, dropping: \(event.event_type ?? "nil") sid=\(event.session_id)")
+                    }
+                } else {
+                    logWarn("[AICliSocket] SocketServer deallocated, dropping: \(event.event_type ?? "nil")")
+                }
             }
 
         } catch {
-            // 解析失败，静默处理
+            logWarn("[AICliSocket] JSON decode failed: \(error), bytes=\(bytesRead)")
         }
     }
 }

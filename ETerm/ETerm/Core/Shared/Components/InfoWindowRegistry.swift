@@ -16,7 +16,7 @@ struct InfoContent: Identifiable {
 }
 
 /// 信息窗口注册表 - 单例模式
-final class InfoWindowRegistry: ObservableObject {
+final class InfoWindowRegistry: NSObject, ObservableObject, NSWindowDelegate {
 
     // MARK: - Singleton
 
@@ -40,7 +40,8 @@ final class InfoWindowRegistry: ObservableObject {
 
     // MARK: - Initialization
 
-    private init() {
+    private override init() {
+        super.init()
         setupObservers()
         setupNotificationObservers()
     }
@@ -139,8 +140,16 @@ final class InfoWindowRegistry: ObservableObject {
     private func showWindow() {
         if infoWindow == nil {
             infoWindow = InfoWindow(registry: self)
+            infoWindow?.delegate = self
         }
         infoWindow?.orderFront(nil)
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowWillClose(_ notification: Notification) {
+        // 窗口关闭时清空可见内容列表
+        visibleContentIds.removeAll()
     }
 
     private func closeWindow() {

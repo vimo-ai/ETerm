@@ -185,7 +185,7 @@ case "$hook_event_name" in
         tool_use_id=$(echo "$input" | jq -r '.tool_use_id // ""')
         echo "📍 [PermissionRequest] tool=$tool_name, tool_use_id=$tool_use_id" >> "$LOG_FILE"
 
-        # 通知 vimo-agent（包含 tool 信息）
+        # 通知 vimo-agent（包含 tool 信息，用于 VlaudeKit 远程审批）
         escaped_tool_name=$(echo "$tool_name" | jq -Rs '.')
         escaped_tool_use_id=$(echo "$tool_use_id" | jq -Rs '.')
         extra_fields="{\"tool_name\": $escaped_tool_name, \"tool_input\": $tool_input, \"tool_use_id\": $escaped_tool_use_id}"

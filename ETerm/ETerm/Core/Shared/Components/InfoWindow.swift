@@ -140,12 +140,6 @@ final class InfoWindow: NSWindow {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
-
-    // 关闭时只隐藏窗口，不清空内容列表
-    // 内容由插件通过 hideContent() 管理
-    override func close() {
-        super.close()
-    }
 }
 
 // MARK: - InfoWindow Content View
