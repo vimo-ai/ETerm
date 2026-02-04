@@ -33,6 +33,8 @@ use crate::domain::primitives::AbsolutePoint;
 
 use crate::rio_event::{EventQueue, FFIEventListener};
 
+use crate::infra::{LogBuffer, SharedLogBuffer};
+
 /// Terminal ID
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -155,6 +157,11 @@ pub struct Terminal {
 
     /// 缓存的 GridData（COW 优化：增量更新时复用未变化的行）
     cached_grid_data: Option<Arc<GridData>>,
+
+    /// 日志缓冲区（可选功能）
+    /// - None: 禁用（ETerm 默认）
+    /// - Some: 启用（dev-runner 使用）
+    log_buffer: SharedLogBuffer,
 }
 
 /// 事件监听器类型
@@ -231,6 +238,7 @@ impl Terminal {
             hyperlink_hover: None,
             mode: TerminalMode::Active,
             cached_grid_data: None,
+            log_buffer: None, // 测试模式不需要日志缓冲
         }
     }
 
@@ -241,11 +249,13 @@ impl Terminal {
     /// - `cols`: 列数
     /// - `rows`: 行数
     /// - `event_queue`: 事件队列（用于接收终端事件）
+    /// - `log_buffer_size`: 日志缓冲区大小（0 = 禁用）
     pub fn new_with_pty(
         id: TerminalId,
         cols: usize,
         rows: usize,
         event_queue: EventQueue,
+        log_buffer_size: u32,
     ) -> Self {
         // 创建 FFIEventListener
         let event_listener = FFIEventListener::new(event_queue.clone(), id.0);
@@ -271,6 +281,13 @@ impl Terminal {
         // 创建 ANSI 解析器
         let parser = Processor::new();
 
+        // 创建日志缓冲区（可选）
+        let log_buffer = if log_buffer_size > 0 {
+            Some(Arc::new(LogBuffer::new(log_buffer_size as usize)))
+        } else {
+            None
+        };
+
         Self {
             id,
             crosswords_ffi: Some(Arc::new(RwLock::new(crosswords))),
@@ -283,6 +300,7 @@ impl Terminal {
             hyperlink_hover: None,
             mode: TerminalMode::Active,
             cached_grid_data: None,
+            log_buffer,
         }
     }
 
@@ -346,7 +364,11 @@ impl Terminal {
     /// 2. Processor 调用 Crosswords (Handler trait) 更新内部 Grid 状态
     /// 3. 可能产生事件（通过 EventListener）
     /// 4. 标记所有行为 dirty（简单实现，未来可优化为只标记受影响的行）
+    /// 5. 如果启用了日志缓冲，同时写入 LogBuffer
     pub fn write(&mut self, data: &[u8]) {
+        // 注意：LogBuffer 由 Machine::pty_read 写入（在 PTY I/O 线程中）
+        // 此处不再重复写入，避免数据重复
+
         // eprintln!("✍️ [Terminal::write] Writing {} bytes: {:?}", data.len(), String::from_utf8_lossy(data));
         if let Some(ref crosswords_ffi) = self.crosswords_ffi {
             // eprintln!("   Using FFI crosswords");
@@ -368,6 +390,11 @@ impl Terminal {
                 // Machine 会调用 Crosswords 的 Handler trait 方法，这些方法内部已经自动标记 damage
             } // 释放 crosswords 的锁
         }
+    }
+
+    /// 获取日志缓冲区（如果启用）
+    pub fn log_buffer(&self) -> &SharedLogBuffer {
+        &self.log_buffer
     }
 
     /// 调整终端大小
