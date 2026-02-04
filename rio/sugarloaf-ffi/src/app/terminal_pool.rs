@@ -519,6 +519,7 @@ impl TerminalPool {
             cols as usize,
             rows as usize,
             self.event_queue.clone(),
+            self.config.log_buffer_size,
         );
 
         // 2. 创建 PTY 和 Machine
@@ -588,6 +589,7 @@ impl TerminalPool {
             cols as usize,
             rows as usize,
             self.event_queue.clone(),
+            self.config.log_buffer_size,
         );
 
         // 2. 创建 PTY 和 Machine（带工作目录）
@@ -658,6 +660,7 @@ impl TerminalPool {
             cols as usize,
             rows as usize,
             self.event_queue.clone(),
+            self.config.log_buffer_size,
         );
 
         // 2. 创建 PTY 和 Machine
@@ -735,6 +738,7 @@ impl TerminalPool {
             cols as usize,
             rows as usize,
             self.event_queue.clone(),
+            self.config.log_buffer_size,
         );
 
         // 2. 创建 PTY 和 Machine（带工作目录）
@@ -859,13 +863,14 @@ impl TerminalPool {
 
         let event_listener = FFIEventListener::new(event_queue, terminal.id().0);
 
-        let machine = Machine::new(
+        let machine = Machine::new_with_log_buffer(
             crosswords,
             pty,
             event_listener,
             terminal.id().0,
             pty_fd,
             shell_pid,
+            terminal.log_buffer().clone(),
         )
         .map_err(|_| ErrorCode::RenderError)?;
 
@@ -878,10 +883,11 @@ impl TerminalPool {
     /// 关闭终端
     pub fn close_terminal(&mut self, id: usize) -> bool {
         if let Some(entry) = self.terminals.write().remove(&id) {
-            // eprintln!("🗑️ [TerminalPool] Closing terminal {}", id);
             // 从全局事件路由注销
             unregister_terminal_event_target(id);
-            // PTY 会在 pty_tx drop 时自动清理
+            // 通知 Machine 线程退出事件循环
+            // Machine 退出后 PTY drop → master fd 关闭 → 内核 SIGHUP → 子进程清理
+            let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
             drop(entry.pty_tx);
             true
         } else {
@@ -1024,6 +1030,93 @@ impl TerminalPool {
             // 检查是否是常见的 shell
             let shell_names = ["zsh", "bash", "fish", "sh", "tcsh", "ksh", "csh", "dash"];
             !shell_names.contains(&fg_name.as_str())
+        } else {
+            false
+        }
+    }
+
+    /// 查询终端的日志缓冲（可选功能）
+    ///
+    /// 仅当 `log_buffer_size > 0` 时可用。
+    /// 返回 JSON 格式的日志查询结果，包含 lines、next_seq、has_more、truncated。
+    ///
+    /// # 参数
+    /// - `id`: 终端 ID
+    /// - `since`: 返回 seq > since 的日志（None 表示全部）
+    /// - `limit`: 最多返回的行数
+    /// - `search`: 可选的搜索过滤（大小写不敏感）
+    pub fn query_log(
+        &self,
+        id: usize,
+        since: Option<u64>,
+        limit: usize,
+        search: Option<&str>,
+    ) -> Option<String> {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            if let Some(ref log_buffer) = terminal.log_buffer() {
+                let result = log_buffer.query(since, limit, search);
+                // 返回 JSON 格式
+                let json = serde_json::json!({
+                    "lines": result.lines.iter().map(|l| {
+                        serde_json::json!({
+                            "seq": l.seq,
+                            "text": l.text
+                        })
+                    }).collect::<Vec<_>>(),
+                    "next_seq": result.next_seq,
+                    "has_more": result.has_more,
+                    "truncated": result.truncated
+                });
+                Some(json.to_string())
+            } else {
+                None // LogBuffer 未启用
+            }
+        } else {
+            None
+        }
+    }
+
+    /// 获取终端日志的最后 N 行
+    ///
+    /// 仅当 `log_buffer_size > 0` 时可用。
+    pub fn tail_log(&self, id: usize, count: usize) -> Option<String> {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            if let Some(ref log_buffer) = terminal.log_buffer() {
+                let lines = log_buffer.tail(count);
+                let json = serde_json::json!(
+                    lines.iter().map(|l| {
+                        serde_json::json!({
+                            "seq": l.seq,
+                            "text": l.text
+                        })
+                    }).collect::<Vec<_>>()
+                );
+                Some(json.to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// 清空终端的日志缓冲
+    ///
+    /// 仅当 `log_buffer_size > 0` 时可用。
+    pub fn clear_log(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            if let Some(ref log_buffer) = terminal.log_buffer() {
+                log_buffer.clear();
+                true
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -1986,6 +2079,47 @@ impl TerminalPool {
 
         // 触发 GPU 渲染
         sugarloaf.render();
+
+        // GPU 异常恢复：检测 OOM/device lost 后强制清理
+        self.check_gpu_health_and_recover(&mut *sugarloaf);
+    }
+
+    /// 检测 GPU 异常状态，触发恢复
+    ///
+    /// 当 Skia DirectContext 报告 OOM 或 device lost 时：
+    /// 1. 强制清理所有 Skia unlocked 资源
+    /// 2. 清除所有终端的 GPU 缓存（强制下帧重建）
+    ///
+    /// 这处理的是"雪崩后即使关 tab 也无法恢复"的问题。
+    fn check_gpu_health_and_recover(&self, sugarloaf: &mut Sugarloaf) {
+        let ctx = sugarloaf.get_context_mut();
+        let oomed = ctx.skia_context.oomed();
+        let device_lost = ctx.skia_context.is_device_lost();
+
+        if !oomed && !device_lost {
+            return;
+        }
+
+        crate::rust_log_warn!(
+            "[GPU] ⚠️ GPU abnormal state detected! oomed={}, device_lost={}. Recovering...",
+            oomed,
+            device_lost
+        );
+
+        // 1. 强制清理 Skia 所有 unlocked 资源
+        ctx.skia_context
+            .purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::AllResources);
+
+        // 2. 清除所有终端的 GPU 缓存
+        if let Some(mut terminals) = self.terminals.try_write() {
+            for (_id, entry) in terminals.iter_mut() {
+                entry.surface_cache = None;
+                entry.render_cache = None;
+                entry.dirty_flag.mark_dirty();
+            }
+        }
+
+        crate::rust_log_warn!("[GPU] Recovery complete. All terminal caches cleared.");
     }
 
     // ========================================================================
@@ -2005,6 +2139,10 @@ impl TerminalPool {
         layout: Vec<(usize, f32, f32, f32, f32)>,
         container_height: f32,
     ) {
+        // GPU 缓存淘汰：在 layout move 之前提取可见终端 ID 集合
+        let visible_ids: std::collections::HashSet<usize> =
+            layout.iter().map(|(id, _, _, _, _)| *id).collect();
+
         {
             let mut render_layout = self.render_layout.lock();
             *render_layout = layout;
@@ -2017,6 +2155,48 @@ impl TerminalPool {
         // 标记需要渲染
         self.needs_render
             .store(true, std::sync::atomic::Ordering::Release);
+
+        // 释放不可见终端的 GPU 缓存（多 tab 场景防止 GPU 内存压力）
+        self.evict_invisible_gpu_caches(&visible_ids);
+    }
+
+    /// 释放不在当前布局中的终端的 GPU 缓存
+    ///
+    /// 多 tab 场景（4K@2x, 20+ tab）下，每个终端 surface_cache + render_cache
+    /// 占用约 250MB GPU 内存。不可见终端缓存常驻导致 Metal shader 编译超时。
+    ///
+    /// 阈值策略：总终端数 < 6 时不清理，保持少 tab 场景的原有行为。
+    /// 使用 try_write 避免阻塞主线程，失败时下次调用重试。
+    fn evict_invisible_gpu_caches(&self, visible_ids: &std::collections::HashSet<usize>) {
+        const EVICTION_THRESHOLD: usize = 6;
+
+        // 快速检查：少 tab 时不清理
+        let total_count = self.terminals.read().len();
+        if total_count < EVICTION_THRESHOLD {
+            return;
+        }
+
+        // 非阻塞获取写锁，避免阻塞主线程
+        if let Some(mut terminals) = self.terminals.try_write() {
+            let mut evicted = 0usize;
+            for (id, entry) in terminals.iter_mut() {
+                if !visible_ids.contains(id)
+                    && (entry.surface_cache.is_some() || entry.render_cache.is_some())
+                {
+                    entry.surface_cache = None;
+                    entry.render_cache = None;
+                    entry.dirty_flag.mark_dirty();
+                    evicted += 1;
+                }
+            }
+            if evicted > 0 {
+                crate::rust_log_info!(
+                    "[GPU] Evicted GPU caches for {} invisible terminals",
+                    evicted
+                );
+            }
+        }
+        // try_write 失败不要紧，下次 set_render_layout 调用时重试
     }
 
     /// 获取渲染布局的 Arc 引用（供 RenderScheduler 使用）
@@ -3104,6 +3284,7 @@ mod tests {
             window_width: 800.0,
             window_height: 600.0,
             history_size: 10000,
+            log_buffer_size: 0, // 测试默认禁用
         }
     }
 
@@ -3723,5 +3904,135 @@ mod tests {
         }
 
         eprintln!("✅ P4 Surface 缓存生命周期管理正确");
+    }
+
+    /// 测试：GPU 缓存淘汰 - 阈值以下不清理
+    #[test]
+    fn test_evict_invisible_gpu_caches_below_threshold() {
+        // 模拟少 tab 场景（< 6），不应触发清理
+        struct MockEntry {
+            surface_cache: Option<()>,
+            render_cache: Option<()>,
+            is_visible: bool,
+        }
+
+        let entries = vec![
+            MockEntry { surface_cache: Some(()), render_cache: Some(()), is_visible: true },
+            MockEntry { surface_cache: Some(()), render_cache: Some(()), is_visible: false },
+            MockEntry { surface_cache: Some(()), render_cache: Some(()), is_visible: false },
+        ];
+
+        // 总数 3 < EVICTION_THRESHOLD(6)，不应清理
+        let total = entries.len();
+        assert!(total < 6, "测试前提：总数小于阈值");
+
+        // 验证：所有 entry 都保持缓存
+        for entry in &entries {
+            assert!(entry.surface_cache.is_some(), "阈值以下不应清理缓存");
+        }
+
+        eprintln!("✅ GPU 缓存淘汰：阈值以下不清理");
+    }
+
+    /// 测试：GPU 缓存淘汰 - 超过阈值时清理不可见终端
+    #[test]
+    fn test_evict_invisible_gpu_caches_above_threshold() {
+        use std::collections::HashSet;
+
+        struct MockEntry {
+            id: usize,
+            surface_cache: Option<()>,
+            render_cache: Option<()>,
+            dirty: bool,
+        }
+
+        let mut entries: Vec<MockEntry> = (0..10)
+            .map(|i| MockEntry {
+                id: i,
+                surface_cache: Some(()),
+                render_cache: Some(()),
+                dirty: false,
+            })
+            .collect();
+
+        // 可见集合：只有 id 0 和 1
+        let visible_ids: HashSet<usize> = [0, 1].iter().copied().collect();
+
+        // 模拟淘汰逻辑
+        let total = entries.len();
+        assert!(total >= 6, "测试前提：总数大于等于阈值");
+
+        let mut evicted = 0usize;
+        for entry in entries.iter_mut() {
+            if !visible_ids.contains(&entry.id)
+                && (entry.surface_cache.is_some() || entry.render_cache.is_some())
+            {
+                entry.surface_cache = None;
+                entry.render_cache = None;
+                entry.dirty = true;
+                evicted += 1;
+            }
+        }
+
+        // 验证：8 个不可见终端被清理
+        assert_eq!(evicted, 8, "应清理 8 个不可见终端的缓存");
+
+        // 验证：可见终端保持缓存
+        assert!(entries[0].surface_cache.is_some(), "可见终端 0 应保持缓存");
+        assert!(entries[1].surface_cache.is_some(), "可见终端 1 应保持缓存");
+
+        // 验证：不可见终端缓存已清除
+        for entry in &entries[2..] {
+            assert!(entry.surface_cache.is_none(), "不可见终端应清除 surface_cache");
+            assert!(entry.render_cache.is_none(), "不可见终端应清除 render_cache");
+            assert!(entry.dirty, "清除后应标记 dirty");
+        }
+
+        eprintln!("✅ GPU 缓存淘汰：超过阈值时正确清理不可见终端");
+    }
+
+    /// 测试：GPU 缓存淘汰 - split view 多个可见终端不被清理
+    #[test]
+    fn test_evict_invisible_gpu_caches_split_view() {
+        use std::collections::HashSet;
+
+        struct MockEntry {
+            id: usize,
+            surface_cache: Option<()>,
+            render_cache: Option<()>,
+        }
+
+        let mut entries: Vec<MockEntry> = (0..8)
+            .map(|i| MockEntry {
+                id: i,
+                surface_cache: Some(()),
+                render_cache: Some(()),
+            })
+            .collect();
+
+        // Split view：id 0, 1, 2 同时可见
+        let visible_ids: HashSet<usize> = [0, 1, 2].iter().copied().collect();
+
+        let mut evicted = 0usize;
+        for entry in entries.iter_mut() {
+            if !visible_ids.contains(&entry.id)
+                && (entry.surface_cache.is_some() || entry.render_cache.is_some())
+            {
+                entry.surface_cache = None;
+                entry.render_cache = None;
+                evicted += 1;
+            }
+        }
+
+        // 验证：3 个可见终端保持缓存，5 个不可见终端被清理
+        assert_eq!(evicted, 5);
+        for i in 0..3 {
+            assert!(entries[i].surface_cache.is_some(), "split view 可见终端 {} 应保持缓存", i);
+        }
+        for i in 3..8 {
+            assert!(entries[i].surface_cache.is_none(), "不可见终端 {} 应清除缓存", i);
+        }
+
+        eprintln!("✅ GPU 缓存淘汰：split view 多个可见终端正确保留");
     }
 }

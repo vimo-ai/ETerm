@@ -187,8 +187,8 @@ impl HasDisplayHandle for SugarloafWindow {
 unsafe impl Send for SugarloafWindow {}
 unsafe impl Sync for SugarloafWindow {}
 
-impl Sugarloaf<'_> {
-    pub fn new<'a>(
+impl<'a> Sugarloaf<'a> {
+    pub fn new(
         window: SugarloafWindow,
         renderer: SugarloafRenderer,
         font_library: &FontLibrary,
@@ -252,6 +252,11 @@ impl Sugarloaf<'_> {
     #[inline]
     pub fn get_context(&self) -> &Context<'_> {
         &self.ctx
+    }
+
+    #[inline]
+    pub fn get_context_mut(&mut self) -> &mut Context<'a> {
+        &mut self.ctx
     }
 
     #[inline]

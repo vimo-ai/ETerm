@@ -395,6 +395,9 @@ impl Context<'_> {
             if !command_buffer.is_null() {
                 let _: () = msg_send![command_buffer, presentDrawable: drawable as *mut AnyObject];
                 let _: () = msg_send![command_buffer, commit];
+                // 背压：等待 GPU 调度完成，防止 command buffer 队列无限积压
+                // 这比 waitUntilCompleted 轻量，不会阻塞到 GPU 执行完毕
+                let _: () = msg_send![command_buffer, waitUntilScheduled];
             } else {
                 tracing::error!("Failed to create command buffer for presentation");
             }
