@@ -7,7 +7,9 @@
     "runMode": "main",
     "dependencies": [],
     "capabilities": [
-        "ui.infoPanel"
+        "ui.infoPanel",
+        "terminal.createTab",
+        "terminal.write"
     ],
     "principalClass": "ClaudeMonitorPlugin",
     "sidebarTabs": [
