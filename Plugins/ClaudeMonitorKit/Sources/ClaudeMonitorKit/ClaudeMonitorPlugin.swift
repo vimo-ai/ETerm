@@ -37,10 +37,13 @@ public final class ClaudeMonitorPlugin: NSObject, ETermKit.Plugin {
 
         // 初始化用量历史存储
         _ = UsageHistoryStore.shared
+
+        // 初始化自动拉起服务
+        AutoResumeService.shared.configure(host: host)
     }
 
     public func deactivate() {
-        // 无需清理
+        AutoResumeService.shared.stop()
     }
 
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
@@ -94,9 +97,67 @@ struct ClaudeMonitorSettingsView: View {
     @AppStorage("ShowHourlyUsageCard") private var showHourlyUsageCard = true
     @AppStorage("ShowUsageHistoryChart") private var showUsageHistoryChart = true
     @AppStorage("ShowSprintPrediction") private var showSprintPrediction = true
+    @AppStorage("AutoResumeEnabled") private var autoResumeEnabled = false
+    @ObservedObject private var autoResume = AutoResumeService.shared
+    @State private var manualDate = Date()
+    @State private var showManualPicker = false
 
     var body: some View {
         Form {
+            Section("自动拉起") {
+                Toggle("周限重置自动拉起 Claude", isOn: $autoResumeEnabled)
+                    .help("周限打满后，到重置时间自动创建终端并启动 Claude 会话")
+
+                if let date = autoResume.scheduledDate {
+                    HStack {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("将于 \(date, style: .date) \(date, style: .time) 拉起")
+                                    .font(.callout)
+                                Text(autoResume.scheduleSource == .manual ? "手动设定" : "自动检测")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "timer")
+                                .foregroundStyle(.green)
+                        }
+
+                        Spacer()
+
+                        Button("取消") {
+                            autoResume.cancel()
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                HStack {
+                    if showManualPicker {
+                        DatePicker("", selection: $manualDate, in: Date()...)
+                            .labelsHidden()
+
+                        Button("确定") {
+                            autoResume.scheduleManual(at: manualDate)
+                            showManualPicker = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+
+                        Button("取消") {
+                            showManualPicker = false
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    } else {
+                        Button("手动设定时间") {
+                            manualDate = Date().addingTimeInterval(3600)
+                            showManualPicker = true
+                        }
+                    }
+                }
+            }
+
             Section("时间计算设置") {
                 Toggle("跳过周末", isOn: $skipWeekends)
                     .help("启用后，时间进度将排除周末（周六、周日）")

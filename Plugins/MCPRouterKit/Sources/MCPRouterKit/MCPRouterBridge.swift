@@ -168,6 +168,20 @@ public final class MCPRouterBridge {
         loadAllServers()
         // 从文件加载 workspaces
         loadWorkspacesFromFile()
+        // 从 settings.json 加载 expose_management_tools 设置
+        loadSettingsIntoRouter()
+    }
+
+    /// 从 settings.json 加载设置到 router
+    private func loadSettingsIntoRouter() {
+        guard let handle = handle,
+              let settings = Self.loadSettings() else { return }
+
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let _ = mcp_router_set_expose_management_tools(handle, settings.exposeManagementTools, &errorPtr)
+        if let errorPtr = errorPtr {
+            mcp_router_free_string(errorPtr)
+        }
     }
 
     deinit {
@@ -732,6 +746,7 @@ public final class MCPRouterBridge {
             handle = mcp_router_create()
             loadAllServers()
             loadWorkspacesFromFile()
+            loadSettingsIntoRouter()
         }
 
         guard let handle = handle else {
