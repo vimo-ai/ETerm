@@ -292,6 +292,10 @@ pub struct TerminalPool {
     /// 配置
     config: AppConfig,
 
+    /// 上次 GPU OOM 恢复的时间戳（epoch 秒，原子操作避免渲染线程阻塞）
+    /// 0 表示从未触发过恢复
+    last_gpu_recovery_epoch: std::sync::atomic::AtomicU64,
+
     /// 是否需要渲染（dirty 标记，供外部调度器查询）
     needs_render: Arc<AtomicBool>,
 
@@ -438,6 +442,7 @@ impl TerminalPool {
             event_callback: None,
             string_event_callback: None,
             config,
+            last_gpu_recovery_epoch: std::sync::atomic::AtomicU64::new(0),
             needs_render: Arc::new(AtomicBool::new(false)),
             render_layout: Arc::new(Mutex::new(Vec::new())),
             container_height: Arc::new(Mutex::new(0.0)),
@@ -1044,19 +1049,23 @@ impl TerminalPool {
     /// - `id`: 终端 ID
     /// - `since`: 返回 seq > since 的日志（None 表示全部）
     /// - `limit`: 最多返回的行数
-    /// - `search`: 可选的搜索过滤（大小写不敏感）
+    /// - `search`: 可选的搜索过滤
+    /// - `is_regex`: 是否将 search 作为正则表达式
+    /// - `case_insensitive`: 是否大小写不敏感
     pub fn query_log(
         &self,
         id: usize,
         since: Option<u64>,
         limit: usize,
         search: Option<&str>,
+        is_regex: bool,
+        case_insensitive: bool,
     ) -> Option<String> {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
             let terminal = entry.terminal.lock();
             if let Some(ref log_buffer) = terminal.log_buffer() {
-                let result = log_buffer.query(since, limit, search);
+                let result = log_buffer.query(since, limit, search, is_regex, case_insensitive);
                 // 返回 JSON 格式
                 let json = serde_json::json!({
                     "lines": result.lines.iter().map(|l| {
@@ -2086,11 +2095,12 @@ impl TerminalPool {
 
     /// 检测 GPU 异常状态，触发恢复
     ///
-    /// 当 Skia DirectContext 报告 OOM 或 device lost 时：
-    /// 1. 强制清理所有 Skia unlocked 资源
-    /// 2. 清除所有终端的 GPU 缓存（强制下帧重建）
+    /// 当 Skia DirectContext 报告 OOM 时：
+    /// 1. 清除终端的 Surface/Image 缓存（这是 GPU 内存大头）
+    /// 2. 不触碰 Skia DirectContext 的资源缓存，让内置 LRU 自行管理
+    ///    - 避免清掉 shader program / pipeline cache 导致重编译超时
     ///
-    /// 这处理的是"雪崩后即使关 tab 也无法恢复"的问题。
+    /// 使用 30 秒冷却窗口（AtomicU64 无锁），避免 oomed() 持续 true 导致每帧触发。
     fn check_gpu_health_and_recover(&self, sugarloaf: &mut Sugarloaf) {
         let ctx = sugarloaf.get_context_mut();
         let oomed = ctx.skia_context.oomed();
@@ -2100,26 +2110,37 @@ impl TerminalPool {
             return;
         }
 
+        // 冷却窗口：30 秒内只触发一次恢复（无锁）
+        let now_epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_epoch = self.last_gpu_recovery_epoch.load(Ordering::Relaxed);
+        if now_epoch.saturating_sub(last_epoch) < 30 {
+            return;
+        }
+
         crate::rust_log_warn!(
             "[GPU] ⚠️ GPU abnormal state detected! oomed={}, device_lost={}. Recovering...",
             oomed,
             device_lost
         );
 
-        // 1. 强制清理 Skia 所有 unlocked 资源
-        ctx.skia_context
-            .purge_unlocked_resources(skia_safe::gpu::PurgeResourceOptions::AllResources);
-
-        // 2. 清除所有终端的 GPU 缓存
+        // 只清除终端的 Surface/Image 缓存（GPU 内存大头 ~2-4MB/tab）
+        // 不调用 Skia purge API，保留 shader program / pipeline cache
+        // Skia 内置 LRU 会在预算超限时自动淘汰其他资源
         if let Some(mut terminals) = self.terminals.try_write() {
             for (_id, entry) in terminals.iter_mut() {
                 entry.surface_cache = None;
                 entry.render_cache = None;
                 entry.dirty_flag.mark_dirty();
             }
+            // 清理成功后才更新冷却时间戳
+            self.last_gpu_recovery_epoch.store(now_epoch, Ordering::Relaxed);
+            crate::rust_log_warn!("[GPU] Recovery complete. Terminal caches cleared (shader programs preserved).");
+        } else {
+            crate::rust_log_warn!("[GPU] Recovery skipped: terminals write lock busy, will retry next frame.");
         }
-
-        crate::rust_log_warn!("[GPU] Recovery complete. All terminal caches cleared.");
     }
 
     // ========================================================================
