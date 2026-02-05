@@ -134,24 +134,49 @@ impl LogBuffer {
     /// # Arguments
     /// * `since` - Return lines with seq > since (None for all)
     /// * `limit` - Maximum number of lines to return
-    /// * `search` - Optional case-insensitive search filter
+    /// * `search` - Optional search filter
+    /// * `is_regex` - If true, treat `search` as a regex pattern
+    /// * `case_insensitive` - If true, search is case-insensitive
     pub fn query(
         &self,
         since: Option<u64>,
         limit: usize,
         search: Option<&str>,
+        is_regex: bool,
+        case_insensitive: bool,
     ) -> LogQueryResult {
         let lines = self.lines.read().unwrap();
         let next_seq = *self.next_seq.read().unwrap();
+
+        // Compile regex if needed
+        let compiled_regex = if is_regex {
+            search.and_then(|s| {
+                regex::RegexBuilder::new(s)
+                    .case_insensitive(case_insensitive)
+                    .build()
+                    .ok()
+            })
+        } else {
+            None
+        };
 
         // Filter by since
         let filtered: Vec<&LogLine> = lines
             .iter()
             .filter(|line| since.map_or(true, |s| line.seq > s))
             .filter(|line| {
-                search.map_or(true, |s| {
-                    line.text.to_lowercase().contains(&s.to_lowercase())
-                })
+                match search {
+                    None => true,
+                    Some(s) => {
+                        if let Some(ref re) = compiled_regex {
+                            re.is_match(&line.text)
+                        } else if case_insensitive {
+                            line.text.to_lowercase().contains(&s.to_lowercase())
+                        } else {
+                            line.text.contains(s)
+                        }
+                    }
+                }
             })
             .collect();
 
@@ -377,7 +402,7 @@ mod tests {
             buffer.append(format!("line{}\n", i).as_bytes());
         }
 
-        let result = buffer.query(Some(2), 100, None);
+        let result = buffer.query(Some(2), 100, None, false, true);
         assert_eq!(result.lines.len(), 3); // seq 3, 4, 5
         assert_eq!(result.lines[0].seq, 3);
     }
@@ -390,9 +415,62 @@ mod tests {
         buffer.append(b"ERROR: failed\n");
         buffer.append(b"INFO: done\n");
 
-        let result = buffer.query(None, 100, Some("error"));
+        let result = buffer.query(None, 100, Some("error"), false, true);
         assert_eq!(result.lines.len(), 1);
         assert_eq!(result.lines[0].text, "ERROR: failed");
+    }
+
+    #[test]
+    fn test_query_regex() {
+        let buffer = LogBuffer::new(100);
+
+        buffer.append(b"INFO: starting server\n");
+        buffer.append(b"ERROR: connection failed\n");
+        buffer.append(b"WARN: timeout 30s\n");
+        buffer.append(b"ERROR: disk full\n");
+
+        // Regex: match lines with "ERROR" followed by any word
+        let result = buffer.query(None, 100, Some(r"ERROR:.*failed"), true, false);
+        assert_eq!(result.lines.len(), 1);
+        assert_eq!(result.lines[0].text, "ERROR: connection failed");
+
+        // Case-insensitive regex
+        let result = buffer.query(None, 100, Some(r"error"), true, true);
+        assert_eq!(result.lines.len(), 2);
+
+        // Case-sensitive regex (no match for lowercase)
+        let result = buffer.query(None, 100, Some(r"error"), true, false);
+        assert_eq!(result.lines.len(), 0);
+    }
+
+    #[test]
+    fn test_query_case_sensitive() {
+        let buffer = LogBuffer::new(100);
+
+        buffer.append(b"ERROR: failed\n");
+        buffer.append(b"error: also failed\n");
+
+        // Case-insensitive (default backward compat)
+        let result = buffer.query(None, 100, Some("error"), false, true);
+        assert_eq!(result.lines.len(), 2);
+
+        // Case-sensitive
+        let result = buffer.query(None, 100, Some("error"), false, false);
+        assert_eq!(result.lines.len(), 1);
+        assert_eq!(result.lines[0].text, "error: also failed");
+    }
+
+    #[test]
+    fn test_query_invalid_regex_fallback() {
+        let buffer = LogBuffer::new(100);
+
+        buffer.append(b"test [invalid pattern\n");
+        buffer.append(b"normal line\n");
+
+        // Invalid regex falls back to plain text search
+        let result = buffer.query(None, 100, Some("[invalid"), true, false);
+        assert_eq!(result.lines.len(), 1);
+        assert_eq!(result.lines[0].text, "test [invalid pattern");
     }
 
     #[test]
@@ -403,7 +481,7 @@ mod tests {
             buffer.append(format!("line{}\n", i).as_bytes());
         }
 
-        let result = buffer.query(None, 100, None);
+        let result = buffer.query(None, 100, None, false, true);
         assert!(result.truncated);
     }
 

@@ -1202,6 +1202,8 @@ pub extern "C" fn terminal_pool_free_string_array(
 /// - `since`: 返回 seq > since 的日志（0 表示全部）
 /// - `limit`: 最多返回的行数
 /// - `search`: 可选的搜索过滤（NULL 表示不过滤）
+/// - `is_regex`: 是否将 search 作为正则表达式
+/// - `case_insensitive`: 是否大小写不敏感
 ///
 /// # 返回
 /// JSON 字符串，需要调用者使用 `rio_free_string` 释放。
@@ -1213,6 +1215,8 @@ pub extern "C" fn terminal_pool_query_log(
     since: u64,
     limit: usize,
     search: *const std::ffi::c_char,
+    is_regex: bool,
+    case_insensitive: bool,
 ) -> *mut std::ffi::c_char {
     if handle.is_null() {
         return std::ptr::null_mut();
@@ -1231,7 +1235,7 @@ pub extern "C" fn terminal_pool_query_log(
     // since = 0 表示返回全部
     let since_opt = if since == 0 { None } else { Some(since) };
 
-    if let Some(json) = pool.query_log(terminal_id, since_opt, limit, search_str) {
+    if let Some(json) = pool.query_log(terminal_id, since_opt, limit, search_str, is_regex, case_insensitive) {
         match std::ffi::CString::new(json) {
             Ok(c_str) => c_str.into_raw(),
             Err(_) => std::ptr::null_mut(),

@@ -1093,14 +1093,18 @@ void terminal_pool_free_string_array(
 /// @param terminal_id Terminal ID
 /// @param since Return lines with seq > since (0 for all)
 /// @param limit Maximum number of lines to return
-/// @param search Optional case-insensitive search filter (NULL for no filter)
+/// @param search Optional search filter (NULL for no filter)
+/// @param is_regex If true, treat search as a regex pattern
+/// @param case_insensitive If true, search is case-insensitive
 /// @return JSON string on success (must be freed with rio_free_string), NULL if disabled or error
 char* terminal_pool_query_log(
     TerminalPoolHandle handle,
     size_t terminal_id,
     uint64_t since,
     size_t limit,
-    const char* search
+    const char* search,
+    bool is_regex,
+    bool case_insensitive
 );
 
 /// Get last N lines from terminal log buffer
