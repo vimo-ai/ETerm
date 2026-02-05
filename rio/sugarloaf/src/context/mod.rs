@@ -38,10 +38,6 @@ pub struct Context<'a> {
     #[cfg(target_os = "macos")]
     last_gpu_cleanup: std::time::Instant,
 
-    /// 上次 Skia CPU 缓存清理的时间（清理 SkMallocPixelRef 等 CPU 侧缓存）
-    #[cfg(target_os = "macos")]
-    last_cpu_cleanup: std::time::Instant,
-
     pub size: SugarloafWindowSize,
     pub scale: f32,
 
@@ -256,7 +252,6 @@ impl Context<'_> {
             layer_ptr,
             command_queue_ptr: command_queue,
             last_gpu_cleanup: std::time::Instant::now(),
-            last_cpu_cleanup: std::time::Instant::now(),
             size,
             scale,
             // #[cfg(feature = "wgpu-backend")]
@@ -371,21 +366,13 @@ impl Context<'_> {
     pub fn end_frame(&mut self, drawable: mtl::Handle) {
         self.skia_context.flush_and_submit();
 
-        // 节流：每 2 秒执行一次 Skia GPU 资源清理
-        // 避免每帧都调用导致频繁的缓存检查（60fps = 每秒 60 次）
-        // 清理超过 30 秒未使用的资源，平衡性能和内存
-        if self.last_gpu_cleanup.elapsed() >= std::time::Duration::from_secs(2) {
+        // 节流：每 120 秒清理超过 5 分钟未使用的 GPU 资源
+        // Skia 内置 LRU 会在预算（默认 256MB）超限时自动淘汰，
+        // 这里仅作为补充，清理长期未使用的残留资源
+        if self.last_gpu_cleanup.elapsed() >= std::time::Duration::from_secs(120) {
             self.skia_context
-                .perform_deferred_cleanup(std::time::Duration::from_secs(30), None);
+                .perform_deferred_cleanup(std::time::Duration::from_secs(300), None);
             self.last_gpu_cleanup = std::time::Instant::now();
-        }
-
-        // 节流：每 60 秒执行一次 Skia CPU 资源清理
-        // 清理 SkMallocPixelRef 等 CPU 侧像素缓存（Malloc 80KB 块）
-        // 间隔较长是因为 CPU 缓存重建成本较高
-        if self.last_cpu_cleanup.elapsed() >= std::time::Duration::from_secs(60) {
-            skia_safe::graphics::purge_resource_cache();
-            self.last_cpu_cleanup = std::time::Instant::now();
         }
 
         unsafe {
