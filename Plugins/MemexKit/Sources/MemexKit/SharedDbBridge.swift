@@ -95,7 +95,7 @@ struct SharedStats {
 
 /// Swift bridge for ai-cli-session-db
 /// Provides cached session data access via shared database (read-only)
-/// Write operations should go through AgentClient
+/// Write operations should go through Agent RPC (notifyFileChange)
 /// Thread-safe: all FFI calls are serialized on a private queue
 final class SharedDbBridge {
     private var handle: OpaquePointer?
