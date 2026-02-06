@@ -19,6 +19,220 @@ import ETermKit
 import SocketClientFFI
 import SharedDbFFI
 
+// MARK: - Cursor State（游标协议）
+
+/// 读侧游标状态
+///
+/// 每个 session 维护独立游标，跟踪 JSONL 文件读取进度。
+/// 主游标是 fileOffset（单调递增），UUID 仅用作去重窗口。
+struct CursorState: Codable {
+    /// JSONL 文件读取偏移量（主游标，字节数）
+    var fileOffset: Int64
+    /// 最后处理的消息 UUID（去重窗口）
+    var lastMessageUUID: String?
+    /// 文件修改时间（变化检测）
+    var fileMtime: Int64
+    /// 文件大小（变化检测 + 游标失效判断）
+    var fileSize: Int64
+    /// JSONL 文件路径（冷启动恢复用）
+    var transcriptPath: String?
+
+    /// 默认初始游标（偏移量 0，从文件开头读取）
+    static var initial: CursorState {
+        CursorState(fileOffset: 0, lastMessageUUID: nil, fileMtime: 0, fileSize: 0, transcriptPath: nil)
+    }
+}
+
+/// 游标持久化管理器
+///
+/// 原子写入：写临时文件 + rename，防止断电/崩溃导致游标损坏。
+/// 存储位置：~/.vimo/plugins/vlaude/cursors.json
+final class CursorStore {
+    /// 游标文件路径
+    private let filePath: String
+    /// 内存中的游标状态
+    private(set) var cursors: [String: CursorState] = [:]
+
+    init() {
+        let vimoRoot = ProcessInfo.processInfo.environment["VIMO_HOME"]
+            ?? (NSHomeDirectory() + "/.vimo")
+        let dir = vimoRoot + "/plugins/vlaude"
+        self.filePath = dir + "/cursors.json"
+
+        // 确保目录存在
+        try? FileManager.default.createDirectory(
+            atPath: dir,
+            withIntermediateDirectories: true
+        )
+
+        // 加载持久化游标
+        load()
+    }
+
+    /// 从磁盘加载游标
+    func load() {
+        guard FileManager.default.fileExists(atPath: filePath),
+              let data = FileManager.default.contents(atPath: filePath),
+              let decoded = try? JSONDecoder().decode([String: CursorState].self, from: data) else {
+            cursors = [:]
+            return
+        }
+        cursors = decoded
+    }
+
+    /// 原子写入游标到磁盘（temp file + rename）
+    func save() {
+        guard let data = try? JSONEncoder().encode(cursors) else { return }
+        let tmpPath = filePath + ".tmp"
+        let fileURL = URL(fileURLWithPath: filePath)
+        let tmpURL = URL(fileURLWithPath: tmpPath)
+        do {
+            try data.write(to: tmpURL)
+            if FileManager.default.fileExists(atPath: filePath) {
+                // 原子替换（目标已存在）
+                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tmpURL)
+            } else {
+                // 首次保存：直接 rename
+                try FileManager.default.moveItem(at: tmpURL, to: fileURL)
+            }
+        } catch {
+            // 降级：直接覆盖写
+            try? data.write(to: fileURL)
+            try? FileManager.default.removeItem(atPath: tmpPath)
+        }
+    }
+
+    /// 获取指定 session 的游标
+    func cursor(for sessionId: String) -> CursorState {
+        cursors[sessionId] ?? .initial
+    }
+
+    /// 更新指定 session 的游标
+    func update(_ sessionId: String, cursor: CursorState) {
+        cursors[sessionId] = cursor
+    }
+
+    /// 清理指定 session 的游标
+    func remove(_ sessionId: String) {
+        cursors.removeValue(forKey: sessionId)
+    }
+
+    /// 清空所有游标
+    func removeAll() {
+        cursors.removeAll()
+    }
+}
+
+// MARK: - Session File Watcher（per-session DispatchSource）
+
+/// 单个 session 的 JSONL 文件监听器
+///
+/// 使用 DispatchSource vnode 监听 `.write` 事件，2 秒 debounce 合并连续写入。
+/// 作为 AICliKit event 的保底机制：当事件未触发时（边缘场景）也能捕获变化。
+/// 游标幂等保证双触发（AICliKit + file watch）不会重复推送。
+final class SessionFileWatcher {
+    let sessionId: String
+    let path: String
+
+    /// debounce + source 状态统一由 watchQueue 保护，消除 data race
+    private var source: DispatchSourceFileSystemObject?
+    private var debounceItem: DispatchWorkItem?  // 只在 watchQueue 上访问
+    private let fileDescriptor: Int32
+    private let onChange: (String, String) -> Void  // (sessionId, path)
+
+    /// debounce 间隔（秒），合并 Claude Code 连续写入
+    private static let debounceInterval: TimeInterval = 2.0
+
+    /// 监听队列（utility QoS，避免阻塞主线程）
+    /// 同时保护 debounceItem 的读写，消除与 stop() 的 data race
+    private static let watchQueue = DispatchQueue(
+        label: "com.eterm.vlaude.filewatcher",
+        qos: .utility
+    )
+
+    /// 初始化文件监听器
+    ///
+    /// - Parameters:
+    ///   - sessionId: 会话 ID
+    ///   - path: JSONL 文件路径
+    ///   - onChange: 文件变化回调（debounce 后，在主线程调用）
+    init?(sessionId: String, path: String, onChange: @escaping (String, String) -> Void) {
+        self.sessionId = sessionId
+        self.path = path
+        self.onChange = onChange
+
+        // 打开文件描述符（只读，用于 vnode 监听）
+        let fd = open(path, O_RDONLY | O_EVTONLY)
+        guard fd >= 0 else {
+            logWarn("[VlaudeKit] FileWatcher: 无法打开文件 \(path)")
+            return nil
+        }
+        self.fileDescriptor = fd
+
+        // 创建 DispatchSource 监听 .write 事件
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: .write,
+            queue: Self.watchQueue
+        )
+
+        source.setEventHandler { [weak self] in
+            self?.handleWriteEvent()
+        }
+
+        source.setCancelHandler { [fd] in
+            close(fd)
+        }
+
+        self.source = source
+        source.resume()
+    }
+
+    deinit {
+        stop()
+    }
+
+    /// 停止监听并释放资源
+    ///
+    /// source.cancel() 阻止新事件产生，debounceItem 异步取消避免同队列死锁。
+    /// 即使 debounceItem 延迟取消，onChange 回调有 fileWatchers[sessionId] != nil 守卫。
+    func stop() {
+        // source.cancel() 是线程安全的，阻止后续事件
+        if let source = source {
+            source.cancel()
+            self.source = nil
+        }
+
+        // S2: async 替代 sync，避免 deinit 从 watchQueue 调用时死锁
+        let pendingItem = debounceItem
+        debounceItem = nil
+        Self.watchQueue.async {
+            pendingItem?.cancel()
+        }
+    }
+
+    /// 处理 vnode write 事件（在 watchQueue 上调用）
+    private func handleWriteEvent() {
+        // 取消前一个 debounce，重新计时
+        debounceItem?.cancel()
+
+        let item = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            // 回到主线程触发回调（与 AICliKit event 汇合点一致）
+            DispatchQueue.main.async {
+                self.onChange(self.sessionId, self.path)
+            }
+        }
+        debounceItem = item
+
+        // 延迟 2 秒执行
+        Self.watchQueue.asyncAfter(
+            deadline: .now() + Self.debounceInterval,
+            execute: item
+        )
+    }
+}
+
 @objc(VlaudePlugin)
 public final class VlaudePlugin: NSObject, Plugin {
     public static var id = "com.eterm.vlaude"
@@ -53,8 +267,8 @@ public final class VlaudePlugin: NSObject, Plugin {
     /// Session 消息读取器
     private let sessionReader = SessionReader()
 
-    /// 每个 session 的最后已处理消息 UUID（用于增量读取）
-    private var lastMessageUUIDs: [String: String] = [:]
+    /// [V2 新链路] 游标持久化存储
+    private let cursorStore = CursorStore()
 
     /// Shared database bridge (用于权限持久化)
     private var dbBridge: SharedDbBridge?
@@ -64,6 +278,15 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     /// 重连请求观察
     private var reconnectObserver: NSObjectProtocol?
+
+    /// [V2] 推送锁文件描述符（flock 互斥）
+    private var pushLockFd: Int32 = -1
+
+    /// W1: 是否成功获取推送锁（未获取时不推送，daemon 可能在运行）
+    private var hasPushLock: Bool { pushLockFd >= 0 }
+
+    /// [V2] 文件监听器：sessionId -> SessionFileWatcher
+    private var fileWatchers: [String: SessionFileWatcher] = [:]
 
     public override required init() {
         super.init()
@@ -77,13 +300,16 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 设置 Rust 日志回调（将日志转发到 LogManager）
         setupVlaudeLogCallback()
 
+        // [V2] 尝试获取推送锁（flock 互斥，与 daemon 竞争）
+        acquirePushLock()
+
         // 初始化客户端（使用 Rust FFI）
         client = VlaudeClient()
         client?.delegate = self
 
         // 在后台线程初始化 AgentClient 和 SharedDbBridge（FFI 调用会阻塞）
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.initializeAgentClient()
+            self?.initAgentRPC()
             self?.initializeSharedDb()
         }
 
@@ -111,13 +337,10 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 如果配置有效，立即连接
         connectIfConfigured()
+
+        // [V2] 冷启动全量扫描：补偿停机期间遗漏的消息
+        performColdStartScan()
     }
-
-    /// AgentClient 重连尝试次数
-    private var agentReconnectAttempts: Int = 0
-
-    /// 最大重连次数
-    private let maxAgentReconnectAttempts: Int = 5
 
     /// 初始化 SharedDbBridge（在后台线程调用，只读模式）
     ///
@@ -138,50 +361,28 @@ public final class VlaudePlugin: NSObject, Plugin {
         }
     }
 
-    /// 初始化 AgentClient（在后台线程调用，内部回到主线程设置状态）
-    private nonisolated func initializeAgentClient() {
-        // 先断开旧连接，避免连接泄漏
+    /// [V2] 初始化 Agent RPC 连接（仅连接，不订阅事件）
+    private nonisolated func initAgentRPC() {
         DispatchQueue.main.sync { [weak self] in
             self?.agentClient?.disconnect()
             self?.agentClient = nil
         }
 
         do {
-            // 使用 plugin bundle 的 Lib 目录作为 agent 源（用于首次部署）
             let pluginBundle = Bundle(for: VlaudePlugin.self)
             let client = try AgentClientBridge(component: "vlaudekit", bundle: pluginBundle)
             try client.connect()
-            try client.subscribeAll()
+            // [V2] 不再订阅事件，不设置 delegate。仅保留 RPC 连接。
 
-            // 回到主线程设置 delegate 和状态
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                client.delegate = self
                 self.agentClient = client
-                self.agentReconnectAttempts = 0
-                logInfo("[VlaudeKit] AgentClient 已连接并订阅事件")
+                logInfo("[VlaudeKit] Agent RPC 已连接（仅 writeApproveResult + notifyFileChange）")
             }
         } catch {
             DispatchQueue.main.async {
-                logWarn("[VlaudeKit] AgentClient 初始化失败: \(error)")
+                logWarn("[VlaudeKit] Agent RPC 初始化失败: \(error)")
             }
-        }
-    }
-
-    /// 尝试重连 AgentClient
-    private func attemptAgentReconnect() {
-        guard agentReconnectAttempts < maxAgentReconnectAttempts else {
-            logWarn("[VlaudeKit] AgentClient 达到最大重连次数 (\(maxAgentReconnectAttempts))，停止重连")
-            return
-        }
-
-        agentReconnectAttempts += 1
-        let delay = min(pow(2.0, Double(agentReconnectAttempts)), 30.0)  // 指数退避，最大 30 秒
-        logInfo("[VlaudeKit] AgentClient 将在 \(Int(delay)) 秒后尝试第 \(agentReconnectAttempts) 次重连")
-
-        // 延迟后在后台线程执行重连（FFI 使用 block_on 会阻塞）
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.initializeAgentClient()
         }
     }
 
@@ -192,6 +393,13 @@ public final class VlaudePlugin: NSObject, Plugin {
         if let observer = reconnectObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+
+        // [V2] 停止所有文件监听器
+        removeAllFileWatchers()
+
+        // [V2] 持久化游标并释放推送锁
+        cursorStore.save()
+        releasePushLock()
 
         // 断开 AgentClient
         agentClient?.disconnect()
@@ -209,7 +417,6 @@ public final class VlaudePlugin: NSObject, Plugin {
         mobileViewingTerminals.removeAll()
         loadingSessions.removeAll()
         pendingClientMessageIds.removeAll()
-        lastMessageUUIDs.removeAll()
     }
 
     // MARK: - Configuration
@@ -287,6 +494,18 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 映射由 ClaudeKit 的 ClaudeSessionMapper 维护，这里只保存 transcriptPath
         sessionPaths[sessionId] = transcriptPath
 
+        // [V2] 尽早持久化 transcriptPath，确保冷启动恢复覆盖（S1 fix）
+        // 即使后续没有触发 readAndPushNewMessages，cursor 中也有路径记录
+        var cursor = cursorStore.cursor(for: sessionId)
+        if cursor.transcriptPath == nil {
+            cursor.transcriptPath = transcriptPath
+            cursorStore.update(sessionId, cursor: cursor)
+            cursorStore.save()
+        }
+
+        // [V2] 安装文件监听器（保底机制）
+        installFileWatcher(sessionId: sessionId, path: transcriptPath)
+
         // 发送 daemon:sessionStart 事件（更新 StatusManager，iOS 显示在线状态）
         let projectPath = payload["cwd"] as? String ?? ""
         client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
@@ -296,6 +515,14 @@ public final class VlaudePlugin: NSObject, Plugin {
         guard let sessionId = payload["sessionId"] as? String else { return }
         // 标记为 loading
         loadingSessions.insert(sessionId)
+
+        // [V2] 增量读取并推送新消息（用户提交 prompt → 新 user 消息）
+        if let transcriptPath = payload["transcriptPath"] as? String,
+           !transcriptPath.isEmpty {
+            readAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
+        } else if let transcriptPath = sessionPaths[sessionId] {
+            readAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
+        }
     }
 
     private func handleClaudeResponseComplete(_ payload: [String: Any]) {
@@ -313,6 +540,7 @@ public final class VlaudePlugin: NSObject, Plugin {
         }
         for oldSessionId in sessionsToClean {
             sessionPaths.removeValue(forKey: oldSessionId)
+            removeFileWatcher(sessionId: oldSessionId)
             client?.emitSessionEnd(sessionId: oldSessionId)
         }
 
@@ -321,10 +549,11 @@ public final class VlaudePlugin: NSObject, Plugin {
             let isNewSession = sessionPaths[sessionId] == nil
             sessionPaths[sessionId] = transcriptPath
 
-            // 如果是新 session，发送 daemon:sessionStart 事件
+            // 如果是新 session，发送 daemon:sessionStart 事件 + 安装 watcher
             if isNewSession {
                 let projectPath = payload["cwd"] as? String ?? ""
                 client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
+                installFileWatcher(sessionId: sessionId, path: transcriptPath)
             }
         }
 
@@ -347,6 +576,9 @@ public final class VlaudePlugin: NSObject, Plugin {
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 try? self?.agentClient?.notifyFileChange(path: transcriptPath)
             }
+
+            // [V2] 增量读取并推送新消息（AICliKit event 驱动，不依赖 AgentClient push）
+            readAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
         }
     }
 
@@ -360,6 +592,12 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 清理本地数据（映射由 ClaudeKit 维护）
         sessionPaths.removeValue(forKey: sessionId)
         pendingRequests.removeValue(forKey: terminalId)
+
+        // [V2] 移除文件监听器
+        removeFileWatcher(sessionId: sessionId)
+
+        // [V2] 持久化游标（session 结束时保存，不删除，支持历史回看）
+        cursorStore.save()
 
         // 发送 daemon:sessionEnd 事件（通知 StatusManager session 结束）
         client?.emitSessionEnd(sessionId: sessionId)
@@ -383,12 +621,14 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 尝试从 payload 获取 sessionId
         if let sessionId = payload["sessionId"] as? String {
             sessionPaths.removeValue(forKey: sessionId)
+            removeFileWatcher(sessionId: sessionId)
             client?.emitSessionEnd(sessionId: sessionId)
         } else {
             // payload 中没有 sessionId，尝试从 sessionPaths 中查找
             // 这种情况下映射可能还存在
             if let sessionId = getSessionId(for: terminalId) {
                 sessionPaths.removeValue(forKey: sessionId)
+                removeFileWatcher(sessionId: sessionId)
                 client?.emitSessionEnd(sessionId: sessionId)
             }
         }
@@ -426,6 +666,14 @@ public final class VlaudePlugin: NSObject, Plugin {
             message: payload["message"] as? String,
             toolUse: toolUseInfo
         )
+
+        // [V2] 增量读取并推送新消息（权限请求 → 新 assistant 消息含 tool_use）
+        if let transcriptPath = payload["transcriptPath"] as? String,
+           !transcriptPath.isEmpty {
+            readAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
+        } else if let transcriptPath = sessionPaths[sessionId] {
+            readAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
+        }
     }
 
     public func handleCommand(_ commandId: String) {
@@ -502,6 +750,169 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     public func pageSlotView(for slotId: String, page: any PageSlotContext) -> AnyView? {
         nil
+    }
+
+    // MARK: - [V2] Push Lock (flock 互斥)
+
+    /// 获取推送锁（非阻塞）
+    ///
+    /// VlaudeKit 与 vlaude-daemon 通过 flock 互斥：
+    /// - VlaudeKit 启动时获取锁，daemon 退让
+    /// - VlaudeKit 退出时释放锁（内核自动释放），daemon 可接管
+    /// - 共享 cursors.json 确保切换时游标接力
+    private func acquirePushLock() {
+        let vimoRoot = ProcessInfo.processInfo.environment["VIMO_HOME"]
+            ?? (NSHomeDirectory() + "/.vimo")
+        let lockDir = vimoRoot + "/locks"
+        let lockPath = lockDir + "/vlaude-push.lock"
+
+        // 确保目录存在
+        try? FileManager.default.createDirectory(
+            atPath: lockDir,
+            withIntermediateDirectories: true
+        )
+
+        // 打开锁文件
+        let fd = open(lockPath, O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else {
+            logWarn("[VlaudeKit] 无法打开推送锁文件: \(lockPath)")
+            return
+        }
+
+        // 尝试非阻塞获取排他锁
+        let result = flock(fd, LOCK_EX | LOCK_NB)
+        if result == 0 {
+            pushLockFd = fd
+            logInfo("[VlaudeKit] 获取推送锁成功")
+        } else {
+            // 锁被占用（理论上不会发生：daemon 应该在 VlaudeKit 启动前退让）
+            close(fd)
+            logWarn("[VlaudeKit] 推送锁被占用，另一个进程正在推送")
+        }
+    }
+
+    /// 释放推送锁
+    ///
+    /// flock 由内核自动释放（进程退出/崩溃时），无需手动清理锁文件。
+    private func releasePushLock() {
+        guard pushLockFd >= 0 else { return }
+        flock(pushLockFd, LOCK_UN)
+        close(pushLockFd)
+        pushLockFd = -1
+        logInfo("[VlaudeKit] 释放推送锁")
+    }
+
+    // MARK: - [V2] File Watcher Management
+
+    /// 安装文件监听器（幂等：已存在则跳过）
+    ///
+    /// - Parameters:
+    ///   - sessionId: 会话 ID
+    ///   - path: JSONL 文件路径
+    private func installFileWatcher(sessionId: String, path: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard hasPushLock else { return }
+
+        // 已有同路径的 watcher，跳过
+        if let existing = fileWatchers[sessionId], existing.path == path {
+            return
+        }
+
+        // 路径变更：先移除旧 watcher
+        removeFileWatcher(sessionId: sessionId)
+
+        // 创建新 watcher
+        guard let watcher = SessionFileWatcher(
+            sessionId: sessionId,
+            path: path,
+            onChange: { [weak self] watchedSessionId, watchedPath in
+                guard let self = self else { return }
+                // stop() 后 debounceItem 已入队的回调可能仍会触发，校验 watcher 是否仍存活
+                guard self.fileWatchers[watchedSessionId] != nil else { return }
+                self.readAndPushNewMessages(sessionId: watchedSessionId, transcriptPath: watchedPath)
+            }
+        ) else {
+            return
+        }
+
+        fileWatchers[sessionId] = watcher
+        logInfo("[VlaudeKit] FileWatcher 已安装: \(sessionId)")
+    }
+
+    /// 移除指定 session 的文件监听器
+    private func removeFileWatcher(sessionId: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let watcher = fileWatchers.removeValue(forKey: sessionId) else { return }
+        watcher.stop()
+        logInfo("[VlaudeKit] FileWatcher 已移除: \(sessionId)")
+    }
+
+    /// 移除所有文件监听器（deactivate 时调用）
+    private func removeAllFileWatchers() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        for (_, watcher) in fileWatchers {
+            watcher.stop()
+        }
+        fileWatchers.removeAll()
+        logInfo("[VlaudeKit] 所有 FileWatcher 已移除")
+    }
+
+    // MARK: - [V2] Cold Start Scan
+
+    /// 冷启动全量扫描：恢复持久化游标并补推遗漏消息
+    ///
+    /// 在 activate() 中调用，处理 VlaudeKit 停机期间的文件变化：
+    /// 1. 遍历 cursors.json 中所有有 transcriptPath 的游标
+    /// 2. 检查文件是否存在 + mtime/size 是否变化
+    /// 3. 对有变化的 session 调用 readAndPushNewMessages 补推
+    /// 4. 为仍然存在的文件安装 file watcher
+    private func performColdStartScan() {
+        guard hasPushLock else { return }
+
+        let cursors = cursorStore.cursors
+        guard !cursors.isEmpty else { return }
+
+        // W4: 文件属性检查移到后台队列，避免阻塞主线程
+        DispatchQueue.global(qos: .userInitiated).async {
+            var sessionsToSync: [(sessionId: String, path: String, changed: Bool)] = []
+
+            for (sessionId, cursor) in cursors {
+                guard let transcriptPath = cursor.transcriptPath else { continue }
+                guard FileManager.default.fileExists(atPath: transcriptPath) else { continue }
+
+                // 检查 mtime/size 是否变化（纯文件系统操作，无需 self）
+                var mtime: Int64 = 0
+                var size: Int64 = 0
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: transcriptPath) {
+                    mtime = (attrs[.modificationDate] as? Date)
+                        .map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+                    size = (attrs[.size] as? Int64) ?? 0
+                }
+                let changed = mtime != cursor.fileMtime || size != cursor.fileSize
+                sessionsToSync.append((sessionId, transcriptPath, changed))
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+
+                var changedCount = 0
+                for session in sessionsToSync {
+                    // 恢复 sessionPaths 映射
+                    self.sessionPaths[session.sessionId] = session.path
+
+                    if session.changed {
+                        self.readAndPushNewMessages(sessionId: session.sessionId, transcriptPath: session.path)
+                        changedCount += 1
+                    }
+
+                    self.installFileWatcher(sessionId: session.sessionId, path: session.path)
+                }
+
+                if !sessionsToSync.isEmpty {
+                    logInfo("[VlaudeKit] 冷启动扫描: \(sessionsToSync.count) 个 session，\(changedCount) 个有变化")
+                }
+            }
+        }
     }
 }
 
@@ -690,16 +1101,117 @@ extension VlaudePlugin: VlaudeClientDelegate {
     }
 }
 
+// MARK: - [V2] Incremental Message Reading
+
+extension VlaudePlugin {
+    /// [V2] 从 JSONL 增量读取并推送新消息到 iOS
+    ///
+    /// 基于游标协议：从上次 fileOffset 开始读取，只消费完整行。
+    /// 由 AICliKit 事件触发（进程内零延迟），不依赖 AgentClient 推送。
+    ///
+    /// - Parameters:
+    ///   - sessionId: 会话 ID
+    ///   - transcriptPath: JSONL 文件路径
+    func readAndPushNewMessages(sessionId: String, transcriptPath: String) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard hasPushLock else { return }
+
+        // 确保 sessionPaths 中有记录
+        if sessionPaths[sessionId] == nil {
+            sessionPaths[sessionId] = transcriptPath
+        }
+
+        // 获取当前游标
+        var cursor = cursorStore.cursor(for: sessionId)
+
+        // 获取文件属性（用于变化检测和游标失效判断）
+        let fileAttrs = fileAttributes(path: transcriptPath)
+
+        // 变化检测：文件未变化则跳过（mtime + size 双重检查）
+        if cursor.fileOffset > 0 &&
+           fileAttrs.mtime == cursor.fileMtime &&
+           fileAttrs.size == cursor.fileSize {
+            return
+        }
+
+        // 游标失效检查：文件被截断/清理
+        if fileAttrs.size < cursor.fileSize && cursor.fileOffset > 0 {
+            logWarn("[VlaudeKit][V2] 文件被截断，重置游标: \(sessionId)")
+            cursor = .initial
+        }
+
+        // 增量读取
+        guard let result = sessionReader.readMessagesFromOffset(
+            sessionPath: transcriptPath,
+            sessionId: sessionId,
+            fromOffset: cursor.fileOffset
+        ) else {
+            logWarn("[VlaudeKit][V2] 增量读取失败: \(transcriptPath)")
+            return
+        }
+
+        // UUID 去重窗口：跳过已处理的消息
+        var newMessages = result.messages
+        if let lastUUID = cursor.lastMessageUUID {
+            if let idx = newMessages.firstIndex(where: { $0.uuid == lastUUID }) {
+                // 去掉 lastUUID 及之前的消息（offset 边界重叠时可能重复）
+                newMessages = Array(newMessages.suffix(from: newMessages.index(after: idx)))
+            }
+        }
+
+        // 更新游标（含 transcriptPath，冷启动恢复用）
+        cursor.fileOffset = result.newOffset
+        cursor.lastMessageUUID = result.lastUUID ?? cursor.lastMessageUUID
+        cursor.fileMtime = fileAttrs.mtime
+        cursor.fileSize = fileAttrs.size
+        cursor.transcriptPath = transcriptPath
+        cursorStore.update(sessionId, cursor: cursor)
+
+        // 推送新消息到 iOS
+        if !newMessages.isEmpty {
+            processNewMessages(newMessages, for: sessionId, transcriptPath: transcriptPath)
+
+            // 每次推送后持久化游标（防止进程崩溃丢失进度）
+            cursorStore.save()
+        }
+    }
+
+    /// 获取文件属性（mtime + size）
+    private func fileAttributes(path: String) -> (mtime: Int64, size: Int64) {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return (mtime: 0, size: 0)
+        }
+        let mtime = (attrs[.modificationDate] as? Date)
+            .map { Int64($0.timeIntervalSince1970 * 1000) } ?? 0
+        let size = (attrs[.size] as? Int64) ?? 0
+        return (mtime: mtime, size: size)
+    }
+}
+
 // MARK: - Message Processing
 
 extension VlaudePlugin {
-    /// 统一处理新消息（由 AgentClient 调用）
+    /// 统一处理新消息（由 V2 增量读取调用）
     func processNewMessages(
         _ messages: [RawMessage],
         for sessionId: String,
         transcriptPath: String
     ) {
         for message in messages {
+            // V2: 跳过空 text 占位符（Opus 4.6 产生的 "\n\n"）
+            if message.messageType == 1, message.eventType == "text" {
+                let blocks = ContentBlockParser.parseContentBlocks(
+                    from: message.content, messageType: 1, eventType: message.eventType
+                )
+                let isEmpty = blocks?.allSatisfy { block in
+                    if case .text(let t) = block {
+                        return t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    }
+                    return false
+                } ?? true
+                if isEmpty { continue }
+            }
+
             // 检查是否有待标记为 pending 的审批请求
             // 从 message.content 中轻量级提取 tool_use id（不解析整个文件）
             if !pendingApprovals.isEmpty {
@@ -733,14 +1245,20 @@ extension VlaudePlugin {
                 clientMsgId = pendingClientMessageIds.removeValue(forKey: sessionId)
             }
 
+            // 解析结构化内容块（用于 iOS 正确渲染 tool_use 等）
+            let contentBlocks = ContentBlockParser.parseContentBlocks(
+                from: message.content,
+                messageType: message.messageType,
+                eventType: message.eventType
+            )
+
             // 生成预览文本（用于列表页实时更新）
             let preview = ContentBlockParser.generatePreview(
                 content: message.content,
                 messageType: message.messageType
             )
 
-            // ContentBlock 由 iOS 按需解析（懒加载），不在这里解析
-            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: nil, preview: preview, clientMessageId: clientMsgId)
+            client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: contentBlocks, preview: preview, clientMessageId: clientMsgId)
         }
     }
 
@@ -764,93 +1282,6 @@ extension VlaudePlugin {
     }
 }
 
-// MARK: - AgentClientDelegate
-
-extension VlaudePlugin: AgentClientDelegate {
-    func agentClient(_ client: AgentClientBridge, didReceiveEvent event: AgentEvent) {
-        switch event {
-        case .newMessages(let data):
-            handleAgentNewMessages(data)
-
-        case .sessionStart(let data):
-            handleAgentSessionStart(data)
-
-        case .sessionEnd(let data):
-            handleAgentSessionEnd(data)
-        }
-    }
-
-    func agentClient(_ client: AgentClientBridge, didDisconnect error: Error?) {
-        logWarn("[VlaudeKit] AgentClient 断开连接: \(error?.localizedDescription ?? "unknown")")
-
-        // 尝试重连
-        attemptAgentReconnect()
-    }
-
-    /// 处理 Agent 推送的新消息事件
-    private func handleAgentNewMessages(_ data: NewMessagesEvent) {
-        let sessionId = data.sessionId
-        let transcriptPath = data.path
-
-        // 确保 sessionPaths 中有记录
-        if sessionPaths[sessionId] == nil {
-            sessionPaths[sessionId] = transcriptPath
-        }
-
-        // 读取消息并过滤出新消息
-        guard let result = sessionReader.readMessages(
-            sessionPath: transcriptPath,
-            limit: 0,  // 读取全部
-            offset: 0,
-            orderAsc: true
-        ) else {
-            logWarn("[VlaudeKit] 读取消息失败: \(transcriptPath)")
-            return
-        }
-
-        // 找到 lastMessageUUID 之后的消息
-        var newMessages: [RawMessage] = []
-        let lastUUID = lastMessageUUIDs[sessionId]
-        var foundLast = lastUUID == nil
-
-        for msg in result.messages {
-            if foundLast {
-                newMessages.append(msg)
-            } else if msg.uuid == lastUUID {
-                foundLast = true
-            }
-        }
-
-        // 防御：如果 lastMessageUUID 在文件中找不到，返回所有消息
-        if !foundLast && lastUUID != nil {
-            newMessages = result.messages
-        }
-
-        // 更新 lastMessageUUID
-        if let lastMsg = newMessages.last ?? result.messages.last {
-            lastMessageUUIDs[sessionId] = lastMsg.uuid
-        }
-
-        // 处理新消息
-        if !newMessages.isEmpty {
-            processNewMessages(newMessages, for: sessionId, transcriptPath: transcriptPath)
-        }
-    }
-
-    /// 处理 Agent 推送的会话开始事件
-    private func handleAgentSessionStart(_ data: SessionStartEvent) {
-        logDebug("[VlaudeKit] Agent session start: \(data.sessionId) at \(data.projectPath)")
-        // 主要的 session 管理由 ClaudeKit 驱动，这里只做日志
-    }
-
-    /// 处理 Agent 推送的会话结束事件
-    private func handleAgentSessionEnd(_ data: SessionEndEvent) {
-        logDebug("[VlaudeKit] Agent session end: \(data.sessionId)")
-
-        // 清理 lastMessageUUID
-        lastMessageUUIDs.removeValue(forKey: data.sessionId)
-    }
-}
 
 // MARK: - Rust Log Bridge
 

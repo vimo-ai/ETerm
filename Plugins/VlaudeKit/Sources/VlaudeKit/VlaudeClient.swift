@@ -857,6 +857,12 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             msgDict["message"] = innerDict
         }
 
+        // V2: Turn context 字段
+        if let requestId = message.requestId { msgDict["requestId"] = requestId }
+        if let stopReason = message.stopReason { msgDict["stopReason"] = stopReason }
+        if let eventType = message.eventType { msgDict["eventType"] = eventType }
+        if let agentId = message.agentId { msgDict["agentId"] = agentId }
+
         // 添加 clientMessageId（用于 iOS 乐观更新去重）
         if let clientMsgId = clientMessageId {
             msgDict["clientMessageId"] = clientMsgId
