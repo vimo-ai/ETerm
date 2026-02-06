@@ -46,7 +46,7 @@ public final class MemexService: @unchecked Sendable {
     /// SharedDb 桥接（nonisolated 以支持 stop() 跨线程释放）
     private nonisolated(unsafe) var sharedDb: SharedDbBridge?
 
-    /// Agent Client（用于接收 Agent 事件推送）
+    /// Agent Client（仅 RPC 写请求：notifyFileChange）
     private nonisolated(unsafe) var agentClient: AgentClientBridge?
 
     /// Session Reader（用于解析 JSONL 文件）
@@ -68,48 +68,43 @@ public final class MemexService: @unchecked Sendable {
     }
 
     private init() {
-        // 在后台线程初始化 SharedDb，完成后再初始化 AgentClient
+        // 在后台线程初始化 SharedDb，完成后再初始化 Agent RPC
         DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.initSharedDb()
         }
     }
 
-    /// 初始化 SharedDb（在后台线程调用），完成后启动 AgentClient
+    /// 初始化 SharedDb（在后台线程调用），完成后启动 Agent RPC
     ///
     /// SharedDb 现在是只读的，写入和采集由 Agent 处理。
     private nonisolated func initSharedDb() {
         do {
             let db = try SharedDbBridge()
 
-            // 回到主线程设置状态，然后在后台启动 AgentClient
+            // 回到主线程设置状态，然后在后台启动 Agent RPC
             DispatchQueue.main.async { [weak self] in
                 self?.sharedDb = db
                 logInfo("[MemexKit] SharedDb connected (read-only)")
 
-                // SharedDb 就绪后，在后台启动 AgentClient
+                // SharedDb 就绪后，在后台启动 Agent RPC 连接
                 DispatchQueue.global(qos: .utility).async {
-                    self?.initAgentClient()
+                    self?.initAgentRPC()
                 }
             }
         } catch {
             logWarn("[MemexKit] SharedDb init failed: \(error)")
-            // SharedDb 初始化失败，仍然尝试启动 AgentClient（部分功能可用）
+            // SharedDb 初始化失败，仍然尝试启动 Agent RPC（部分功能可用）
             DispatchQueue.global(qos: .utility).async { [weak self] in
-                self?.initAgentClient()
+                self?.initAgentRPC()
             }
         }
     }
 
-    /// 重连尝试次数
-    private nonisolated(unsafe) var reconnectAttempts: Int = 0
-
-    /// 最大重连次数
-    private let maxReconnectAttempts: Int = 5
-
-    /// 初始化 AgentClient（在后台线程调用，内部回到主线程设置状态）
+    /// [V2] 初始化 Agent RPC 连接（在后台线程调用，内部回到主线程设置状态）
     ///
-    /// 连接到 vimo-agent 订阅事件推送，当收到 NewMessages 事件时触发采集。
-    private nonisolated func initAgentClient() {
+    /// 仅建立 RPC 连接用于 notifyFileChange 写请求，不订阅事件。
+    /// 事件触发已由 AICliKit event（aicli.responseComplete）接管。
+    private nonisolated func initAgentRPC() {
         // 先断开旧连接，避免连接泄漏
         DispatchQueue.main.sync { [weak self] in
             self?.agentClient?.disconnect()
@@ -121,39 +116,18 @@ public final class MemexService: @unchecked Sendable {
             let pluginBundle = Bundle(for: MemexPlugin.self)
             let client = try AgentClientBridge(component: "memexkit", bundle: pluginBundle)
             try client.connect()
-            try client.subscribe(events: [.newMessages])
+            // [V2] 不再订阅事件，不设置 delegate。仅保留 RPC 连接。
 
-            // 回到主线程设置 delegate 和状态
+            // 回到主线程设置状态
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                client.delegate = self
                 self.agentClient = client
-                self.reconnectAttempts = 0
-                logInfo("[MemexKit] AgentClient 已连接并订阅 NewMessages 事件")
+                logInfo("[MemexKit] Agent RPC 已连接（仅 notifyFileChange）")
             }
         } catch {
             DispatchQueue.main.async {
-                logWarn("[MemexKit] AgentClient 初始化失败: \(error)")
+                logWarn("[MemexKit] Agent RPC 初始化失败: \(error)")
             }
-        }
-    }
-
-    /// 尝试重连 AgentClient
-    private func attemptReconnect() async {
-        guard reconnectAttempts < maxReconnectAttempts else {
-            logWarn("[MemexKit] AgentClient 达到最大重连次数 (\(maxReconnectAttempts))，停止重连")
-            return
-        }
-
-        reconnectAttempts += 1
-        let delay = min(pow(2.0, Double(reconnectAttempts)), 30.0)  // 指数退避，最大 30 秒
-        logInfo("[MemexKit] AgentClient 将在 \(Int(delay)) 秒后尝试第 \(reconnectAttempts) 次重连")
-
-        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-
-        // 在后台线程执行重连（FFI 使用 block_on 会阻塞）
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            self?.initAgentClient()
         }
     }
 
@@ -226,7 +200,7 @@ public final class MemexService: @unchecked Sendable {
     /// 警告：此方法会阻塞当前线程，不要在主线程调用。
     /// UI 交互请使用 `stopAsync()` 方法。
     public nonisolated func stop() {
-        // 1. 断开 AgentClient
+        // 1. 断开 Agent RPC
         agentClient?.disconnect()
         agentClient = nil
 
@@ -537,13 +511,11 @@ extension MemexService {
         }
     }
 
-    /// 按路径精确采集单个会话（Writer 直接写入）
+    /// 按路径精确采集单个会话
     ///
-    /// 当收到 AI CLI Event（如 aicli.responseComplete）时调用此方法。
-    /// Writer 直接调用 FFI 写入数据库，FTS 索引通过触发器自动更新。
+    /// 当收到 AICliKit event（aicli.responseComplete）时由 MemexPlugin 调用。
+    /// 通过 Agent RPC (notifyFileChange) 通知 agent 采集指定文件。
     /// - Parameter path: JSONL 文件路径
-    ///
-    /// 通过 AgentClient 通知 Agent 采集指定文件
     public func collectByPath(_ path: String) throws {
         guard let agentClient = agentClient else {
             throw MemexServiceError.agentNotConnected
@@ -672,55 +644,3 @@ public enum MemexServiceError: Error, LocalizedError {
     }
 }
 
-// MARK: - AgentClientDelegate
-
-extension MemexService: AgentClientDelegate {
-    nonisolated func agentClient(_ client: AgentClientBridge, didReceiveEvent event: AgentEvent) {
-        switch event {
-        case .newMessages(let data):
-            // 在后台队列处理，避免阻塞主线程
-            Task.detached(priority: .utility) {
-                await self.handleAgentNewMessages(data)
-            }
-
-        case .sessionStart, .sessionEnd:
-            // MemexKit 只关心 NewMessages 事件
-            break
-        }
-    }
-
-    nonisolated func agentClient(_ client: AgentClientBridge, didDisconnect error: Error?) {
-        logWarn("[MemexKit] AgentClient 断开连接: \(error?.localizedDescription ?? "unknown")")
-
-        // 尝试重连
-        Task.detached(priority: .utility) {
-            await self.attemptReconnect()
-        }
-    }
-
-    /// 处理 Agent 推送的新消息事件
-    ///
-    /// 注意：虽然用了 Task.detached，但 MemexService 是 @MainActor，
-    /// 所以这个方法仍会在主线程执行。FFI 调用必须在后台队列执行。
-    private func handleAgentNewMessages(_ data: NewMessagesEvent) async {
-        let path = data.path
-        let sessionId = data.sessionId
-
-        // FFI 调用（collectByPath → notifyFileChange）会阻塞，必须在后台队列执行
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                defer { continuation.resume() }
-                guard let self = self else { return }
-                do {
-                    try self.collectByPath(path)
-                    logDebug("[MemexKit] 采集成功: \(sessionId)")
-                } catch {
-                    logWarn("[MemexKit] 采集失败: \(error)")
-                }
-            }
-        }
-
-        // triggerCompact 是 HTTP 请求，不会阻塞主线程
-        try? await triggerCompact(sessionId: sessionId)
-    }
-}
