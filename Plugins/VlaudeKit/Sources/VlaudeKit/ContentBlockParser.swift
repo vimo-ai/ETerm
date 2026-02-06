@@ -240,6 +240,46 @@ public enum ContentBlockParser {
         return nil
     }
 
+    /// 解析 tool_result user 消息的 toolUseResult JSON
+    private static func parseToolResultContent(_ content: String) -> [ContentBlock]? {
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) else {
+            return [.text(content)]
+        }
+
+        // toolUseResult 可以是 dict 或 array
+        if let dict = json as? [String: Any] {
+            if let block = parseToolResultBlock(dict) {
+                return [block]
+            }
+        } else if let arr = json as? [[String: Any]] {
+            let blocks = arr.compactMap { parseToolResultBlock($0) }
+            return blocks.isEmpty ? nil : blocks
+        }
+
+        return [.text(content)]
+    }
+
+    /// 从 toolUseResult 字典解析为 ContentBlock
+    private static func parseToolResultBlock(_ dict: [String: Any]) -> ContentBlock? {
+        // toolUseResult 格式: { toolUseId, content, isError }
+        let toolUseId = dict["toolUseId"] as? String
+            ?? dict["tool_use_id"] as? String
+            ?? ""
+        let isError = dict["isError"] as? Bool
+            ?? dict["is_error"] as? Bool
+            ?? false
+        let resultContent = extractToolResultContent(dict["content"])
+
+        guard !toolUseId.isEmpty || !resultContent.isEmpty else { return nil }
+
+        return .toolResult(ToolResultBlock(
+            toolUseId: toolUseId,
+            isError: isError,
+            content: resultContent
+        ))
+    }
+
     /// 提取 tool_result 的内容
     private static func extractToolResultContent(_ content: Any?) -> String {
         guard let content = content else {
@@ -250,7 +290,8 @@ public enum ContentBlockParser {
             return str
         }
 
-        if let data = try? JSONSerialization.data(withJSONObject: content, options: .prettyPrinted),
+        if JSONSerialization.isValidJSONObject(content),
+           let data = try? JSONSerialization.data(withJSONObject: content, options: .prettyPrinted),
            let str = String(data: data, encoding: .utf8) {
             return str
         }
@@ -486,6 +527,52 @@ public extension ContentBlockParser {
         }
 
         return results
+    }
+}
+
+// MARK: - Content Block Extraction (for Push)
+
+public extension ContentBlockParser {
+
+    /// 从 RawMessage.content 字符串解析结构化内容块（用于实时推送）
+    ///
+    /// 与 `parse(_:)` 不同，此方法接收的是已提取的 content 字符串
+    /// （而非完整 JSONL 行），直接解析为 ContentBlock 数组。
+    ///
+    /// - Parameters:
+    ///   - content: 消息内容字符串（user: 纯文本, assistant: JSON 数组字符串）
+    ///   - messageType: 消息类型（0 = user, 1 = assistant）
+    /// - Returns: 解析后的内容块数组，解析失败返回 nil
+    static func parseContentBlocks(from content: String, messageType: Int, eventType: String? = nil) -> [ContentBlock]? {
+        guard !content.isEmpty else { return nil }
+
+        if messageType == 0 {
+            // user 消息：区分 tool_result 和普通文本
+            if eventType == "tool_result" {
+                return parseToolResultContent(content)
+            }
+            return [.text(content)]
+        }
+
+        // assistant 消息：尝试解析为 JSON 数组
+        guard let data = content.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) else {
+            // 非 JSON，当作纯文本
+            return [.text(content)]
+        }
+
+        // 纯字符串 content
+        if let text = json as? String {
+            return [.text(text)]
+        }
+
+        // content blocks 数组
+        guard let blocks = json as? [[String: Any]] else {
+            return [.text(content)]
+        }
+
+        let parsed = blocks.compactMap { parseBlock($0) }
+        return parsed.isEmpty ? nil : parsed
     }
 }
 

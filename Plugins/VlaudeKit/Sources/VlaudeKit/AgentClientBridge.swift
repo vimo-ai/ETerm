@@ -2,8 +2,8 @@
 //  AgentClientBridge.swift
 //  VlaudeKit
 //
+//  [V2] 仅 RPC（notifyFileChange + writeApproveResult），不订阅事件
 //  Swift wrapper for ai-cli-session-db Agent Client FFI
-//  Provides event subscription via Unix Socket connection to Agent
 //
 
 import Foundation
@@ -50,98 +50,17 @@ enum AgentClientBridgeError: Error, LocalizedError {
     }
 }
 
-// MARK: - Event Types
-
-/// Agent 推送的事件类型
-enum AgentEventKind {
-    case newMessages
-    case sessionStart
-    case sessionEnd
-    case unknown(UInt32)
-
-    init(from ffiType: AgentEventType) {
-        switch ffiType {
-        case NewMessage: self = .newMessages
-        case SessionStart: self = .sessionStart
-        case SessionEnd: self = .sessionEnd
-        default: self = .unknown(ffiType.rawValue)
-        }
-    }
-
-    var ffiType: AgentEventType {
-        switch self {
-        case .newMessages: return NewMessage
-        case .sessionStart: return SessionStart
-        case .sessionEnd: return SessionEnd
-        case .unknown(let raw): return AgentEventType(rawValue: raw)
-        }
-    }
-}
-
-/// 新消息事件数据
-struct NewMessagesEvent: Codable {
-    let sessionId: String
-    let path: String
-    let count: Int
-    let messageIds: [Int64]
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case path
-        case count
-        case messageIds = "message_ids"
-    }
-}
-
-/// 会话开始事件数据
-struct SessionStartEvent: Codable {
-    let sessionId: String
-    let projectPath: String
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-        case projectPath = "project_path"
-    }
-}
-
-/// 会话结束事件数据
-struct SessionEndEvent: Codable {
-    let sessionId: String
-
-    enum CodingKeys: String, CodingKey {
-        case sessionId = "session_id"
-    }
-}
-
-/// Agent 推送事件
-enum AgentEvent {
-    case newMessages(NewMessagesEvent)
-    case sessionStart(SessionStartEvent)
-    case sessionEnd(SessionEndEvent)
-}
-
-
-// MARK: - Delegate Protocol
-
-/// AgentClient 事件回调协议
-protocol AgentClientDelegate: AnyObject {
-    func agentClient(_ client: AgentClientBridge, didReceiveEvent event: AgentEvent)
-    func agentClient(_ client: AgentClientBridge, didDisconnect error: Error?)
-}
-
 // MARK: - AgentClientBridge
 
-/// Agent Client 桥接层
+/// Agent Client 桥接层（仅 RPC）
 ///
-/// 通过 Unix Socket 连接到 vimo-agent，订阅事件推送
+/// 通过 Unix Socket 连接到 vimo-agent，提供 RPC 调用（notifyFileChange + writeApproveResult）
+/// [V2] 不再订阅事件，事件由 AICliKit 直接驱动
 class AgentClientBridge {
 
     // MARK: - Properties
 
     private var handle: OpaquePointer?
-    private let queue = DispatchQueue(label: "com.eterm.AgentClientBridge", qos: .utility)
-
-    weak var delegate: AgentClientDelegate?
 
     /// 组件名称
     let component: String
@@ -186,7 +105,6 @@ class AgentClientBridge {
         }
 
         self.handle = handlePtr
-        setupCallback()
     }
 
     /// 便捷初始化：自动使用 bundle 的 Lib 目录作为 Agent 源
@@ -230,30 +148,6 @@ class AgentClientBridge {
         logInfo("[AgentClient] disconnected")
     }
 
-    // MARK: - Subscription
-
-    /// 订阅事件
-    /// - Parameter events: 要订阅的事件类型列表
-    func subscribe(events: [AgentEventKind]) throws {
-        guard let handle = handle else {
-            throw AgentClientBridgeError.nullPointer
-        }
-
-        var ffiEvents = events.map { $0.ffiType }
-        let result = agent_client_subscribe(handle, &ffiEvents, UInt(ffiEvents.count))
-
-        if let error = AgentClientBridgeError.from(result) {
-            throw error
-        }
-
-        logDebug("[AgentClient] subscribed to events: \(events)")
-    }
-
-    /// 订阅所有事件
-    func subscribeAll() throws {
-        try subscribe(events: [.newMessages, .sessionStart, .sessionEnd])
-    }
-
     // MARK: - File Change Notification
 
     /// 通知文件变化
@@ -294,95 +188,6 @@ class AgentClientBridge {
 
         if let error = AgentClientBridgeError.from(result) {
             throw error
-        }
-    }
-
-    // MARK: - Private
-
-    /// 设置推送回调和断开连接回调
-    private func setupCallback() {
-        guard let handle = handle else { return }
-
-        // 使用 Unmanaged 传递 self
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-
-        // 设置推送回调
-        agent_client_set_push_callback(handle, { eventType, dataJson, userData in
-            guard let userData = userData,
-                  let dataJson = dataJson else { return }
-
-            let bridge = Unmanaged<AgentClientBridge>.fromOpaque(userData).takeUnretainedValue()
-            let jsonString = String(cString: dataJson)
-            let eventKind = AgentEventKind(from: eventType)
-
-            bridge.handleEvent(kind: eventKind, json: jsonString)
-        }, selfPtr)
-
-        // 设置断开连接回调
-        agent_client_set_disconnect_callback(handle, { errorMessage, userData in
-            guard let userData = userData else { return }
-
-            let bridge = Unmanaged<AgentClientBridge>.fromOpaque(userData).takeUnretainedValue()
-            let errorString = errorMessage.map { String(cString: $0) }
-
-            bridge.handleDisconnect(errorMessage: errorString)
-        }, selfPtr)
-    }
-
-    /// 处理断开连接
-    private func handleDisconnect(errorMessage: String?) {
-        let error: Error? = errorMessage != nil ? AgentClientBridgeError.connectionFailed : nil
-
-        // 回调到主线程
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.delegate?.agentClient(self, didDisconnect: error)
-        }
-    }
-
-    /// 处理事件
-    private func handleEvent(kind: AgentEventKind, json: String) {
-        // 忽略未知事件类型
-        if case .unknown(let raw) = kind {
-            logWarn("[AgentClient] received unknown event type: \(raw)")
-            return
-        }
-
-        guard let data = json.data(using: .utf8) else {
-            logWarn("[AgentClient] failed to parse event JSON: \(json)")
-            return
-        }
-
-        let decoder = JSONDecoder()
-
-        do {
-            let event: AgentEvent
-
-            switch kind {
-            case .newMessages:
-                let eventData = try decoder.decode(NewMessagesEvent.self, from: data)
-                event = .newMessages(eventData)
-
-            case .sessionStart:
-                let eventData = try decoder.decode(SessionStartEvent.self, from: data)
-                event = .sessionStart(eventData)
-
-            case .sessionEnd:
-                let eventData = try decoder.decode(SessionEndEvent.self, from: data)
-                event = .sessionEnd(eventData)
-
-            case .unknown:
-                return  // 已在上面处理
-            }
-
-            // 回调到主线程
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.delegate?.agentClient(self, didReceiveEvent: event)
-            }
-
-        } catch {
-            logError("[AgentClient] failed to decode event: \(error)")
         }
     }
 }
