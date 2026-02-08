@@ -41,6 +41,7 @@ enum Request {
         rows: u16,
     },
     Ping,
+    Shutdown,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +78,7 @@ enum Response {
         version: u16,
         session_count: usize,
     },
+    ShuttingDown,
     Error {
         message: String,
     },
@@ -194,7 +196,84 @@ fn socket_path() -> String {
 }
 
 fn connect() -> Option<UnixStream> {
-    UnixStream::connect(socket_path()).ok()
+    let path = socket_path();
+    if let Ok(stream) = UnixStream::connect(&path) {
+        return Some(stream);
+    }
+
+    // On-demand spawn: 连接失败时尝试启动 daemon
+    if let Err(e) = ensure_daemon(&path) {
+        eprintln!("[DaemonClient] ensure_daemon failed: {e}");
+        return None;
+    }
+
+    // Retry connect with backoff
+    for i in 0..3 {
+        std::thread::sleep(std::time::Duration::from_millis(50 * (i + 1)));
+        if let Ok(stream) = UnixStream::connect(&path) {
+            return Some(stream);
+        }
+    }
+
+    eprintln!("[DaemonClient] failed to connect after spawning daemon");
+    None
+}
+
+/// 查找 daemon binary 路径
+fn find_daemon_binary() -> Option<std::path::PathBuf> {
+    // 1. 环境变量优先
+    if let Ok(path) = env::var("PTY_DAEMON_BIN") {
+        let p = std::path::PathBuf::from(&path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 2. App bundle: ../Resources/pty-daemon (相对于当前可执行文件)
+    if let Ok(exe) = env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let bundle_path = parent.join("../Resources/pty-daemon");
+            if bundle_path.exists() {
+                return Some(bundle_path);
+            }
+        }
+    }
+
+    // 3. PATH 中查找
+    if let Ok(output) = std::process::Command::new("which")
+        .arg("pty-daemon")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(std::path::PathBuf::from(path));
+            }
+        }
+    }
+
+    None
+}
+
+/// 确保 daemon 正在运行，不在则 spawn
+fn ensure_daemon(socket_path: &str) -> Result<(), String> {
+    // 如果 socket 已存在且能连上，说明 daemon 已在运行
+    if UnixStream::connect(socket_path).is_ok() {
+        return Ok(());
+    }
+
+    let bin = find_daemon_binary().ok_or("pty-daemon binary not found")?;
+    eprintln!("[DaemonClient] spawning daemon: {}", bin.display());
+
+    std::process::Command::new(&bin)
+        .arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("failed to spawn daemon: {e}"))?;
+
+    Ok(())
 }
 
 fn send_request(stream: &mut UnixStream, req: Request) -> Result<Response, String> {
@@ -351,6 +430,27 @@ impl DaemonClient {
             Response::Killed { .. } => Ok(()),
             Response::Error { message } => Err(message),
             _ => Err("unexpected response to Kill".to_string()),
+        }
+    }
+
+    /// Kill 所有 session（用于 ⌘⇧Q Quit & Close All）
+    pub fn kill_all() -> Result<(), String> {
+        let sessions = Self::list()?;
+        for s in &sessions {
+            if let Err(e) = Self::kill(&s.id) {
+                eprintln!("[DaemonClient] kill session {} failed: {e}", s.id);
+            }
+        }
+        Ok(())
+    }
+
+    /// 请求 daemon 优雅退出
+    pub fn shutdown() -> Result<(), String> {
+        let mut stream = connect().ok_or("failed to connect to daemon")?;
+        match send_request(&mut stream, Request::Shutdown)? {
+            Response::ShuttingDown => Ok(()),
+            Response::Error { message } => Err(message),
+            _ => Err("unexpected response to Shutdown".to_string()),
         }
     }
 
