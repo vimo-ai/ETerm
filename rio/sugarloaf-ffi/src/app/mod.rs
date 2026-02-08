@@ -10,6 +10,7 @@
 pub mod terminal_pool;
 pub mod render_scheduler;
 pub mod ffi;
+pub mod daemon_client;
 
 pub use terminal_pool::{TerminalPool, DetachedTerminal};
 pub use render_scheduler::RenderScheduler;
