@@ -889,8 +889,10 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     ///   - contentBlocks: 结构化内容块（可选）
     ///   - preview: 消息预览文本（可选，用于列表页显示）
     ///   - clientMessageId: 客户端消息 ID（用于去重，可选）
-    func pushMessage(sessionId: String, message: RawMessage, contentBlocks: [ContentBlock]? = nil, preview: String? = nil, clientMessageId: String? = nil) {
-        guard isConnected else { return }
+    /// - Returns: 推送是否成功（用于游标协议：失败时不前进游标，可重试）
+    @discardableResult
+    func pushMessage(sessionId: String, message: RawMessage, contentBlocks: [ContentBlock]? = nil, preview: String? = nil, clientMessageId: String? = nil) -> Bool {
+        guard isConnected else { return false }
 
         // 转换消息格式
         var msgDict: [String: Any] = [
@@ -954,7 +956,13 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             }
         }
 
-        try? socketBridge?.notifyNewMessage(sessionId: sessionId, message: msgDict)
+        do {
+            try socketBridge?.notifyNewMessage(sessionId: sessionId, message: msgDict)
+            return true
+        } catch {
+            logError("[VlaudeKit] pushMessage 失败 (\(sessionId)): \(error)")
+            return false
+        }
     }
 
     /// 推送新消息给 Server（让 iOS 实时看到）
