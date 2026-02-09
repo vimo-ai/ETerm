@@ -276,6 +276,48 @@ final class VlaudeFfiBridge {
         )
     }
 
+    /// Get messages by Turn count (turn-based pagination)
+    /// 返回原始 JSON dict（JSONL 格式），不经过 FfiMessage 转换
+    /// - detail: "summary"（默认，裁剪大 payload）或 "full"（完整数据）
+    func getMessagesByTurns(sessionId: String, turnsLimit: UInt32, before: Int? = nil, detail: String = "summary") -> TurnBasedRawResult? {
+        let beforeVal: Int64 = before.map { Int64($0) } ?? -1
+
+        guard let ptr = sessionId.withCString({ sid in
+            detail.withCString { detailPtr in
+                vlaude_get_messages_by_turns(sid, turnsLimit, beforeVal, detailPtr)
+            }
+        }) else {
+            return nil
+        }
+        defer { vlaude_free_string(ptr) }
+
+        let jsonString = String(cString: ptr)
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        // 检查错误
+        if json["error"] != nil { return nil }
+
+        guard let messagesArray = json["messages"] as? [[String: Any]],
+              let total = json["total"] as? Int,
+              let hasMore = json["hasMore"] as? Bool,
+              let openTurn = json["openTurn"] as? Bool else {
+            return nil
+        }
+
+        let nextCursor = json["nextCursor"] as? Int
+
+        return TurnBasedRawResult(
+            messages: messagesArray,
+            total: total,
+            hasMore: hasMore,
+            openTurn: openTurn,
+            nextCursor: nextCursor
+        )
+    }
+
     /// Search messages
     func search(query: String, limit: UInt32 = 20) -> [FfiSearchResult]? {
         struct Response: Codable {

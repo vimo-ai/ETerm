@@ -338,8 +338,8 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     func socketClientDidDisconnect(_ bridge: SocketClientBridge) {
         isConnected = false
-        // Bug #1 修复：停止心跳定时器
-        stopHeartbeatTimer()
+        // 不停心跳：让 emitHeartbeat() 检测 isConnected=false 自动触发 reconnect()
+        // 只有主动 disconnect() 时才停心跳
         delegate?.vlaudeClientDidDisconnect(self)
     }
 
@@ -637,11 +637,17 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             return
         }
         let requestId = data["requestId"] as? String
+        let sessionIdFilter = data["sessionId"] as? String
         let limit = UInt32((data["limit"] as? Int) ?? 1000)
         let offset = UInt32((data["offset"] as? Int) ?? 0)
 
-        guard let sessions = vlaudeFfi.listSessionsLegacy(projectPath: projectPath, limit: limit, offset: offset) else {
+        guard var sessions = vlaudeFfi.listSessionsLegacy(projectPath: projectPath, limit: limit, offset: offset) else {
             return
+        }
+
+        // 按 sessionId 精确过滤（避免全量传输）
+        if let sid = sessionIdFilter {
+            sessions = sessions.filter { $0.id == sid }
         }
 
         reportSessionMetadata(sessions: sessions, projectPath: projectPath, requestId: requestId)
@@ -654,12 +660,50 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             return
         }
 
-        let limit = (data["limit"] as? Int) ?? 50
-        let offset = (data["offset"] as? Int) ?? 0
         let requestId = data["requestId"] as? String
 
+        let detail = data["detail"] as? String ?? "summary"
+
+        // turnsLimit 模式：按 Turn 数量分页，直接传原始 JSON dict
+        if let turnsLimit = data["turnsLimit"] as? Int {
+            let before = data["before"] as? Int
+
+            guard let result = vlaudeFfi.getMessagesByTurns(
+                sessionId: sessionId,
+                turnsLimit: UInt32(turnsLimit),
+                before: before,
+                detail: detail
+            ) else {
+                try? socketBridge?.reportSessionMessages(
+                    sessionId: sessionId,
+                    projectPath: projectPath,
+                    messages: [],
+                    total: 0,
+                    hasMore: false,
+                    requestId: requestId
+                )
+                return
+            }
+
+            // 直接传原始 JSON dict，不经过 RawMessage 转换
+            try? socketBridge?.reportSessionMessages(
+                sessionId: sessionId,
+                projectPath: projectPath,
+                messages: result.messages,
+                total: result.total,
+                hasMore: result.hasMore,
+                requestId: requestId,
+                openTurn: result.openTurn,
+                nextCursor: result.nextCursor
+            )
+            return
+        }
+
+        // 传统 limit/offset 模式
+        let limit = (data["limit"] as? Int) ?? 50
+        let offset = (data["offset"] as? Int) ?? 0
+
         guard let result = vlaudeFfi.getMessagesLegacy(sessionId: sessionId, limit: UInt32(limit), offset: UInt32(offset)) else {
-            // 发送空响应避免超时
             reportSessionMessages(
                 sessionId: sessionId,
                 projectPath: projectPath,
@@ -760,7 +804,9 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         messages: [RawMessage],
         total: Int,
         hasMore: Bool,
-        requestId: String?
+        requestId: String?,
+        openTurn: Bool? = nil,
+        nextCursor: Int? = nil
     ) {
         guard isConnected else { return }
 
@@ -792,7 +838,9 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             messages: messagesData,
             total: total,
             hasMore: hasMore,
-            requestId: requestId
+            requestId: requestId,
+            openTurn: openTurn,
+            nextCursor: nextCursor
         )
     }
 

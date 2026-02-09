@@ -433,7 +433,9 @@ final class SocketClientBridge {
         messages: [[String: Any]],
         total: Int,
         hasMore: Bool,
-        requestId: String? = nil
+        requestId: String? = nil,
+        openTurn: Bool? = nil,
+        nextCursor: Int? = nil
     ) throws {
         try queue.sync {
             guard let handle = handle else { throw SocketClientError.nullPointer }
@@ -444,6 +446,11 @@ final class SocketClientBridge {
             // 防止负数溢出
             let safeTotal = UInt(max(0, total))
 
+            // open_turn: -1 = None, 0 = false, 1 = true
+            let openTurnVal: Int8 = openTurn.map { $0 ? 1 : 0 } ?? -1
+            // next_cursor: -1 = None, >= 0 = value
+            let nextCursorVal: Int64 = nextCursor.map { Int64($0) } ?? -1
+
             let error = sessionId.withCString { sidCstr in
                 projectPath.withCString { pathCstr in
                     jsonStr.withCString { jsonCstr in
@@ -451,13 +458,15 @@ final class SocketClientBridge {
                             return reqId.withCString { reqCstr in
                                 socket_client_report_session_messages(
                                     handle, sidCstr, pathCstr, jsonCstr,
-                                    safeTotal, hasMore, reqCstr
+                                    safeTotal, hasMore, reqCstr,
+                                    openTurnVal, nextCursorVal
                                 )
                             }
                         } else {
                             return socket_client_report_session_messages(
                                 handle, sidCstr, pathCstr, jsonCstr,
-                                safeTotal, hasMore, nil
+                                safeTotal, hasMore, nil,
+                                openTurnVal, nextCursorVal
                             )
                         }
                     }
