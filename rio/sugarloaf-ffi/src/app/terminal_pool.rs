@@ -240,6 +240,9 @@ struct TerminalEntry {
     /// IME 预编辑状态（独立存储，不修改 Terminal 聚合根）
     /// 使用 RwLock 以支持渲染时无锁读取
     ime_state: Arc<RwLock<Option<crate::domain::ImeView>>>,
+
+    /// Daemon session (if using pty-daemon)
+    daemon_session: Option<super::daemon_client::DaemonSession>,
 }
 
 /// 分离的终端（用于跨池迁移）
@@ -528,7 +531,7 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine
-        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+        let (machine_handle, pty_tx, pty_fd, shell_pid, daemon_session) =
             match Self::create_pty_and_machine(&terminal, self.event_queue.clone()) {
                 Ok(result) => result,
                 Err(e) => {
@@ -563,6 +566,7 @@ impl TerminalPool {
             )), // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_session,
         };
 
         self.terminals.write().insert(id, entry);
@@ -598,7 +602,7 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine（带工作目录）
-        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+        let (machine_handle, pty_tx, pty_fd, shell_pid, daemon_session) =
             match Self::create_pty_and_machine_with_cwd(
                 &terminal,
                 self.event_queue.clone(),
@@ -637,6 +641,7 @@ impl TerminalPool {
             )), // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_session,
         };
 
         self.terminals.write().insert(id, entry);
@@ -669,7 +674,7 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine
-        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+        let (machine_handle, pty_tx, pty_fd, shell_pid, daemon_session) =
             match Self::create_pty_and_machine(&terminal, self.event_queue.clone()) {
                 Ok(result) => result,
                 Err(e) => {
@@ -704,6 +709,7 @@ impl TerminalPool {
             )),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_session,
         };
 
         self.terminals.write().insert(id, entry);
@@ -747,7 +753,7 @@ impl TerminalPool {
         );
 
         // 2. 创建 PTY 和 Machine（带工作目录）
-        let (machine_handle, pty_tx, pty_fd, shell_pid) =
+        let (machine_handle, pty_tx, pty_fd, shell_pid, daemon_session) =
             match Self::create_pty_and_machine_with_cwd(
                 &terminal,
                 self.event_queue.clone(),
@@ -786,6 +792,7 @@ impl TerminalPool {
             )),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_session,
         };
 
         self.terminals.write().insert(id, entry);
@@ -813,6 +820,7 @@ impl TerminalPool {
             channel::Sender<rio_backend::event::Msg>,
             i32,
             u32,
+            Option<super::daemon_client::DaemonSession>,
         ),
         ErrorCode,
     > {
@@ -823,7 +831,7 @@ impl TerminalPool {
 
     /// 创建 PTY 和 Machine（支持工作目录）
     ///
-    /// 返回: (machine_handle, pty_tx, pty_fd, shell_pid)
+    /// 返回: (machine_handle, pty_tx, pty_fd, shell_pid, daemon_session)
     fn create_pty_and_machine_with_cwd(
         terminal: &Terminal,
         event_queue: EventQueue,
@@ -834,6 +842,7 @@ impl TerminalPool {
             channel::Sender<rio_backend::event::Msg>,
             i32,
             u32,
+            Option<super::daemon_client::DaemonSession>,
         ),
         ErrorCode,
     > {
@@ -847,24 +856,130 @@ impl TerminalPool {
 
         let cols = terminal.cols() as u16;
         let rows = terminal.rows() as u16;
-        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
-        // 统一使用 spawn 创建 PTY（支持指定工作目录）
-        // 如果未指定工作目录，默认使用 $HOME
-        let cwd = working_dir.or_else(|| env::var("HOME").ok());
+        // Try daemon PTY first
+        let cwd_ref = working_dir.as_deref();
         let terminal_id = terminal.id().0 as u32;
-        let pty = create_pty_with_spawn(
-            &shell,
-            vec!["-l".to_string()],
-            &cwd,
-            cols,
-            rows,
-            terminal_id,
-        )
-        .map_err(|_| ErrorCode::RenderError)?;
+        match Self::try_create_daemon_pty(terminal, event_queue.clone(), cols, rows, cwd_ref, terminal_id) {
+            Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session)) => {
+                eprintln!("[TerminalPool] using daemon PTY: session_id={}",
+                    daemon_session.as_ref().map(|s| s.session_id.as_str()).unwrap_or("unknown"));
+                return Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session));
+            }
+            Err(e) => {
+                eprintln!("[TerminalPool] daemon pty failed, fallback to in-process: {}", e);
+                let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
-        let pty_fd = *pty.child.id;
-        let shell_pid = *pty.child.pid as u32;
+                // 统一使用 spawn 创建 PTY（支持指定工作目录）
+                // 如果未指定工作目录，默认使用 $HOME
+                let cwd = working_dir.or_else(|| env::var("HOME").ok());
+                let terminal_id = terminal.id().0 as u32;
+                let pty = create_pty_with_spawn(
+                    &shell,
+                    vec!["-l".to_string()],
+                    &cwd,
+                    cols,
+                    rows,
+                    terminal_id,
+                )
+                .map_err(|_| ErrorCode::RenderError)?;
+
+                let pty_fd = *pty.child.id;
+                let shell_pid = *pty.child.pid as u32;
+
+                let event_listener = FFIEventListener::new(event_queue, terminal.id().0);
+
+                // 非 daemon 模式不使用共享内存 ring buffer
+                let machine = Machine::new_with_log_buffer(
+                    crosswords,
+                    pty,
+                    event_listener,
+                    terminal.id().0,
+                    pty_fd,
+                    shell_pid,
+                    terminal.log_buffer().clone(),
+                    None,
+                )
+                .map_err(|_| ErrorCode::RenderError)?;
+
+                let pty_tx = machine.channel();
+                let handle = machine.spawn();
+
+                Ok((handle, pty_tx, pty_fd, shell_pid, None))
+            }
+        }
+    }
+
+    /// 尝试使用 daemon 创建或 reattach PTY（失败时回退到 in-process）
+    ///
+    /// 启动时优先 reattach 已有 Active/Idle session，无可用 session 才 create 新的。
+    fn try_create_daemon_pty(
+        terminal: &Terminal,
+        event_queue: EventQueue,
+        cols: u16,
+        rows: u16,
+        cwd: Option<&str>,
+        terminal_id: u32,
+    ) -> Result<
+        (
+            JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>,
+            channel::Sender<rio_backend::event::Msg>,
+            i32,
+            u32,
+            Option<super::daemon_client::DaemonSession>,
+        ),
+        String,
+    > {
+        use crate::rio_event::FFIEventListener;
+        use std::os::fd::FromRawFd;
+
+        let crosswords = terminal
+            .inner_crosswords()
+            .ok_or_else(|| "failed to get crosswords".to_string())?;
+
+        // 优先按 terminal_id 精确 reattach 已有 session
+        let daemon_session = match Self::try_reattach(terminal_id) {
+            Some(session) => {
+                eprintln!("[TerminalPool] reattach to existing session: {} (terminal_id={})", session.session_id, terminal_id);
+                session
+            }
+            None => {
+                eprintln!("[TerminalPool] no reattachable session for terminal_id={}, creating new", terminal_id);
+                super::daemon_client::DaemonClient::create(cols, rows, cwd, Some(terminal_id))?
+            }
+        };
+
+        let pty_fd = daemon_session.pty_fd;
+        let shell_pid = daemon_session.child_pid as u32;
+        let shm_name = &daemon_session.shm_name;
+
+        // 打开共享内存 ring buffer，从 shm 直接读取历史数据
+        let shared_ring = match pty_daemon::shared_ring::SharedRingBuffer::open(shm_name) {
+            Ok(shm) => {
+                eprintln!("[TerminalPool] opened shared ring buffer: {}", shm_name);
+                Some(shm)
+            }
+            Err(e) => {
+                eprintln!("[TerminalPool] warning: failed to open shared ring buffer {}: {}", shm_name, e);
+                None
+            }
+        };
+
+        // 从 shm dump 历史数据并回放到终端
+        let ring_data = shared_ring.as_ref().map(|shm| shm.dump()).unwrap_or_default();
+        if !ring_data.is_empty() {
+            eprintln!("[TerminalPool] replaying {} bytes of ring data from shm", ring_data.len());
+            let mut parser = rio_backend::performer::handler::Processor::<rio_backend::performer::handler::StdSyncHandler>::new();
+            let mut cw = crosswords.write();
+            parser.advance(&mut *cw, &ring_data);
+        }
+
+        // Create a PTY wrapper from the daemon's dup(master_fd)
+        let pty = unsafe {
+            let file = std::fs::File::from_raw_fd(pty_fd);
+            teletypewriter::create_pty_from_file(file, shell_pid as u32)
+                .map_err(|e| format!("failed to create pty from fd: {:?}", e))?
+        };
 
         let event_listener = FFIEventListener::new(event_queue, terminal.id().0);
 
@@ -876,13 +991,48 @@ impl TerminalPool {
             pty_fd,
             shell_pid,
             terminal.log_buffer().clone(),
+            shared_ring,
         )
-        .map_err(|_| ErrorCode::RenderError)?;
+        .map_err(|e| format!("failed to create machine: {:?}", e))?;
 
         let pty_tx = machine.channel();
         let handle = machine.spawn();
 
-        Ok((handle, pty_tx, pty_fd, shell_pid))
+        // Reattach 时 ring buffer 为空意味着 shell 在 detach 期间空闲，
+        // 终端屏幕内容丢失。通过 resize bounce 触发 SIGWINCH 迫使 shell 重绘 prompt。
+        if ring_data.is_empty() {
+            let refresh_tx = pty_tx.clone();
+            let cols = daemon_session.cols;
+            let rows = daemon_session.rows;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                // 缩小 1 列触发 SIGWINCH
+                let _ = refresh_tx.send(rio_backend::event::Msg::Resize(
+                    teletypewriter::WinsizeBuilder { cols: cols.saturating_sub(1), rows, width: 0, height: 0 },
+                ));
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                // 恢复原始大小
+                let _ = refresh_tx.send(rio_backend::event::Msg::Resize(
+                    teletypewriter::WinsizeBuilder { cols, rows, width: 0, height: 0 },
+                ));
+            });
+        }
+
+        Ok((handle, pty_tx, pty_fd, shell_pid, Some(daemon_session)))
+    }
+
+    /// 按 terminal_id 精确匹配可 reattach 的 daemon session
+    fn try_reattach(terminal_id: u32) -> Option<super::daemon_client::DaemonSession> {
+        let sessions = super::daemon_client::DaemonClient::list().ok()?;
+        // 优先精确匹配 terminal_id
+        let reattachable = sessions.iter().find(|s| {
+            s.terminal_id == Some(terminal_id)
+                && (s.state == "Active" || s.state == "Idle")
+                && s.child_alive
+        })?;
+        let session_id = &reattachable.id;
+        eprintln!("[TerminalPool] found reattachable session: {} (terminal_id={}, state={})", session_id, terminal_id, reattachable.state);
+        super::daemon_client::DaemonClient::attach(session_id).ok()
     }
 
     /// 关闭终端
@@ -890,6 +1040,12 @@ impl TerminalPool {
         if let Some(entry) = self.terminals.write().remove(&id) {
             // 从全局事件路由注销
             unregister_terminal_event_target(id);
+            // 主动关闭：Kill daemon session（区分于崩溃的 crash detach 保留 session）
+            if let Some(ref ds) = entry.daemon_session {
+                if let Err(e) = super::daemon_client::DaemonClient::kill(&ds.session_id) {
+                    eprintln!("[TerminalPool] daemon kill failed (session={}): {}", ds.session_id, e);
+                }
+            }
             // 通知 Machine 线程退出事件循环
             // Machine 退出后 PTY drop → master fd 关闭 → 内核 SIGHUP → 子进程清理
             let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
@@ -1228,7 +1384,7 @@ impl TerminalPool {
 
         // 阶段 1：快速更新 entry 字段（持有写锁时间尽量短）
         // 使用 try_write_for 让 writer 实际排队，parking_lot 对排队的 writer 是公平的
-        let (terminal_arc, pty_tx) = {
+        let (terminal_arc, pty_tx, daemon_session_id) = {
             let mut terminals =
                 match self.terminals.try_write_for(Duration::from_micros(200)) {
                     Some(t) => t,
@@ -1261,7 +1417,8 @@ impl TerminalPool {
                 }
 
                 // 获取需要的引用，稍后在锁外使用
-                (entry.terminal.clone(), entry.pty_tx.clone())
+                let daemon_session_id = entry.daemon_session.as_ref().map(|s| s.session_id.clone());
+                (entry.terminal.clone(), entry.pty_tx.clone(), daemon_session_id)
             } else {
                 return false;
             }
@@ -1284,6 +1441,11 @@ impl TerminalPool {
         };
         crate::rio_machine::send_resize(&pty_tx, winsize);
 
+        // 通知 daemon 更新 PTY 窗口大小
+        if let Some(session_id) = daemon_session_id {
+            let _ = super::daemon_client::DaemonClient::winsize_update(&session_id, cols, rows);
+        }
+
         true
     }
 
@@ -1298,6 +1460,7 @@ impl TerminalPool {
             self.needs_render.store(true, Ordering::Release);
             true
         } else {
+            eprintln!("[TerminalPool] input: id={} NOT FOUND (have: {:?})", id, terminals.keys().collect::<Vec<_>>());
             false
         }
     }
@@ -2305,9 +2468,11 @@ impl TerminalPool {
                                 entry.render_cache = None;
                                 entry.dirty_flag.mark_dirty();
                                 // 收集需要的信息
+                                let daemon_session_id = entry.daemon_session.as_ref().map(|s| s.session_id.clone());
                                 Some((
                                     entry.terminal.clone(),
                                     entry.pty_tx.clone(),
+                                    daemon_session_id,
                                     cols,
                                     rows,
                                     width,
@@ -2326,7 +2491,7 @@ impl TerminalPool {
             };
 
             // 阶段 2：在锁外执行 terminal.resize() 和 send_resize()
-            for (terminal_arc, pty_tx, cols, rows, width, height) in resize_tasks {
+            for (terminal_arc, pty_tx, daemon_session_id, cols, rows, width, height) in resize_tasks {
                 if let Some(mut terminal) = terminal_arc.try_lock() {
                     terminal.resize(cols as usize, rows as usize);
                 }
@@ -2338,6 +2503,11 @@ impl TerminalPool {
                     height: height as u16,
                 };
                 crate::rio_machine::send_resize(&pty_tx, winsize);
+
+                // 通知 daemon 更新 PTY 窗口大小
+                if let Some(session_id) = daemon_session_id {
+                    let _ = super::daemon_client::DaemonClient::winsize_update(&session_id, cols, rows);
+                }
             }
         }
     }
@@ -2402,8 +2572,8 @@ impl TerminalPool {
 
             // ⚠️ DO NOT DELETE - 帧性能定位日志，用于调试渲染性能问题
             // 输出: 帧序号、总耗时、渲染耗时、缓存命中(H)、布局命中(L)、缓存未命中(M)、终端数量
-            // eprintln!("🎯 [Frame] #{} total={:?} render={:?} H={} L={} M={} terminals={}",
-            //     n, frame_time, render_time, hits, layout_hits, misses, layout.len());
+            crate::rust_log_info!("[perf] frame #{} total={:?} render={:?} H={} L={} M={} terminals={}",
+                n, frame_time, render_time, hits, layout_hits, misses, layout.len());
 
             // renderer.print_frame_stats("render_all");
         }

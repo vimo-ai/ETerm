@@ -668,11 +668,12 @@ pub fn create_pty_with_spawn(
             }
 
             let ptsname: String = tty_ptsname(main).unwrap_or_else(|_| "".to_string());
+            let pid = child_process.id().try_into().unwrap();
             let child_unix = Child {
                 id: Arc::new(main),
                 ptsname,
-                pid: Arc::new(child_process.id().try_into().unwrap()),
-                process: Some(child_process),
+                pid: Arc::new(pid),
+                ownership: ProcessOwnership::Spawned(child_process),
             };
 
             Ok(Pty {
@@ -753,7 +754,7 @@ pub fn create_pty_with_fork(shell: &str, columns: u16, rows: u16) -> Result<Pty,
                 id: Arc::new(main),
                 ptsname,
                 pid: Arc::new(id),
-                process: None,
+                ownership: ProcessOwnership::Forked,
             };
 
             unsafe {
@@ -802,14 +803,24 @@ unsafe fn set_nonblocking(fd: libc::c_int) {
     assert_eq!(res, 0);
 }
 
+/// Process ownership model: determines who is responsible for the child process lifecycle
+#[derive(Debug)]
+pub enum ProcessOwnership {
+    /// Created via Command::spawn — we own the std::process::Child
+    Spawned(std::process::Child),
+    /// Created via forkpty — we own the pid but have no std::process::Child handle
+    Forked,
+    /// Daemon manages the process — we must NOT send signals or waitpid
+    DaemonManaged,
+}
+
 #[derive(Debug)]
 pub struct Child {
     pub id: Arc<libc::c_int>,
     pub pid: Arc<libc::pid_t>,
     #[allow(dead_code)]
     ptsname: String,
-    #[allow(dead_code)]
-    process: Option<std::process::Child>,
+    pub ownership: ProcessOwnership,
 }
 
 impl Child {
@@ -838,11 +849,15 @@ impl Child {
         }
     }
 
-    /// Return the child’s exit status if it has already exited. If the child is still running, return Ok(None).
+    /// Return the child's exit status if it has already exited. If the child is still running, return Ok(None).
     /// https://linux.die.net/man/2/waitpid
     pub fn waitpid(&self) -> Result<Option<i32>, String> {
+        if matches!(self.ownership, ProcessOwnership::DaemonManaged) {
+            // Daemon owns the process — we must not waitpid
+            return Ok(None);
+        }
+
         let mut status = 0 as libc::c_int;
-        // If WNOHANG was specified in options and there were no children in a waitable state, then waitid() returns 0 immediately and the state of the siginfo_t structure pointed to by infop is unspecified. To distinguish this case from that where a child was in a waitable state, zero out the si_pid field before the call and check for a nonzero value in this field after the call returns.
         let res =
             unsafe { waitpid(*self.pid, &mut status as *mut libc::c_int, libc::WNOHANG) };
         if res <= -1 {
@@ -858,14 +873,8 @@ impl Child {
 
     pub fn close(&self) {
         unsafe {
-            libc::close(*self.pid);
+            libc::close(*self.id);
         }
-    }
-}
-
-pub fn kill_pid(pid: i32) {
-    unsafe {
-        libc::kill(pid, libc::SIGHUP);
     }
 }
 
@@ -878,8 +887,15 @@ impl Deref for Child {
 
 impl Drop for Child {
     fn drop(&mut self) {
-        unsafe {
-            libc::kill(*self.pid, libc::SIGHUP);
+        match &self.ownership {
+            ProcessOwnership::Spawned(_) | ProcessOwnership::Forked => {
+                unsafe {
+                    libc::kill(*self.pid, libc::SIGHUP);
+                }
+            }
+            ProcessOwnership::DaemonManaged => {
+                // Daemon owns the process — do not send SIGHUP
+            }
         }
     }
 }
@@ -1080,4 +1096,43 @@ where
             .wait()
             .map(|_| ())
     }
+}
+
+/// Create a Pty from an existing file descriptor (for daemon proxy mode)
+///
+/// # Safety
+/// The caller must ensure that:
+/// - The fd is a valid PTY master file descriptor
+/// - The fd ownership is transferred to this function
+/// - The fd will not be closed externally
+pub fn create_pty_from_file(file: File, pid: u32) -> Result<Pty, Error> {
+    use std::sync::Arc;
+
+    let fd = file.as_raw_fd();
+
+    // Set non-blocking mode
+    unsafe {
+        set_nonblocking(fd);
+    }
+
+    // Create signals handler (reuse existing implementation)
+    let signals = Signals::new([sigconsts::SIGCHLD])
+        .map_err(|e| Error::new(io::ErrorKind::Other, format!("failed to create signals: {}", e)))?;
+    let signals_token = corcovado::Token(0); // Will be set during register
+
+    // Create Child structure — daemon manages the actual process
+    let child = Child {
+        id: Arc::new(fd),
+        pid: Arc::new(pid as libc::pid_t),
+        ptsname: String::from("<daemon-pty>"),
+        ownership: ProcessOwnership::DaemonManaged,
+    };
+
+    Ok(Pty {
+        child,
+        file,
+        token: corcovado::Token(0), // Will be set during register
+        signals_token,
+        signals,
+    })
 }
