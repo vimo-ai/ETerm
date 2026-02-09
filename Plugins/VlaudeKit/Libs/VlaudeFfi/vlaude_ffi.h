@@ -131,6 +131,25 @@ void vlaude_free_string(char *ptr);
 char *vlaude_get_messages(const char *session_id, uint32_t limit, uint32_t offset);
 
 /**
+ * 按 Turn 数量获取会话消息（Turn-based 分页）
+ *
+ * # Arguments
+ * * `session_id` - 会话 ID（C 字符串）
+ * * `turns_limit` - 返回最近 N 个 Turn
+ * * `before` - 翻页游标，-1 表示首页
+ *
+ * 返回 JSON: `{ "messages": [...], "total": N, "hasMore": bool, "openTurn": bool, "nextCursor": N|null }`
+ *
+ * # Safety
+ * - `session_id` 必须是有效的 UTF-8 C 字符串
+ * - 返回的字符串必须通过 `vlaude_free_string` 释放
+ */
+char *vlaude_get_messages_by_turns(const char *session_id,
+                                   uint32_t turns_limit,
+                                   int64_t before,
+                                   const char *detail);
+
+/**
  * 获取数据库统计信息
  *
  * 返回 JSON 字符串，格式：

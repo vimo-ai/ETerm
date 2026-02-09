@@ -247,7 +247,9 @@ enum SocketClientError socket_client_report_session_messages(struct SocketClient
                                                              const char *messages_json,
                                                              uintptr_t total,
                                                              bool has_more,
-                                                             const char *request_id);
+                                                             const char *request_id,
+                                                             int8_t open_turn,
+                                                             int64_t next_cursor);
 
 /**
  * 上报会话元数据

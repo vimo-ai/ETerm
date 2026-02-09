@@ -41,6 +41,9 @@ pub struct LogBuffer {
 
     /// Current incomplete line (handling \r)
     current_line: RwLock<String>,
+
+    /// Partial UTF-8 bytes from previous append (max 3 bytes for a 4-byte sequence)
+    partial_utf8: RwLock<Vec<u8>>,
 }
 
 impl LogBuffer {
@@ -54,6 +57,7 @@ impl LogBuffer {
             lines: RwLock::new(VecDeque::with_capacity(max_lines.min(1000))),
             next_seq: RwLock::new(1),
             current_line: RwLock::new(String::new()),
+            partial_utf8: RwLock::new(Vec::with_capacity(4)),
         }
     }
 
@@ -64,10 +68,52 @@ impl LogBuffer {
     /// - Handles `\r` (carriage return) for progress bar overwriting
     /// - Commits lines on `\n`
     pub fn append(&self, data: &[u8]) {
-        let text = match std::str::from_utf8(data) {
-            Ok(s) => s,
-            Err(_) => return, // Skip invalid UTF-8
+        let mut partial = self.partial_utf8.write().unwrap();
+
+        // Prepend any leftover partial UTF-8 bytes from the previous call
+        let combined: std::borrow::Cow<[u8]> = if partial.is_empty() {
+            std::borrow::Cow::Borrowed(data)
+        } else {
+            let mut buf = std::mem::take(&mut *partial);
+            buf.extend_from_slice(data);
+            std::borrow::Cow::Owned(buf)
         };
+
+        // Decode as much valid UTF-8 as possible, save trailing incomplete bytes
+        let (text, remainder) = match std::str::from_utf8(&combined) {
+            Ok(s) => (s, &[] as &[u8]),
+            Err(e) => {
+                let valid_up_to = e.valid_up_to();
+                let valid_str = unsafe { std::str::from_utf8_unchecked(&combined[..valid_up_to]) };
+                match e.error_len() {
+                    Some(len) => {
+                        // Invalid byte sequence (not just incomplete): skip it, save the rest as new data
+                        // Recurse on the remaining bytes after the invalid sequence
+                        let after_invalid = valid_up_to + len;
+                        if after_invalid < combined.len() {
+                            // Save valid part, process remainder separately
+                            partial.extend_from_slice(&combined[after_invalid..]);
+                        }
+                        (valid_str, &[] as &[u8])
+                    }
+                    None => {
+                        // Incomplete UTF-8 at the end: save for next append
+                        (valid_str, &combined[valid_up_to..])
+                    }
+                }
+            }
+        };
+
+        if !remainder.is_empty() {
+            partial.extend_from_slice(remainder);
+        }
+
+        // Drop partial lock before acquiring other locks
+        drop(partial);
+
+        if text.is_empty() {
+            return;
+        }
 
         let plain = Self::strip_ansi(text);
 
@@ -81,19 +127,25 @@ impl LogBuffer {
         while i < chars.len() {
             match chars[i] {
                 '\r' => {
-                    if i + 1 < chars.len() && chars[i + 1] == '\n' {
-                        // \r\n (CRLF): 当作换行，提交当前行
+                    // Skip consecutive \r's, find the terminal \r before \n or content
+                    let mut j = i;
+                    while j < chars.len() && chars[j] == '\r' {
+                        j += 1;
+                    }
+                    // j now points to the first non-\r character (or end)
+                    if j < chars.len() && chars[j] == '\n' {
+                        // \r+\n (CRLF variant): commit current line
                         let text = std::mem::take(&mut *current);
                         Self::commit_line(&mut lines, &mut next_seq, text, self.max_lines);
-                        i += 2; // 跳过 \r\n
+                        i = j + 1; // skip past \n
                     } else {
-                        // 单独 \r: 进度条覆写，回到行首
+                        // \r without following \n: progress bar overwrite, reset to line start
                         current.clear();
-                        i += 1;
+                        i = j;
                     }
                 }
                 '\n' => {
-                    // 单独 \n: 提交当前行
+                    // Standalone \n: commit current line
                     let text = std::mem::take(&mut *current);
                     Self::commit_line(&mut lines, &mut next_seq, text, self.max_lines);
                     i += 1;
@@ -395,6 +447,31 @@ mod tests {
     }
 
     #[test]
+    fn test_double_cr_lf() {
+        // simctl --console-pty outputs \r\r\n (PTY ONLCR converts \n→\r\n, plus app's own \r)
+        let buffer = LogBuffer::new(100);
+
+        buffer.append("line1\r\r\nline2\r\r\n".as_bytes());
+
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.tail(2)[0].text, "line1");
+        assert_eq!(buffer.tail(2)[1].text, "line2");
+    }
+
+    #[test]
+    fn test_double_cr_lf_with_emoji() {
+        // Real simctl --console-pty output pattern
+        let buffer = LogBuffer::new(100);
+
+        let input = "✅ [AuthService] Token OK\r\r\n🔐 [TLS] mTLS enabled\r\r\n";
+        buffer.append(input.as_bytes());
+
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.tail(2)[0].text, "✅ [AuthService] Token OK");
+        assert_eq!(buffer.tail(2)[1].text, "🔐 [TLS] mTLS enabled");
+    }
+
+    #[test]
     fn test_query_since() {
         let buffer = LogBuffer::new(100);
 
@@ -493,5 +570,74 @@ mod tests {
 
         assert_eq!(buffer.len(), 2);
         assert_eq!(buffer.tail(1)[0].text, "🚀 Launched");
+    }
+
+    #[test]
+    fn test_partial_utf8_split() {
+        let buffer = LogBuffer::new(100);
+
+        // ✅ is U+2705, UTF-8: E2 9C 85 (3 bytes)
+        // Split in the middle of the emoji
+        let full = "✅ OK\n".as_bytes();
+        assert_eq!(full[0], 0xE2);
+
+        // First chunk: partial emoji (2 of 3 bytes)
+        buffer.append(&full[..2]);
+        // Second chunk: remaining emoji byte + rest of line
+        buffer.append(&full[2..]);
+
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.tail(1)[0].text, "✅ OK");
+    }
+
+    #[test]
+    fn test_partial_utf8_4byte_emoji() {
+        let buffer = LogBuffer::new(100);
+
+        // 🚀 is U+1F680, UTF-8: F0 9F 9A 80 (4 bytes)
+        let full = "🚀 Launch\n".as_bytes();
+
+        // Split after 1 byte of the 4-byte emoji
+        buffer.append(&full[..1]);
+        buffer.append(&full[1..]);
+
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.tail(1)[0].text, "🚀 Launch");
+    }
+
+    #[test]
+    fn test_partial_utf8_chinese() {
+        let buffer = LogBuffer::new(100);
+
+        // 日 is U+65E5, UTF-8: E6 97 A5 (3 bytes)
+        let full = "日志成功\n".as_bytes();
+
+        // Split between two Chinese characters
+        // 日(3) + 志(3) = 6 bytes, split at 4 (middle of 志)
+        buffer.append(&full[..4]);
+        buffer.append(&full[4..]);
+
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.tail(1)[0].text, "日志成功");
+    }
+
+    #[test]
+    fn test_partial_utf8_multiple_lines() {
+        let buffer = LogBuffer::new(100);
+
+        // Simulate real app output with emoji split across chunks
+        let line1 = "✅ [Auth] Token OK\n";
+        let line2 = "🔐 [TLS] mTLS enabled\n";
+        let combined = format!("{}{}", line1, line2);
+        let bytes = combined.as_bytes();
+
+        // Split in the middle of 🔐 (F0 9F 94 90, 4 bytes)
+        let split_point = line1.len() + 2; // 2 bytes into 🔐
+        buffer.append(&bytes[..split_point]);
+        buffer.append(&bytes[split_point..]);
+
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer.tail(2)[0].text, "✅ [Auth] Token OK");
+        assert_eq!(buffer.tail(2)[1].text, "🔐 [TLS] mTLS enabled");
     }
 }

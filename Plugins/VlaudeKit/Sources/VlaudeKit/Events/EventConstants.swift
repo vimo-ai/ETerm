@@ -115,6 +115,11 @@ public enum DaemonEvents {
     public static let checkLoadingResult = "daemon:checkLoadingResult"
     /// @payload { success: Bool, error: String?, requestId: String? }
     public static let sendMessageResult = "daemon:sendMessageResult"
+
+    // MARK: - 分段传输
+
+    /// @payload { transferId: String, event: String, seq: Int, total: Int, data: String }
+    public static let chunk = "daemon:chunk"
 }
 
 /// Server → Daemon 下行事件

@@ -66,6 +66,15 @@ struct MessagesResult {
     let hasMore: Bool
 }
 
+/// Turn-based pagination result (raw JSON dicts, bypasses FfiMessage conversion)
+struct TurnBasedRawResult {
+    let messages: [[String: Any]]
+    let total: Int
+    let hasMore: Bool
+    let openTurn: Bool
+    let nextCursor: Int?
+}
+
 /// Raw message from session file
 struct RawMessage {
     let uuid: String
