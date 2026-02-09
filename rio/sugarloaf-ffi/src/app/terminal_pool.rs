@@ -867,7 +867,7 @@ impl TerminalPool {
                 return Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session));
             }
             Err(e) => {
-                eprintln!("[TerminalPool] daemon pty failed, fallback to in-process: {}", e);
+                crate::rust_log_info!("[TerminalPool] daemon pty failed, fallback to in-process: {}", e);
                 let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
 
                 // 统一使用 spawn 创建 PTY（支持指定工作目录）
@@ -913,6 +913,9 @@ impl TerminalPool {
     /// 尝试使用 daemon 创建或 reattach PTY（失败时回退到 in-process）
     ///
     /// 启动时优先 reattach 已有 Active/Idle session，无可用 session 才 create 新的。
+    ///
+    /// NOTE: daemon 链路暂停，等待解决 reattach 花屏 + resume 冲突问题
+    #[allow(unreachable_code)]
     fn try_create_daemon_pty(
         terminal: &Terminal,
         event_queue: EventQueue,
@@ -930,6 +933,9 @@ impl TerminalPool {
         ),
         String,
     > {
+        // daemon 链路暂停
+        return Err("daemon disabled: pending reattach + resume conflict resolution".to_string());
+
         use crate::rio_event::FFIEventListener;
         use std::os::fd::FromRawFd;
 
@@ -938,14 +944,14 @@ impl TerminalPool {
             .ok_or_else(|| "failed to get crosswords".to_string())?;
 
         // 优先按 terminal_id 精确 reattach 已有 session
-        let daemon_session = match Self::try_reattach(terminal_id) {
+        let (mut daemon_session, is_reattach) = match Self::try_reattach(terminal_id) {
             Some(session) => {
                 eprintln!("[TerminalPool] reattach to existing session: {} (terminal_id={})", session.session_id, terminal_id);
-                session
+                (session, true)
             }
             None => {
                 eprintln!("[TerminalPool] no reattachable session for terminal_id={}, creating new", terminal_id);
-                super::daemon_client::DaemonClient::create(cols, rows, cwd, Some(terminal_id))?
+                (super::daemon_client::DaemonClient::create(cols, rows, cwd, Some(terminal_id))?, false)
             }
         };
 
@@ -998,24 +1004,11 @@ impl TerminalPool {
         let pty_tx = machine.channel();
         let handle = machine.spawn();
 
-        // Reattach 时 ring buffer 为空意味着 shell 在 detach 期间空闲，
-        // 终端屏幕内容丢失。通过 resize bounce 触发 SIGWINCH 迫使 shell 重绘 prompt。
-        if ring_data.is_empty() {
-            let refresh_tx = pty_tx.clone();
-            let cols = daemon_session.cols;
-            let rows = daemon_session.rows;
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                // 缩小 1 列触发 SIGWINCH
-                let _ = refresh_tx.send(rio_backend::event::Msg::Resize(
-                    teletypewriter::WinsizeBuilder { cols: cols.saturating_sub(1), rows, width: 0, height: 0 },
-                ));
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                // 恢复原始大小
-                let _ = refresh_tx.send(rio_backend::event::Msg::Resize(
-                    teletypewriter::WinsizeBuilder { cols, rows, width: 0, height: 0 },
-                ));
-            });
+        // Reattach 且 ring buffer 为空：shell 在 detach 期间空闲，屏幕内容丢失。
+        // 标记 needs_sigwinch_bounce，由首次 resize_terminal 用正确尺寸触发 SIGWINCH。
+        // 新建 session 不需要 bounce —— shell 刚启动会自然绘制 prompt。
+        if is_reattach && ring_data.is_empty() {
+            daemon_session.needs_sigwinch_bounce = true;
         }
 
         Ok((handle, pty_tx, pty_fd, shell_pid, Some(daemon_session)))
@@ -1384,7 +1377,7 @@ impl TerminalPool {
 
         // 阶段 1：快速更新 entry 字段（持有写锁时间尽量短）
         // 使用 try_write_for 让 writer 实际排队，parking_lot 对排队的 writer 是公平的
-        let (terminal_arc, pty_tx, daemon_session_id) = {
+        let (terminal_arc, pty_tx, daemon_session_id, needs_bounce) = {
             let mut terminals =
                 match self.terminals.try_write_for(Duration::from_micros(200)) {
                     Some(t) => t,
@@ -1418,7 +1411,10 @@ impl TerminalPool {
 
                 // 获取需要的引用，稍后在锁外使用
                 let daemon_session_id = entry.daemon_session.as_ref().map(|s| s.session_id.clone());
-                (entry.terminal.clone(), entry.pty_tx.clone(), daemon_session_id)
+                let needs_bounce = entry.daemon_session.as_mut()
+                    .map(|s| std::mem::replace(&mut s.needs_sigwinch_bounce, false))
+                    .unwrap_or(false);
+                (entry.terminal.clone(), entry.pty_tx.clone(), daemon_session_id, needs_bounce)
             } else {
                 return false;
             }
@@ -1427,9 +1423,15 @@ impl TerminalPool {
 
         // 阶段 2：在锁外执行可能阻塞的操作
         // 更新 Terminal（可能需要获取 crosswords 锁）
-        if let Some(mut terminal) = terminal_arc.try_lock() {
+        let grid_resized = if let Some(mut terminal) = terminal_arc.try_lock() {
             terminal.resize(cols as usize, rows as usize);
-        }
+            true
+        } else {
+            false
+        };
+
+        eprintln!("[resize_terminal] id={} cols={} rows={} grid_resized={} is_daemon={} needs_bounce={}",
+            id, cols, rows, grid_resized, daemon_session_id.is_some(), needs_bounce);
 
         // 通知 PTY
         use teletypewriter::WinsizeBuilder;
@@ -1440,6 +1442,15 @@ impl TerminalPool {
             height: height as u16,
         };
         crate::rio_machine::send_resize(&pty_tx, winsize);
+
+        // Reattach bounce：用当前正确尺寸触发 SIGWINCH，迫使 shell 重绘 prompt。
+        // 缩小 1 列再恢复，保证即使窗口尺寸未变也能产生 SIGWINCH。
+        if needs_bounce {
+            let bounce = WinsizeBuilder { cols: cols.saturating_sub(1), rows, width: 0, height: 0 };
+            crate::rio_machine::send_resize(&pty_tx, bounce);
+            let restore = WinsizeBuilder { cols, rows, width: width as u16, height: height as u16 };
+            crate::rio_machine::send_resize(&pty_tx, restore);
+        }
 
         // 通知 daemon 更新 PTY 窗口大小
         if let Some(session_id) = daemon_session_id {

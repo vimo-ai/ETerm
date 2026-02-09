@@ -394,7 +394,12 @@ where
                     state.write_list.push_back(input);
                 }
                 Msg::Resize(window_size) => {
-                    let _ = self.pty.set_winsize(window_size);
+                    eprintln!("[Machine-{}] Resize: cols={} rows={}",
+                        self.route_id, window_size.cols, window_size.rows);
+                    match self.pty.set_winsize(window_size) {
+                        Ok(_) => eprintln!("[Machine-{}] set_winsize OK", self.route_id),
+                        Err(e) => eprintln!("[Machine-{}] set_winsize FAILED: {}", self.route_id, e),
+                    }
                 }
                 Msg::Shutdown => return false,
             }

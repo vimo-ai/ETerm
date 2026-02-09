@@ -3,6 +3,7 @@
 //! Does NOT depend on pty-daemon crate - duplicates minimal protocol types.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
@@ -22,6 +23,8 @@ enum Request {
         working_dir: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         terminal_id: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        envs: Option<HashMap<String, String>>,
     },
     Attach {
         session_id: String,
@@ -109,6 +112,9 @@ pub struct DaemonSession {
     pub rows: u16,
     pub control_stream: UnixStream,
     pub shm_name: String,
+    /// Reattach 且 ring buffer 为空时置 true，
+    /// 由首次 resize_terminal 消费并触发 SIGWINCH bounce
+    pub needs_sigwinch_bounce: bool,
 }
 
 impl Drop for DaemonSession {
@@ -203,7 +209,7 @@ fn connect() -> Option<UnixStream> {
 
     // On-demand spawn: 连接失败时尝试启动 daemon
     if let Err(e) = ensure_daemon(&path) {
-        eprintln!("[DaemonClient] ensure_daemon failed: {e}");
+        crate::rust_log_info!("[DaemonClient] ensure_daemon failed: {}", e);
         return None;
     }
 
@@ -215,7 +221,7 @@ fn connect() -> Option<UnixStream> {
         }
     }
 
-    eprintln!("[DaemonClient] failed to connect after spawning daemon");
+    crate::rust_log_info!("[DaemonClient] failed to connect after spawning daemon");
     None
 }
 
@@ -229,25 +235,20 @@ fn find_daemon_binary() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 2. App bundle: ../Resources/pty-daemon (相对于当前可执行文件)
+    // 2. ~/.vimo/bin/pty-daemon（build.sh 部署位置）
+    if let Some(home) = env::var("HOME").ok() {
+        let vimo_bin = std::path::PathBuf::from(home).join(".vimo/bin/pty-daemon");
+        if vimo_bin.exists() {
+            return Some(vimo_bin);
+        }
+    }
+
+    // 3. App bundle: ../Resources/pty-daemon (相对于当前可执行文件)
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
             let bundle_path = parent.join("../Resources/pty-daemon");
             if bundle_path.exists() {
                 return Some(bundle_path);
-            }
-        }
-    }
-
-    // 3. PATH 中查找
-    if let Ok(output) = std::process::Command::new("which")
-        .arg("pty-daemon")
-        .output()
-    {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(std::path::PathBuf::from(path));
             }
         }
     }
@@ -263,7 +264,7 @@ fn ensure_daemon(socket_path: &str) -> Result<(), String> {
     }
 
     let bin = find_daemon_binary().ok_or("pty-daemon binary not found")?;
-    eprintln!("[DaemonClient] spawning daemon: {}", bin.display());
+    crate::rust_log_info!("[DaemonClient] spawning daemon: {}", bin.display());
 
     std::process::Command::new(&bin)
         .arg("daemon")
@@ -282,6 +283,29 @@ fn send_request(stream: &mut UnixStream, req: Request) -> Result<Response, Strin
         .write_all(&encoded)
         .map_err(|e| format!("write request: {}", e))?;
     try_decode_message(stream)
+}
+
+/// 计算 shell 集成环境变量（ZDOTDIR, ETERM_SHELL_DIR）
+fn compute_shell_envs() -> Option<HashMap<String, String>> {
+    let exe_path = std::env::current_exe().ok()?;
+    let bundle_path = exe_path.parent()?.parent()?;
+    let shell_dir = bundle_path.join("Resources/Shell/zsh");
+    let shell_dir_flat = bundle_path.join("Resources");
+    let final_dir = if shell_dir.exists() {
+        shell_dir
+    } else if shell_dir_flat.join("integration.zsh").exists() {
+        shell_dir_flat
+    } else {
+        return None;
+    };
+    let dir_str = final_dir.to_string_lossy().to_string();
+    let mut envs = HashMap::new();
+    if let Ok(original) = std::env::var("ZDOTDIR") {
+        envs.insert("ETERM_ORIGINAL_ZDOTDIR".to_string(), original);
+    }
+    envs.insert("ETERM_SHELL_DIR".to_string(), dir_str.clone());
+    envs.insert("ZDOTDIR".to_string(), dir_str);
+    Some(envs)
 }
 
 // Public API
@@ -324,6 +348,7 @@ impl DaemonClient {
             rows,
             working_dir: cwd.map(|s| s.to_string()),
             terminal_id,
+            envs: compute_shell_envs(),
         };
         let session_id = match send_request(&mut stream, create_req) {
             Ok(Response::Created { session_id }) => {
@@ -390,6 +415,7 @@ impl DaemonClient {
             rows,
             control_stream: stream,
             shm_name,
+            needs_sigwinch_bounce: false,
         })
     }
 
