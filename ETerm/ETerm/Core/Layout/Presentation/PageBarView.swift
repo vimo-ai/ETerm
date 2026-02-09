@@ -172,6 +172,9 @@ private class PassthroughContainerView: NSView {
 /// 同时禁止窗口拖动，让子视图可以正确处理拖拽事件
 /// 参考: https://ardentswift.com/posts/macos-hide-toolbar/
 final class NSHostingViewIgnoringSafeArea<Content: View>: NSHostingView<Content> {
+    /// 上次上报的 fittingSize 宽度，用于检测内容尺寸变化
+    private var lastReportedFittingWidth: CGFloat = 0
+
     override var safeAreaInsets: NSEdgeInsets {
         NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
     }
@@ -182,6 +185,19 @@ final class NSHostingViewIgnoringSafeArea<Content: View>: NSHostingView<Content>
 
     override var mouseDownCanMoveWindow: Bool {
         false
+    }
+
+    override func layout() {
+        super.layout()
+        // SwiftUI 内容变化后 fittingSize 会更新，检测到变化就通知父 view 重新布局
+        let currentWidth = fittingSize.width
+        if abs(currentWidth - lastReportedFittingWidth) > 1 {
+            lastReportedFittingWidth = currentWidth
+            // 下一个 run loop 触发，避免 layout 递归
+            DispatchQueue.main.async { [weak self] in
+                self?.superview?.needsLayout = true
+            }
+        }
     }
 }
 

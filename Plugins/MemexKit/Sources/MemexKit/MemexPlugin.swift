@@ -35,9 +35,15 @@ public final class MemexPlugin: NSObject, Plugin {
         Task { @MainActor in
             try? MemexService.shared.start()
         }
+
+        // 启动 PageBar 统计轮询
+        MemexStatsStore.shared.startPolling()
     }
 
     public func deactivate() {
+        // 停止 PageBar 统计轮询
+        MemexStatsStore.shared.stopPolling()
+
         // 同步停止服务（不能用 Task，否则 app 退出时可能来不及执行）
         MemexService.shared.stop()
     }
@@ -106,7 +112,12 @@ public final class MemexPlugin: NSObject, Plugin {
     }
 
     public func pageBarView(for itemId: String) -> AnyView? {
-        nil
+        switch itemId {
+        case "memex-stats":
+            return AnyView(MemexPageBarView())
+        default:
+            return nil
+        }
     }
 
     public func windowBottomOverlayView(for id: String) -> AnyView? {
