@@ -62,6 +62,8 @@ struct SharedMessage {
     let content: String
     let timestamp: Int64
     let sequence: Int64
+    /// 原始 JSONL 行数据（用于解析 V2 字段：requestId, stopReason, eventType, agentId）
+    let raw: String?
 }
 
 struct SharedSearchResult {
@@ -253,6 +255,7 @@ final class SharedDbBridge {
             for i in 0..<Int(array.len) {
                 let m = array.data[i]
                 let roleStr = m.role == 0 ? "human" : "assistant"
+                let rawStr: String? = m.raw != nil ? String(cString: m.raw) : nil
                 result.append(SharedMessage(
                     id: m.id,
                     sessionId: try safeString(m.session_id),
@@ -260,7 +263,8 @@ final class SharedDbBridge {
                     role: roleStr,
                     content: try safeString(m.content),
                     timestamp: m.timestamp,
-                    sequence: m.sequence
+                    sequence: m.sequence,
+                    raw: rawStr
                 ))
             }
 
