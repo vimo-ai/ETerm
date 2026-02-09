@@ -7,7 +7,7 @@
     "runMode": "main",
     "loadPriority": "immediate",
     "dependencies": [{"id": "com.eterm.aicli", "minVersion": "1.0.0"}],
-    "capabilities": [],
+    "capabilities": ["ui.pageBar"],
     "principalClass": "MemexPlugin",
     "sidebarTabs": [
         {
@@ -28,6 +28,12 @@
         }
     ],
     "infoPanelContents": [],
+    "pageBarItems": [
+        {
+            "id": "memex-stats",
+            "viewClass": "MemexPageBarView"
+        }
+    ],
     "commands": [],
     "subscribes": [
         "aicli.responseComplete"
