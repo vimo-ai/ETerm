@@ -23,6 +23,7 @@ use crate::infra::SharedLogBuffer;
 use teletypewriter::EventedPty;
 
 use crate::rio_event::{FFIEventListener, RioEvent};
+use pty_daemon::shared_ring::SharedRingBuffer;
 
 /// 性能日志开关（开发调试时设为 true，生产环境设为 false）
 const DEBUG_PERFORMANCE: bool = false;
@@ -162,6 +163,8 @@ pub struct Machine<T: EventedPty> {
     shell_pid: u32,
     /// 日志缓冲（可选，来自 Terminal）
     log_buffer: SharedLogBuffer,
+    /// 共享内存 ring buffer（daemon 模式下用于恢复屏幕）
+    shared_ring: Option<SharedRingBuffer>,
 }
 
 impl<T> Machine<T>
@@ -177,7 +180,7 @@ where
         pty_fd: i32,
         shell_pid: u32,
     ) -> Result<Machine<T>, Box<dyn std::error::Error>> {
-        Self::new_with_log_buffer(terminal, pty, event_listener, route_id, pty_fd, shell_pid, None)
+        Self::new_with_log_buffer(terminal, pty, event_listener, route_id, pty_fd, shell_pid, None, None)
     }
 
     pub fn new_with_log_buffer(
@@ -188,6 +191,7 @@ where
         pty_fd: i32,
         shell_pid: u32,
         log_buffer: SharedLogBuffer,
+        shared_ring: Option<SharedRingBuffer>,
     ) -> Result<Machine<T>, Box<dyn std::error::Error>> {
         let (sender, receiver) = channel::channel();
         let poll = corcovado::Poll::new()?;
@@ -205,6 +209,7 @@ where
             pty_fd,
             shell_pid,
             log_buffer,
+            shared_ring,
         })
     }
 
@@ -333,6 +338,15 @@ where
                 log_buffer.append(&buf[..unprocessed]);
             }
 
+            // 写入共享内存 ring buffer（daemon 模式下恢复屏幕用）
+            if let Some(ref shm) = self.shared_ring {
+                let shm_start = std::time::Instant::now();
+                shm.write(&buf[..unprocessed]);
+                let shm_ns = shm_start.elapsed().as_nanos();
+                // ⚠️ DO NOT DELETE - shm write 性能日志，用于验证热路径开销
+                crate::rust_log_info!("[perf] shm_write: {}ns for {} bytes", shm_ns, unprocessed);
+            }
+
             // 照抄 Rio: Parse the incoming bytes.
             let parse_start = std::time::Instant::now();
             state.parser.advance(&mut **terminal, &buf[..unprocessed]);
@@ -376,7 +390,9 @@ where
     fn drain_recv_channel(&mut self, state: &mut State) -> bool {
         while let Some(msg) = self.receiver.recv() {
             match msg {
-                Msg::Input(input) => state.write_list.push_back(input),
+                Msg::Input(input) => {
+                    state.write_list.push_back(input);
+                }
                 Msg::Resize(window_size) => {
                     let _ = self.pty.set_winsize(window_size);
                 }
@@ -476,6 +492,8 @@ where
 
                 let mut events = Events::with_capacity(1024);
 
+                eprintln!("[Machine-{}] event loop started, pty_fd={}, shell_pid={}", self.route_id, self.pty_fd, self.shell_pid);
+
                 'event_loop: loop {
                     // 照抄 Rio: Wakeup the event loop when a synchronized update timeout was reached.
                     let handler = state.parser.sync_timeout();
@@ -538,7 +556,7 @@ where
                             {
                                 #[cfg(unix)]
                                 if UnixReady::from(event.readiness()).is_hup() {
-                                    // 照抄 Rio: Don't try to do I/O on a dead PTY.
+                                    eprintln!("[Machine-{}] PTY HUP detected, skipping I/O", self.route_id);
                                     continue;
                                 }
                                 if event.readiness().is_readable() {
@@ -609,9 +627,13 @@ where
 
 /// 用于发送 PTY 输入的辅助函数
 pub fn send_input(sender: &channel::Sender<Msg>, data: &[u8]) -> bool {
-    sender
+    let result = sender
         .send(Msg::Input(Cow::Owned(data.to_vec())))
-        .is_ok()
+        .is_ok();
+    if !result {
+        eprintln!("[send_input] channel send FAILED ({} bytes)", data.len());
+    }
+    result
 }
 
 /// 用于发送 resize 消息的辅助函数

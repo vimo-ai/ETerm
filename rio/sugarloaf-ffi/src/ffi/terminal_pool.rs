@@ -324,9 +324,9 @@ pub extern "C" fn terminal_pool_input(
     len: usize,
 ) -> bool {
     if handle.is_null() || data.is_null() {
+        eprintln!("[FFI] terminal_pool_input: null handle or data");
         return false;
     }
-
     let pool = unsafe { &*(handle as *const TerminalPool) };
     let data_slice = unsafe { std::slice::from_raw_parts(data, len) };
     pool.input(terminal_id, data_slice)
