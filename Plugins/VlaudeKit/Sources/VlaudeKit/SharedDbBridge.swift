@@ -58,7 +58,7 @@ struct SharedMessage {
     let id: Int64
     let sessionId: String
     let uuid: String
-    let role: String  // "human" or "assistant"
+    let role: String  // "human", "assistant", "tool", or "system"
     let content: String
     let timestamp: Int64
     let sequence: Int64
@@ -254,7 +254,14 @@ final class SharedDbBridge {
             var result: [SharedMessage] = []
             for i in 0..<Int(array.len) {
                 let m = array.data[i]
-                let roleStr = m.role == 0 ? "human" : "assistant"
+                let roleStr: String
+                switch Int(m.role) {
+                case 0: roleStr = "human"
+                case 1: roleStr = "assistant"
+                case 2: roleStr = "tool"
+                case 3: roleStr = "system"
+                default: roleStr = "unknown"
+                }
                 let rawStr: String? = m.raw != nil ? String(cString: m.raw) : nil
                 result.append(SharedMessage(
                     id: m.id,

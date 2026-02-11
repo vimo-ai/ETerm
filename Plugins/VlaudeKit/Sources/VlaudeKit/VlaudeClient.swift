@@ -349,9 +349,14 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             isConnected = false
 
         case ServerEvents.injectToEterm:
+            print("📡 [VlaudeClient] 收到 injectToEterm 事件, data keys=\(data.keys.sorted())")
             guard let sessionId = data["sessionId"] as? String,
-                  let text = data["text"] as? String else { return }
+                  let text = data["text"] as? String else {
+                print("❌ [VlaudeClient] injectToEterm 解析失败, data=\(data)")
+                return
+            }
             let clientMessageId = data["clientMessageId"] as? String
+            print("📡 [VlaudeClient] injectToEterm: sessionId=\(sessionId), text=\(text.prefix(20))..., delegate=\(delegate != nil)")
             delegate?.vlaudeClient(self, didReceiveInject: sessionId, text: text, clientMessageId: clientMessageId)
 
         case ServerEvents.mobileViewing:
