@@ -684,20 +684,28 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     /// 通过 ClaudeKit 服务查询 sessionId -> terminalId 映射
     private func getTerminalId(for sessionId: String) -> Int? {
-        guard let host = host else { return nil }
+        guard let host = host else {
+            print("🔍 [getTerminalId] host 为 nil")
+            return nil
+        }
         guard let result = host.callService(
-            pluginId: "com.eterm.claude",
+            pluginId: "com.eterm.aicli",
             name: "getTerminalId",
             params: ["sessionId": sessionId]
-        ) else { return nil }
-        return result["terminalId"] as? Int
+        ) else {
+            print("🔍 [getTerminalId] callService 返回 nil, sessionId=\(sessionId)")
+            return nil
+        }
+        let tid = result["terminalId"] as? Int
+        print("🔍 [getTerminalId] sessionId=\(sessionId) -> terminalId=\(tid.map(String.init) ?? "nil")")
+        return tid
     }
 
     /// 通过 ClaudeKit 服务查询 terminalId -> sessionId 映射
     private func getSessionId(for terminalId: Int) -> String? {
         guard let host = host else { return nil }
         guard let result = host.callService(
-            pluginId: "com.eterm.claude",
+            pluginId: "com.eterm.aicli",
             name: "getSessionId",
             params: ["terminalId": terminalId]
         ) else { return nil }
@@ -871,9 +879,12 @@ extension VlaudePlugin: VlaudeClientDelegate {
     }
 
     func vlaudeClient(_ client: VlaudeClient, didReceiveInject sessionId: String, text: String, clientMessageId: String?) {
+        print("💉 [VlaudePlugin.didReceiveInject] sessionId=\(sessionId), text=\(text.prefix(30))..., clientMsgId=\(clientMessageId ?? "nil")")
         guard let terminalId = getTerminalId(for: sessionId) else {
+            print("❌ [VlaudePlugin.didReceiveInject] getTerminalId 返回 nil，sessionId=\(sessionId)")
             return
         }
+        print("💉 [VlaudePlugin.didReceiveInject] terminalId=\(terminalId)")
 
         // 存储 clientMessageId，等待 Agent 推送 user 消息后一起推送
         if let clientMsgId = clientMessageId {
@@ -881,10 +892,12 @@ extension VlaudePlugin: VlaudeClientDelegate {
         }
 
         // 写入终端
+        print("💉 [VlaudePlugin.didReceiveInject] 写入终端...")
         host?.writeToTerminal(terminalId: terminalId, data: text)
 
         // 延迟发送回车
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            print("💉 [VlaudePlugin.didReceiveInject] 发送回车")
             self?.host?.writeToTerminal(terminalId: terminalId, data: "\r")
         }
     }
@@ -1112,9 +1125,17 @@ extension VlaudePlugin {
                 Self.convertToRawMessage(msg, sessionId: sessionId)
             }
 
+            // 即使所有消息被过滤（system/meta），也要推进游标，防止死循环
             guard !rawMessages.isEmpty else {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
+                    // 推进游标跳过被过滤的消息
+                    var cursor = self.cursorStore.cursor(for: sessionId)
+                    cursor.messagesRead = currentOffset + dbMessages.count
+                    cursor.transcriptPath = transcriptPath
+                    self.cursorStore.update(sessionId, cursor: cursor)
+                    self.cursorStore.save()
+
                     self.collectInFlight.remove(sessionId)
                     if let pendingPath = self.collectPending.removeValue(forKey: sessionId) {
                         self.collectAndPushNewMessages(sessionId: sessionId, transcriptPath: pendingPath)
@@ -1158,6 +1179,8 @@ extension VlaudePlugin {
 
     /// 将 DB 消息转换为 RawMessage（解析 raw JSONL 提取 V2 字段）
     private nonisolated static func convertToRawMessage(_ msg: SharedMessage, sessionId: String) -> RawMessage? {
+        // 数据分类：只推送 user/assistant 消息，过滤 system/tool/unknown
+        guard msg.role == "human" || msg.role == "assistant" else { return nil }
         let messageType = msg.role == "human" ? 0 : 1
 
         // 从 raw 字段解析 V2 字段
@@ -1165,27 +1188,47 @@ extension VlaudePlugin {
         var stopReason: String? = nil
         var eventType: String? = nil
         var agentId: String? = nil
+        var content = msg.content  // fallback: content_full（格式化文本）
 
         if let raw = msg.raw,
            let rawData = raw.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: rawData) as? [String: Any] {
 
+            // 过滤 meta 消息（command output 如 /chat, /copy 等）
+            if json["isMeta"] as? Bool == true { return nil }
+
             requestId = json["requestId"] as? String
             agentId = json["agentId"] as? String
 
-            // stop_reason 在 message.stop_reason（Claude Code JSONL 通常为 null，需推断）
             if let message = json["message"] as? [String: Any] {
+                // stop_reason
                 stopReason = message["stop_reason"] as? String
+
+                // 提取原始 content（JSON 格式）替代 content_full
+                // content_full 是 FTS 格式化文本（"[Thinking] xxx\n回复文本"），
+                // ContentBlockParser 需要 JSON 数组才能正确解析 content blocks
+                if let messageContent = message["content"] {
+                    if let contentArray = messageContent as? [[String: Any]] {
+                        // assistant: content blocks 数组 → 序列化回 JSON
+                        if let contentData = try? JSONSerialization.data(withJSONObject: contentArray),
+                           let contentStr = String(data: contentData, encoding: .utf8) {
+                            content = contentStr
+                        }
+                    } else if let contentStr = messageContent as? String {
+                        // user: 纯文本字符串
+                        content = contentStr
+                    }
+                }
 
                 // JSONL 不写 stop_reason，从 content 推断：有 tool_use → "tool_use"，否则 → "end_turn"
                 if stopReason == nil, messageType == 1,
-                   let content = message["content"] as? [[String: Any]] {
-                    let hasToolUse = content.contains { ($0["type"] as? String) == "tool_use" }
+                   let contentBlocks = message["content"] as? [[String: Any]] {
+                    let hasToolUse = contentBlocks.contains { ($0["type"] as? String) == "tool_use" }
                     stopReason = hasToolUse ? "tool_use" : "end_turn"
                 }
             }
 
-            // 推断 eventType
+            // 推断 eventType（不再为混合 block 消息指定单一类型，留给 iOS 端按 block 解析）
             if messageType == 0 {
                 if json["toolUseResult"] != nil {
                     eventType = "tool_result"
@@ -1194,14 +1237,17 @@ extension VlaudePlugin {
                 }
             } else {
                 if let message = json["message"] as? [String: Any],
-                   let content = message["content"] as? [[String: Any]] {
-                    let types = content.compactMap { $0["type"] as? String }
+                   let contentBlocks = message["content"] as? [[String: Any]] {
+                    let types = contentBlocks.compactMap { $0["type"] as? String }
                     if types.contains("tool_use") {
                         eventType = "tool_use"
-                    } else if types.contains("thinking") {
+                    } else if types.count == 1 && types.first == "thinking" {
+                        // 纯 thinking 消息（没有 text block）
                         eventType = "thinking"
                     } else {
-                        eventType = types.first
+                        // 混合 block（thinking + text、纯 text 等）：不指定 eventType
+                        // iOS 端通过 contentBlocks 逐个 block 解析
+                        eventType = nil
                     }
                 }
             }
@@ -1211,7 +1257,7 @@ extension VlaudePlugin {
             uuid: msg.uuid,
             sessionId: sessionId,
             messageType: messageType,
-            content: msg.content,
+            content: content,
             timestamp: msg.timestamp > 0 ? String(msg.timestamp) : nil,
             requestId: requestId,
             stopReason: stopReason,
@@ -1295,7 +1341,11 @@ extension VlaudePlugin {
             )
 
             let pushed = client?.pushMessage(sessionId: sessionId, message: message, contentBlocks: contentBlocks, preview: preview, clientMessageId: clientMsgId) ?? false
-            if !pushed { allSuccess = false }
+            if pushed {
+                logInfo("[DIAG] push sid=\(sessionId.prefix(8)) uuid=\(message.uuid.prefix(8)) role=\(message.type ?? "?")")
+            } else {
+                allSuccess = false
+            }
         }
         return allSuccess
     }
