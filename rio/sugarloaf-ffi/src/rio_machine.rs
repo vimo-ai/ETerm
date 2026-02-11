@@ -344,6 +344,7 @@ where
                 shm.write(&buf[..unprocessed]);
                 let shm_ns = shm_start.elapsed().as_nanos();
                 // ⚠️ DO NOT DELETE - shm write 性能日志，用于验证热路径开销
+                #[cfg(feature = "perf_log")]
                 crate::rust_log_info!("[perf] shm_write: {}ns for {} bytes", shm_ns, unprocessed);
             }
 
