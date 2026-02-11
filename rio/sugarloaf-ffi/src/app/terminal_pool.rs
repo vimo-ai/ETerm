@@ -2573,7 +2573,8 @@ impl TerminalPool {
 
         let frame_time = frame_start.elapsed();
 
-        // 🎯 帧时间日志（每帧都输出）
+        // 🎯 帧时间日志（默认关闭，只有开启 perf_log feature 才输出）
+        #[cfg(feature = "perf_log")]
         {
             static FRAME_NUM: AtomicU64 = AtomicU64::new(0);
             let n = FRAME_NUM.fetch_add(1, Ordering::Relaxed);
