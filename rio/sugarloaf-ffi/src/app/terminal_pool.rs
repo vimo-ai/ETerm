@@ -1204,18 +1204,34 @@ impl TerminalPool {
     pub fn query_log(
         &self,
         id: usize,
-        since: Option<u64>,
+        after: Option<u64>,
+        before: Option<u64>,
         limit: usize,
         search: Option<&str>,
         is_regex: bool,
         case_insensitive: bool,
+        backward: bool,
+        current_run: bool,
     ) -> Option<String> {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
             let terminal = entry.terminal.lock();
             if let Some(ref log_buffer) = terminal.log_buffer() {
-                let result = log_buffer.query(since, limit, search, is_regex, case_insensitive);
-                // 返回 JSON 格式
+                // current_run: use boundary_seq as effective after
+                let effective_after = if current_run {
+                    match (log_buffer.boundary_seq(), after) {
+                        (Some(b), Some(a)) => Some(a.max(b - 1)), // user's after takes precedence if larger
+                        (Some(b), None) => Some(b - 1),           // boundary - 1 so seq >= boundary passes
+                        (None, a) => a,                            // no boundary, use user's after
+                    }
+                } else {
+                    after
+                };
+
+                let result = log_buffer.query(
+                    effective_after, before, limit, search,
+                    is_regex, case_insensitive, backward,
+                );
                 let json = serde_json::json!({
                     "lines": result.lines.iter().map(|l| {
                         serde_json::json!({
@@ -1225,12 +1241,27 @@ impl TerminalPool {
                     }).collect::<Vec<_>>(),
                     "next_seq": result.next_seq,
                     "has_more": result.has_more,
-                    "truncated": result.truncated
+                    "truncated": result.truncated,
+                    "boundary_seq": result.boundary_seq,
+                    "boundary_valid": result.boundary_valid
                 });
                 Some(json.to_string())
             } else {
                 None // LogBuffer 未启用
             }
+        } else {
+            None
+        }
+    }
+
+    /// Mark a run boundary on the terminal's log buffer
+    ///
+    /// Returns the boundary seq value, or None if LogBuffer is not enabled.
+    pub fn mark_log_boundary(&self, id: usize) -> Option<u64> {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            let terminal = entry.terminal.lock();
+            terminal.log_buffer().as_ref().map(|lb| lb.mark_boundary())
         } else {
             None
         }
