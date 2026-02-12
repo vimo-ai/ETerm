@@ -40,6 +40,7 @@
         "aicli.waitingInput",
         "aicli.responseComplete",
         "aicli.sessionEnd",
-        "aicli.permissionRequest"
+        "aicli.permissionRequest",
+        "aicli.toolUse"
     ]
 }
