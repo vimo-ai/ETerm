@@ -1194,16 +1194,20 @@ pub extern "C" fn terminal_pool_free_string_array(
 /// 查询终端的日志缓冲
 ///
 /// 仅当 `log_buffer_size > 0` 时可用。
-/// 返回 JSON 格式的日志查询结果，包含 lines、next_seq、has_more、truncated。
+/// 返回 JSON 格式的日志查询结果，包含 lines、next_seq、has_more、truncated、
+/// boundary_seq、boundary_valid。
 ///
 /// # 参数
 /// - `handle`: TerminalPool 句柄
 /// - `terminal_id`: 终端 ID
 /// - `since`: 返回 seq > since 的日志（0 表示全部）
+/// - `before`: 返回 seq < before 的日志（0 表示无上界）
 /// - `limit`: 最多返回的行数
 /// - `search`: 可选的搜索过滤（NULL 表示不过滤）
 /// - `is_regex`: 是否将 search 作为正则表达式
 /// - `case_insensitive`: 是否大小写不敏感
+/// - `backward`: 是否从尾部反向扫描
+/// - `current_run`: 是否只查当前运行（使用 boundary_seq 作为下界）
 ///
 /// # 返回
 /// JSON 字符串，需要调用者使用 `rio_free_string` 释放。
@@ -1213,10 +1217,13 @@ pub extern "C" fn terminal_pool_query_log(
     handle: *mut TerminalPoolHandle,
     terminal_id: usize,
     since: u64,
+    before: u64,
     limit: usize,
     search: *const std::ffi::c_char,
     is_regex: bool,
     case_insensitive: bool,
+    backward: bool,
+    current_run: bool,
 ) -> *mut std::ffi::c_char {
     if handle.is_null() {
         return std::ptr::null_mut();
@@ -1232,10 +1239,14 @@ pub extern "C" fn terminal_pool_query_log(
         c_str.to_str().ok()
     };
 
-    // since = 0 表示返回全部
-    let since_opt = if since == 0 { None } else { Some(since) };
+    // 0 表示无界
+    let after_opt = if since == 0 { None } else { Some(since) };
+    let before_opt = if before == 0 { None } else { Some(before) };
 
-    if let Some(json) = pool.query_log(terminal_id, since_opt, limit, search_str, is_regex, case_insensitive) {
+    if let Some(json) = pool.query_log(
+        terminal_id, after_opt, before_opt, limit, search_str,
+        is_regex, case_insensitive, backward, current_run,
+    ) {
         match std::ffi::CString::new(json) {
             Ok(c_str) => c_str.into_raw(),
             Err(_) => std::ptr::null_mut(),
@@ -1243,6 +1254,30 @@ pub extern "C" fn terminal_pool_query_log(
     } else {
         std::ptr::null_mut()
     }
+}
+
+/// 标记终端日志的运行边界
+///
+/// 在终端复用场景下，标记当前位置为新一次运行的起点。
+/// 后续查询可使用 current_run=true 只获取边界之后的日志。
+///
+/// # 参数
+/// - `handle`: TerminalPool 句柄
+/// - `terminal_id`: 终端 ID
+///
+/// # 返回
+/// boundary seq 值，0 表示失败（LogBuffer 未启用或终端不存在）
+#[no_mangle]
+pub extern "C" fn terminal_pool_mark_log_boundary(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> u64 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+    pool.mark_log_boundary(terminal_id).unwrap_or(0)
 }
 
 /// 获取终端日志的最后 N 行

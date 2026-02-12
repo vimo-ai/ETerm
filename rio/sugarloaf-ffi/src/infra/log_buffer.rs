@@ -22,7 +22,9 @@ pub struct LogQueryResult {
     pub lines: Vec<LogLine>,
     pub next_seq: u64,
     pub has_more: bool,
-    pub truncated: bool, // true if old logs were discarded
+    pub truncated: bool,         // true if old logs were discarded by ring buffer
+    pub boundary_seq: Option<u64>, // current run start seq (if mark_boundary was called)
+    pub boundary_valid: bool,    // true if boundary_seq is still within the buffer
 }
 
 /// Terminal output log buffer
@@ -44,6 +46,10 @@ pub struct LogBuffer {
 
     /// Partial UTF-8 bytes from previous append (max 3 bytes for a 4-byte sequence)
     partial_utf8: RwLock<Vec<u8>>,
+
+    /// Run boundary: seq of the first line in the current run
+    /// Set by mark_boundary(), used by current_run queries
+    boundary_seq: RwLock<Option<u64>>,
 }
 
 impl LogBuffer {
@@ -58,6 +64,7 @@ impl LogBuffer {
             next_seq: RwLock::new(1),
             current_line: RwLock::new(String::new()),
             partial_utf8: RwLock::new(Vec::with_capacity(4)),
+            boundary_seq: RwLock::new(None),
         }
     }
 
@@ -181,24 +188,54 @@ impl LogBuffer {
         // Keep next_seq incrementing, don't reset
     }
 
+    /// Mark current position as a run boundary
+    ///
+    /// Flushes any incomplete line first, then records next_seq as the
+    /// start of a new run. Used to distinguish "current run" from history.
+    ///
+    /// Returns the boundary seq value.
+    pub fn mark_boundary(&self) -> u64 {
+        self.flush();
+        let seq = *self.next_seq.read().unwrap();
+        *self.boundary_seq.write().unwrap() = Some(seq);
+        seq
+    }
+
+    /// Get the current boundary seq (if set)
+    pub fn boundary_seq(&self) -> Option<u64> {
+        *self.boundary_seq.read().unwrap()
+    }
+
     /// Query log lines
     ///
     /// # Arguments
-    /// * `since` - Return lines with seq > since (None for all)
+    /// * `after` - Return lines with seq > after (None for no lower bound)
+    /// * `before` - Return lines with seq < before (None for no upper bound)
     /// * `limit` - Maximum number of lines to return
     /// * `search` - Optional search filter
     /// * `is_regex` - If true, treat `search` as a regex pattern
     /// * `case_insensitive` - If true, search is case-insensitive
+    /// * `backward` - If true, scan from tail and return most recent matches
     pub fn query(
         &self,
-        since: Option<u64>,
+        after: Option<u64>,
+        before: Option<u64>,
         limit: usize,
         search: Option<&str>,
         is_regex: bool,
         case_insensitive: bool,
+        backward: bool,
     ) -> LogQueryResult {
         let lines = self.lines.read().unwrap();
         let next_seq = *self.next_seq.read().unwrap();
+        let boundary = *self.boundary_seq.read().unwrap();
+
+        // Boundary validity: boundary must be >= first seq in buffer
+        let first_seq = lines.front().map_or(next_seq, |l| l.seq);
+        let boundary_valid = boundary.map_or(false, |b| b >= first_seq);
+
+        // Check if old logs were discarded by ring buffer
+        let truncated = first_seq > 1;
 
         // Compile regex if needed
         let compiled_regex = if is_regex {
@@ -212,45 +249,67 @@ impl LogBuffer {
             None
         };
 
-        // Filter by since
-        let filtered: Vec<&LogLine> = lines
-            .iter()
-            .filter(|line| since.map_or(true, |s| line.seq > s))
-            .filter(|line| {
-                match search {
-                    None => true,
-                    Some(s) => {
-                        if let Some(ref re) = compiled_regex {
-                            re.is_match(&line.text)
-                        } else if case_insensitive {
-                            line.text.to_lowercase().contains(&s.to_lowercase())
-                        } else {
-                            line.text.contains(s)
-                        }
+        // Build filter closure
+        let matches = |line: &&LogLine| -> bool {
+            if after.map_or(false, |a| line.seq <= a) { return false; }
+            if before.map_or(false, |b| line.seq >= b) { return false; }
+            match search {
+                None => true,
+                Some(s) => {
+                    if let Some(ref re) = compiled_regex {
+                        re.is_match(&line.text)
+                    } else if case_insensitive {
+                        line.text.to_lowercase().contains(&s.to_lowercase())
+                    } else {
+                        line.text.contains(s)
                     }
                 }
-            })
-            .collect();
+            }
+        };
 
-        // Check if truncated (old logs discarded)
-        let first_seq = lines.front().map_or(1, |l| l.seq);
-        let truncated = first_seq > 1;
-
-        // Check has_more
-        let has_more = filtered.len() > limit;
-
-        // Take limit
-        let result_lines: Vec<LogLine> = filtered
-            .into_iter()
-            .take(limit)
-            .cloned()
-            .collect();
+        let (result_lines, has_more) = if backward {
+            // Reverse scan: collect from tail, then reverse to chronological order
+            let mut collected: Vec<LogLine> = Vec::with_capacity(limit + 1);
+            let mut total_matched = 0usize;
+            for line in lines.iter().rev() {
+                if matches(&line) {
+                    total_matched += 1;
+                    if collected.len() < limit {
+                        collected.push(line.clone());
+                    } else {
+                        // We found more than limit, so has_more = true
+                        break;
+                    }
+                }
+            }
+            let has_more = total_matched > limit;
+            collected.reverse(); // chronological order
+            (collected, has_more)
+        } else {
+            // Forward scan (original behavior)
+            let mut collected: Vec<LogLine> = Vec::with_capacity(limit);
+            let mut total_matched = 0usize;
+            for line in lines.iter() {
+                if matches(&line) {
+                    total_matched += 1;
+                    if collected.len() < limit {
+                        collected.push(line.clone());
+                    } else {
+                        break;
+                    }
+                }
+            }
+            let has_more = total_matched > limit;
+            (collected, has_more)
+        };
 
         LogQueryResult {
             lines: result_lines,
             next_seq,
             has_more,
             truncated,
+            boundary_seq: boundary,
+            boundary_valid,
         }
     }
 
@@ -479,7 +538,7 @@ mod tests {
             buffer.append(format!("line{}\n", i).as_bytes());
         }
 
-        let result = buffer.query(Some(2), 100, None, false, true);
+        let result = buffer.query(Some(2), None, 100, None, false, true, false);
         assert_eq!(result.lines.len(), 3); // seq 3, 4, 5
         assert_eq!(result.lines[0].seq, 3);
     }
@@ -492,7 +551,7 @@ mod tests {
         buffer.append(b"ERROR: failed\n");
         buffer.append(b"INFO: done\n");
 
-        let result = buffer.query(None, 100, Some("error"), false, true);
+        let result = buffer.query(None, None, 100, Some("error"), false, true, false);
         assert_eq!(result.lines.len(), 1);
         assert_eq!(result.lines[0].text, "ERROR: failed");
     }
@@ -507,16 +566,16 @@ mod tests {
         buffer.append(b"ERROR: disk full\n");
 
         // Regex: match lines with "ERROR" followed by any word
-        let result = buffer.query(None, 100, Some(r"ERROR:.*failed"), true, false);
+        let result = buffer.query(None, None, 100, Some(r"ERROR:.*failed"), true, false, false);
         assert_eq!(result.lines.len(), 1);
         assert_eq!(result.lines[0].text, "ERROR: connection failed");
 
         // Case-insensitive regex
-        let result = buffer.query(None, 100, Some(r"error"), true, true);
+        let result = buffer.query(None, None, 100, Some(r"error"), true, true, false);
         assert_eq!(result.lines.len(), 2);
 
         // Case-sensitive regex (no match for lowercase)
-        let result = buffer.query(None, 100, Some(r"error"), true, false);
+        let result = buffer.query(None, None, 100, Some(r"error"), true, false, false);
         assert_eq!(result.lines.len(), 0);
     }
 
@@ -528,11 +587,11 @@ mod tests {
         buffer.append(b"error: also failed\n");
 
         // Case-insensitive (default backward compat)
-        let result = buffer.query(None, 100, Some("error"), false, true);
+        let result = buffer.query(None, None, 100, Some("error"), false, true, false);
         assert_eq!(result.lines.len(), 2);
 
         // Case-sensitive
-        let result = buffer.query(None, 100, Some("error"), false, false);
+        let result = buffer.query(None, None, 100, Some("error"), false, false, false);
         assert_eq!(result.lines.len(), 1);
         assert_eq!(result.lines[0].text, "error: also failed");
     }
@@ -545,7 +604,7 @@ mod tests {
         buffer.append(b"normal line\n");
 
         // Invalid regex falls back to plain text search
-        let result = buffer.query(None, 100, Some("[invalid"), true, false);
+        let result = buffer.query(None, None, 100, Some("[invalid"), true, false, false);
         assert_eq!(result.lines.len(), 1);
         assert_eq!(result.lines[0].text, "test [invalid pattern");
     }
@@ -558,8 +617,132 @@ mod tests {
             buffer.append(format!("line{}\n", i).as_bytes());
         }
 
-        let result = buffer.query(None, 100, None, false, true);
+        let result = buffer.query(None, None, 100, None, false, true, false);
         assert!(result.truncated);
+    }
+
+    #[test]
+    fn test_query_backward() {
+        let buffer = LogBuffer::new(100);
+
+        for i in 1..=10 {
+            buffer.append(format!("line{}\n", i).as_bytes());
+        }
+
+        // Backward query: last 3 lines
+        let result = buffer.query(None, None, 3, None, false, true, true);
+        assert_eq!(result.lines.len(), 3);
+        assert_eq!(result.lines[0].text, "line8");
+        assert_eq!(result.lines[1].text, "line9");
+        assert_eq!(result.lines[2].text, "line10");
+        assert!(result.has_more);
+    }
+
+    #[test]
+    fn test_query_backward_with_search() {
+        let buffer = LogBuffer::new(100);
+
+        buffer.append(b"ERROR: first\n");
+        buffer.append(b"INFO: ok\n");
+        buffer.append(b"ERROR: second\n");
+        buffer.append(b"INFO: ok\n");
+        buffer.append(b"ERROR: third\n");
+
+        // Backward search: last 2 ERRORs
+        let result = buffer.query(None, None, 2, Some("ERROR"), false, true, true);
+        assert_eq!(result.lines.len(), 2);
+        assert_eq!(result.lines[0].text, "ERROR: second");
+        assert_eq!(result.lines[1].text, "ERROR: third");
+        assert!(result.has_more); // "ERROR: first" still exists
+    }
+
+    #[test]
+    fn test_query_before() {
+        let buffer = LogBuffer::new(100);
+
+        for i in 1..=5 {
+            buffer.append(format!("line{}\n", i).as_bytes());
+        }
+
+        // Lines with seq < 4 (i.e. seq 1, 2, 3)
+        let result = buffer.query(None, Some(4), 100, None, false, true, false);
+        assert_eq!(result.lines.len(), 3);
+        assert_eq!(result.lines[2].text, "line3");
+    }
+
+    #[test]
+    fn test_query_after_and_before() {
+        let buffer = LogBuffer::new(100);
+
+        for i in 1..=10 {
+            buffer.append(format!("line{}\n", i).as_bytes());
+        }
+
+        // Lines with 3 < seq < 8 (i.e. seq 4, 5, 6, 7)
+        let result = buffer.query(Some(3), Some(8), 100, None, false, true, false);
+        assert_eq!(result.lines.len(), 4);
+        assert_eq!(result.lines[0].text, "line4");
+        assert_eq!(result.lines[3].text, "line7");
+    }
+
+    #[test]
+    fn test_mark_boundary() {
+        let buffer = LogBuffer::new(100);
+
+        buffer.append(b"old line 1\n");
+        buffer.append(b"old line 2\n");
+
+        let boundary = buffer.mark_boundary();
+        assert_eq!(boundary, 3); // next_seq after 2 lines
+
+        buffer.append(b"new line 1\n");
+        buffer.append(b"new line 2\n");
+
+        assert_eq!(buffer.boundary_seq(), Some(3));
+
+        // Query with after=boundary should only get new lines
+        let result = buffer.query(Some(boundary - 1), None, 100, None, false, true, false);
+        assert_eq!(result.lines.len(), 2);
+        assert_eq!(result.lines[0].text, "new line 1");
+        assert_eq!(result.boundary_seq, Some(3));
+        assert!(result.boundary_valid);
+    }
+
+    #[test]
+    fn test_boundary_valid_after_ring_buffer_eviction() {
+        let buffer = LogBuffer::new(3);
+
+        buffer.append(b"line1\n");
+        let boundary = buffer.mark_boundary();
+        assert_eq!(boundary, 2);
+
+        // Fill buffer past capacity, evicting the boundary
+        for i in 2..=10 {
+            buffer.append(format!("line{}\n", i).as_bytes());
+        }
+
+        let result = buffer.query(None, None, 100, None, false, true, false);
+        assert_eq!(result.boundary_seq, Some(2));
+        assert!(!result.boundary_valid); // boundary evicted
+    }
+
+    #[test]
+    fn test_boundary_with_backward_query() {
+        let buffer = LogBuffer::new(100);
+
+        buffer.append(b"old1\n");
+        buffer.append(b"old2\n");
+        let boundary = buffer.mark_boundary();
+
+        buffer.append(b"new1\n");
+        buffer.append(b"new2\n");
+        buffer.append(b"new3\n");
+
+        // Backward query within current run (after = boundary - 1)
+        let result = buffer.query(Some(boundary - 1), None, 2, None, false, true, true);
+        assert_eq!(result.lines.len(), 2);
+        assert_eq!(result.lines[0].text, "new2");
+        assert_eq!(result.lines[1].text, "new3");
     }
 
     #[test]
