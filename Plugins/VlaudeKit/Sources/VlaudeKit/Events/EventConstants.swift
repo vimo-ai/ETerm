@@ -73,6 +73,11 @@ public enum DaemonEvents {
     /// @payload { clientId: String, sessionId: String, projectPath: String }
     public static let newSessionCreated = "daemon:newSessionCreated"
 
+    // MARK: - 工具生命周期
+
+    /// @payload { sessionId: String, toolName: String, toolUseId: String }
+    public static let preToolUse = "daemon:preToolUse"
+
     // MARK: - 权限请求
 
     /// @payload { requestId: String, sessionId: String, clientId: String, toolName: String, input: Any, toolUseId: String, description: String }
@@ -84,6 +89,8 @@ public enum DaemonEvents {
     /// @payload { toolUseId: String, sessionId: String, success: Bool, message: String? }
     /// ETerm 收到 iOS 审批后发送确认，通知 iOS 更新状态
     public static let approvalAck = "daemon:approvalAck"
+    /// @payload { sessionId: String, toolUseIds: [String] }
+    public static let permissionCancelled = "daemon:permissionCancelled"
 
     // MARK: - ETerm 状态
 

@@ -467,6 +467,9 @@ public final class VlaudePlugin: NSObject, Plugin {
         case "aicli.permissionRequest":
             handleClaudePermissionPrompt(payload)
 
+        case "aicli.toolUse":
+            handleClaudeToolUse(payload)
+
         case "terminal.didClose":
             handleTerminalClosed(payload)
 
@@ -498,12 +501,16 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 发送 daemon:sessionStart 事件（更新 StatusManager，iOS 显示在线状态）
         let projectPath = payload["cwd"] as? String ?? ""
         client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
+        diagLog("hook-out", event: "SessionStart", sessionId: sessionId)
     }
 
     private func handleClaudePromptSubmit(_ payload: [String: Any]) {
         guard let sessionId = payload["sessionId"] as? String else { return }
         // 标记为 loading
         loadingSessions.insert(sessionId)
+
+        // 新 prompt 提交 = 之前的审批请求已过期（用户 Interrupt 后重新输入）
+        cleanupExpiredApprovals(sessionId: sessionId)
 
         // [V3] 通知 agent 采集 → 从 DB 读取新消息 → 推送到 iOS
         if let transcriptPath = payload["transcriptPath"] as? String,
@@ -520,6 +527,9 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 清除 loading 状态
         loadingSessions.remove(sessionId)
+
+        // Response 完成 = 之前未应答的审批请求已过期
+        cleanupExpiredApprovals(sessionId: sessionId)
 
         // 检查是否有旧的 sessionPaths 需要清理（session 改变的情况）
         // 先收集要清理的 sessionId，避免迭代时修改字典
@@ -579,6 +589,9 @@ public final class VlaudePlugin: NSObject, Plugin {
             collectAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
         }
 
+        // Session 结束 = 所有未应答的审批请求已过期
+        cleanupExpiredApprovals(sessionId: sessionId)
+
         // 清理本地数据（映射由 ClaudeKit 维护）
         sessionPaths.removeValue(forKey: sessionId)
         pendingRequests.removeValue(forKey: terminalId)
@@ -591,6 +604,7 @@ public final class VlaudePlugin: NSObject, Plugin {
 
         // 发送 daemon:sessionEnd 事件（通知 StatusManager session 结束）
         client?.emitSessionEnd(sessionId: sessionId)
+        diagLog("hook-out", event: "SessionEnd", sessionId: sessionId)
     }
 
     private func handleTerminalClosed(_ payload: [String: Any]) {
@@ -666,6 +680,7 @@ public final class VlaudePlugin: NSObject, Plugin {
             message: payload["message"] as? String,
             toolUse: toolUseInfo
         )
+        diagLog("hook-out", event: "PermissionRequest", sessionId: sessionId, tool: toolName, toolUseId: toolUseId)
 
         // [V3] 通知 agent 采集 → 从 DB 读取新消息 → 推送到 iOS
         if let transcriptPath = payload["transcriptPath"] as? String,
@@ -676,8 +691,58 @@ public final class VlaudePlugin: NSObject, Plugin {
         }
     }
 
+    private func handleClaudeToolUse(_ payload: [String: Any]) {
+        // 只转发 PreToolUse（phase == "pre"），供 Server Correlator 关联 toolUseId
+        guard let phase = payload["phase"] as? String, phase == "pre" else { return }
+        guard let sessionId = payload["sessionId"] as? String,
+              let toolName = payload["toolName"] as? String,
+              let toolUseId = payload["toolUseId"] as? String,
+              !toolUseId.isEmpty else { return }
+
+        client?.emitPreToolUse(sessionId: sessionId, toolName: toolName, toolUseId: toolUseId)
+        diagLog("hook-out", event: "PreToolUse", sessionId: sessionId, tool: toolName, toolUseId: toolUseId)
+    }
+
     public func handleCommand(_ commandId: String) {
         // 暂无命令
+    }
+
+    // MARK: - 审批清理
+
+    /// 清理指定 session 的过期审批请求
+    /// 触发时机：PromptSubmit / ResponseComplete / SessionEnd
+    /// 这些事件意味着之前的审批已不再有效（用户 Interrupt 或 Claude 自行跳过）
+    private func cleanupExpiredApprovals(sessionId: String) {
+        let expiredIds = pendingApprovals
+            .filter { $0.value.sessionId == sessionId }
+            .map { $0.key }
+
+        guard !expiredIds.isEmpty else { return }
+
+        // 移除本地状态
+        for toolUseId in expiredIds {
+            pendingApprovals.removeValue(forKey: toolUseId)
+        }
+
+        // 通知 Server（Server 转发给 iOS）
+        client?.emitPermissionCancelled(sessionId: sessionId, toolUseIds: expiredIds)
+        diagLog("hook-out", event: "PermissionCancelled", sessionId: sessionId)
+        LogManager.shared.info("[VlaudePlugin] 清理过期审批: session=\(sessionId.prefix(8)) count=\(expiredIds.count)")
+    }
+
+    // MARK: - DIAG 日志
+
+    private static let diagDateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm:ss.SSS"
+        return df
+    }()
+
+    private func diagLog(_ tag: String, event: String, sessionId: String, tool: String? = nil, toolUseId: String? = nil) {
+        var parts = ["[DIAG] \(tag) ts=\(Self.diagDateFormatter.string(from: Date())) event=\(event) sid=\(sessionId.prefix(8))"]
+        if let tool = tool { parts.append("tool=\(tool)") }
+        if let id = toolUseId, !id.isEmpty { parts.append("toolUseId=\(id.prefix(12))") }
+        LogManager.shared.info(parts.joined(separator: " "))
     }
 
     // MARK: - ClaudeKit 服务调用

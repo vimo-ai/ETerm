@@ -96,6 +96,19 @@ public final class ClaudeProvider: AICliProvider {
                 payload["toolUseId"] = toolUseId
             }
 
+        case "pre_tool_use":
+            eventType = .toolUse
+            payload["phase"] = "pre"
+            if let toolName = raw.tool_name {
+                payload["toolName"] = toolName
+            }
+            if let toolUseId = raw.tool_use_id {
+                payload["toolUseId"] = toolUseId
+            }
+            if let toolInput = raw.tool_input {
+                payload["toolInput"] = toolInput.mapValues { $0.value }
+            }
+
         default:
             // 未知事件类型，忽略
             return nil

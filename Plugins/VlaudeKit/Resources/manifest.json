@@ -26,6 +26,7 @@
         "aicli.responseComplete",
         "aicli.sessionEnd",
         "aicli.permissionRequest",
+        "aicli.toolUse",
         "terminal.didClose"
     ],
     "tabSlots": [

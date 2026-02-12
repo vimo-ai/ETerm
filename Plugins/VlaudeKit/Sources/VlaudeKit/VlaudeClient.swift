@@ -472,6 +472,19 @@ final class VlaudeClient: SocketClientBridgeDelegate {
         try? socketBridge?.sendCheckLoadingResult(requestId: requestId, loading: loading)
     }
 
+    /// 发送 PreToolUse 到 Server（供 Correlator 关联 toolUseId）
+    func emitPreToolUse(sessionId: String, toolName: String, toolUseId: String) {
+        guard isConnected else { return }
+
+        let data: [String: Any] = [
+            "sessionId": sessionId,
+            "toolName": toolName,
+            "toolUseId": toolUseId
+        ]
+
+        try? socketBridge?.emit(event: DaemonEvents.preToolUse, data: data)
+    }
+
     /// 发送权限请求到 iOS
     /// - Parameters:
     ///   - sessionId: 会话 ID
@@ -527,6 +540,19 @@ final class VlaudeClient: SocketClientBridgeDelegate {
     ///   - sessionId: 会话 ID
     ///   - success: 是否成功写入终端
     ///   - message: 可选的消息
+    /// 发送权限取消通知到 Server（Interrupt/PromptSubmit/ResponseComplete 导致审批过期）
+    func emitPermissionCancelled(sessionId: String, toolUseIds: [String]) {
+        guard isConnected else { return }
+
+        let data: [String: Any] = [
+            "sessionId": sessionId,
+            "toolUseIds": toolUseIds,
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+
+        try? socketBridge?.emit(event: DaemonEvents.permissionCancelled, data: data)
+    }
+
     func emitApprovalAck(toolUseId: String, sessionId: String, success: Bool, message: String? = nil) {
         guard isConnected else { return }
 

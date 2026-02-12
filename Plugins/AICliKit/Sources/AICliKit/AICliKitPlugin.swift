@@ -295,8 +295,7 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
             handlePermissionRequest(event: event)
 
         case .toolUse:
-            // 工具使用事件，暂不处理
-            break
+            handleToolUse(event: event)
         }
     }
 
@@ -406,6 +405,20 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
         }
 
         host?.emit(eventName: "aicli.permissionRequest", payload: payload)
+    }
+
+    private func handleToolUse(event: AICliEvent) {
+        var payload = makePayload(event)
+        payload["toolName"] = event.payload["toolName"] ?? ""
+        payload["phase"] = event.payload["phase"] ?? ""
+        if let toolUseId = event.payload["toolUseId"] {
+            payload["toolUseId"] = toolUseId
+        }
+        if let toolInput = event.payload["toolInput"] {
+            payload["toolInput"] = toolInput
+        }
+
+        host?.emit(eventName: "aicli.toolUse", payload: payload)
     }
 
     // MARK: - Plugin Event Handling
