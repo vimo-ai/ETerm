@@ -822,6 +822,12 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             if let type = session.lastMessageType { dict["lastMessageType"] = type }
             if let preview = session.lastMessagePreview { dict["lastMessagePreview"] = preview }
             if let ts = session.lastMessageAt { dict["lastMessageTimestamp"] = ts }
+            // V6: Session Chain 关系
+            if let type = session.sessionType { dict["sessionType"] = type }
+            if let src = session.source { dict["source"] = src }
+            if let count = session.childrenCount { dict["childrenCount"] = count }
+            if let parent = session.parentSessionId { dict["parentSessionId"] = parent }
+            if let ids = session.childSessionIds { dict["childSessionIds"] = ids }
             return dict
         }
 

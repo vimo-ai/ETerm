@@ -44,6 +44,12 @@ struct SessionMeta: Codable {
     let lastMessagePreview: String?
     /// 最后一条消息时间戳（毫秒）
     let lastMessageAt: Int64?
+    // V6: Session Chain 关系
+    let sessionType: String?
+    let source: String?
+    let childrenCount: Int64?
+    let parentSessionId: String?
+    let childSessionIds: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -56,6 +62,11 @@ struct SessionMeta: Codable {
         case lastMessageType = "last_message_type"
         case lastMessagePreview = "last_message_preview"
         case lastMessageAt = "last_message_at"
+        case sessionType = "session_type"
+        case source
+        case childrenCount = "children_count"
+        case parentSessionId = "parent_session_id"
+        case childSessionIds = "child_session_ids"
     }
 }
 
@@ -300,7 +311,12 @@ final class SessionReader {
                     messageCount: s.message_count >= 0 ? s.message_count : nil,
                     lastMessageType: s.last_message_type != nil ? String(cString: s.last_message_type) : nil,
                     lastMessagePreview: s.last_message_preview != nil ? String(cString: s.last_message_preview) : nil,
-                    lastMessageAt: s.last_message_at >= 0 ? s.last_message_at : nil
+                    lastMessageAt: s.last_message_at >= 0 ? s.last_message_at : nil,
+                    sessionType: nil,
+                    source: nil,
+                    childrenCount: nil,
+                    parentSessionId: nil,
+                    childSessionIds: nil
                 ))
             }
         }
@@ -345,7 +361,12 @@ final class SessionReader {
             messageCount: s.message_count >= 0 ? s.message_count : nil,
             lastMessageType: s.last_message_type != nil ? String(cString: s.last_message_type) : nil,
             lastMessagePreview: s.last_message_preview != nil ? String(cString: s.last_message_preview) : nil,
-            lastMessageAt: s.last_message_at >= 0 ? s.last_message_at : nil
+            lastMessageAt: s.last_message_at >= 0 ? s.last_message_at : nil,
+            sessionType: nil,
+            source: nil,
+            childrenCount: nil,
+            parentSessionId: nil,
+            childSessionIds: nil
         )
     }
 
