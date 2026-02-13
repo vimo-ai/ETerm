@@ -51,6 +51,12 @@ struct FfiSessionInfo: Codable {
     // V5: 预览字段（数据库路径暂不支持，预留）
     let lastMessageType: String?
     let lastMessagePreview: String?
+    // V6: Session Chain 关系
+    let sessionType: String?
+    let source: String?
+    let childrenCount: Int64?
+    let parentSessionId: String?
+    let childSessionIds: [String]?
 
     /// Convert to legacy SessionMeta format (for VlaudeClient compatibility)
     func toSessionMeta() -> SessionMeta {
@@ -67,7 +73,12 @@ struct FfiSessionInfo: Codable {
             messageCount: messageCount,
             lastMessageType: lastMessageType,
             lastMessagePreview: lastMessagePreview,
-            lastMessageAt: lastMessageAt
+            lastMessageAt: lastMessageAt,
+            sessionType: sessionType,
+            source: source,
+            childrenCount: childrenCount,
+            parentSessionId: parentSessionId,
+            childSessionIds: childSessionIds
         )
     }
 }

@@ -502,6 +502,17 @@ public final class VlaudePlugin: NSObject, Plugin {
         let projectPath = payload["cwd"] as? String ?? ""
         client?.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
         diagLog("hook-out", event: "SessionStart", sessionId: sessionId)
+
+        // SessionStart 时就回调创建结果（不等 responseComplete，支持无 prompt 创建）
+        if let pending = pendingRequests.removeValue(forKey: terminalId) {
+            client?.emitSessionCreatedResult(
+                requestId: pending.requestId,
+                success: true,
+                sessionId: sessionId,
+                encodedDirName: payload["encodedDirName"] as? String,
+                transcriptPath: transcriptPath
+            )
+        }
     }
 
     private func handleClaudePromptSubmit(_ payload: [String: Any]) {
