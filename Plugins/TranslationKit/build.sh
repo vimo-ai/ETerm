@@ -10,11 +10,9 @@ cd "$SCRIPT_DIR"
 BUNDLE_NAME="TranslationKit"
 BUNDLE_ID="com.eterm.translation"
 CONFIGURATION="${CONFIGURATION:-Debug}"
-# 内置插件必须通过 Xcode 编译
-if [ -z "${BUNDLE_OUTPUT_DIR:-}" ]; then
-    echo "Error: BUNDLE_OUTPUT_DIR not set. Build via Xcode." >&2
-    exit 1
-fi
+
+# Output directory: {plugins}/{id}/{name}.bundle
+OUTPUT_DIR="${BUNDLE_OUTPUT_DIR:-${HOME}/.vimo/eterm/plugins}"
 
 echo "Building $BUNDLE_NAME ($CONFIGURATION)..."
 
@@ -22,7 +20,7 @@ echo "Building $BUNDLE_NAME ($CONFIGURATION)..."
 swift build -c $(echo $CONFIGURATION | tr '[:upper:]' '[:lower:]')
 
 # 创建 bundle 结构: {plugins}/{id}/{name}.bundle
-PLUGIN_DIR="$BUNDLE_OUTPUT_DIR/$BUNDLE_ID"
+PLUGIN_DIR="$OUTPUT_DIR/$BUNDLE_ID"
 BUNDLE_DIR="$PLUGIN_DIR/$BUNDLE_NAME.bundle"
 rm -rf "$PLUGIN_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
@@ -30,13 +28,13 @@ mkdir -p "$BUNDLE_DIR/Contents/Resources"
 
 # 复制动态库
 BUILD_DIR=".build/$(echo $CONFIGURATION | tr '[:upper:]' '[:lower:]')"
-cp "$BUILD_DIR/lib${BUNDLE_NAME}.dylib" "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
+cp "$BUILD_DIR/lib${BUNDLE_NAME}.dylib" "$BUNDLE_DIR/Contents/MacOS/"
 
 # 修复 ETermKit 依赖路径：从 @rpath/libETermKit.dylib 改为指向 app bundle 的 framework
-install_name_tool -change @rpath/libETermKit.dylib @executable_path/../Frameworks/ETermKit.framework/ETermKit "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
+install_name_tool -change @rpath/libETermKit.dylib @executable_path/../Frameworks/ETermKit.framework/ETermKit "$BUNDLE_DIR/Contents/MacOS/lib${BUNDLE_NAME}.dylib"
 
 # 修改后需要重签名
-codesign -f -s - "$BUNDLE_DIR/Contents/MacOS/$BUNDLE_NAME"
+codesign -f -s - "$BUNDLE_DIR/Contents/MacOS/lib${BUNDLE_NAME}.dylib"
 
 # 复制 manifest
 cp "Resources/manifest.json" "$BUNDLE_DIR/Contents/Resources/"
@@ -52,7 +50,7 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << EOF
     <key>CFBundleName</key>
     <string>$BUNDLE_NAME</string>
     <key>CFBundleExecutable</key>
-    <string>$BUNDLE_NAME</string>
+    <string>lib${BUNDLE_NAME}.dylib</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleVersion</key>
