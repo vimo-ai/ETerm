@@ -152,6 +152,7 @@ struct DownloadablePluginItemView: View {
     @ObservedObject var downloader: PluginDownloader
 
     @State private var pluginStatus: PluginStatus = .notInstalled
+    @State private var showUninstallAlert = false
 
     /// 当前插件是否正在下载
     private var isDownloading: Bool {
@@ -258,6 +259,14 @@ struct DownloadablePluginItemView: View {
                 refreshStatus()
             }
         }
+        .alert("确认卸载", isPresented: $showUninstallAlert) {
+            Button("卸载", role: .destructive) {
+                uninstallPlugin()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("确定要卸载 \(plugin.name) 吗？")
+        }
     }
 
     // MARK: - 状态相关的视图属性
@@ -274,9 +283,18 @@ struct DownloadablePluginItemView: View {
             .disabled(downloader.isDownloading)
 
         case .installed:
-            Label("已安装", systemImage: "checkmark.circle.fill")
+            HStack(spacing: 8) {
+                Label("已安装", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.green)
+
+                Button("卸载") {
+                    showUninstallAlert = true
+                }
                 .font(.caption)
-                .foregroundColor(.green)
+                .buttonStyle(.borderless)
+                .foregroundColor(.red)
+            }
 
         case .updateAvailable(let from, let to):
             Button {
@@ -316,6 +334,16 @@ struct DownloadablePluginItemView: View {
         case .updateAvailable:
             return .orange
         }
+    }
+
+    /// 卸载插件
+    private func uninstallPlugin() {
+        // 先禁用
+        _ = SDKPluginLoader.shared.disablePlugin(plugin.id)
+        // 再删除文件
+        try? PluginDownloader.shared.uninstallPlugin(plugin.id)
+        // 刷新状态
+        refreshStatus()
     }
 
     /// 刷新插件状态
