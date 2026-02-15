@@ -65,5 +65,10 @@
         "extract": true
       }
     }
+  },
+  "translationkit": {
+    "name": "TranslationKit",
+    "path": "Plugins/TranslationKit",
+    "deps": {}
   }
 }

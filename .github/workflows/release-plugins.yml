@@ -6,6 +6,7 @@ on:
       - 'vlaudekit-v*'
       - 'memexkit-v*'
       - 'mcprouterkit-v*'
+      - 'translationkit-v*'
 
 permissions:
   contents: write
