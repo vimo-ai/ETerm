@@ -40,6 +40,13 @@ final class MemexStatsStore: ObservableObject {
     }
 
     private func refresh() async {
+        // memex-rs 未运行时不显示统计
+        guard MemexService.shared.isRunning else {
+            stats = nil
+            embeddingStats = nil
+            return
+        }
+
         // 基础统计（FFI 或 HTTP）
         stats = try? await MemexService.shared.getStats()
 
@@ -80,13 +87,13 @@ public struct MemexPageBarView: View {
                     }
                 }
             } else {
-                // 未加载
-                Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                // memex 未启动
+                Image(systemName: "exclamationmark.triangle")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
-                Text("--")
+                    .foregroundColor(.orange)
+                Text("memex 未启动")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.orange)
             }
         }
         .fixedSize()
