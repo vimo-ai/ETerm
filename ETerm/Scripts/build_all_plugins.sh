@@ -56,11 +56,21 @@ main() {
     local success_count=0
     local fail_count=0
 
+    # 外部插件（独立分发，不随 app 打包）
+    local EXTERNAL_PLUGINS="VlaudeKit MemexKit LspKit MCPRouterKit TranslationKit"
+
     # 扫描 *Kit 和 *SDK 目录
     for kit in "${PLUGINS_DIR}"/*Kit "${PLUGINS_DIR}"/*SDK; do
         [[ ! -d "$kit" ]] && continue
 
         local kit_name=$(basename "$kit")
+
+        # 跳过外部插件（通过 scripts/build.sh plugins 或独立 build.sh 构建）
+        if echo "$EXTERNAL_PLUGINS" | grep -qw "$kit_name"; then
+            log_info "Skipping ${kit_name} (external plugin)"
+            continue
+        fi
+
         local build_script="${kit}/build.sh"
 
         if [[ ! -f "$build_script" ]]; then

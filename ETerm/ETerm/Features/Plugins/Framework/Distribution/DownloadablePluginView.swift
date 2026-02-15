@@ -39,6 +39,11 @@ struct DownloadablePluginsView: View {
                         plugin: Self.memexKitPlugin,
                         downloader: downloader
                     )
+
+                    DownloadablePluginItemView(
+                        plugin: Self.translationKitPlugin,
+                        downloader: downloader
+                    )
                 }
             } else {
                 ForEach(availablePlugins) { plugin in
@@ -101,6 +106,17 @@ struct DownloadablePluginsView: View {
                 downloadUrl: "https://github.com/vimo-ai/vlaude/releases/download/socket-ffi-v0.0.1-beta.3/libsocket_client_ffi.dylib"
             )
         ]
+    )
+
+    static let translationKitPlugin = DownloadablePlugin(
+        id: "com.eterm.translation",
+        name: "TranslationKit",
+        version: "0.0.1-beta.1",
+        description: "终端选词翻译 + 单词本",
+        size: 2 * 1024 * 1024, // ~2MB
+        downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/translationkit-v0.0.1-beta.1/TranslationKit.bundle.zip",
+        sha256: nil,
+        runtimeDeps: nil
     )
 
     static let memexKitPlugin = DownloadablePlugin(
