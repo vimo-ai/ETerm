@@ -213,14 +213,6 @@ struct PluginItemView: View {
     }
 }
 
-// MARK: - Plugin 扩展
-
-extension Plugin {
-    var id: String {
-        type(of: self).id
-    }
-}
-
 #Preview {
     PluginManagerView()
         .frame(width: 600, height: 500)

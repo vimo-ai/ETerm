@@ -2,7 +2,7 @@
 //  PluginContext.swift
 //  ETerm
 //
-//  插件层 - 插件上下文
+//  插件层 - 服务协议定义
 
 import Foundation
 import SwiftUI
@@ -14,33 +14,16 @@ import ETermKit
 // 使用 ETermKit 的 TabDecoration、DecorationPriority 和 .tabDecorationChanged 通知
 // 这些类型已移动到 ETermKit，此处通过 import 使其在 ETerm 模块中可用
 
-/// 插件上下文 - 聚合插件所需的系统能力
-///
-/// 提供插件与核心系统交互的统一接口：
-/// - 命令服务：注册和执行命令
-/// - 事件服务：发布和订阅事件
-/// - 键盘服务：绑定快捷键
-/// - UI 服务：注册侧边栏 Tab
-/// - 终端服务：与终端交互
-/// - 服务注册表：插件间能力共享
-protocol PluginContext: AnyObject {
-    /// 命令服务
-    var commands: CommandService { get }
-
-    /// 事件服务
-    var events: EventService { get }
-
-    /// 键盘服务
-    var keyboard: KeyboardService { get }
-
-    /// UI 服务
-    var ui: UIService { get }
-
-    /// 终端服务
-    var terminal: TerminalService { get }
-
-    /// 服务注册表 - 插件间能力共享
-    var services: ServiceRegistry { get }
+/// 插件信息（给 UI 用）
+struct PluginInfo: Identifiable {
+    let id: String
+    let name: String
+    let version: String
+    let dependencies: [String]
+    let isLoaded: Bool
+    let isEnabled: Bool
+    /// 依赖此插件的其他插件
+    let dependents: [String]
 }
 
 // MARK: - 终端服务协议

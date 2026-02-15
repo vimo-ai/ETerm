@@ -148,9 +148,6 @@ final class PluginDownloader: ObservableObject {
             do {
                 let result = try await performInstall(plugin)
                 await MainActor.run {
-                    if result.success {
-                        PluginManager.shared.objectWillChange.send()
-                    }
                     self.resetState()
                 }
             } catch is CancellationError {
