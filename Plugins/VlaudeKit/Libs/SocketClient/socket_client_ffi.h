@@ -90,6 +90,7 @@ enum SocketClientError socket_client_create(const char *url,
  * - `url` 必须是有效的 UTF-8 C 字符串
  * - `namespace` 可为 null
  * - `redis_host` 可为 null（不启用 Redis）
+ * - `ca_cert_path` 可为 null（不加载 CA 证书，退回 danger_accept_invalid_certs）
  * - `device_id`, `device_name`, `platform`, `version` 启用 Redis 时必填
  * - 返回的句柄需要通过 `socket_client_destroy` 释放
  */
@@ -98,6 +99,7 @@ enum SocketClientError socket_client_create_with_redis(const char *url,
                                                        const char *redis_host,
                                                        uint16_t redis_port,
                                                        const char *redis_password,
+                                                       const char *ca_cert_path,
                                                        const char *device_id,
                                                        const char *device_name,
                                                        const char *platform,

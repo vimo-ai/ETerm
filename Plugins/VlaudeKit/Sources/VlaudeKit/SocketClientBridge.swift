@@ -112,7 +112,7 @@ final class SocketClientBridge {
     ///   - namespace: 命名空间（默认 "/daemon"）
     ///   - redis: Redis 配置
     ///   - daemon: Daemon 配置
-    init(url: String, namespace: String = "/daemon", redis: RedisConfig, daemon: DaemonConfig) throws {
+    init(url: String, namespace: String = "/daemon", redis: RedisConfig, daemon: DaemonConfig, caCertPath: String? = nil) throws {
         var handlePtr: OpaquePointer?
 
         let error = url.withCString { urlCstr in
@@ -123,8 +123,10 @@ final class SocketClientBridge {
                             daemon.platform.withCString { platformCstr in
                                 daemon.version.withCString { versionCstr in
                                     let passwordPtr: UnsafePointer<CChar>? = redis.password.flatMap { strdup($0).map { UnsafePointer($0) } }
+                                    let caPtr: UnsafePointer<CChar>? = caCertPath.flatMap { strdup($0).map { UnsafePointer($0) } }
                                     defer {
                                         if let p = passwordPtr { free(UnsafeMutablePointer(mutating: p)) }
+                                        if let p = caPtr { free(UnsafeMutablePointer(mutating: p)) }
                                     }
                                     return socket_client_create_with_redis(
                                         urlCstr,
@@ -132,6 +134,7 @@ final class SocketClientBridge {
                                         hostCstr,
                                         redis.port,
                                         passwordPtr,
+                                        caPtr,
                                         deviceIdCstr,
                                         deviceNameCstr,
                                         platformCstr,

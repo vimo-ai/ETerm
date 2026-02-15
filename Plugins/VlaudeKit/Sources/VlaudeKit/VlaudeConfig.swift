@@ -38,6 +38,9 @@ public struct VlaudeConfig: Codable, Equatable {
     /// Daemon TTL（秒），默认 30 秒
     var daemonTTL: UInt64
 
+    /// CA 证书路径（用于自签名 TLS，可选）
+    var caCertPath: String?
+
     static var `default`: VlaudeConfig {
         VlaudeConfig(
             serverURL: "",

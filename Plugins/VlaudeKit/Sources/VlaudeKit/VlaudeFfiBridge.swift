@@ -57,6 +57,9 @@ struct FfiSessionInfo: Codable {
     let childrenCount: Int64?
     let parentSessionId: String?
     let childSessionIds: [String]?
+    // Continuation chain 导航（V7）
+    let continuationPrevId: String?
+    let continuationNextIds: [String]?
 
     /// Convert to legacy SessionMeta format (for VlaudeClient compatibility)
     func toSessionMeta() -> SessionMeta {
@@ -78,7 +81,9 @@ struct FfiSessionInfo: Codable {
             source: source,
             childrenCount: childrenCount,
             parentSessionId: parentSessionId,
-            childSessionIds: childSessionIds
+            childSessionIds: childSessionIds,
+            continuationPrevId: continuationPrevId,
+            continuationNextIds: continuationNextIds
         )
     }
 }
