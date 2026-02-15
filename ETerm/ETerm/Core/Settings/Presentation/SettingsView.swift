@@ -33,6 +33,10 @@ struct SettingsView: View {
     @State private var hookInstallError: String? = nil
     @State private var showHookForceAlert: Bool = false
 
+    // 外观配置
+    @ObservedObject private var backgroundConfig = BackgroundConfig.shared
+    @State private var selectedBackgroundMode: BackgroundMode = BackgroundConfig.shared.mode
+
     // 开发者选项
     @State private var debugLogEnabled: Bool = LogManager.shared.debugEnabled
 
@@ -353,6 +357,88 @@ struct SettingsView: View {
                         Text("脚本已被修改，是否强制覆盖？")
                     }
 
+                    // 外观配置
+                    SettingsSectionView(title: "外观") {
+                        VStack(alignment: .leading, spacing: 16) {
+                            // 背景模式 — 用 @State 驱动，onChange 同步到 config
+                            HStack {
+                                Text("终端背景")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+
+                                Spacer()
+
+                                Picker("", selection: $selectedBackgroundMode) {
+                                    Text("山水画").tag(BackgroundMode.mountain)
+                                    Text("自定义图片").tag(BackgroundMode.custom)
+                                    Text("无背景").tag(BackgroundMode.plain)
+                                }
+                                .labelsHidden()
+                                .frame(width: 160)
+                                .onChange(of: selectedBackgroundMode) { _, newValue in
+                                    NSLog("[BG] Picker changed to: \(newValue.rawValue)")
+                                    backgroundConfig.mode = newValue
+                                }
+                            }
+
+                            // 自定义图片选择
+                            if selectedBackgroundMode == .custom {
+                                HStack {
+                                    Button("选择图片...") {
+                                        selectBackgroundImage()
+                                    }
+
+                                    if backgroundConfig.customImagePath != nil {
+                                        Button("清除图片") {
+                                            backgroundConfig.customImagePath = nil
+                                        }
+                                        .foregroundColor(.red)
+                                        .buttonStyle(.bordered)
+                                    }
+
+                                    Spacer()
+                                }
+
+                                if let path = backgroundConfig.customImagePath {
+                                    Text((path as NSString).lastPathComponent)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+
+                                    if let image = backgroundConfig.customImage {
+                                        Image(nsImage: image)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .frame(height: 80)
+                                            .clipped()
+                                            .contentShape(Rectangle())
+                                            .cornerRadius(6)
+                                    }
+                                }
+                            }
+
+                            // 透明度
+                            if selectedBackgroundMode != .plain {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text("透明度")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                        Spacer()
+                                        Text("\(Int(backgroundConfig.opacity * 100))%")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .monospacedDigit()
+                                    }
+                                    Slider(value: $backgroundConfig.opacity, in: 0...1, step: 0.05)
+                                }
+                            }
+
+                        }
+                    }
+                    .onAppear {
+                        selectedBackgroundMode = backgroundConfig.mode
+                    }
+
                     // 开发者选项
                     SettingsSectionView(title: "开发者选项") {
                         VStack(alignment: .leading, spacing: 12) {
@@ -582,6 +668,28 @@ struct SettingsView: View {
             } catch {
                 hookInstallError = error.localizedDescription
             }
+        }
+    }
+
+    // MARK: - 外观
+
+    private func selectBackgroundImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "选择终端背景图片"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            // 拷贝到 app 数据目录，避免权限问题
+            let destDir = ETermPaths.root + "/backgrounds"
+            try? FileManager.default.createDirectory(atPath: destDir, withIntermediateDirectories: true)
+            let destPath = destDir + "/" + url.lastPathComponent
+
+            try? FileManager.default.removeItem(atPath: destPath)
+            try? FileManager.default.copyItem(atPath: url.path, toPath: destPath)
+
+            backgroundConfig.customImagePath = destPath
         }
     }
 

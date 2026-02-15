@@ -38,6 +38,9 @@ struct RioTerminalView: View {
     /// 底部 Overlay 注册表
     @ObservedObject private var overlayRegistry = BottomOverlayRegistry.shared
 
+    /// 背景配置
+    @ObservedObject private var backgroundConfig = BackgroundConfig.shared
+
     // MARK: - Terminal Search State (View-owned)
 
     /// 是否显示终端搜索框
@@ -48,11 +51,29 @@ struct RioTerminalView: View {
 
     var body: some View {
         ZStack {
-            // 背景层 - 宣纸水墨风格（整体透明度 0.5，可调节）
-            RicePaperView(showMountain: true, overallOpacity: 0.5) {
-                EmptyView()
+            // 背景层
+            Group {
+                switch backgroundConfig.mode {
+                case .mountain:
+                    RicePaperView(showMountain: true, overallOpacity: backgroundConfig.opacity) {
+                        EmptyView()
+                    }
+                case .custom:
+                    if let image = backgroundConfig.customImage {
+                        GeometryReader { geo in
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: geo.size.width, height: geo.size.height)
+                                .clipped()
+                                .opacity(backgroundConfig.opacity)
+                        }
+                    }
+                case .plain:
+                    EmptyView()
+                }
             }
-            .allowsHitTesting(false)  // 不拦截事件，让事件穿透到下面的渲染层
+            .allowsHitTesting(false)
 
             // 渲染层（PageBar 已在 SwiftUI 层，这里不需要 ignoresSafeArea）
             RioRenderView(
