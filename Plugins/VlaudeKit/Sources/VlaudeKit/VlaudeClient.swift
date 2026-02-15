@@ -136,13 +136,22 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             ttl: config.daemonTTL
         )
 
+        // 展开 ~ 路径
+        let resolvedCaCertPath = config.caCertPath.map { path -> String in
+            if path.hasPrefix("~/") {
+                return NSString(string: path).expandingTildeInPath
+            }
+            return path
+        }
+
         // 通过 Rust FFI 创建带 Redis 的 Socket 客户端
         do {
             socketBridge = try SocketClientBridge(
                 url: config.serverURL.isEmpty ? "https://localhost:10005" : config.serverURL,
                 namespace: "/daemon",
                 redis: redisConfig,
-                daemon: daemonConfig
+                daemon: daemonConfig,
+                caCertPath: resolvedCaCertPath
             )
             socketBridge?.delegate = self
             try socketBridge?.connect()
@@ -589,11 +598,19 @@ final class VlaudeClient: SocketClientBridgeDelegate {
                 ttl: 30
             )
 
+            let resolvedCaPath = config.caCertPath.map { path -> String in
+                if path.hasPrefix("~/") {
+                    return NSString(string: path).expandingTildeInPath
+                }
+                return path
+            }
+
             let bridge = try SocketClientBridge(
                 url: config.serverURL.isEmpty ? "https://localhost:10005" : config.serverURL,
                 namespace: "/daemon",
                 redis: redisConfig,
-                daemon: daemonConfig
+                daemon: daemonConfig,
+                caCertPath: resolvedCaPath
             )
 
             var completed = false
@@ -828,6 +845,9 @@ final class VlaudeClient: SocketClientBridgeDelegate {
             if let count = session.childrenCount { dict["childrenCount"] = count }
             if let parent = session.parentSessionId { dict["parentSessionId"] = parent }
             if let ids = session.childSessionIds { dict["childSessionIds"] = ids }
+            // V7: Continuation chain 导航
+            if let prev = session.continuationPrevId { dict["continuationPrevId"] = prev }
+            if let ids = session.continuationNextIds { dict["continuationNextIds"] = ids }
             return dict
         }
 

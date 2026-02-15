@@ -50,6 +50,9 @@ struct SessionMeta: Codable {
     let childrenCount: Int64?
     let parentSessionId: String?
     let childSessionIds: [String]?
+    // Continuation chain 导航（V7）
+    let continuationPrevId: String?
+    let continuationNextIds: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -67,6 +70,8 @@ struct SessionMeta: Codable {
         case childrenCount = "children_count"
         case parentSessionId = "parent_session_id"
         case childSessionIds = "child_session_ids"
+        case continuationPrevId = "continuation_prev_id"
+        case continuationNextIds = "continuation_next_ids"
     }
 }
 
@@ -316,7 +321,9 @@ final class SessionReader {
                     source: nil,
                     childrenCount: nil,
                     parentSessionId: nil,
-                    childSessionIds: nil
+                    childSessionIds: nil,
+                    continuationPrevId: nil,
+                    continuationNextIds: nil
                 ))
             }
         }
@@ -366,7 +373,9 @@ final class SessionReader {
             source: nil,
             childrenCount: nil,
             parentSessionId: nil,
-            childSessionIds: nil
+            childSessionIds: nil,
+            continuationPrevId: nil,
+            continuationNextIds: nil
         )
     }
 
