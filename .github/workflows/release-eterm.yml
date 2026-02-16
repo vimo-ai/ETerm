@@ -210,7 +210,6 @@ jobs:
             - OneLineCommandKit
             - TranslationKit
             - WorkspaceKit
-            - WritingKit
 
             ### Optional Plugins (Download separately)
             - [VlaudeKit](https://github.com/vimo-ai/ETerm/releases?q=vlaudekit) - Claude remote control

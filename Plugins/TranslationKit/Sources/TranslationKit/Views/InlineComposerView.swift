@@ -1,6 +1,6 @@
 //
 //  InlineComposerView.swift
-//  WritingKit
+//  TranslationKit
 //
 //  Inline Writing Assistant - Cmd+K 快捷写作助手
 //  SDK 插件版本 - 使用 HostBridge 与宿主通信
@@ -50,63 +50,6 @@ enum WritingError: LocalizedError {
             return "AI 返回了空响应"
         }
     }
-}
-
-struct AnalysisPlan: Codable {
-    let needGrammarCheck: Bool
-    let needFixes: Bool
-    let needIdiomatic: Bool
-    let needTranslation: Bool
-    let needExplanation: Bool
-    let reasoning: String
-
-    enum CodingKeys: String, CodingKey {
-        case needGrammarCheck = "need_grammar_check"
-        case needFixes = "need_fixes"
-        case needIdiomatic = "need_idiomatic"
-        case needTranslation = "need_translation"
-        case needExplanation = "need_explanation"
-        case reasoning
-    }
-}
-
-struct AnalysisResult {
-    var fixes: [GrammarFix]?
-    var idiomaticSuggestions: [IdiomaticSuggestion]?
-    var pureEnglish: String?
-    var translations: [Translation]?
-    var grammarPoints: [GrammarPoint]?
-}
-
-struct GrammarFix: Codable {
-    let original: String
-    let corrected: String
-    let errorType: String
-    let category: String
-
-    enum CodingKeys: String, CodingKey {
-        case original
-        case corrected
-        case errorType = "error_type"
-        case category
-    }
-}
-
-struct IdiomaticSuggestion: Codable {
-    let current: String
-    let idiomatic: String
-    let explanation: String
-}
-
-struct Translation: Codable {
-    let chinese: String
-    let english: String
-}
-
-struct GrammarPoint: Codable {
-    let rule: String
-    let explanation: String
-    let examples: [String]
 }
 
 private enum AnalysisTask {

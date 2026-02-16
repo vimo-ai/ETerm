@@ -2,7 +2,7 @@
 //  TranslationPlugin.swift
 //  TranslationKit
 //
-//  划词翻译插件 - 提供翻译、单词本功能 (SDK main 模式)
+//  语言工具插件 - 提供翻译、单词本、写作助手、语法档案功能 (SDK main 模式)
 
 import Foundation
 import SwiftUI
@@ -17,6 +17,12 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
 
     public static var id = "com.eterm.translation"
     private static let translateActionId = "com.eterm.translation.translate"
+
+    // Writing 命令 ID
+    private static let toggleCommandId = "writing.toggleComposer"
+    private static let showCommandId = "writing.showComposer"
+    private static let hideCommandId = "writing.hideComposer"
+    private static let showArchiveId = "writing.showArchive"
 
     private var host: HostBridge?
     private var actionObserver: NSObjectProtocol?
@@ -61,6 +67,34 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
             }
         }
 
+        // --- Writing 功能注册 ---
+
+        // 注册写作助手命令
+        host.registerCommand(PluginCommand(
+            id: Self.toggleCommandId,
+            title: "切换写作助手",
+            icon: "sparkles"
+        ))
+
+        host.registerCommand(PluginCommand(
+            id: Self.showCommandId,
+            title: "显示写作助手",
+            icon: "sparkles"
+        ))
+
+        host.registerCommand(PluginCommand(
+            id: Self.hideCommandId,
+            title: "隐藏写作助手"
+        ))
+
+        host.registerCommand(PluginCommand(
+            id: Self.showArchiveId,
+            title: "语法档案",
+            icon: "book"
+        ))
+
+        // 绑定快捷键 Cmd+K 到切换命令
+        host.bindKeyboard(.cmd("k"), to: Self.toggleCommandId)
     }
 
     public func deactivate() {
@@ -76,6 +110,13 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
             NotificationCenter.default.removeObserver(observer)
             actionObserver = nil
         }
+
+        // --- Writing 功能清理 ---
+        host?.unbindKeyboard(.cmd("k"))
+        host?.unregisterCommand(commandId: Self.toggleCommandId)
+        host?.unregisterCommand(commandId: Self.showCommandId)
+        host?.unregisterCommand(commandId: Self.hideCommandId)
+        host?.unregisterCommand(commandId: Self.showArchiveId)
     }
 
     public func sidebarView(for tabId: String) -> AnyView? {
@@ -87,6 +128,11 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
                 VocabularyView()
                     .modelContainer(EnglishLearningDataStore.shared)
             )
+        case "grammar-archive":
+            return AnyView(
+                GrammarArchiveView()
+                    .modelContainer(WritingDataStore.shared)
+            )
         default:
             return nil
         }
@@ -97,6 +143,11 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
         case "translation":
             return AnyView(
                 TranslationContentView(state: TranslationController.shared.state)
+            )
+        case "grammarArchive":
+            return AnyView(
+                GrammarArchiveView()
+                    .modelContainer(WritingDataStore.shared)
             )
         default:
             return nil
@@ -121,9 +172,40 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
         }
     }
 
-    /// 处理终端选中事件（用于数据记录等）
+    /// 处理事件
     public func handleEvent(_ eventName: String, payload: [String: Any]) {
-        // Selection 事件在此处理（如需要）
+        guard eventName == "command.invoked",
+              let commandId = payload["commandId"] as? String else {
+            return
+        }
+
+        switch commandId {
+        case Self.toggleCommandId:
+            host?.toggleBottomOverlay("composer")
+        case Self.showCommandId:
+            host?.showBottomOverlay("composer")
+        case Self.hideCommandId:
+            host?.hideBottomOverlay("composer")
+        case Self.showArchiveId:
+            host?.showInfoPanel("grammarArchive")
+        default:
+            break
+        }
+    }
+
+    /// 提供 Composer 视图
+    public func windowBottomOverlayView(for id: String) -> AnyView? {
+        guard id == "composer", let host = host else { return nil }
+        return AnyView(
+            InlineComposerView(
+                isShowing: .constant(true),
+                inputHeight: .constant(0),
+                onCancel: { [weak self] in
+                    self?.host?.hideBottomOverlay("composer")
+                },
+                host: host
+            )
+        )
     }
 
     // MARK: - Private

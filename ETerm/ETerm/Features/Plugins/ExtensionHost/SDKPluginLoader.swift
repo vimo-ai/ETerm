@@ -283,6 +283,13 @@ final class SDKPluginLoader {
 
     // MARK: - 热插拔 API
 
+    /// 从禁用列表中移除插件（卸载后清理用）
+    func removeFromDisabledList(_ pluginId: String) {
+        var disabled = disabledPluginIds
+        disabled.remove(pluginId)
+        disabledPluginIds = disabled
+    }
+
     /// 检查插件是否启用
     func isPluginEnabled(_ pluginId: String) -> Bool {
         !disabledPluginIds.contains(pluginId)
