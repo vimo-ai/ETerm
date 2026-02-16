@@ -112,7 +112,7 @@ struct DownloadablePluginsView: View {
         id: "com.eterm.translation",
         name: "TranslationKit",
         version: "0.0.1-beta.1",
-        description: "终端选词翻译 + 单词本",
+        description: "翻译 + 单词本 + 写作助手 + 语法档案",
         size: 2 * 1024 * 1024, // ~2MB
         downloadUrl: "https://github.com/vimo-ai/ETerm/releases/download/translationkit-v0.0.1-beta.1/TranslationKit.bundle.zip",
         sha256: nil,
@@ -342,6 +342,8 @@ struct DownloadablePluginItemView: View {
         _ = SDKPluginLoader.shared.disablePlugin(plugin.id)
         // 再删除文件
         try? PluginDownloader.shared.uninstallPlugin(plugin.id)
+        // 从禁用列表移除，否则 PluginManagerView 仍显示"已禁用"
+        SDKPluginLoader.shared.removeFromDisabledList(plugin.id)
         // 刷新状态
         refreshStatus()
     }

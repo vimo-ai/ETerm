@@ -1,6 +1,6 @@
 //
 //  GrammarArchiveView.swift
-//  WritingKit
+//  TranslationKit
 //
 //  语法档案视图 - 显示所有语法错误记录
 //
@@ -11,7 +11,7 @@ import ETermKit
 
 // MARK: - 统计项组件
 
-private struct StatItem: View {
+private struct GrammarStatItem: View {
     let label: String
     let value: String
     let color: Color
@@ -208,8 +208,8 @@ public struct GrammarArchiveView: View {
             // 统计信息
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 16) {
-                    StatItem(label: "总错误", value: "\(allErrors.count)", color: .blue)
-                    StatItem(label: "分类数", value: "\(categoryStats.count)", color: .orange)
+                    GrammarStatItem(label: "总错误", value: "\(allErrors.count)", color: .blue)
+                    GrammarStatItem(label: "分类数", value: "\(categoryStats.count)", color: .orange)
                 }
             }
             .padding()

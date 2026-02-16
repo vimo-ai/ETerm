@@ -29,7 +29,6 @@ BUILTIN_PLUGINS=(
     "OneLineCommandKit"
     "TranslationKit"
     "WorkspaceKit"
-    "WritingKit"
 )
 
 # Colors

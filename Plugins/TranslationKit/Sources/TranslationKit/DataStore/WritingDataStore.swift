@@ -1,6 +1,6 @@
 //
 //  WritingDataStore.swift
-//  WritingKit
+//  TranslationKit
 //
 //  写作助手数据存储 - 管理语法错误档案
 //

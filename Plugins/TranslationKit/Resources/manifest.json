@@ -1,6 +1,6 @@
 {
     "id": "com.eterm.translation",
-    "name": "翻译",
+    "name": "语言工具",
     "version": "0.0.1-beta.1",
     "minHostVersion": "0.0.1-beta.1",
     "sdkVersion": "0.0.1-beta.1",
@@ -10,10 +10,20 @@
         "ui.sidebar",
         "ui.infoPanel",
         "ui.pageBar",
-        "selection.registerAction"
+        "ui.composer",
+        "selection.registerAction",
+        "command.register",
+        "keyboard.bind"
     ],
     "principalClass": "TranslationPlugin",
     "sidebarTabs": [
+        {
+            "id": "grammar-archive",
+            "title": "语法档案",
+            "icon": "doc.text.fill",
+            "viewClass": "GrammarArchiveView",
+            "order": 200
+        },
         {
             "id": "translation-settings",
             "title": "翻译配置",

@@ -1,6 +1,6 @@
 //
 //  GrammarErrorRecord.swift
-//  WritingKit
+//  TranslationKit
 //
 //  语法错误记录模型 - SwiftData
 //
