@@ -18,13 +18,6 @@
     "principalClass": "TranslationPlugin",
     "sidebarTabs": [
         {
-            "id": "grammar-archive",
-            "title": "语法档案",
-            "icon": "doc.text.fill",
-            "viewClass": "GrammarArchiveView",
-            "order": 200
-        },
-        {
             "id": "translation-settings",
             "title": "翻译配置",
             "icon": "gearshape.fill",
@@ -37,6 +30,13 @@
             "icon": "book.fill",
             "viewClass": "VocabularyView",
             "order": 211
+        },
+        {
+            "id": "grammar-archive",
+            "title": "语法档案",
+            "icon": "doc.text.fill",
+            "viewClass": "GrammarArchiveView",
+            "order": 212
         }
     ],
     "infoPanelContents": [
