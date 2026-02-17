@@ -79,6 +79,15 @@ enum UIEvent {
     case clearSearchIfPanel(panelId: UUID)
 }
 
+/// View Tab 覆盖层信息（用于 SwiftUI 直接渲染插件视图）
+struct ViewTabOverlayInfo: Identifiable {
+    let id: UUID             // panelId
+    let viewId: String       // ViewTabRegistry key
+    let bounds: CGRect       // AppKit 坐标系（相对于 contentBounds）
+    let containerHeight: CGFloat  // contentBounds 的高度（用于 Y 轴翻转）
+    let containerOriginY: CGFloat // contentBounds 的 origin.y（底部预留空间）
+}
+
 /// 终端窗口协调器（DDD 架构）
 class TerminalWindowCoordinator: ObservableObject {
 
@@ -89,6 +98,9 @@ class TerminalWindowCoordinator: ObservableObject {
 
     /// 更新触发器 - 用于触发 SwiftUI 的 updateNSView
     @Published var updateTrigger = UUID()
+
+    /// View Tab 覆盖层信息（供 ContentView 的 SwiftUI 层直接渲染）
+    @Published var viewTabOverlays: [ViewTabOverlayInfo] = []
 
     /// 当前激活的焦点（订阅自领域层，单一数据源）
     @Published private(set) var activeFocus: ActiveFocus?

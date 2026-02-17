@@ -448,16 +448,47 @@ class RioContainerView: NSView {
 
         // 插件页面由 ContentView 层处理，这里只处理终端页面
         if let activePage = coordinator.terminalWindow.active.page, activePage.isPluginPage {
+            // 清除 View Tab 覆盖层（插件页面不需要）
+            if !coordinator.viewTabOverlays.isEmpty {
+                coordinator.viewTabOverlays = []
+            }
             return
         }
 
         // PageBar 已移至 SwiftUI 层，通过 @ObservedObject 自动更新
 
-        // 获取当前 Page 的所有 Panel
-        let _ = coordinator.terminalWindow.getActiveTabsForRendering(
+        // 获取当前 Page 的所有 Panel 的渲染信息
+        let renderables = coordinator.terminalWindow.getActiveTabRenderables(
             containerBounds: contentBounds,
             headerHeight: 30.0
         )
+
+        // 更新 View Tab 覆盖层信息（供 ContentView SwiftUI 层直接渲染）
+        let viewOverlays: [ViewTabOverlayInfo] = renderables.compactMap { renderable in
+            if case .view(let viewId, let bounds) = renderable {
+                // 找到对应的 panelId
+                let panels = coordinator.terminalWindow.allPanels
+                for panel in panels {
+                    if let activeTab = panel.activeTab,
+                       case .view(let vc) = activeTab.content,
+                       vc.viewId == viewId {
+                        return ViewTabOverlayInfo(
+                            id: panel.panelId,
+                            viewId: viewId,
+                            bounds: bounds,
+                            containerHeight: contentBounds.height,
+                            containerOriginY: contentBounds.origin.y
+                        )
+                    }
+                }
+                return nil
+            }
+            return nil
+        }
+        if coordinator.viewTabOverlays.count != viewOverlays.count ||
+           !zip(coordinator.viewTabOverlays, viewOverlays).allSatisfy({ $0.id == $1.id && $0.bounds == $1.bounds }) {
+            coordinator.viewTabOverlays = viewOverlays
+        }
 
         let panels = coordinator.terminalWindow.allPanels
         let panelIds = Set(panels.map { $0.panelId })

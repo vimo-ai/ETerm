@@ -61,6 +61,11 @@ struct ContentView: View {
                 .opacity(isPluginPage ? 0 : 1)
                 .allowsHitTesting(!isPluginPage)
 
+            // View Tab 覆盖层：在 SwiftUI 层直接渲染插件视图（绕过 AppKit NSHostingView 桥接）
+            if !isPluginPage && !coordinator.viewTabOverlays.isEmpty {
+                viewTabOverlayLayer
+            }
+
             // 插件页面视图（终端页面时隐藏）
             if let activePage = coordinator.terminalWindow.active.page, isPluginPage {
                 pluginPageContent(for: activePage)
@@ -124,6 +129,10 @@ struct ContentView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .viewTabRegistered)) { _ in
+            // View Tab 视图注册后刷新 SwiftUI 层
+            coordinator.updateTrigger = UUID()
+        }
     }
 
     /// 插件页面内容视图
@@ -135,6 +144,61 @@ struct ContentView: View {
         } else {
             EmptyView()
         }
+    }
+
+    /// View Tab 覆盖层：在 SwiftUI 层直接渲染插件视图
+    ///
+    /// 坐标转换：AppKit contentBounds (origin 在左下角) → SwiftUI (origin 在左上角)
+    /// pageBarHeight 在顶部，contentBounds 在其下方
+    @ViewBuilder
+    private var viewTabOverlayLayer: some View {
+        let pageBarHeight: CGFloat = PageBarHostingView.recommendedHeight()
+
+        GeometryReader { _ in
+            ForEach(coordinator.viewTabOverlays) { overlay in
+                // AppKit → SwiftUI Y 轴翻转
+                // AppKit contentBounds: origin 在左下角，y 向上增长
+                // SwiftUI: origin 在左上角，y 向下增长
+                // pageBarHeight 在 SwiftUI 顶部，contentBounds 在其下方
+                let containerHeight = overlay.containerHeight
+                let swiftUIX = overlay.bounds.origin.x
+                let swiftUIY = pageBarHeight + (containerHeight - overlay.bounds.origin.y - overlay.bounds.height)
+
+                Group {
+                    if let view = ViewTabRegistry.shared.getView(for: overlay.viewId) {
+                        view
+                    } else {
+                        viewTabPlaceholder(viewId: overlay.viewId)
+                    }
+                }
+                .frame(width: overlay.bounds.width, height: overlay.bounds.height)
+                .position(
+                    x: swiftUIX + overlay.bounds.width / 2,
+                    y: swiftUIY + overlay.bounds.height / 2
+                )
+            }
+        }
+        .allowsHitTesting(true)
+    }
+
+    /// View Tab 占位视图（插件未加载时显示）
+    @ViewBuilder
+    private func viewTabPlaceholder(viewId: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary.opacity(0.5))
+
+            Text("插件未加载")
+                .font(.headline)
+                .foregroundColor(.secondary)
+
+            Text("viewId: \(viewId)")
+                .font(.caption)
+                .foregroundColor(.secondary.opacity(0.7))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     /// 侧边栏详情视图（居中显示，半透明圆角）
