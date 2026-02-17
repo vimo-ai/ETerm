@@ -123,26 +123,14 @@ enum HTMLTemplate {
         <title>\(title)</title>
         <style>
         :root {
-            --bg: #ffffff;
-            --fg: #1d1d1f;
+            --bg: #000000;
+            --fg: #f5f5f7;
             --fg-secondary: #86868b;
-            --border: #d2d2d7;
-            --code-bg: #f5f5f7;
-            --link: #0066cc;
-            --blockquote-border: #d2d2d7;
-            --blockquote-bg: #f5f5f7;
-        }
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #1d1d1f;
-                --fg: #f5f5f7;
-                --fg-secondary: #86868b;
-                --border: #424245;
-                --code-bg: #2c2c2e;
-                --link: #2997ff;
-                --blockquote-border: #424245;
-                --blockquote-bg: #2c2c2e;
-            }
+            --border: #424245;
+            --code-bg: #2c2c2e;
+            --link: #2997ff;
+            --blockquote-border: #424245;
+            --blockquote-bg: #2c2c2e;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -241,8 +229,9 @@ struct MarkdownPreviewView: NSViewRepresentable {
         webView.wantsLayer = true
         webView.navigationDelegate = context.coordinator
 
-        // 透明背景，跟随系统主题
-        webView.setValue(false, forKey: "drawsBackground")
+        // 固定深色背景，避免加载前白色闪烁
+        webView.setValue(true, forKey: "drawsBackground")
+        webView.layer?.backgroundColor = NSColor.black.cgColor
 
         loadMarkdown(into: webView)
         context.coordinator.startWatching(fileURL: fileURL, webView: webView, loader: loadMarkdown)
