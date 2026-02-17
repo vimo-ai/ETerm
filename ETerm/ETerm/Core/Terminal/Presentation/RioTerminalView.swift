@@ -486,7 +486,7 @@ class RioContainerView: NSView {
             return nil
         }
         if coordinator.viewTabOverlays.count != viewOverlays.count ||
-           !zip(coordinator.viewTabOverlays, viewOverlays).allSatisfy({ $0.id == $1.id && $0.bounds == $1.bounds }) {
+           !zip(coordinator.viewTabOverlays, viewOverlays).allSatisfy({ $0.id == $1.id && $0.viewId == $1.viewId && $0.bounds == $1.bounds }) {
             coordinator.viewTabOverlays = viewOverlays
         }
 
