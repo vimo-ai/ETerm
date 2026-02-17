@@ -97,6 +97,7 @@ struct TabState: Codable {
     /// View Tab 专用字段（可选）
     let viewId: String?
     let pluginId: String?
+    let viewParameters: [String: String]?
 
     // MARK: - 便捷构造器
 
@@ -110,10 +111,12 @@ struct TabState: Codable {
         self.contentType = .terminal
         self.viewId = nil
         self.pluginId = nil
+        self.viewParameters = nil
     }
 
     /// 创建 View Tab 状态
-    init(tabId: String, title: String, viewId: String, pluginId: String? = nil, userTitle: String? = nil, pluginTitle: String? = nil) {
+    init(tabId: String, title: String, viewId: String, pluginId: String? = nil,
+         viewParameters: [String: String]? = nil, userTitle: String? = nil, pluginTitle: String? = nil) {
         self.tabId = tabId
         self.title = title
         self.cwd = ""  // View Tab 不需要 cwd
@@ -122,6 +125,7 @@ struct TabState: Codable {
         self.contentType = .view
         self.viewId = viewId
         self.pluginId = pluginId
+        self.viewParameters = viewParameters
     }
 
     // MARK: - 类型判断

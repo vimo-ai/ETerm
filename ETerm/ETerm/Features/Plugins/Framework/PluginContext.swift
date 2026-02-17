@@ -105,6 +105,7 @@ protocol UIService: AnyObject {
         viewId: String,
         title: String,
         placement: ViewTabPlacement,
+        persistable: Bool,
         viewProvider: @escaping () -> AnyView
     ) -> Tab?
 
@@ -215,4 +216,21 @@ protocol UIService: AnyObject {
     ///
     /// - Parameter terminalId: 目标终端 ID
     func clearTabTitle(terminalId: Int)
+}
+
+// MARK: - UIService 默认参数
+
+extension UIService {
+    /// 便捷方法：不传 persistable 时默认为 true
+    @discardableResult
+    func createViewTab(
+        for pluginId: String,
+        viewId: String,
+        title: String,
+        placement: ViewTabPlacement,
+        viewProvider: @escaping () -> AnyView
+    ) -> Tab? {
+        createViewTab(for: pluginId, viewId: viewId, title: title,
+                      placement: placement, persistable: true, viewProvider: viewProvider)
+    }
 }

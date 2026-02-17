@@ -119,6 +119,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             WindowManager.shared.createWindow()
         }
 
+        // 恢复 immediate 插件的 View Tab（窗口已恢复，ViewTabRegistry 可能还有空缺）
+        SDKPluginLoader.shared.restoreAllPendingViewTabs()
+
         // 检测并显示首次启动引导
         if OnboardingManager.shared.shouldShowOnboarding() {
             // 延迟一点显示，让主窗口先完成渲染

@@ -746,6 +746,9 @@ final class SDKPluginLoader {
             registerPageBarItems(for: manifest)
             registerTabSlots(for: manifest)
             registerPageSlots(for: manifest)
+
+            // 恢复该插件的待恢复 View Tab（窗口恢复后才有效）
+            restorePendingViewTabs(for: pluginId)
         }
     }
 
@@ -886,6 +889,20 @@ final class SDKPluginLoader {
             let isTabMode = tabConfig.renderMode == "tab"
 
             if isTabMode {
+                // 立即注册 view provider（用于 session 恢复，不在 onSelect 中延迟）
+                UIServiceImpl.shared.registerViewProvider(
+                    for: pluginId,
+                    viewId: tabConfig.id,
+                    title: tabConfig.title
+                ) { [weak self] in
+                    self?.getSidebarView(pluginId: pluginId, tabId: tabConfig.id, isMainMode: isMainMode)
+                        ?? AnyView(SDKPluginPlaceholderView(
+                            pluginId: pluginId,
+                            tabId: tabConfig.id,
+                            message: "View not available"
+                        ))
+                }
+
                 // Tab 模式：点击后创建 View Tab
                 let tab = SidebarTab(
                     id: tabConfig.id,
@@ -894,20 +911,6 @@ final class SDKPluginLoader {
                     order: tabConfig.order ?? 100,
                     viewProvider: { AnyView(EmptyView()) },
                     onSelect: { [weak self] in
-                        // 预注册视图 Provider（用于 Session 恢复）
-                        UIServiceImpl.shared.registerViewProvider(
-                            for: pluginId,
-                            viewId: tabConfig.id,
-                            title: tabConfig.title
-                        ) {
-                            self?.getSidebarView(pluginId: pluginId, tabId: tabConfig.id, isMainMode: isMainMode)
-                                ?? AnyView(SDKPluginPlaceholderView(
-                                    pluginId: pluginId,
-                                    tabId: tabConfig.id,
-                                    message: "View not available"
-                                ))
-                        }
-
                         // 创建或切换到 View Tab
                         UIServiceImpl.shared.createViewTab(
                             for: pluginId,
@@ -953,6 +956,78 @@ final class SDKPluginLoader {
                 )
             }
         }
+    }
+
+    // MARK: - View Tab 恢复
+
+    /// 恢复指定插件的待恢复 View Tab
+    ///
+    /// 遍历所有窗口中属于该插件的 View Tab，如果 ViewTabRegistry 中没有对应 provider，
+    /// 则调用插件的 `ViewTabRestorable.restoreViewTab` 获取视图并注册。
+    func restorePendingViewTabs(for pluginId: String) {
+        guard let plugin = mainModePlugins[pluginId],
+              let restorable = plugin as? ViewTabRestorable else {
+            return
+        }
+
+        // 收集所有窗口中该插件的待恢复 View Tab
+        let pendingTabs = collectPendingViewTabs(for: pluginId)
+        guard !pendingTabs.isEmpty else { return }
+
+        logInfo("[SDKPluginLoader] Restoring \(pendingTabs.count) View Tab(s) for \(pluginId)")
+
+        for pending in pendingTabs {
+            // 从稳定 viewId 中提取插件端 id（去掉 "pluginId." 前缀）
+            let pluginViewId: String
+            let prefix = "\(pluginId)."
+            if pending.viewId.hasPrefix(prefix) {
+                pluginViewId = String(pending.viewId.dropFirst(prefix.count))
+            } else {
+                pluginViewId = pending.viewId
+            }
+
+            if let view = restorable.restoreViewTab(viewId: pluginViewId, parameters: pending.parameters) {
+                UIServiceImpl.shared.registerViewProvider(
+                    for: pluginId,
+                    viewId: pending.viewId,
+                    title: pending.title
+                ) { view }
+                logInfo("[SDKPluginLoader] Restored View Tab: \(pending.viewId)")
+            } else {
+                logWarn("[SDKPluginLoader] Plugin returned nil for View Tab: \(pending.viewId)")
+            }
+        }
+    }
+
+    /// 恢复所有已加载插件的待恢复 View Tab
+    func restoreAllPendingViewTabs() {
+        for pluginId in mainModePlugins.keys {
+            restorePendingViewTabs(for: pluginId)
+        }
+    }
+
+    /// 收集指定插件在所有窗口中的待恢复 View Tab
+    private func collectPendingViewTabs(for pluginId: String) -> [(viewId: String, title: String, parameters: [String: String])] {
+        var result: [(viewId: String, title: String, parameters: [String: String])] = []
+
+        for window in WindowManager.shared.windows {
+            guard let coordinator = WindowManager.shared.getCoordinator(for: window.windowNumber) else { continue }
+            for panel in coordinator.terminalWindow.allPanels {
+                for tab in panel.tabs {
+                    if case .view(let content) = tab.content,
+                       content.pluginId == pluginId,
+                       ViewTabRegistry.shared.getDefinition(for: content.viewId) == nil {
+                        result.append((
+                            viewId: content.viewId,
+                            title: tab.systemTitle,
+                            parameters: content.parameters
+                        ))
+                    }
+                }
+            }
+        }
+
+        return result
     }
 
     /// 获取侧边栏视图（区分 main/isolated 模式）

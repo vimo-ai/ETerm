@@ -27,8 +27,11 @@ final class ViewTabContent {
     /// 关联的插件 ID（可选，仅插件视图有）
     let pluginId: String?
 
-    /// 视图参数（可选，用于传递额外信息）
+    /// 视图参数（可选，用于传递额外信息，支持 session 恢复时传回插件）
     let parameters: [String: String]
+
+    /// 是否可持久化（有稳定 id 的 View Tab 才持久化到 session）
+    let isPersistable: Bool
 
     // MARK: - 初始化
 
@@ -36,12 +39,14 @@ final class ViewTabContent {
         contentId: UUID = UUID(),
         viewId: String,
         pluginId: String? = nil,
-        parameters: [String: String] = [:]
+        parameters: [String: String] = [:],
+        isPersistable: Bool = true
     ) {
         self.contentId = contentId
         self.viewId = viewId
         self.pluginId = pluginId
         self.parameters = parameters
+        self.isPersistable = isPersistable
     }
 
     // MARK: - 生命周期

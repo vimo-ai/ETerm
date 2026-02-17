@@ -181,21 +181,16 @@ struct ContentView: View {
         .allowsHitTesting(true)
     }
 
-    /// View Tab 占位视图（插件未加载时显示）
+    /// View Tab 占位视图（插件加载中显示）
     @ViewBuilder
     private func viewTabPlaceholder(viewId: String) -> some View {
         VStack(spacing: 16) {
-            Image(systemName: "puzzlepiece.extension")
-                .font(.system(size: 48))
-                .foregroundColor(.secondary.opacity(0.5))
+            ProgressView()
+                .scaleEffect(1.5)
 
-            Text("插件未加载")
-                .font(.headline)
+            Text("正在加载...")
+                .font(.subheadline)
                 .foregroundColor(.secondary)
-
-            Text("viewId: \(viewId)")
-                .font(.caption)
-                .foregroundColor(.secondary.opacity(0.7))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))

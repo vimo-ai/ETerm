@@ -671,17 +671,28 @@ final class MainProcessHostBridge: HostBridge, PluginPageHostBridge, ViewTabHost
 
     // MARK: - View Tab
 
-    func createViewTab(title: String, placement: ETermKit.ViewTabPlacement, viewProvider: @escaping @MainActor () -> AnyView) {
+    func createViewTab(id: String?, title: String, placement: ETermKit.ViewTabPlacement, viewProvider: @escaping @MainActor () -> AnyView) {
         let pid = pluginId
+        let stableId = id
         let t = title
         let provider = viewProvider
         let p = placement
 
-        logInfo("[MainProcessHostBridge] createViewTab called: title=\(title), placement=\(placement)")
+        logInfo("[MainProcessHostBridge] createViewTab called: id=\(id ?? "nil"), title=\(title), placement=\(placement)")
 
         DispatchQueue.main.async {
-            let viewId = "\(pid)-\(UUID().uuidString.prefix(8))"
-            logInfo("[MainProcessHostBridge] createViewTab async: viewId=\(viewId)")
+            // 有 id → 稳定 viewId（支持去重 + session 恢复）
+            // 无 id → 临时 viewId（不持久化）
+            let viewId: String
+            let persistable: Bool
+            if let stableId {
+                viewId = "\(pid).\(stableId)"
+                persistable = true
+            } else {
+                viewId = "\(pid)-\(UUID().uuidString.prefix(8))"
+                persistable = false
+            }
+            logInfo("[MainProcessHostBridge] createViewTab async: viewId=\(viewId), persistable=\(persistable)")
 
             // 将 ETermKit.ViewTabPlacement 转换为内部 ViewTabPlacement
             let internalPlacement: ETerm.ViewTabPlacement
@@ -699,6 +710,7 @@ final class MainProcessHostBridge: HostBridge, PluginPageHostBridge, ViewTabHost
                 viewId: viewId,
                 title: t,
                 placement: internalPlacement,
+                persistable: persistable,
                 viewProvider: provider
             )
             logInfo("[MainProcessHostBridge] createViewTab result: \(result != nil ? "tab created" : "nil")")

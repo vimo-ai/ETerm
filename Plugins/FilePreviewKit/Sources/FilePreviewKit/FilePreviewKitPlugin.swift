@@ -48,7 +48,8 @@ final class FileBrowserService {
             logWarn("[FilePreviewKit] host does not support ViewTabHostBridge")
             return
         }
-        tabHost.createViewTab(title: fileName, placement: .tab) {
+        // 使用文件路径作为稳定 id，支持去重 + session 恢复
+        tabHost.createViewTab(id: "preview:\(url.path)", title: fileName, placement: .tab) {
             AnyView(FilePreviewView(fileURL: url))
         }
     }
@@ -94,5 +95,24 @@ public final class FilePreviewKitPlugin: NSObject, ETermKit.Plugin {
         default:
             return nil
         }
+    }
+}
+
+// MARK: - View Tab 恢复
+
+extension FilePreviewKitPlugin: ViewTabRestorable {
+    public func restoreViewTab(viewId: String, parameters: [String: String]) -> AnyView? {
+        // 文件预览 tab：viewId 格式为 "preview:/path/to/file"
+        if viewId.hasPrefix("preview:") {
+            let path = String(viewId.dropFirst("preview:".count))
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else {
+                logWarn("[FilePreviewKit] Cannot restore preview, file not found: \(path)")
+                return nil
+            }
+            logInfo("[FilePreviewKit] Restoring preview for \(url.lastPathComponent)")
+            return AnyView(FilePreviewView(fileURL: url))
+        }
+        return nil
     }
 }
