@@ -5,18 +5,26 @@ import PackageDescription
 
 let package = Package(
     name: "PanelLayoutKit",
+    platforms: [
+        .macOS(.v14),
+    ],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
             name: "PanelLayoutKit",
             targets: ["PanelLayoutKit"]
         ),
+        .library(
+            name: "PanelLayoutUI",
+            targets: ["PanelLayoutUI"]
+        ),
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "PanelLayoutKit"
+        ),
+        .target(
+            name: "PanelLayoutUI",
+            dependencies: ["PanelLayoutKit"]
         ),
         .testTarget(
             name: "PanelLayoutKitTests",
