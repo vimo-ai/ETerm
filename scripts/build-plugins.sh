@@ -25,6 +25,7 @@ BUILTIN_PLUGINS=(
     "AICliKit"
     "ClaudeMonitorKit"
     "DevHelperKit"
+    "FilePreviewKit"
     "HistoryKit"
     "OneLineCommandKit"
     "TranslationKit"

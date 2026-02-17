@@ -1,0 +1,26 @@
+{
+    "id": "com.eterm.file-preview",
+    "name": "文件预览",
+    "version": "0.0.1-beta.1",
+    "minHostVersion": "0.0.1-beta.1",
+    "sdkVersion": "0.0.1-beta.1",
+    "runMode": "main",
+    "dependencies": [],
+    "capabilities": [
+        "ui.pluginPage",
+        "ui.sidebar",
+        "service.register"
+    ],
+    "principalClass": "FilePreviewKitPlugin",
+    "sidebarTabs": [
+        {
+            "id": "file-browser",
+            "title": "文件",
+            "icon": "folder",
+            "viewClass": "FileBrowserView",
+            "renderMode": "tab"
+        }
+    ],
+    "subscribes": [],
+    "emits": []
+}

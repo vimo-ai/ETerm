@@ -22,6 +22,7 @@ enum PluginCapability: String, CaseIterable {
     case uiTabTitle = "ui.tabTitle"
     case uiTabSlot = "ui.tabSlot"
     case uiPageSlot = "ui.pageSlot"
+    case uiPluginPage = "ui.pluginPage"
 
     // 服务能力
     case serviceRegister = "service.register"

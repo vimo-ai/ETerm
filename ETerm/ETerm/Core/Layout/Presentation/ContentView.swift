@@ -68,13 +68,9 @@ struct ContentView: View {
             }
 
             // PageBar 在顶部（覆盖在终端上方，与红绿灯同一行）
-            // 使用 AppKit 版本实现 Page 拖拽排序
-            VStack(spacing: 0) {
-                AppKitPageBar(coordinator: coordinator)
-                    .frame(height: PageBarHostingView.recommendedHeight())
-                Spacer()
-                    .allowsHitTesting(false)  // 让点击事件穿透到下层的插件视图
-            }
+            // 直接放置，不用 VStack+Spacer 包裹，避免全屏覆盖层干扰底层 AppKit hit-testing chain
+            AppKitPageBar(coordinator: coordinator)
+                .frame(height: PageBarHostingView.recommendedHeight())
 
             // 侧边栏背景遮罩：点击关闭侧边栏（放在详情面板和侧边栏下面）
             if showSidebar {

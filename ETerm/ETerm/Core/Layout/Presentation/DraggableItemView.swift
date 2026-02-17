@@ -415,10 +415,18 @@ class DraggableItemView: NSView {
             menu.addItem(closeRightItem)
         }
 
+        // 子类可添加自定义菜单项
+        addCustomMenuItems(to: menu)
+
         // 只有有菜单项时才显示
         if menu.items.count > 0 {
             NSMenu.popUpContextMenu(menu, with: event, for: self)
         }
+    }
+
+    /// 子类可覆盖此方法添加自定义右键菜单项
+    func addCustomMenuItems(to menu: NSMenu) {
+        // 默认空实现
     }
 
     @objc private func handleClose() {

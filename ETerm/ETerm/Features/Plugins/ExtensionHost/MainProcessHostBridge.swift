@@ -7,6 +7,8 @@
 
 import Foundation
 import AppKit
+import SwiftUI
+import Combine
 import ETermKit
 
 /// 主进程模式 HostBridge
@@ -555,7 +557,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
 
     // MARK: - 快捷键绑定
 
-    func bindKeyboard(_ shortcut: KeyboardShortcut, to commandId: String) {
+    func bindKeyboard(_ shortcut: ETermKit.KeyboardShortcut, to commandId: String) {
         let sc = shortcut
         let cmdId = commandId
 
@@ -568,7 +570,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
         }
     }
 
-    func unbindKeyboard(_ shortcut: KeyboardShortcut) {
+    func unbindKeyboard(_ shortcut: ETermKit.KeyboardShortcut) {
         let sc = shortcut
 
         Task { @Sendable in
@@ -580,7 +582,7 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
     }
 
     /// 将 SDK KeyboardShortcut 转换为内部 KeyStroke
-    private static func toKeyStroke(_ shortcut: KeyboardShortcut) -> KeyStroke {
+    private static func toKeyStroke(_ shortcut: ETermKit.KeyboardShortcut) -> KeyStroke {
         var modifiers: KeyModifiers = []
         if shortcut.modifiers.contains(.command) {
             modifiers.insert(.command)
@@ -635,6 +637,35 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
                     coordinator.sendUIEvent(.toggleComposer(position: .zero))
                 }
             }
+        }
+    }
+
+    // MARK: - 插件 Page
+
+    func createPluginPage(title: String, viewProvider: @escaping @MainActor () -> AnyView) {
+        let pid = pluginId
+        let t = title
+        let provider = viewProvider
+
+        DispatchQueue.main.async {
+            guard let activeWindow = NSApp.keyWindow,
+                  let coordinator = WindowManager.shared.getCoordinator(for: activeWindow.windowNumber) else {
+                logWarn("[MainProcessHostBridge] createPluginPage: no key window or coordinator")
+                return
+            }
+
+            // 用 pluginId + UUID 后缀支持多开
+            let instanceId = "\(pid)-\(UUID().uuidString.prefix(8))"
+            let page = coordinator.terminalWindow.pages.addPlugin(
+                pluginId: instanceId,
+                title: t,
+                viewProvider: provider
+            )
+
+            // 切换到新创建的 Page
+            _ = coordinator.terminalWindow.pages.switchTo(page.pageId)
+            coordinator.objectWillChange.send()
+            coordinator.updateTrigger = UUID()
         }
     }
 
