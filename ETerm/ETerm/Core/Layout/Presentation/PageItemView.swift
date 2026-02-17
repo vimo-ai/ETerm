@@ -137,6 +137,38 @@ final class PageItemView: DraggableItemView {
         bringEditFieldToFront()
     }
 
+    override func addCustomMenuItems(to menu: NSMenu) {
+        // 仅对非插件 Page 显示"打开文件浏览器"
+        guard let page = page, !page.isPluginPage else { return }
+
+        if menu.items.count > 0 {
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        let openBrowserItem = NSMenuItem(
+            title: "打开文件浏览器",
+            action: #selector(handleOpenFileBrowser),
+            keyEquivalent: ""
+        )
+        openBrowserItem.target = self
+        menu.addItem(openBrowserItem)
+    }
+
+    @objc private func handleOpenFileBrowser() {
+        // 获取关联终端的 CWD
+        var cwd: String?
+        if let coordinator = window.flatMap({ WindowManager.shared.getCoordinator(for: $0.windowNumber) }) {
+            cwd = coordinator.getActiveTabCwd()
+        }
+
+        // 通过 PluginManager 调用 FilePreviewKit 的 openFileBrowser 服务
+        _ = MainProcessHostBridge.callGlobalService(
+            pluginId: "com.eterm.file-preview",
+            name: "openFileBrowser",
+            params: ["cwd": cwd ?? NSHomeDirectory()]
+        )
+    }
+
     override func createPasteboardData() -> String {
         // 格式：page:{windowNumber}:{pageId}
         let windowNumber = window?.windowNumber ?? 0

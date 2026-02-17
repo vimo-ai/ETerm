@@ -513,8 +513,12 @@ final class PageBarHostingView: NSView {
         }
 
         // 1. 检查是否在 hostingView（右侧按钮区域）的 frame 内
-        // hostingView 现在只覆盖右侧按钮区域，点击在这个区域就交给 SwiftUI 处理
+        // 委托给 NSHostingView 自己的 hitTest，让 SwiftUI 正确路由事件到具体控件
         if let hosting = hostingView, hosting.frame.contains(point) {
+            let pointInHosting = convert(point, to: hosting)
+            if let hitView = hosting.hitTest(pointInHosting) {
+                return hitView
+            }
             return hosting
         }
 
@@ -592,6 +596,11 @@ final class PageBarHostingView: NSView {
     override func mouseDown(with event: NSEvent) {
         // 检查点击位置
         let point = convert(event.locationInWindow, from: nil)
+
+        // 点击在 hosting 区域的空白处，不拖动窗口（按钮事件由 SwiftUI 处理）
+        if let hosting = hostingView, hosting.frame.contains(point) {
+            return
+        }
 
         // 检查是否点击在 PageItemView 上
         if scrollView.frame.contains(point) {

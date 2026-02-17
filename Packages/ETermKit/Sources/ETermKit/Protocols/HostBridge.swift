@@ -4,6 +4,7 @@
 // 主应用桥接协议 - 插件通过此协议调用主应用能力
 
 import Foundation
+import SwiftUI
 
 /// 主应用桥接协议
 ///
@@ -388,6 +389,20 @@ public protocol HostBridge: AnyObject, Sendable {
     /// - Returns: 当前活跃终端的 ID，无活跃终端时返回 nil
     func getActiveTerminalId() -> Int?
 
+    // MARK: - 插件 Page
+
+    /// 创建插件 Page（支持多实例）
+    ///
+    /// 每次调用都会创建一个新的 Page，不会复用已有的同类 Page。
+    /// 适用于需要多开的插件页面（如文件浏览器）。
+    ///
+    /// 需要 capability: `ui.pluginPage`
+    ///
+    /// - Parameters:
+    ///   - title: Page 标题
+    ///   - viewProvider: 视图提供闭包
+    func createPluginPage(title: String, viewProvider: @escaping @MainActor () -> AnyView)
+
     // MARK: - Socket
 
     /// 获取 Socket 目录路径
@@ -417,4 +432,13 @@ public protocol HostBridge: AnyObject, Sendable {
     ///
     /// - Returns: Socket 服务实例，主应用未提供时返回 nil
     var socketService: SocketServiceProtocol? { get }
+}
+
+// MARK: - Default Implementations
+
+public extension HostBridge {
+    /// 默认空实现 - 仅 MainProcessHostBridge 提供实际实现
+    func createPluginPage(title: String, viewProvider: @escaping @MainActor () -> AnyView) {
+        logWarn("[HostBridge] createPluginPage not supported in this context")
+    }
 }
