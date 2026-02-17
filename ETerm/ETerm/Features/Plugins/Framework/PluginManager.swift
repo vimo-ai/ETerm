@@ -131,6 +131,7 @@ final class UIServiceImpl: UIService {
         viewId: String,
         title: String,
         placement: ViewTabPlacement,
+        persistable: Bool = true,
         viewProvider: @escaping () -> AnyView
     ) -> Tab? {
         // 1. 注册视图到 ViewTabRegistry
@@ -150,7 +151,8 @@ final class UIServiceImpl: UIService {
         // 3. 创建 ViewTabContent 和 Tab
         let viewTabContent = ViewTabContent(
             viewId: viewId,
-            pluginId: pluginId
+            pluginId: pluginId,
+            isPersistable: persistable
         )
         let tab = Tab(
             tabId: UUID(),

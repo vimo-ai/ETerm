@@ -260,7 +260,8 @@ final class WindowManager: NSObject {
                     let tabId = UUID(uuidString: tabState.tabId) ?? UUID()
                     let viewContent = ViewTabContent(
                         viewId: viewId,
-                        pluginId: tabState.pluginId
+                        pluginId: tabState.pluginId,
+                        parameters: tabState.viewParameters ?? [:]
                     )
                     let tab = Tab(
                         tabId: tabId,
@@ -961,12 +962,15 @@ final class WindowManager: NSObject {
                     )
 
                 case .view(let viewContent):
-                    // View Tab：保存 viewId 和 pluginId
+                    // 临时 View Tab 不持久化
+                    guard viewContent.isPersistable else { continue }
+                    // View Tab：保存 viewId、pluginId 和 parameters
                     tabState = TabState(
                         tabId: tab.tabId.uuidString,
                         title: tab.systemTitle,  // 保存 systemTitle（非显示 title）
                         viewId: viewContent.viewId,
                         pluginId: viewContent.pluginId,
+                        viewParameters: viewContent.parameters.isEmpty ? nil : viewContent.parameters,
                         userTitle: tab.userTitle,
                         pluginTitle: tab.pluginTitle  // 保存插件设置的标题
                     )
