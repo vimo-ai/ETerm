@@ -53,6 +53,8 @@ enum PreviewFileType {
 struct FilePreviewView: View {
     let fileURL: URL
 
+    private static let darkBg = Color(nsColor: .black)
+
     var body: some View {
         VStack(spacing: 0) {
             // 标题栏
@@ -62,6 +64,7 @@ struct FilePreviewView: View {
             // 内容区域
             contentView
         }
+        .background(Self.darkBg)
     }
 
     // MARK: - 标题栏
@@ -76,6 +79,7 @@ struct FilePreviewView: View {
             // 文件名
             Text(fileURL.lastPathComponent)
                 .font(.system(size: 13, weight: .medium))
+                .foregroundColor(Color(nsColor: .init(white: 0.92, alpha: 1.0)))
                 .lineLimit(1)
 
             Spacer()
@@ -83,7 +87,7 @@ struct FilePreviewView: View {
             // 路径（缩略显示）
             Text(fileURL.deletingLastPathComponent().path.abbreviatingWithTildeInPath)
                 .font(.system(size: 11))
-                .foregroundColor(.secondary)
+                .foregroundColor(Color(nsColor: .init(white: 0.55, alpha: 1.0)))
                 .lineLimit(1)
                 .truncationMode(.head)
 
@@ -91,13 +95,14 @@ struct FilePreviewView: View {
             Button(action: { NSWorkspace.shared.open(fileURL) }) {
                 Image(systemName: "arrow.up.forward.square")
                     .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(Color(nsColor: .init(white: 0.55, alpha: 1.0)))
             }
             .buttonStyle(.plain)
             .help("用默认应用打开")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .background(Self.darkBg)
     }
 
     // MARK: - 内容区域
@@ -119,16 +124,17 @@ struct FilePreviewView: View {
         VStack(spacing: 12) {
             Image(systemName: "doc.questionmark")
                 .font(.system(size: 40))
-                .foregroundColor(.secondary)
+                .foregroundColor(Color(nsColor: .init(white: 0.55, alpha: 1.0)))
             Text("无法预览此文件类型")
                 .font(.system(size: 14))
-                .foregroundColor(.secondary)
+                .foregroundColor(Color(nsColor: .init(white: 0.55, alpha: 1.0)))
             Button("用默认应用打开") {
                 NSWorkspace.shared.open(fileURL)
             }
             .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Self.darkBg)
     }
 }
 
@@ -142,15 +148,16 @@ private struct CodePreviewView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = .black
 
         let textView = NSTextView()
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false
         textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        textView.textColor = NSColor.labelColor
-        textView.backgroundColor = .clear
+        textView.textColor = .init(white: 0.92, alpha: 1.0)
+        textView.backgroundColor = .black
         textView.textContainerInset = NSSize(width: 16, height: 16)
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false

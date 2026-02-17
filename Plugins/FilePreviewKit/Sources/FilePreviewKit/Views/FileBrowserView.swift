@@ -122,6 +122,7 @@ final class FileOutlineDataSource: NSObject, NSOutlineViewDataSource, NSOutlineV
         let textField = NSTextField(labelWithString: "")
         textField.lineBreakMode = .byTruncatingMiddle
         textField.font = .systemFont(ofSize: 13)
+        textField.textColor = .init(white: 0.9, alpha: 1.0)
         cell.addSubview(textField)
         cell.textField = textField
 
@@ -217,7 +218,13 @@ final class FileBrowserContainerView: NSView {
     // MARK: - UI 构建
 
     private func setupUI() {
+        // --- 自身及导航栏深色背景 ---
+        self.wantsLayer = true
+        self.layer?.backgroundColor = NSColor.black.cgColor
+
         // --- 导航栏 ---
+        toolbarView.wantsLayer = true
+        toolbarView.layer?.backgroundColor = NSColor.black.cgColor
         toolbarView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(toolbarView)
 
@@ -234,7 +241,7 @@ final class FileBrowserContainerView: NSView {
         pathLabel.font = .systemFont(ofSize: 13, weight: .medium)
         pathLabel.lineBreakMode = .byTruncatingHead
         pathLabel.maximumNumberOfLines = 1
-        pathLabel.textColor = .labelColor
+        pathLabel.textColor = .init(white: 0.85, alpha: 1.0)
         pathLabel.translatesAutoresizingMaskIntoConstraints = false
         toolbarView.addSubview(pathLabel)
 
@@ -275,6 +282,7 @@ final class FileBrowserContainerView: NSView {
         outlineView.allowsMultipleSelection = false
         outlineView.style = .sourceList
         outlineView.focusRingType = .none
+        outlineView.backgroundColor = .black
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.resizingMask = .autoresizingMask
