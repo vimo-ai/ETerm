@@ -164,8 +164,7 @@ final class UIServiceImpl: UIService {
             return createViewTabWithSplit(tab: tab, direction: direction)
 
         case .tab:
-            // 暂时 fallback 到 split（水平方向）
-            return createViewTabWithSplit(tab: tab, direction: .horizontal)
+            return createViewTabInCurrentPanel(tab: tab)
 
         case .page:
             // 创建独立 Page
@@ -300,6 +299,95 @@ final class UIServiceImpl: UIService {
         coordinator.updateTrigger = UUID()
 
         // 保存 Session（分栏创建 View Tab，需要备份）
+        WindowManager.shared.saveSessionWithBackup()
+
+        return tab
+    }
+
+    /// 在当前 Panel 新增 View Tab（.tab placement）
+    ///
+    /// 如果当前在 Plugin Page（无 Panel），自动切到最近的 Terminal Page。
+    private func createViewTabInCurrentPanel(tab: Tab) -> Tab? {
+        var resultTab: Tab? = nil
+
+        if Thread.isMainThread {
+            resultTab = executeCreateViewTabInCurrentPanel(tab: tab)
+        } else {
+            DispatchQueue.main.sync {
+                resultTab = executeCreateViewTabInCurrentPanel(tab: tab)
+            }
+        }
+
+        return resultTab
+    }
+
+    /// 执行在当前 Panel 新增 View Tab（内部方法，需在主线程调用）
+    private func executeCreateViewTabInCurrentPanel(tab: Tab) -> Tab? {
+        guard let activeWindow = NSApp.keyWindow,
+              let coordinator = WindowManager.shared.getCoordinator(for: activeWindow.windowNumber) else {
+            logWarn("[UIServiceImpl] createViewTabInCurrentPanel: no key window or coordinator")
+            return nil
+        }
+
+        // 尝试获取当前 Panel
+        var targetPanelId = coordinator.activePanelId
+        logInfo("[UIServiceImpl] createViewTabInCurrentPanel: activePanelId=\(targetPanelId?.uuidString ?? "nil")")
+
+        // 如果当前无 Panel（Plugin Page），切到最近的 Terminal Page
+        if targetPanelId == nil {
+            // 找最近的 Terminal Page（从当前 page 往前找，再往后找）
+            let pages = coordinator.terminalWindow.pages.all
+            let currentPageId = coordinator.terminalWindow.active.pageId
+
+            // 找到当前 page 的 index
+            let currentIndex = pages.firstIndex(where: { $0.pageId == currentPageId }) ?? 0
+
+            // 先往前找，再往后找
+            var terminalPage: Page? = nil
+            for i in stride(from: currentIndex - 1, through: 0, by: -1) {
+                if case .terminal = pages[i].content {
+                    terminalPage = pages[i]
+                    break
+                }
+            }
+            if terminalPage == nil {
+                for i in (currentIndex + 1)..<pages.count {
+                    if case .terminal = pages[i].content {
+                        terminalPage = pages[i]
+                        break
+                    }
+                }
+            }
+
+            guard let page = terminalPage else {
+                logWarn("[UIServiceImpl] createViewTabInCurrentPanel: no terminal page found")
+                return nil
+            }
+
+            // 切换到该 Terminal Page
+            _ = coordinator.terminalWindow.pages.switchTo(page.pageId)
+
+            // 获取该 page 的 panel
+            targetPanelId = coordinator.terminalWindow.active.panelId(for: page.pageId)
+                ?? page.allPanels.first?.panelId
+        }
+
+        guard let panelId = targetPanelId,
+              let panel = coordinator.terminalWindow.allPanels.first(where: { $0.panelId == panelId }) else {
+            logWarn("[UIServiceImpl] createViewTabInCurrentPanel: no panel found")
+            return nil
+        }
+
+        // 在 Panel 中添加 Tab 并激活
+        logInfo("[UIServiceImpl] createViewTabInCurrentPanel: adding tab to panel \(panelId)")
+        panel.addTab(tab)
+        panel.setActiveTab(tab.tabId)
+
+        // 触发 UI 更新
+        coordinator.objectWillChange.send()
+        coordinator.updateTrigger = UUID()
+
+        // 保存 Session
         WindowManager.shared.saveSessionWithBackup()
 
         return tab

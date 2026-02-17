@@ -15,7 +15,7 @@ import ETermKit
 ///
 /// 当插件以 `runMode: main` 运行时使用。
 /// 直接调用主进程的服务，无需 IPC 通信。
-final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
+final class MainProcessHostBridge: HostBridge, PluginPageHostBridge, ViewTabHostBridge, @unchecked Sendable {
 
     private let pluginId: String
     private let manifest: PluginManifest
@@ -666,6 +666,42 @@ final class MainProcessHostBridge: HostBridge, @unchecked Sendable {
             _ = coordinator.terminalWindow.pages.switchTo(page.pageId)
             coordinator.objectWillChange.send()
             coordinator.updateTrigger = UUID()
+        }
+    }
+
+    // MARK: - View Tab
+
+    func createViewTab(title: String, placement: ETermKit.ViewTabPlacement, viewProvider: @escaping @MainActor () -> AnyView) {
+        let pid = pluginId
+        let t = title
+        let provider = viewProvider
+        let p = placement
+
+        logInfo("[MainProcessHostBridge] createViewTab called: title=\(title), placement=\(placement)")
+
+        DispatchQueue.main.async {
+            let viewId = "\(pid)-\(UUID().uuidString.prefix(8))"
+            logInfo("[MainProcessHostBridge] createViewTab async: viewId=\(viewId)")
+
+            // 将 ETermKit.ViewTabPlacement 转换为内部 ViewTabPlacement
+            let internalPlacement: ETerm.ViewTabPlacement
+            switch p {
+            case .tab:
+                internalPlacement = .tab
+            case .page:
+                internalPlacement = .page
+            @unknown default:
+                internalPlacement = .tab
+            }
+
+            let result = UIServiceImpl.shared.createViewTab(
+                for: pid,
+                viewId: viewId,
+                title: t,
+                placement: internalPlacement,
+                viewProvider: provider
+            )
+            logInfo("[MainProcessHostBridge] createViewTab result: \(result != nil ? "tab created" : "nil")")
         }
     }
 
