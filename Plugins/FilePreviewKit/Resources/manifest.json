@@ -8,6 +8,7 @@
     "dependencies": [],
     "capabilities": [
         "ui.pluginPage",
+        "ui.viewTab",
         "ui.sidebar",
         "service.register"
     ],

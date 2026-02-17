@@ -23,6 +23,7 @@ enum PluginCapability: String, CaseIterable {
     case uiTabSlot = "ui.tabSlot"
     case uiPageSlot = "ui.pageSlot"
     case uiPluginPage = "ui.pluginPage"
+    case uiViewTab = "ui.viewTab"
 
     // 服务能力
     case serviceRegister = "service.register"
@@ -51,6 +52,7 @@ final class CapabilityChecker {
         "ui.tabTitle": ["setTabTitle", "clearTabTitle"],
         "ui.tabSlot": ["registerTabSlot"],
         "ui.pageSlot": ["registerPageSlot"],
+        "ui.viewTab": ["createViewTab"],
         "service.register": ["registerService"],
         "service.call": ["callService"]
     ]

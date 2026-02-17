@@ -27,8 +27,29 @@ final class FileBrowserService {
         }
         let cwd = rootPath ?? host.getActiveTabCwd() ?? NSHomeDirectory()
         logInfo("[FilePreviewKit] creating plugin page with cwd=\(cwd)")
-        host.createPluginPage(title: "📁 文件") {
+        guard let pageHost = host as? PluginPageHostBridge else {
+            logWarn("[FilePreviewKit] host does not support PluginPageHostBridge")
+            return
+        }
+        pageHost.createPluginPage(title: "📁 文件") {
             AnyView(FileBrowserView(rootPath: cwd))
+        }
+    }
+
+    /// 打开文件预览（作为 Tab 添加到当前 Panel）
+    func openPreview(url: URL) {
+        guard let host = host else {
+            logWarn("[FilePreviewKit] host is nil, cannot open preview")
+            return
+        }
+        let fileName = url.lastPathComponent
+        logInfo("[FilePreviewKit] opening preview for \(fileName)")
+        guard let tabHost = host as? ViewTabHostBridge else {
+            logWarn("[FilePreviewKit] host does not support ViewTabHostBridge")
+            return
+        }
+        tabHost.createViewTab(title: fileName, placement: .tab) {
+            AnyView(FilePreviewView(fileURL: url))
         }
     }
 }

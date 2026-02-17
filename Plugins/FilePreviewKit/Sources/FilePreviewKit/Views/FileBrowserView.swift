@@ -37,6 +37,7 @@ final class FileOutlineDataSource: NSObject, NSOutlineViewDataSource, NSOutlineV
     var showHiddenFiles: Bool = false
     var onDoubleClick: ((FileNode) -> Void)?
     var onSelectionChange: ((FileNode?) -> Void)?
+    var onSingleClickFile: ((FileNode) -> Void)?
 
     private let fileManager = FileManager.default
 
@@ -93,13 +94,13 @@ final class FileOutlineDataSource: NSObject, NSOutlineViewDataSource, NSOutlineV
 
         cell.textField?.stringValue = node.name
         cell.imageView?.image = NSWorkspace.shared.icon(forFile: node.url.path)
-        cell.imageView?.image?.size = NSSize(width: 16, height: 16)
+        cell.imageView?.image?.size = NSSize(width: 18, height: 18)
 
         return cell
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        22
+        26
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
@@ -120,18 +121,18 @@ final class FileOutlineDataSource: NSObject, NSOutlineViewDataSource, NSOutlineV
 
         let textField = NSTextField(labelWithString: "")
         textField.lineBreakMode = .byTruncatingMiddle
-        textField.font = .systemFont(ofSize: 12)
+        textField.font = .systemFont(ofSize: 13)
         cell.addSubview(textField)
         cell.textField = textField
 
         imageView.translatesAutoresizingMaskIntoConstraints = false
         textField.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
+            imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
             imageView.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            imageView.widthAnchor.constraint(equalToConstant: 16),
-            imageView.heightAnchor.constraint(equalToConstant: 16),
-            textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 4),
+            imageView.widthAnchor.constraint(equalToConstant: 18),
+            imageView.heightAnchor.constraint(equalToConstant: 18),
+            textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 6),
             textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
             textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
@@ -230,7 +231,7 @@ final class FileBrowserContainerView: NSView {
         toolbarView.addSubview(backButton)
 
         // 路径标签
-        pathLabel.font = .systemFont(ofSize: 12)
+        pathLabel.font = .systemFont(ofSize: 13, weight: .medium)
         pathLabel.lineBreakMode = .byTruncatingHead
         pathLabel.maximumNumberOfLines = 1
         pathLabel.textColor = .labelColor
@@ -286,7 +287,15 @@ final class FileBrowserContainerView: NSView {
                 self.currentPath = node.url.path
                 self.loadCurrentDirectory()
             } else {
-                NSWorkspace.shared.open(node.url)
+                // 可预览文件 → ETerm 内预览 tab；其他 → 系统默认应用
+                let fileType = PreviewFileType.detect(url: node.url)
+                if fileType != .unsupported {
+                    Task { @MainActor in
+                        FileBrowserService.shared.openPreview(url: node.url)
+                    }
+                } else {
+                    NSWorkspace.shared.open(node.url)
+                }
             }
         }
 
@@ -303,7 +312,7 @@ final class FileBrowserContainerView: NSView {
             toolbarView.topAnchor.constraint(equalTo: topAnchor),
             toolbarView.leadingAnchor.constraint(equalTo: leadingAnchor),
             toolbarView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            toolbarView.heightAnchor.constraint(equalToConstant: 30),
+            toolbarView.heightAnchor.constraint(equalToConstant: 36),
 
             backButton.leadingAnchor.constraint(equalTo: toolbarView.leadingAnchor, constant: 8),
             backButton.centerYAnchor.constraint(equalTo: toolbarView.centerYAnchor),
