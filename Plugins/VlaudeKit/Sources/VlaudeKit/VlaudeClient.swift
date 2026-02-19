@@ -81,7 +81,16 @@ final class VlaudeClient: SocketClientBridgeDelegate {
 
     /// 当前打开的 Session 列表（用于重连时重新上报）
     /// 注意：状态由 Server 的 StatusManager 统一管理，此处仅用于重连上报
+    /// [V4] 通过 rebuildOpenSessions() 从 VlaudePlugin 本地映射同步，避免僵尸累积
     private var openSessions: [String: (projectPath: String, terminalId: Int)] = [:]
+
+    /// [V4] 用外部提供的活跃 session 列表重建 openSessions（防止僵尸 session 累积）
+    func rebuildOpenSessions(_ activeSessions: [(sessionId: String, projectPath: String, terminalId: Int)]) {
+        openSessions.removeAll()
+        for s in activeSessions {
+            openSessions[s.sessionId] = (projectPath: s.projectPath, terminalId: s.terminalId)
+        }
+    }
 
     /// 心跳定时器（每 30 秒发送一次，保持 Redis TTL 不过期）
     private var heartbeatTimer: Timer?

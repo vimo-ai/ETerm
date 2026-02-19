@@ -289,7 +289,7 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
             handleResponseComplete(terminalId: terminalId, event: event)
 
         case .sessionEnd:
-            handleSessionEnd(terminalId: terminalId)
+            handleSessionEnd(terminalId: terminalId, sessionId: event.sessionId)
 
         case .permissionRequest:
             handlePermissionRequest(event: event)
@@ -370,7 +370,7 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
         notifyResponseWaiters(terminalId: terminalId)
     }
 
-    private func handleSessionEnd(terminalId: Int) {
+    private func handleSessionEnd(terminalId: Int, sessionId: String?) {
         decorationStates.removeValue(forKey: terminalId)
         host?.clearTabDecoration(terminalId: terminalId)
         host?.clearTabTitle(terminalId: terminalId)
@@ -383,10 +383,12 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
             AICliSessionMapper.shared.end(terminalId: terminalId, tabId: tabId)
         }
 
-        // 广播事件
-        host?.emit(eventName: "aicli.sessionEnd", payload: [
-            "terminalId": terminalId
-        ])
+        // 广播事件（[V4] 带上 sessionId，避免下游 guard 失败导致泄漏）
+        var payload: [String: Any] = ["terminalId": terminalId]
+        if let sid = sessionId, !sid.isEmpty {
+            payload["sessionId"] = sid
+        }
+        host?.emit(eventName: "aicli.sessionEnd", payload: payload)
     }
 
     private func handlePermissionRequest(event: AICliEvent) {
