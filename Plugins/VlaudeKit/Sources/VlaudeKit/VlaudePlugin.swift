@@ -235,8 +235,12 @@ public final class VlaudePlugin: NSObject, Plugin {
     private var client: VlaudeClient?
 
     /// Session 文件路径映射：sessionId -> transcriptPath
-    /// 注意：session ↔ terminal 映射由 ClaudeKit 的 ClaudeSessionMapper 维护
     private var sessionPaths: [String: String] = [:]
+
+    /// [V4] 本地 terminalId ↔ sessionId 双向映射
+    /// 不再依赖 AICliKit 的 ClaudeSessionMapper（其映射会被覆盖/竞态清理）
+    private var terminalToSession: [Int: String] = [:]
+    private var sessionToTerminal: [String: Int] = [:]
 
     /// 待上报的创建请求：terminalId -> (requestId, projectPath)
     private var pendingRequests: [Int: (requestId: String, projectPath: String)] = [:]
@@ -400,12 +404,13 @@ public final class VlaudePlugin: NSObject, Plugin {
         // 更新状态
         VlaudeConfigManager.shared.updateConnectionStatus(.disconnected)
 
-        // 映射由 ClaudeKit 维护，这里只清理 VlaudeKit 本地状态
-        // sessionPaths 保留，重连后还能用
+        // 清理 VlaudeKit 本地状态
         pendingRequests.removeAll()
         mobileViewingTerminals.removeAll()
         loadingSessions.removeAll()
         pendingClientMessageIds.removeAll()
+        terminalToSession.removeAll()
+        sessionToTerminal.removeAll()
     }
 
     // MARK: - Configuration
@@ -483,11 +488,17 @@ public final class VlaudePlugin: NSObject, Plugin {
               let sessionId = payload["sessionId"] as? String,
               let transcriptPath = payload["transcriptPath"] as? String else { return }
 
-        // 映射由 ClaudeKit 的 ClaudeSessionMapper 维护，这里只保存 transcriptPath
+        // [V4] 更新本地映射，主动清理同一 terminal 的旧 session
+        if let oldSessionId = updateLocalMapping(terminalId: terminalId, sessionId: sessionId) {
+            sessionPaths.removeValue(forKey: oldSessionId)
+            removeFileWatcher(sessionId: oldSessionId)
+            client?.emitSessionEnd(sessionId: oldSessionId)
+            logInfo("[VlaudeKit] Session 切换: \(oldSessionId.prefix(8)) → \(sessionId.prefix(8)) (tid=\(terminalId))")
+        }
+
         sessionPaths[sessionId] = transcriptPath
 
         // [V2] 尽早持久化 transcriptPath，确保冷启动恢复覆盖（S1 fix）
-        // 即使后续没有触发 collectAndPushNewMessages，cursor 中也有路径记录
         var cursor = cursorStore.cursor(for: sessionId)
         if cursor.transcriptPath == nil {
             cursor.transcriptPath = transcriptPath
@@ -542,16 +553,12 @@ public final class VlaudePlugin: NSObject, Plugin {
         // Response 完成 = 之前未应答的审批请求已过期
         cleanupExpiredApprovals(sessionId: sessionId)
 
-        // 检查是否有旧的 sessionPaths 需要清理（session 改变的情况）
-        // 先收集要清理的 sessionId，避免迭代时修改字典
-        let sessionsToClean = sessionPaths.keys.filter { oldSessionId in
-            oldSessionId != sessionId &&
-            getTerminalId(for: oldSessionId) == terminalId
-        }
-        for oldSessionId in sessionsToClean {
+        // [V4] 用本地映射清理旧 session（替代旧的 getTerminalId 查询方式）
+        if let oldSessionId = updateLocalMapping(terminalId: terminalId, sessionId: sessionId) {
             sessionPaths.removeValue(forKey: oldSessionId)
             removeFileWatcher(sessionId: oldSessionId)
             client?.emitSessionEnd(sessionId: oldSessionId)
+            logInfo("[VlaudeKit] ResponseComplete 清理旧 session: \(oldSessionId.prefix(8)) (tid=\(terminalId))")
         }
 
         // 更新 transcriptPath
@@ -588,11 +595,18 @@ public final class VlaudePlugin: NSObject, Plugin {
     }
 
     private func handleClaudeSessionEnd(_ payload: [String: Any]) {
-        guard let terminalId = payload["terminalId"] as? Int,
-              let sessionId = payload["sessionId"] as? String else { return }
+        guard let terminalId = payload["terminalId"] as? Int else { return }
 
-        // 注意：ClaudeKit 先清理映射再 emit 事件，所以这里不能依赖 getSessionId()
-        // 直接使用 payload 中的 sessionId 进行清理
+        // [V4] sessionId 优先从 payload 取，fallback 到本地映射
+        let sessionId: String
+        if let sid = payload["sessionId"] as? String {
+            sessionId = sid
+        } else if let sid = terminalToSession[terminalId] {
+            sessionId = sid
+        } else {
+            logInfo("[VlaudeKit] SessionEnd 无法获取 sessionId (tid=\(terminalId))")
+            return
+        }
 
         // [V3] 最终 drain：在清理前推送剩余消息
         if let transcriptPath = cursorStore.cursor(for: sessionId).transcriptPath
@@ -603,9 +617,10 @@ public final class VlaudePlugin: NSObject, Plugin {
         // Session 结束 = 所有未应答的审批请求已过期
         cleanupExpiredApprovals(sessionId: sessionId)
 
-        // 清理本地数据（映射由 ClaudeKit 维护）
+        // 清理本地数据
         sessionPaths.removeValue(forKey: sessionId)
         pendingRequests.removeValue(forKey: terminalId)
+        removeLocalMapping(sessionId: sessionId)
 
         // [V2] 移除文件监听器
         removeFileWatcher(sessionId: sessionId)
@@ -627,14 +642,14 @@ public final class VlaudePlugin: NSObject, Plugin {
         pendingRequests.removeValue(forKey: terminalId)
         mobileViewingTerminals.remove(terminalId)
 
-        // 注意：ClaudeKit 可能已经清理了映射，所以不能依赖 getSessionId()
-        // 从本地 sessionPaths 中查找属于这个 terminal 的 session
-        // 需要遍历 sessionPaths，通过 getTerminalId 找到匹配的 session
-        // 但 getTerminalId 也依赖 ClaudeKit 映射，所以这里需要用 payload 中的 sessionId（如果有）
-        // 或者从 sessionPaths 中根据已知信息清理
+        // [V4] 优先用本地映射获取 sessionId，不依赖 AICliKit（竞态安全）
+        let sessionId = payload["sessionId"] as? String
+            ?? removeLocalMappingByTerminal(terminalId: terminalId)
 
-        // 尝试从 payload 获取 sessionId
-        if let sessionId = payload["sessionId"] as? String {
+        if let sessionId = sessionId {
+            // 确保本地映射也清理（如果上面 fallback 没走 removeLocalMappingByTerminal）
+            removeLocalMapping(sessionId: sessionId)
+
             // [V3] 最终 drain：终端关闭前推送剩余消息
             if let transcriptPath = cursorStore.cursor(for: sessionId).transcriptPath
                 ?? sessionPaths[sessionId] {
@@ -643,19 +658,6 @@ public final class VlaudePlugin: NSObject, Plugin {
             sessionPaths.removeValue(forKey: sessionId)
             removeFileWatcher(sessionId: sessionId)
             client?.emitSessionEnd(sessionId: sessionId)
-        } else {
-            // payload 中没有 sessionId，尝试从 sessionPaths 中查找
-            // 这种情况下映射可能还存在
-            if let sessionId = getSessionId(for: terminalId) {
-                // [V3] 最终 drain
-                if let transcriptPath = cursorStore.cursor(for: sessionId).transcriptPath
-                    ?? sessionPaths[sessionId] {
-                    collectAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
-                }
-                sessionPaths.removeValue(forKey: sessionId)
-                removeFileWatcher(sessionId: sessionId)
-                client?.emitSessionEnd(sessionId: sessionId)
-            }
         }
     }
 
@@ -769,7 +771,6 @@ public final class VlaudePlugin: NSObject, Plugin {
             name: "getTerminalId",
             params: ["sessionId": sessionId]
         ) else {
-            print("🔍 [getTerminalId] callService 返回 nil, sessionId=\(sessionId)")
             return nil
         }
         let tid = result["terminalId"] as? Int
@@ -786,6 +787,40 @@ public final class VlaudePlugin: NSObject, Plugin {
             params: ["terminalId": terminalId]
         ) else { return nil }
         return result["sessionId"] as? String
+    }
+
+    // MARK: - [V4] 本地映射管理
+
+    /// 更新本地映射，返回被替换的旧 sessionId（如果有）
+    private func updateLocalMapping(terminalId: Int, sessionId: String) -> String? {
+        let oldSessionId = terminalToSession[terminalId]
+        // 清理旧映射（同一 terminal 的旧 session）
+        if let old = oldSessionId, old != sessionId {
+            sessionToTerminal.removeValue(forKey: old)
+        }
+        // 清理同 sessionId 在其他 terminal 的映射（异常防御）
+        if let oldTid = sessionToTerminal[sessionId], oldTid != terminalId {
+            terminalToSession.removeValue(forKey: oldTid)
+        }
+        // 建立新映射
+        terminalToSession[terminalId] = sessionId
+        sessionToTerminal[sessionId] = terminalId
+        return (oldSessionId != nil && oldSessionId != sessionId) ? oldSessionId : nil
+    }
+
+    /// 按 sessionId 移除映射
+    private func removeLocalMapping(sessionId: String) {
+        if let tid = sessionToTerminal.removeValue(forKey: sessionId) {
+            terminalToSession.removeValue(forKey: tid)
+        }
+    }
+
+    /// 按 terminalId 移除映射，返回被移除的 sessionId
+    @discardableResult
+    private func removeLocalMappingByTerminal(terminalId: Int) -> String? {
+        guard let sid = terminalToSession.removeValue(forKey: terminalId) else { return nil }
+        sessionToTerminal.removeValue(forKey: sid)
+        return sid
     }
 
     // MARK: - View Providers
@@ -892,38 +927,32 @@ public final class VlaudePlugin: NSObject, Plugin {
 
     // MARK: - [V3] Cold Start Scan
 
-    /// 冷启动全量扫描：恢复持久化游标并补推遗漏消息
+    /// 冷启动全量扫描：补推停机期间的遗漏消息
     ///
     /// 在 activate() 中调用，处理 VlaudeKit 停机期间的文件变化：
     /// 1. 遍历 cursors.json 中所有有 transcriptPath 的游标
     /// 2. 对每个 session 调用 collectAndPushNewMessages（通知 agent 采集 + 从 DB 读）
-    /// 3. 为仍然存在的文件安装 file watcher
+    ///
+    /// [V4] 不再恢复 sessionPaths 映射：真正活跃的 session 会通过 handleClaudeSessionStart 自行注册。
+    /// 冷启动只补推数据，不建立"在线 session"状态，避免僵尸 session 泄漏。
     private func performColdStartScan() {
         let cursors = cursorStore.cursors
         guard !cursors.isEmpty else { return }
 
-        var sessionsToSync: [(sessionId: String, path: String)] = []
+        var syncCount = 0
 
         for (sessionId, cursor) in cursors {
             guard let transcriptPath = cursor.transcriptPath else { continue }
             guard FileManager.default.fileExists(atPath: transcriptPath) else { continue }
-            sessionsToSync.append((sessionId, transcriptPath))
+
+            // 只补推数据，不恢复 sessionPaths（不标记为"在线"）
+            collectAndPushNewMessages(sessionId: sessionId, transcriptPath: transcriptPath)
+            syncCount += 1
         }
 
-        guard !sessionsToSync.isEmpty else { return }
-
-        for session in sessionsToSync {
-            // 恢复 sessionPaths 映射
-            sessionPaths[session.sessionId] = session.path
-
-            // 通知 agent 采集 + 从 DB 读取 + 推送
-            collectAndPushNewMessages(sessionId: session.sessionId, transcriptPath: session.path)
-
-            // 安装 file watcher
-            installFileWatcher(sessionId: session.sessionId, path: session.path)
+        if syncCount > 0 {
+            logInfo("[VlaudeKit] 冷启动补推: \(syncCount) 个 session")
         }
-
-        logInfo("[VlaudeKit] 冷启动扫描: \(sessionsToSync.count) 个 session")
     }
 }
 
@@ -934,16 +963,14 @@ extension VlaudePlugin: VlaudeClientDelegate {
         // 更新连接状态
         VlaudeConfigManager.shared.updateConnectionStatus(.connected)
 
-        // 连接成功后，上报所有已存在的 session（StatusManager 架构）
-        // 遍历 sessionPaths，通过 ClaudeKit 服务查询 terminalId
-        var reportedCount = 0
-        for sessionId in sessionPaths.keys {
-            guard let terminalId = getTerminalId(for: sessionId) else { continue }
+        // [V4] 用本地映射重建活跃 session 列表（防止僵尸 session 重连后上报）
+        var activeSessions: [(sessionId: String, projectPath: String, terminalId: Int)] = []
+        for (sessionId, terminalId) in sessionToTerminal {
             let projectPath = host?.getTerminalInfo(terminalId: terminalId)?.cwd ?? ""
-            client.emitSessionStart(sessionId: sessionId, projectPath: projectPath, terminalId: terminalId)
-            reportedCount += 1
+            activeSessions.append((sessionId, projectPath, terminalId))
         }
-
+        client.rebuildOpenSessions(activeSessions)
+        logInfo("[VlaudeKit] 重连上报 \(activeSessions.count) 个活跃 session")
     }
 
     func vlaudeClientDidDisconnect(_ client: VlaudeClient) {
