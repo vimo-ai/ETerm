@@ -20,6 +20,40 @@ import Combine
 
 extension TerminalWindowCoordinator {
 
+    /// 标记终端为 keepAlive
+    ///
+    /// 调用后，closeTerminalInternal 会 detach daemon session 而非 kill，
+    /// daemon session 保留，后续可通过 reattach 恢复。
+    func markTerminalKeepAlive(_ terminalId: Int) {
+        terminalPool.markKeepAlive(terminalId)
+    }
+
+    /// 强制关闭终端（无视 keepAlive 标记，直接 kill daemon session）
+    ///
+    /// 先查找对应 tabId 以发射 DidClose 事件，再调用强制关闭。
+    @discardableResult
+    func closeTerminalForce(_ terminalId: Int) -> Bool {
+        // 在关闭前查找 tabId（关闭后就找不到了）
+        var tabId: String?
+        for panel in terminalWindow.allPanels {
+            if let tab = panel.tabs.first(where: { $0.rustTerminalId == terminalId }) {
+                tabId = tab.tabId.uuidString
+                break
+            }
+        }
+
+        let success = terminalPool.closeTerminalForce(terminalId)
+
+        if success {
+            EventBus.shared.emit(CoreEvents.Terminal.DidClose(
+                terminalId: terminalId,
+                tabId: tabId
+            ))
+        }
+
+        return success
+    }
+
     /// 关闭终端（统一入口）
     @discardableResult
     func closeTerminalInternal(_ terminalId: Int) -> Bool {
@@ -32,13 +66,17 @@ extension TerminalWindowCoordinator {
             }
         }
 
-        // 发射终端关闭事件
-        EventBus.shared.emit(CoreEvents.Terminal.DidClose(
-            terminalId: terminalId,
-            tabId: tabId
-        ))
+        let success = terminalPool.closeTerminal(terminalId)
 
-        return terminalPool.closeTerminal(terminalId)
+        // close 成功后再发射事件，避免 close 失败时误报
+        if success {
+            EventBus.shared.emit(CoreEvents.Terminal.DidClose(
+                terminalId: terminalId,
+                tabId: tabId
+            ))
+        }
+
+        return success
     }
 
     /// 创建终端（统一入口）
@@ -414,6 +452,18 @@ extension TerminalWindowCoordinator {
                 }
             }
         }
+    }
+
+    /// 设置 reattach hint
+    ///
+    /// 下次 createTerminalForTab 时，优先 attach 到此 daemon session。
+    func setReattachHint(_ sessionId: String) {
+        terminalPool.setReattachHint(sessionId)
+    }
+
+    /// 查询终端关联的 daemon session ID
+    func getDaemonSessionId(_ terminalId: Int) -> String? {
+        terminalPool.getDaemonSessionId(terminalId)
     }
 
     /// 重建 Page 中所有 Tab 的终端（已废弃，使用 attachTerminalsForPage）

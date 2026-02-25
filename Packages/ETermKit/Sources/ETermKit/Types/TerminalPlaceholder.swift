@@ -17,6 +17,14 @@ public enum EmbeddedTerminalFactory {
     ///   - cwd: 工作目录
     /// - Returns: NSView 实例
     public static var createView: ((_ terminalId: Int, _ cwd: String) -> NSView)?
+
+    /// 用外部 PTY fd 创建终端视图的工厂函数
+    /// - Parameters:
+    ///   - terminalId: 终端 ID
+    ///   - fd: PTY master fd
+    ///   - childPid: 子进程 PID
+    /// - Returns: NSView 实例
+    public static var createViewWithFd: ((_ terminalId: Int, _ fd: Int32, _ childPid: UInt32) -> NSView)?
 }
 
 /// 嵌入式终端占位视图

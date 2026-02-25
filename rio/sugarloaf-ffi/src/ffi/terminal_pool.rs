@@ -136,7 +136,78 @@ pub extern "C" fn terminal_pool_create_terminal_with_id_and_cwd(
     pool.create_terminal_with_id_and_cwd(id as usize, cols, rows, working_dir_opt)
 }
 
+/// 用外部 PTY fd 创建终端（dev-runner 等外部进程管理器集成）
+///
+/// 调用方已通过 openpty() + fork() 启动进程，传入 master fd 和子进程 PID。
+/// terminal_pool 复用该 fd 进行终端渲染，不启动新 shell。
+///
+/// 返回终端 ID，失败返回 -1
+#[no_mangle]
+pub extern "C" fn terminal_pool_create_terminal_with_fd(
+    handle: *mut TerminalPoolHandle,
+    fd: i32,
+    child_pid: u32,
+    cols: u16,
+    rows: u16,
+) -> i64 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.create_terminal_with_fd(fd, child_pid, cols, rows)
+}
+
+/// 设置 reattach hint
+///
+/// 下次 terminal_pool_create_terminal_with_cwd 时，优先 attach 到此 daemon session。
+/// hint 是一次性的：被消费后自动清空。
+///
+/// 使用场景：插件 reopenTerminal 时，先调用此方法设置旧 session_id，
+/// 再调用 createTerminalTab，新终端会 reattach 到原 daemon session。
+#[no_mangle]
+pub extern "C" fn terminal_pool_set_reattach_hint(
+    handle: *mut TerminalPoolHandle,
+    session_id: *const std::os::raw::c_char,
+) {
+    if handle.is_null() || session_id.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    let session_id = match unsafe { std::ffi::CStr::from_ptr(session_id) }.to_str() {
+        Ok(s) if !s.is_empty() => s.to_string(),
+        _ => return,
+    };
+    pool.set_reattach_hint(session_id);
+}
+
+/// 查询终端关联的 daemon session ID
+///
+/// 返回 C 字符串（调用方需要使用 rio_free_string 释放），无 session 返回 NULL。
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_daemon_session_id(
+    handle: *const TerminalPoolHandle,
+    terminal_id: usize,
+) -> *mut std::os::raw::c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    match pool.get_daemon_session_id(terminal_id) {
+        Some(sid) => match std::ffi::CString::new(sid) {
+            Ok(c) => c.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// 关闭终端
+///
+/// 若终端已标记为 keepAlive，则 detach daemon session（session 保留可 reattach）；
+/// 否则 kill daemon session（彻底清理）。
 #[no_mangle]
 pub extern "C" fn terminal_pool_close_terminal(
     handle: *mut TerminalPoolHandle,
@@ -148,6 +219,43 @@ pub extern "C" fn terminal_pool_close_terminal(
 
     let pool = unsafe { &mut *(handle as *mut TerminalPool) };
     pool.close_terminal(terminal_id)
+}
+
+/// 标记终端为 keepAlive
+///
+/// 设置后，terminal_pool_close_terminal 会 detach daemon session 而非 kill，
+/// daemon session 保留，后续可通过 reattach 恢复。
+#[no_mangle]
+pub extern "C" fn terminal_pool_mark_keep_alive(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) {
+    if handle.is_null() {
+        return;
+    }
+
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.mark_keep_alive(terminal_id);
+}
+
+/// 强制关闭终端（无视 keepAlive 标记，直接 kill daemon session）
+///
+/// 供插件主动清理时使用，确保彻底终止 daemon session。
+///
+/// # 返回
+/// - true: 成功关闭
+/// - false: 句柄无效或终端不存在
+#[no_mangle]
+pub extern "C" fn terminal_pool_close_terminal_force(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.close_terminal_force(terminal_id)
 }
 
 /// 获取终端的当前工作目录（通过 proc_pidinfo 系统调用）

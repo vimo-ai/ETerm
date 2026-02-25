@@ -139,7 +139,18 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
 
     public func createTerminalTab(cwd: String?) -> Int? {
         // isolated 模式暂不支持创建终端 Tab（需要访问 WindowManager）
-        // 如果需要支持，可添加 IPC 消息类型 .createTerminalTab
+        return nil
+    }
+
+    public func createTerminalTabWithFd(
+        fd: Int32,
+        childPid: Int32?,
+        cols: UInt16?,
+        rows: UInt16?,
+        title: String?,
+        sessionId: String?
+    ) -> Int? {
+        // isolated 模式暂不支持
         return nil
     }
 
@@ -419,6 +430,11 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
         return -1
     }
 
+    public func createEmbeddedTerminalWithFd(fd: Int32, childPid: UInt32) -> Int {
+        // isolated 模式不支持嵌入终端（需要 Metal 渲染）
+        return -1
+    }
+
     public func closeEmbeddedTerminal(terminalId: Int) {
         // isolated 模式不支持嵌入终端
     }
@@ -610,6 +626,27 @@ final class ExtensionHostBridge: HostBridge, @unchecked Sendable {
     var socketService: SocketServiceProtocol? {
         // isolated 模式不支持 SocketService（SocketIO 库只在主应用链接）
         nil
+    }
+
+    // MARK: - 终端 keepAlive / reattach
+
+    public func markTerminalKeepAlive(terminalId: Int) {
+        // isolated 模式暂不支持
+    }
+
+    @discardableResult
+    public func closeTerminalForce(terminalId: Int) -> Bool {
+        // isolated 模式暂不支持
+        return false
+    }
+
+    public func setReattachHint(sessionId: String) {
+        // isolated 模式暂不支持
+    }
+
+    public func getDaemonSessionId(terminalId: Int) -> String? {
+        // isolated 模式暂不支持
+        return nil
     }
 
     // MARK: - Internal

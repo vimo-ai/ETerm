@@ -159,6 +159,119 @@ final class MainProcessHostBridge: HostBridge, PluginPageHostBridge, ViewTabHost
         }
     }
 
+    func createTerminalTabWithFd(
+        fd: Int32,
+        childPid: Int32?,
+        cols: UInt16?,
+        rows: UInt16?,
+        title: String?,
+        sessionId: String?
+    ) -> Int? {
+        let f = fd
+        let pid = childPid
+        let c = cols
+        let r = rows
+        let t = title
+
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated {
+                CoreTerminalService.createTabWithFd(
+                    fd: f, childPid: pid, cols: c, rows: r, title: t
+                ).terminalId
+            }
+        } else {
+            var result: Int?
+            DispatchQueue.main.sync {
+                result = MainActor.assumeIsolated {
+                    CoreTerminalService.createTabWithFd(
+                        fd: f, childPid: pid, cols: c, rows: r, title: t
+                    ).terminalId
+                }
+            }
+            return result
+        }
+    }
+
+    func markTerminalKeepAlive(terminalId: Int) {
+        let termId = terminalId
+
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                CoreTerminalService.findCoordinator(for: termId)?.markTerminalKeepAlive(termId)
+            }
+        } else {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    CoreTerminalService.findCoordinator(for: termId)?.markTerminalKeepAlive(termId)
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    func closeTerminalForce(terminalId: Int) -> Bool {
+        let termId = terminalId
+
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated {
+                CoreTerminalService.findCoordinator(for: termId)?.closeTerminalForce(termId) ?? false
+            }
+        } else {
+            var result = false
+            DispatchQueue.main.sync {
+                result = MainActor.assumeIsolated {
+                    CoreTerminalService.findCoordinator(for: termId)?.closeTerminalForce(termId) ?? false
+                }
+            }
+            return result
+        }
+    }
+
+    func setReattachHint(sessionId: String) {
+        let sid = sessionId
+
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                Self.activeCoordinator()?.setReattachHint(sid)
+            }
+        } else {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    Self.activeCoordinator()?.setReattachHint(sid)
+                }
+            }
+        }
+    }
+
+    func getDaemonSessionId(terminalId: Int) -> String? {
+        let termId = terminalId
+
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated {
+                CoreTerminalService.findCoordinator(for: termId)?.getDaemonSessionId(termId)
+            }
+        } else {
+            var result: String?
+            DispatchQueue.main.sync {
+                result = MainActor.assumeIsolated {
+                    CoreTerminalService.findCoordinator(for: termId)?.getDaemonSessionId(termId)
+                }
+            }
+            return result
+        }
+    }
+
+    /// 返回当前 key window 的 coordinator（与 createTerminalTab 使用相同的查找逻辑）
+    @MainActor
+    private static func activeCoordinator() -> TerminalWindowCoordinator? {
+        let windowManager = WindowManager.shared
+        return windowManager.windows
+            .first { $0.isKeyWindow }
+            .flatMap { windowManager.getCoordinator(for: $0.windowNumber) }
+            ?? windowManager.windows.first
+                .flatMap { windowManager.getCoordinator(for: $0.windowNumber) }
+    }
+
     func getTerminalInfo(terminalId: Int) -> TerminalInfo? {
         if Thread.isMainThread {
             return Self.doGetTerminalInfo(terminalId: terminalId)
@@ -448,6 +561,60 @@ final class MainProcessHostBridge: HostBridge, PluginPageHostBridge, ViewTabHost
         )
 
         return terminalId
+    }
+
+    /// 外部 fd 信息存储（terminalId -> (fd, childPid)）
+    private static var externalFdInfo: [Int: (fd: Int32, childPid: UInt32)] = [:]
+    private static var externalFdLock = NSLock()
+
+    func createEmbeddedTerminalWithFd(fd: Int32, childPid: UInt32) -> Int {
+        var resultId: Int = -1
+
+        let createBlock = {
+            // 分配 ID
+            Self.embeddedTerminalLock.lock()
+            let terminalId = Self.nextEmbeddedTerminalId
+            Self.nextEmbeddedTerminalId += 1
+            Self.embeddedTerminalLock.unlock()
+
+            // 存储 fd 信息
+            Self.externalFdLock.lock()
+            Self.externalFdInfo[terminalId] = (fd: fd, childPid: childPid)
+            Self.externalFdLock.unlock()
+
+            // 通知创建嵌入终端（factory 会通过 getExternalFdInfo 读取 fd）
+            NotificationCenter.default.post(
+                name: NSNotification.Name("ETerm.CreateEmbeddedTerminal"),
+                object: nil,
+                userInfo: ["terminalId": terminalId, "cwd": ""]
+            )
+
+            resultId = terminalId
+        }
+
+        if Thread.isMainThread {
+            createBlock()
+        } else {
+            DispatchQueue.main.sync {
+                createBlock()
+            }
+        }
+
+        return resultId
+    }
+
+    /// 获取外部 fd 信息（供 EmbeddedTerminalFactory 使用）
+    static func getExternalFdInfo(for terminalId: Int) -> (fd: Int32, childPid: UInt32)? {
+        externalFdLock.lock()
+        defer { externalFdLock.unlock() }
+        return externalFdInfo[terminalId]
+    }
+
+    /// 清除外部 fd 信息
+    static func removeExternalFdInfo(for terminalId: Int) {
+        externalFdLock.lock()
+        externalFdInfo.removeValue(forKey: terminalId)
+        externalFdLock.unlock()
     }
 
     func closeEmbeddedTerminal(terminalId: Int) {

@@ -108,6 +108,33 @@ public protocol HostBridge: AnyObject, Sendable {
     /// - Returns: 新终端的 ID，失败返回 nil
     func createTerminalTab(cwd: String?) -> Int?
 
+    /// 用外部 PTY fd 创建原生终端 Tab
+    ///
+    /// 在当前窗口的当前 Panel 创建新终端 Tab，使用外部 PTY master fd
+    /// 进行终端渲染，不启动新 shell。
+    ///
+    /// fd 所有权在调用后移交给 host。调用方在此方法返回后
+    /// 不得再 read/write/close 该 fd，由 host 内部的 terminal_pool 管理。
+    ///
+    /// 需要 capability: `terminal.createTab`
+    ///
+    /// - Parameters:
+    ///   - fd: PTY master fd（所有权移交）
+    ///   - childPid: 子进程 PID（nil 表示未知）
+    ///   - cols: 终端列数（nil 使用当前窗口默认值）
+    ///   - rows: 终端行数（nil 使用当前窗口默认值）
+    ///   - title: 初始 Tab 标题（nil 使用默认标题）
+    ///   - sessionId: pty-daemon session UUID（nil 表示非 daemon 模式）
+    /// - Returns: 终端 ID，失败返回 nil
+    func createTerminalTabWithFd(
+        fd: Int32,
+        childPid: Int32?,
+        cols: UInt16?,
+        rows: UInt16?,
+        title: String?,
+        sessionId: String?
+    ) -> Int?
+
     /// 获取终端信息
     ///
     /// - Parameter terminalId: 终端 ID
@@ -271,6 +298,19 @@ public protocol HostBridge: AnyObject, Sendable {
     /// - Returns: 终端 ID，创建失败返回 -1
     func createEmbeddedTerminal(cwd: String) -> Int
 
+    /// 用外部 PTY fd 创建嵌入式终端
+    ///
+    /// 调用方已通过 openpty() + fork() 启动进程，传入 master fd 和子进程 PID。
+    /// 终端复用该 fd 进行渲染，不启动新 shell。
+    ///
+    /// 需要 capability: `terminal.embed`
+    ///
+    /// - Parameters:
+    ///   - fd: PTY master fd
+    ///   - childPid: 子进程 PID
+    /// - Returns: 终端 ID，创建失败返回 -1
+    func createEmbeddedTerminalWithFd(fd: Int32, childPid: UInt32) -> Int
+
     /// 关闭嵌入式终端
     ///
     /// 需要 capability: `terminal.embed`
@@ -418,5 +458,45 @@ public protocol HostBridge: AnyObject, Sendable {
     ///
     /// - Returns: Socket 服务实例，主应用未提供时返回 nil
     var socketService: SocketServiceProtocol? { get }
+
+    // MARK: - 终端 keepAlive / reattach（追加到末尾，保持 witness table 兼容）
+
+    /// 标记终端为 keepAlive — 用户关闭 Tab 时 detach daemon session 而非 kill
+    ///
+    /// 调用后，关闭终端时会 detach daemon session，session 保留，
+    /// 后续可通过 reattach 恢复终端状态。
+    ///
+    /// 需要 capability: `terminal.write`
+    ///
+    /// - Parameter terminalId: 终端 ID
+    func markTerminalKeepAlive(terminalId: Int)
+
+    /// 强制关闭终端（kill daemon session，无视 keepAlive 标记）
+    ///
+    /// 供插件主动清理时使用，确保彻底终止 daemon session。
+    ///
+    /// 需要 capability: `terminal.write`
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: true 表示成功，false 表示终端不存在
+    @discardableResult
+    func closeTerminalForce(terminalId: Int) -> Bool
+
+    /// 设置 reattach hint
+    ///
+    /// 下次 createTerminalTab 时，优先 attach 到此 daemon session（而非按 terminal_id 匹配）。
+    /// hint 是一次性的：被消费后自动清空。
+    ///
+    /// 使用场景：插件 reopenTerminal 时，先调用此方法设置旧 session_id，
+    /// 再调用 createTerminalTab，新终端会 reattach 到原 daemon session。
+    ///
+    /// 需要 capability: `terminal.createTab`
+    func setReattachHint(sessionId: String)
+
+    /// 查询终端关联的 daemon session ID
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: daemon session ID，终端不存在或未使用 pty-daemon 时返回 nil
+    func getDaemonSessionId(terminalId: Int) -> String?
 }
 
