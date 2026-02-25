@@ -132,11 +132,54 @@ int64_t terminal_pool_create_terminal_with_id_and_cwd(
     const char* working_dir
 );
 
+/// Create terminal with external PTY fd (for dev-runner integration)
+///
+/// Caller has already opened PTY and forked process, passes master fd and child PID.
+/// Returns: Terminal ID on success, -1 on failure
+int64_t terminal_pool_create_terminal_with_fd(
+    TerminalPoolHandle handle,
+    int32_t fd,
+    uint32_t child_pid,
+    uint16_t cols,
+    uint16_t rows
+);
+
 /// Close terminal
+///
+/// If the terminal has been marked keep-alive, detaches the daemon session
+/// (session is preserved for later reattach) instead of killing it.
 bool terminal_pool_close_terminal(
     TerminalPoolHandle handle,
     size_t terminal_id
 );
+
+/// Set reattach hint
+///
+/// On the next call to terminal_pool_create_terminal_with_cwd, the pool will
+/// prefer to attach to this daemon session instead of matching by terminal_id.
+/// The hint is consumed (cleared) after one use.
+///
+/// Use case: plugin reopen — call this with the old session_id before
+/// createTerminalTab so the new terminal reattaches to the existing daemon session.
+void terminal_pool_set_reattach_hint(TerminalPoolHandle handle, const char* session_id);
+
+/// Get daemon session ID associated with a terminal
+///
+/// Returns the session_id string (must be freed with rio_free_string),
+/// or NULL if the terminal does not exist or is not using pty-daemon.
+char* terminal_pool_get_daemon_session_id(TerminalPoolHandle handle, size_t terminal_id);
+
+/// Mark terminal as keep-alive
+///
+/// After calling this, terminal_pool_close_terminal will detach the daemon
+/// session instead of killing it, allowing later reattach.
+void terminal_pool_mark_keep_alive(TerminalPoolHandle handle, size_t terminal_id);
+
+/// Force-close terminal (ignores keep-alive flag, always kills daemon session)
+///
+/// Use this when a plugin needs to explicitly terminate a terminal regardless
+/// of the keep-alive flag.
+bool terminal_pool_close_terminal_force(TerminalPoolHandle handle, size_t terminal_id);
 
 /// Get terminal's current working directory (via proc_pidinfo)
 ///

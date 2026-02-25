@@ -1,15 +1,14 @@
 #!/bin/bash
-# build.sh - Build DevHelperKit plugin
+# build.sh - Build DevRunnerKit plugin
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_NAME="DevHelperKit"
-BUNDLE_ID="com.eterm.dev-helper"
+PLUGIN_NAME="DevRunnerKit"
+BUNDLE_ID="com.eterm.dev-runner"
 BUNDLE_NAME="${PLUGIN_NAME}.bundle"
 
 # Output directory: {plugins}/{id}/{name}.bundle
-# 内置插件必须通过 Xcode 编译
 if [ -z "${BUNDLE_OUTPUT_DIR:-}" ]; then
     echo "Error: BUNDLE_OUTPUT_DIR not set. Build via Xcode." >&2
     exit 1
@@ -36,19 +35,43 @@ log_info "Creating bundle..."
 rm -rf "$PLUGIN_DIR"
 mkdir -p "${BUNDLE_PATH}/Contents/MacOS"
 mkdir -p "${BUNDLE_PATH}/Contents/Resources"
+mkdir -p "${BUNDLE_PATH}/Libs/DevRunnerFFI"
 
-# Copy dylib
+# Copy main plugin dylib
 cp ".build/debug/lib${PLUGIN_NAME}.dylib" "${BUNDLE_PATH}/Contents/MacOS/"
 
-# Fix ETermKit link path: SPM dylib -> Xcode framework
-log_info "Fixing ETermKit link path for framework..."
+# Copy Rust FFI dylib
+cp "Libs/DevRunnerFFI/libdev_runner_app.dylib" "${BUNDLE_PATH}/Libs/DevRunnerFFI/"
+
+# Fix dylib link paths
+log_info "Fixing dylib link paths..."
+
+# 1. Fix Rust dylib install name (absolute → @rpath)
+install_name_tool -id \
+    "@rpath/libdev_runner_app.dylib" \
+    "${BUNDLE_PATH}/Libs/DevRunnerFFI/libdev_runner_app.dylib"
+
+# 2. Fix plugin dylib references
+PLUGIN_DYLIB="${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+
+# ETermKit: SPM dylib → Xcode framework
 install_name_tool -change \
     "@rpath/libETermKit.dylib" \
     "@executable_path/../Frameworks/ETermKit.framework/ETermKit" \
-    "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+    "$PLUGIN_DYLIB"
+
+# Rust FFI dylib: absolute path → @loader_path relative
+OLD_RUST_PATH=$(otool -L "$PLUGIN_DYLIB" | grep libdev_runner_app | awk '{print $1}')
+if [ -n "$OLD_RUST_PATH" ]; then
+    install_name_tool -change \
+        "$OLD_RUST_PATH" \
+        "@loader_path/../../Libs/DevRunnerFFI/libdev_runner_app.dylib" \
+        "$PLUGIN_DYLIB"
+fi
 
 # Re-sign after modification
-codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+codesign -f -s - "$PLUGIN_DYLIB"
+codesign -f -s - "${BUNDLE_PATH}/Libs/DevRunnerFFI/libdev_runner_app.dylib"
 
 # Copy manifest.json
 cp "Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"
@@ -60,7 +83,7 @@ cat > "${BUNDLE_PATH}/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.eterm.dev-helper</string>
+    <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
     <string>${PLUGIN_NAME}</string>
     <key>CFBundleVersion</key>
@@ -70,7 +93,7 @@ cat > "${BUNDLE_PATH}/Contents/Info.plist" <<EOF
     <key>CFBundleExecutable</key>
     <string>lib${PLUGIN_NAME}.dylib</string>
     <key>NSPrincipalClass</key>
-    <string>DevHelperKit.DevHelperPlugin</string>
+    <string>DevRunnerPlugin</string>
 </dict>
 </plist>
 EOF

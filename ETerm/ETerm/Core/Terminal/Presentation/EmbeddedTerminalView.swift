@@ -87,6 +87,13 @@ class EmbeddedTerminalMetalView: NSView {
     /// 工作目录
     var workingDirectory: String?
 
+    /// 外部 PTY fd（dev-runner 等外部进程管理器集成）
+    /// 设置后不创建新 shell，直接复用该 fd
+    var externalFd: Int32?
+
+    /// 外部进程 PID（与 externalFd 配合使用）
+    var externalChildPid: UInt32?
+
     /// 终端创建回调
     var onTerminalCreated: ((Int) -> Void)?
 
@@ -178,7 +185,10 @@ class EmbeddedTerminalMetalView: NSView {
         let cols: UInt16 = 80
         let rows: UInt16 = 24
 
-        if let cwd = workingDirectory {
+        if let fd = externalFd, let pid = externalChildPid {
+            // 外部 PTY fd 模式：复用已有 fd，不启动新 shell
+            terminalId = pool.createTerminalWithFd(fd, childPid: pid, cols: cols, rows: rows)
+        } else if let cwd = workingDirectory {
             terminalId = pool.createTerminalWithCwd(cols: cols, rows: rows, shell: "", cwd: cwd)
         } else {
             terminalId = pool.createTerminal(cols: cols, rows: rows, shell: "")

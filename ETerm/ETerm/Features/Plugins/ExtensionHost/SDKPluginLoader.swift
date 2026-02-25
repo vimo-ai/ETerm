@@ -121,12 +121,33 @@ final class SDKPluginLoader {
     /// 注入嵌入终端工厂
     private func setupEmbeddedTerminalFactory() {
         EmbeddedTerminalFactory.createView = { terminalId, cwd in
-            // 创建 EmbeddedTerminalMetalView
+            // 检查是否有外部 fd 信息（由 createEmbeddedTerminalWithFd 存储）
+            if let fdInfo = MainProcessHostBridge.getExternalFdInfo(for: terminalId) {
+                let view = EmbeddedTerminalMetalView()
+                view.externalFd = fdInfo.fd
+                view.externalChildPid = fdInfo.childPid
+                view.onTerminalCreated = { id in
+                    logInfo("[SDKPluginLoader] Embedded terminal (external fd) created: \(id) for placeholder: \(terminalId)")
+                    MainProcessHostBridge.removeExternalFdInfo(for: terminalId)
+                }
+                return view
+            }
+
+            // 常规模式：创建新 shell
             let view = EmbeddedTerminalMetalView()
             view.workingDirectory = cwd
             view.onTerminalCreated = { id in
-                // 更新 terminalId 映射（可选，用于后续控制）
                 logInfo("[SDKPluginLoader] Embedded terminal created: \(id) for placeholder: \(terminalId)")
+            }
+            return view
+        }
+
+        EmbeddedTerminalFactory.createViewWithFd = { terminalId, fd, childPid in
+            let view = EmbeddedTerminalMetalView()
+            view.externalFd = fd
+            view.externalChildPid = childPid
+            view.onTerminalCreated = { id in
+                logInfo("[SDKPluginLoader] Embedded terminal (fd) created: \(id) for placeholder: \(terminalId)")
             }
             return view
         }

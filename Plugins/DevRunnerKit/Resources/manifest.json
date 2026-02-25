@@ -1,0 +1,33 @@
+{
+    "id": "com.eterm.dev-runner",
+    "name": "DevRunner",
+    "version": "1.0.0",
+    "minHostVersion": "1.0.0",
+    "sdkVersion": "1.0.0",
+    "runMode": "main",
+    "dependencies": [],
+    "capabilities": [
+        "terminal.createTab",
+        "terminal.write",
+        "ui.tabDecoration",
+        "ui.tabTitle",
+        "ui.sidebar",
+        "service.call",
+        "service.register"
+    ],
+    "principalClass": "DevRunnerPlugin",
+    "sidebarTabs": [
+        {
+            "id": "dev-runner",
+            "title": "DevRunner",
+            "icon": "hammer.fill",
+            "viewClass": "DevRunnerSidebarView",
+            "renderMode": "tab"
+        }
+    ],
+    "commands": [],
+    "subscribes": [
+        "terminal.didClose"
+    ],
+    "emits": []
+}
