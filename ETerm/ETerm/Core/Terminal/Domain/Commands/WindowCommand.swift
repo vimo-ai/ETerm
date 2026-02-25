@@ -79,11 +79,15 @@ struct TabConfig {
     /// 环境变量
     let env: [String: String]?
 
-    init(cwd: String? = nil, command: String? = nil, commandDelay: TimeInterval = 0.3, env: [String: String]? = nil) {
+    /// 跳过终端创建（用于外部 fd 注入场景，调用方自行创建终端）
+    let skipTerminalCreation: Bool
+
+    init(cwd: String? = nil, command: String? = nil, commandDelay: TimeInterval = 0.3, env: [String: String]? = nil, skipTerminalCreation: Bool = false) {
         self.cwd = cwd
         self.command = command
         self.commandDelay = commandDelay
         self.env = env
+        self.skipTerminalCreation = skipTerminalCreation
     }
 }
 

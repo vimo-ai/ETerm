@@ -871,12 +871,15 @@ extension TerminalWindow {
 
         var result = CommandResult()
         result.createdTabId = newTab.tabId
-        result.terminalsToCreate = [TerminalSpec(
-            tabId: newTab.tabId,
-            cwd: config.cwd,
-            command: config.command,
-            env: config.env
-        )]
+        // skipTerminalCreation 时不加入 terminalsToCreate（调用方自行创建终端）
+        if !config.skipTerminalCreation {
+            result.terminalsToCreate = [TerminalSpec(
+                tabId: newTab.tabId,
+                cwd: config.cwd,
+                command: config.command,
+                env: config.env
+            )]
+        }
         if let oldId = oldTerminalId {
             result.terminalsToDeactivate = [oldId]
         }

@@ -54,9 +54,29 @@ protocol TerminalPoolProtocol: AnyObject {
     /// 用于 Session 恢复，确保 ID 在重启后保持一致
     func createTerminalWithIdAndCwd(_ id: Int, cols: UInt16, rows: UInt16, cwd: String?) -> Int
 
+    /// 用外部 PTY fd 创建终端
+    ///
+    /// fd 所有权移交给 pool，调用方不再管理。
+    func createTerminalWithFd(_ fd: Int32, childPid: UInt32, cols: UInt16, rows: UInt16) -> Int
+
     /// 关闭终端
+    ///
+    /// 若终端已标记为 keepAlive，则 detach daemon session（session 保留可 reattach）；
+    /// 否则 kill daemon session（彻底清理）。
     @discardableResult
     func closeTerminal(_ terminalId: Int) -> Bool
+
+    /// 标记终端为 keepAlive
+    ///
+    /// 调用后，closeTerminal 会 detach daemon session 而非 kill，
+    /// daemon session 保留，后续可通过 reattach 恢复。
+    func markKeepAlive(_ terminalId: Int)
+
+    /// 强制关闭终端（无视 keepAlive 标记，直接 kill daemon session）
+    ///
+    /// 供插件主动清理时使用，确保彻底终止 daemon session。
+    @discardableResult
+    func closeTerminalForce(_ terminalId: Int) -> Bool
 
     /// 获取终端数量
     func getTerminalCount() -> Int
@@ -218,6 +238,23 @@ protocol TerminalPoolProtocol: AnyObject {
     /// - Parameter terminalId: 终端 ID
     /// - Returns: 当前模式，终端不存在时返回 nil
     func getMode(terminalId: Int) -> TerminalMode?
+
+    // MARK: - Daemon Session
+
+    /// 设置 reattach hint
+    ///
+    /// 下次 createTerminalWithCwd 时，优先 attach 到此 daemon session。
+    /// hint 是一次性的：被消费后自动清空。
+    ///
+    /// 使用场景：插件 reopenTerminal 时，先调用此方法设置旧 session_id，
+    /// 再调用 createTerminalTab，新终端会 reattach 到原 daemon session。
+    func setReattachHint(_ sessionId: String)
+
+    /// 查询终端关联的 daemon session ID
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: daemon session ID，终端不存在或未使用 daemon 时返回 nil
+    func getDaemonSessionId(_ terminalId: Int) -> String?
 }
 
 // MARK: - Mock Implementation
@@ -228,7 +265,10 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func createTerminalWithCwd(cols: UInt16, rows: UInt16, shell: String, cwd: String) -> Int { -1 }
     func createTerminalWithId(_ id: Int, cols: UInt16, rows: UInt16) -> Int { -1 }
     func createTerminalWithIdAndCwd(_ id: Int, cols: UInt16, rows: UInt16, cwd: String?) -> Int { -1 }
+    func createTerminalWithFd(_ fd: Int32, childPid: UInt32, cols: UInt16, rows: UInt16) -> Int { -1 }
     func closeTerminal(_ terminalId: Int) -> Bool { false }
+    func markKeepAlive(_ terminalId: Int) {}
+    func closeTerminalForce(_ terminalId: Int) -> Bool { false }
     func getTerminalCount() -> Int { 0 }
     func detachTerminal(_ terminalId: Int) -> DetachedTerminalHandle? { nil }
     func attachTerminal(_ detached: DetachedTerminalHandle) -> Int { -1 }
@@ -255,4 +295,6 @@ final class MockTerminalPool: TerminalPoolProtocol {
     func getFontMetrics() -> SugarloafFontMetrics? { nil }
     func setMode(terminalId: Int, mode: TerminalMode) {}
     func getMode(terminalId: Int) -> TerminalMode? { nil }
+    func setReattachHint(_ sessionId: String) {}
+    func getDaemonSessionId(_ terminalId: Int) -> String? { nil }
 }
