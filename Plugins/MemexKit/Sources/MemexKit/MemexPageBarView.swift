@@ -66,6 +66,7 @@ final class MemexStatsStore: ObservableObject {
 
 public struct MemexPageBarView: View {
     @ObservedObject private var store = MemexStatsStore.shared
+    @State private var isStarting = false
 
     public init() {}
 
@@ -86,17 +87,47 @@ public struct MemexPageBarView: View {
                         statGroup(icon: "clock.fill", value: formatNumber(emb.pending), label: "待索引")
                     }
                 }
-            } else {
-                // memex 未启动
-                Image(systemName: "exclamationmark.triangle")
+            } else if isStarting {
+                // 启动中
+                Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.caption2)
-                    .foregroundColor(.orange)
-                Text("memex 未启动")
+                    .foregroundColor(.secondary)
+                    .rotationEffect(.degrees(isStarting ? 360 : 0))
+                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isStarting)
+                Text("memex 启动中...")
                     .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                // memex 未启动，点击启动
+                Button {
+                    startMemex()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "play.circle")
+                            .font(.caption2)
+                        Text("启动 memex")
+                            .font(.caption)
+                    }
                     .foregroundColor(.orange)
+                }
+                .buttonStyle(.plain)
             }
         }
         .fixedSize()
+    }
+
+    private func startMemex() {
+        isStarting = true
+        Task {
+            do {
+                try MemexService.shared.start()
+                // 等待服务就绪后刷新统计
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                MemexStatsStore.shared.startPolling()
+            } catch {
+                isStarting = false
+            }
+        }
     }
 
     // MARK: - Components
