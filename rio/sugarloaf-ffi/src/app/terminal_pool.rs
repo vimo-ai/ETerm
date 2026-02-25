@@ -243,6 +243,12 @@ struct TerminalEntry {
 
     /// Daemon session (if using pty-daemon)
     daemon_session: Option<super::daemon_client::DaemonSession>,
+
+    /// keepAlive 标记：关闭终端时 detach daemon session 而非 kill
+    ///
+    /// 为 true 时，close_terminal 会调用 DaemonClient::detach()，
+    /// daemon session 保留，后续可通过 reattach 恢复。
+    keep_daemon_alive: bool,
 }
 
 /// 分离的终端（用于跨池迁移）
@@ -333,6 +339,12 @@ pub struct TerminalPool {
     /// 启动时计算一次，只在字体大小/scale 变化时更新
     /// 使用原子读写避免锁争用
     cached_font_metrics: std::sync::RwLock<(f32, f32, f32)>,
+
+    /// Reattach hint：下次 create_terminal 时优先 attach 到此 daemon session
+    ///
+    /// 插件在 reopenTerminal 前通过 set_reattach_hint 设置，
+    /// create_terminal_with_cwd 消费后自动清空（一次性语义）。
+    reattach_hint: RwLock<Option<String>>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -456,6 +468,7 @@ impl TerminalPool {
             pending_terminal_resizes: Mutex::new(Vec::new()),
             // 缓存初始 font metrics
             cached_font_metrics: std::sync::RwLock::new(initial_font_metrics),
+            reattach_hint: RwLock::new(None),
         })
     }
 
@@ -567,6 +580,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_session,
+            keep_daemon_alive: false,
         };
 
         self.terminals.write().insert(id, entry);
@@ -591,6 +605,9 @@ impl TerminalPool {
         let id = self.next_id;
         self.next_id += 1;
 
+        // 消费 reattach hint（一次性语义）
+        let reattach_hint = self.reattach_hint.write().take();
+
         // 1. 创建 Terminal
         let terminal_id = TerminalId(id);
         let terminal = Terminal::new_with_pty(
@@ -607,6 +624,7 @@ impl TerminalPool {
                 &terminal,
                 self.event_queue.clone(),
                 working_dir,
+                reattach_hint,
             ) {
                 Ok(result) => result,
                 Err(e) => {
@@ -642,6 +660,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_session,
+            keep_daemon_alive: false,
         };
 
         self.terminals.write().insert(id, entry);
@@ -710,6 +729,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_session,
+            keep_daemon_alive: false,
         };
 
         self.terminals.write().insert(id, entry);
@@ -752,12 +772,13 @@ impl TerminalPool {
             self.config.log_buffer_size,
         );
 
-        // 2. 创建 PTY 和 Machine（带工作目录）
+        // 2. 创建 PTY 和 Machine（带工作目录，session restore 不使用 hint，用 terminal_id 匹配）
         let (machine_handle, pty_tx, pty_fd, shell_pid, daemon_session) =
             match Self::create_pty_and_machine_with_cwd(
                 &terminal,
                 self.event_queue.clone(),
                 working_dir,
+                None, // session restore 通过 terminal_id 精确匹配
             ) {
                 Ok(result) => result,
                 Err(e) => {
@@ -793,6 +814,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_session,
+            keep_daemon_alive: false,
         };
 
         self.terminals.write().insert(id, entry);
@@ -804,6 +826,116 @@ impl TerminalPool {
         if id >= self.next_id {
             self.next_id = id + 1;
         }
+
+        id as i64
+    }
+
+    /// 用外部 PTY fd 创建终端（用于 dev-runner 等外部进程管理器集成）
+    ///
+    /// 不分配新 PTY，不启动新 shell，直接复用外部 fd。
+    /// 适用于调用方已通过 openpty() + fork() 启动进程的场景。
+    pub fn create_terminal_with_fd(
+        &mut self,
+        fd: i32,
+        child_pid: u32,
+        cols: u16,
+        rows: u16,
+    ) -> i64 {
+        use crate::rio_event::FFIEventListener;
+        use std::os::fd::FromRawFd;
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        // 1. 创建 Terminal
+        let terminal_id = TerminalId(id);
+        let terminal = Terminal::new_with_pty(
+            terminal_id,
+            cols as usize,
+            rows as usize,
+            self.event_queue.clone(),
+            self.config.log_buffer_size,
+        );
+
+        let crosswords = match terminal.inner_crosswords() {
+            Some(cw) => cw,
+            None => {
+                eprintln!("❌ [TerminalPool] Failed to get crosswords for external fd terminal");
+                return -1;
+            }
+        };
+
+        // 2. 从外部 fd 创建 PTY wrapper
+        let pty = match unsafe {
+            let file = std::fs::File::from_raw_fd(fd);
+            teletypewriter::create_pty_from_file(file, child_pid)
+        } {
+            Ok(pty) => pty,
+            Err(e) => {
+                eprintln!("❌ [TerminalPool] Failed to create PTY from fd {}: {:?}", fd, e);
+                return -1;
+            }
+        };
+
+        // 3. 创建 Machine
+        let event_listener = FFIEventListener::new(self.event_queue.clone(), terminal.id().0);
+
+        let machine = match Machine::new_with_log_buffer(
+            crosswords,
+            pty,
+            event_listener,
+            terminal.id().0,
+            fd,
+            child_pid,
+            terminal.log_buffer().clone(),
+            None, // 无 shared ring buffer
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("❌ [TerminalPool] Failed to create machine from fd: {:?}", e);
+                return -1;
+            }
+        };
+
+        let pty_tx = machine.channel();
+        let machine_handle = machine.spawn();
+
+        // 4. 存储条目
+        let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
+        let entry = TerminalEntry {
+            terminal: Arc::new(Mutex::new(terminal)),
+            pty_tx,
+            machine_handle,
+            cols,
+            rows,
+            pty_fd: fd,
+            shell_pid: child_pid,
+            render_cache: None,
+            surface_cache: None,
+            cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
+            is_background: Arc::new(AtomicBool::new(false)),
+            selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
+            title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
+            scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
+            dirty_flag: dirty_flag.clone(),
+            render_state: Arc::new(Mutex::new(
+                crate::domain::aggregates::render_state::RenderState::new(
+                    cols as usize,
+                    rows as usize,
+                ),
+            )),
+            selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
+            daemon_session: None, // 非 daemon 管理
+            keep_daemon_alive: false,
+        };
+
+        self.terminals.write().insert(id, entry);
+
+        // 5. 注册全局事件路由
+        register_terminal_event_target(id, dirty_flag, &self.needs_render);
+
+        eprintln!("[TerminalPool] created terminal {} from external fd {} (pid={})", id, fd, child_pid);
 
         id as i64
     }
@@ -824,18 +956,21 @@ impl TerminalPool {
         ),
         ErrorCode,
     > {
-        // 默认使用用户 home 目录
+        // 默认使用用户 home 目录，无 reattach hint
         let home = std::env::var("HOME").ok();
-        Self::create_pty_and_machine_with_cwd(terminal, event_queue, home)
+        Self::create_pty_and_machine_with_cwd(terminal, event_queue, home, None)
     }
 
     /// 创建 PTY 和 Machine（支持工作目录）
     ///
     /// 返回: (machine_handle, pty_tx, pty_fd, shell_pid, daemon_session)
+    ///
+    /// `reattach_session_id`: 优先 attach 到此 daemon session（插件 reopen 场景）
     fn create_pty_and_machine_with_cwd(
         terminal: &Terminal,
         event_queue: EventQueue,
         working_dir: Option<String>,
+        reattach_session_id: Option<String>,
     ) -> Result<
         (
             JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>,
@@ -860,7 +995,7 @@ impl TerminalPool {
         // Try daemon PTY first
         let cwd_ref = working_dir.as_deref();
         let terminal_id = terminal.id().0 as u32;
-        match Self::try_create_daemon_pty(terminal, event_queue.clone(), cols, rows, cwd_ref, terminal_id) {
+        match Self::try_create_daemon_pty(terminal, event_queue.clone(), cols, rows, cwd_ref, terminal_id, reattach_session_id.as_deref()) {
             Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session)) => {
                 eprintln!("[TerminalPool] using daemon PTY: session_id={}",
                     daemon_session.as_ref().map(|s| s.session_id.as_str()).unwrap_or("unknown"));
@@ -914,8 +1049,8 @@ impl TerminalPool {
     ///
     /// 启动时优先 reattach 已有 Active/Idle session，无可用 session 才 create 新的。
     ///
-    /// NOTE: daemon 链路暂停，等待解决 reattach 花屏 + resume 冲突问题
-    #[allow(unreachable_code)]
+    /// `reattach_session_id`: 若不为 None，优先 attach 到此 session（插件 reopen 场景）；
+    /// 否则退回按 terminal_id 精确匹配的旧逻辑。
     fn try_create_daemon_pty(
         terminal: &Terminal,
         event_queue: EventQueue,
@@ -923,6 +1058,7 @@ impl TerminalPool {
         rows: u16,
         cwd: Option<&str>,
         terminal_id: u32,
+        reattach_session_id: Option<&str>,
     ) -> Result<
         (
             JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>,
@@ -933,9 +1069,6 @@ impl TerminalPool {
         ),
         String,
     > {
-        // daemon 链路暂停
-        return Err("daemon disabled: pending reattach + resume conflict resolution".to_string());
-
         use crate::rio_event::FFIEventListener;
         use std::os::fd::FromRawFd;
 
@@ -943,15 +1076,29 @@ impl TerminalPool {
             .inner_crosswords()
             .ok_or_else(|| "failed to get crosswords".to_string())?;
 
-        // 优先按 terminal_id 精确 reattach 已有 session
-        let (mut daemon_session, is_reattach) = match Self::try_reattach(terminal_id) {
-            Some(session) => {
-                eprintln!("[TerminalPool] reattach to existing session: {} (terminal_id={})", session.session_id, terminal_id);
-                (session, true)
+        // 优先使用 reattach hint（插件通过 set_reattach_hint 指定的 session_id）
+        let (mut daemon_session, is_reattach) = if let Some(sid) = reattach_session_id {
+            match super::daemon_client::DaemonClient::attach(sid) {
+                Ok(session) => {
+                    eprintln!("[TerminalPool] reattach via hint: session_id={}", sid);
+                    (session, true)
+                }
+                Err(e) => {
+                    eprintln!("[TerminalPool] reattach hint failed (session={}): {}, creating new", sid, e);
+                    (super::daemon_client::DaemonClient::create(cols, rows, cwd, Some(terminal_id))?, false)
+                }
             }
-            None => {
-                eprintln!("[TerminalPool] no reattachable session for terminal_id={}, creating new", terminal_id);
-                (super::daemon_client::DaemonClient::create(cols, rows, cwd, Some(terminal_id))?, false)
+        } else {
+            // 原有逻辑：按 terminal_id 精确 reattach 已有 session
+            match Self::try_reattach(terminal_id) {
+                Some(session) => {
+                    eprintln!("[TerminalPool] reattach to existing session: {} (terminal_id={})", session.session_id, terminal_id);
+                    (session, true)
+                }
+                None => {
+                    eprintln!("[TerminalPool] no reattachable session for terminal_id={}, creating new", terminal_id);
+                    (super::daemon_client::DaemonClient::create(cols, rows, cwd, Some(terminal_id))?, false)
+                }
             }
         };
 
@@ -1028,19 +1175,95 @@ impl TerminalPool {
         super::daemon_client::DaemonClient::attach(session_id).ok()
     }
 
+    /// 设置 reattach hint
+    ///
+    /// 下次 create_terminal_with_cwd 时，优先 attach 到此 daemon session（而非按 terminal_id 匹配）。
+    /// hint 是一次性的：被消费后自动清空。
+    ///
+    /// 使用场景：插件 reopenTerminal 时，先调用此方法设置旧 session_id，
+    /// 再调用 createTerminalTab，新终端会 reattach 到原 daemon session。
+    pub fn set_reattach_hint(&self, session_id: String) {
+        *self.reattach_hint.write() = Some(session_id);
+    }
+
+    /// 查询终端关联的 daemon session ID
+    ///
+    /// 返回终端当前绑定的 daemon session ID，若终端不存在或未使用 daemon 则返回 None。
+    pub fn get_daemon_session_id(&self, id: usize) -> Option<String> {
+        self.terminals.read().get(&id)
+            .and_then(|entry| entry.daemon_session.as_ref())
+            .map(|ds| ds.session_id.clone())
+    }
+
+    /// 标记终端为 keepAlive
+    ///
+    /// 设置后，close_terminal 关闭时会 detach daemon session 而非 kill，
+    /// daemon session 保留，后续可通过 reattach 恢复。
+    pub fn mark_keep_alive(&self, id: usize) {
+        if let Some(entry) = self.terminals.write().get_mut(&id) {
+            entry.keep_daemon_alive = true;
+        }
+    }
+
     /// 关闭终端
+    ///
+    /// 若 keep_daemon_alive 为 true，则 detach daemon session（session 保留可恢复）；
+    /// 否则 kill daemon session（彻底清理）。
     pub fn close_terminal(&mut self, id: usize) -> bool {
         if let Some(entry) = self.terminals.write().remove(&id) {
             // 从全局事件路由注销
             unregister_terminal_event_target(id);
-            // 主动关闭：Kill daemon session（区分于崩溃的 crash detach 保留 session）
+            // 根据 keepAlive 标记决定关闭策略
             if let Some(ref ds) = entry.daemon_session {
-                if let Err(e) = super::daemon_client::DaemonClient::kill(&ds.session_id) {
-                    eprintln!("[TerminalPool] daemon kill failed (session={}): {}", ds.session_id, e);
+                if entry.keep_daemon_alive {
+                    // keepAlive：detach session，保留 daemon 进程供后续 reattach
+                    if let Err(e) = super::daemon_client::DaemonClient::detach(
+                        &ds.session_id,
+                        entry.cols,
+                        entry.rows,
+                    ) {
+                        eprintln!(
+                            "[TerminalPool] daemon detach failed (session={}): {}",
+                            ds.session_id, e
+                        );
+                    }
+                } else {
+                    // 主动关闭：Kill daemon session（区分于崩溃的 crash detach 保留 session）
+                    if let Err(e) = super::daemon_client::DaemonClient::kill(&ds.session_id) {
+                        eprintln!(
+                            "[TerminalPool] daemon kill failed (session={}): {}",
+                            ds.session_id, e
+                        );
+                    }
                 }
             }
             // 通知 Machine 线程退出事件循环
             // Machine 退出后 PTY drop → master fd 关闭 → 内核 SIGHUP → 子进程清理
+            let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
+            drop(entry.pty_tx);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 强制关闭终端（无视 keepAlive 标记，直接 kill daemon session）
+    ///
+    /// 供插件主动清理时使用，确保彻底终止 daemon session。
+    pub fn close_terminal_force(&mut self, id: usize) -> bool {
+        if let Some(entry) = self.terminals.write().remove(&id) {
+            // 从全局事件路由注销
+            unregister_terminal_event_target(id);
+            // 无视 keep_daemon_alive，直接 kill
+            if let Some(ref ds) = entry.daemon_session {
+                if let Err(e) = super::daemon_client::DaemonClient::kill(&ds.session_id) {
+                    eprintln!(
+                        "[TerminalPool] force kill failed (session={}): {}",
+                        ds.session_id, e
+                    );
+                }
+            }
+            // 通知 Machine 线程退出
             let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
             drop(entry.pty_tx);
             true

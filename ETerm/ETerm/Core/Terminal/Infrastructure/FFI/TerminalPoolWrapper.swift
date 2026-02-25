@@ -280,6 +280,16 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         return Int(result)
     }
 
+    /// 用外部 PTY fd 创建终端（dev-runner 等外部进程管理器集成）
+    ///
+    /// 调用方已通过 openpty() + fork() 启动进程，传入 master fd 和子进程 PID。
+    /// terminal_pool 复用该 fd 进行终端渲染，不启动新 shell。
+    func createTerminalWithFd(_ fd: Int32, childPid: UInt32, cols: UInt16, rows: UInt16) -> Int {
+        guard let handle = handle else { return -1 }
+        let result = terminal_pool_create_terminal_with_fd(handle, fd, childPid, cols, rows)
+        return Int(result)
+    }
+
     /// 获取终端的当前工作目录（通过 proc_pidinfo 系统调用）
     ///
     /// 注意：此方法获取的是前台进程的 CWD，如果有子进程运行（如 vim、claude），
@@ -394,6 +404,24 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         guard let handle = handle else { return false }
         let result = terminal_pool_close_terminal(handle, terminalId)
         return result
+    }
+
+    /// 标记终端为 keepAlive
+    ///
+    /// 调用后，closeTerminal 会 detach daemon session 而非 kill，
+    /// daemon session 保留，后续可通过 reattach 恢复。
+    func markKeepAlive(_ terminalId: Int) {
+        guard let handle = handle else { return }
+        terminal_pool_mark_keep_alive(handle, terminalId)
+    }
+
+    /// 强制关闭终端（无视 keepAlive 标记，直接 kill daemon session）
+    ///
+    /// 供插件主动清理时使用，确保彻底终止 daemon session。
+    @discardableResult
+    func closeTerminalForce(_ terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_close_terminal_force(handle, terminalId)
     }
 
     // MARK: - Terminal Migration (Cross-window move)
@@ -870,6 +898,32 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         guard let handle = handle else { return nil }
         let rawMode = terminal_pool_get_mode(handle, terminalId)
         return TerminalMode(rawValue: rawMode)
+    }
+
+    // MARK: - Daemon Session
+
+    /// 设置 reattach hint
+    ///
+    /// 下次 createTerminalWithCwd 时，优先 attach 到此 daemon session。
+    /// hint 是一次性的：被消费后自动清空。
+    func setReattachHint(_ sessionId: String) {
+        guard let handle = handle else { return }
+        sessionId.withCString { ptr in
+            terminal_pool_set_reattach_hint(handle, ptr)
+        }
+    }
+
+    /// 查询终端关联的 daemon session ID
+    ///
+    /// - Parameter terminalId: 终端 ID
+    /// - Returns: daemon session ID，终端不存在或未使用 daemon 时返回 nil
+    func getDaemonSessionId(_ terminalId: Int) -> String? {
+        guard let handle = handle else { return nil }
+        let cStr = terminal_pool_get_daemon_session_id(handle, terminalId)
+        guard let cStr = cStr else { return nil }
+        let result = String(cString: cStr)
+        rio_free_string(cStr)
+        return result
     }
 }
 
