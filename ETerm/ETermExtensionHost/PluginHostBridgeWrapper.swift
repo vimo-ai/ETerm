@@ -63,6 +63,20 @@ final class PluginHostBridgeWrapper: HostBridge, @unchecked Sendable {
         bridge.createTerminalTab(cwd: cwd)
     }
 
+    func createTerminalTabWithFd(
+        fd: Int32,
+        childPid: Int32?,
+        cols: UInt16?,
+        rows: UInt16?,
+        title: String?,
+        sessionId: String?
+    ) -> Int? {
+        bridge.createTerminalTabWithFd(
+            fd: fd, childPid: childPid, cols: cols, rows: rows,
+            title: title, sessionId: sessionId
+        )
+    }
+
     func getTerminalInfo(terminalId: Int) -> TerminalInfo? {
         bridge.getTerminalInfo(terminalId: terminalId)
     }
@@ -171,6 +185,10 @@ final class PluginHostBridgeWrapper: HostBridge, @unchecked Sendable {
         bridge.createEmbeddedTerminal(cwd: cwd)
     }
 
+    func createEmbeddedTerminalWithFd(fd: Int32, childPid: UInt32) -> Int {
+        bridge.createEmbeddedTerminalWithFd(fd: fd, childPid: childPid)
+    }
+
     func closeEmbeddedTerminal(terminalId: Int) {
         bridge.closeEmbeddedTerminal(terminalId: terminalId)
     }
@@ -257,5 +275,24 @@ final class PluginHostBridgeWrapper: HostBridge, @unchecked Sendable {
 
     var socketService: SocketServiceProtocol? {
         bridge.socketService
+    }
+
+    // MARK: - 终端 keepAlive / reattach
+
+    func markTerminalKeepAlive(terminalId: Int) {
+        bridge.markTerminalKeepAlive(terminalId: terminalId)
+    }
+
+    @discardableResult
+    func closeTerminalForce(terminalId: Int) -> Bool {
+        bridge.closeTerminalForce(terminalId: terminalId)
+    }
+
+    func setReattachHint(sessionId: String) {
+        bridge.setReattachHint(sessionId: sessionId)
+    }
+
+    func getDaemonSessionId(terminalId: Int) -> String? {
+        bridge.getDaemonSessionId(terminalId: terminalId)
     }
 }
