@@ -294,19 +294,17 @@ class RioContainerView: NSView {
         }
 
         // 检查 Panel UI 视图（Tab 栏）
-        for (panelId, panelView) in panelUIViews {
+        for (_, panelView) in panelUIViews {
             // 检查点是否在这个 Panel 的 frame 内
             if panelView.frame.contains(point) {
                 let pointInPanel = convert(point, to: panelView)
                 if let hitView = panelView.hitTest(pointInPanel) {
-                    NSLog("[HitTest] RioContainer: panel \(panelId) hit → \(type(of: hitView))")
                     return hitView
                 }
             }
         }
 
         // 其他区域返回 renderView（让 Metal 视图处理鼠标事件）
-        NSLog("[HitTest] RioContainer: fallthrough to renderView")
         let pointInRender = convert(point, to: renderView)
         return renderView.hitTest(pointInRender) ?? renderView
     }
