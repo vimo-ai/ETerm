@@ -24,7 +24,6 @@ OUTPUT_DIR="${2:-$HOME/.vimo/eterm/plugins}"
 BUILTIN_PLUGINS=(
     "AICliKit"
     "ClaudeMonitorKit"
-    "DevHelperKit"
     "FilePreviewKit"
     "HistoryKit"
     "OneLineCommandKit"

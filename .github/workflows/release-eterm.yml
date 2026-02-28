@@ -205,7 +205,6 @@ jobs:
             ### Built-in Plugins
             - ClaudeKit
             - ClaudeMonitorKit
-            - DevHelperKit
             - HistoryKit
             - OneLineCommandKit
             - TranslationKit
