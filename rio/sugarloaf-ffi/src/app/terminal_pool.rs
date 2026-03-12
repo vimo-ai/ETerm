@@ -3713,9 +3713,26 @@ impl Drop for TerminalPool {
         // - 如果不先 shutdown，回调可能使用已释放的内存
         self.event_queue.shutdown();
 
-        // terminals 会自动 drop，PTY 连接会关闭
-        // #[cfg(debug_assertions)]
-        // eprintln!("🗑️ [TerminalPool] Dropped pool with {} terminals", self.terminals.read().len());
+        // 显式清理所有 daemon session，防止 ETerm 退出后留下幽灵进程。
+        // HashMap 自动 drop 时 DaemonSession 结构体释放，但 daemon 进程不会收到任何信号；
+        // 此处根据 keep_daemon_alive 标记决定 detach（保留 session 供后续 reattach）
+        // 还是 kill（彻底终止 daemon 进程）。
+        let mut terminals = self.terminals.write();
+        for (_, entry) in terminals.drain() {
+            if let Some(ref ds) = entry.daemon_session {
+                if entry.keep_daemon_alive {
+                    let _ = super::daemon_client::DaemonClient::detach(
+                        &ds.session_id,
+                        entry.cols,
+                        entry.rows,
+                    );
+                } else {
+                    let _ = super::daemon_client::DaemonClient::kill(&ds.session_id);
+                }
+            }
+            // 通知 Machine 线程退出，避免写入已关闭的 PTY fd
+            let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
+        }
     }
 }
 
