@@ -57,7 +57,11 @@ main() {
     local fail_count=0
 
     # 外部插件（独立分发，不随 app 打包）
-    local EXTERNAL_PLUGINS="VlaudeKit MemexKit LspKit MCPRouterKit TranslationKit"
+    #
+    # NOTE(main): DevRunnerKit stays on disk for future recovery, but is treated
+    # as an external/disabled plugin on main so Xcode app builds do not bundle
+    # it and accidentally reactivate the daemon-backed terminal flow at launch.
+    local EXTERNAL_PLUGINS="VlaudeKit MemexKit LspKit MCPRouterKit TranslationKit DevRunnerKit"
 
     # 扫描 *Kit 和 *SDK 目录
     for kit in "${PLUGINS_DIR}"/*Kit "${PLUGINS_DIR}"/*SDK; do
