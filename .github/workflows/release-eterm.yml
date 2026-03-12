@@ -104,7 +104,10 @@ jobs:
 
       - name: Build builtin plugins
         run: |
-          # Build all builtin plugins that ship with the app
+          # Build all builtin plugins that ship with the app.
+          # NOTE(main): DevRunnerKit stays on disk but is intentionally not
+          # part of the main release flow while daemon-backed terminal control
+          # is disabled for stability.
           ./scripts/build-plugins.sh release build/plugins
 
       - name: Remove plugins with native dependencies
