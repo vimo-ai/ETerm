@@ -992,57 +992,83 @@ impl TerminalPool {
         let cols = terminal.cols() as u16;
         let rows = terminal.rows() as u16;
 
-        // Try daemon PTY first
-        let cwd_ref = working_dir.as_deref();
-        let terminal_id = terminal.id().0 as u32;
-        match Self::try_create_daemon_pty(terminal, event_queue.clone(), cols, rows, cwd_ref, terminal_id, reattach_session_id.as_deref()) {
-            Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session)) => {
-                eprintln!("[TerminalPool] using daemon PTY: session_id={}",
-                    daemon_session.as_ref().map(|s| s.session_id.as_str()).unwrap_or("unknown"));
-                return Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session));
-            }
-            Err(e) => {
-                crate::rust_log_info!("[TerminalPool] daemon pty failed, fallback to in-process: {}", e);
-                let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        // NOTE(main): pty-daemon is intentionally bypassed on main for stability.
+        // Keep the daemon implementation below so it can be re-enabled later,
+        // but force all default terminal creation back to the in-process PTY path.
+        //
+        // let cwd_ref = working_dir.as_deref();
+        // let terminal_id = terminal.id().0 as u32;
+        // match Self::try_create_daemon_pty(
+        //     terminal,
+        //     event_queue.clone(),
+        //     cols,
+        //     rows,
+        //     cwd_ref,
+        //     terminal_id,
+        //     reattach_session_id.as_deref(),
+        // ) {
+        //     Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session)) => {
+        //         eprintln!(
+        //             "[TerminalPool] using daemon PTY: session_id={}",
+        //             daemon_session
+        //                 .as_ref()
+        //                 .map(|s| s.session_id.as_str())
+        //                 .unwrap_or("unknown")
+        //         );
+        //         return Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session));
+        //     }
+        //     Err(e) => {
+        //         crate::rust_log_info!(
+        //             "[TerminalPool] daemon pty failed, fallback to in-process: {}",
+        //             e
+        //         );
+        //     }
+        // }
 
-                // 统一使用 spawn 创建 PTY（支持指定工作目录）
-                // 如果未指定工作目录，默认使用 $HOME
-                let cwd = working_dir.or_else(|| env::var("HOME").ok());
-                let terminal_id = terminal.id().0 as u32;
-                let pty = create_pty_with_spawn(
-                    &shell,
-                    vec!["-l".to_string()],
-                    &cwd,
-                    cols,
-                    rows,
-                    terminal_id,
-                )
-                .map_err(|_| ErrorCode::RenderError)?;
-
-                let pty_fd = *pty.child.id;
-                let shell_pid = *pty.child.pid as u32;
-
-                let event_listener = FFIEventListener::new(event_queue, terminal.id().0);
-
-                // 非 daemon 模式不使用共享内存 ring buffer
-                let machine = Machine::new_with_log_buffer(
-                    crosswords,
-                    pty,
-                    event_listener,
-                    terminal.id().0,
-                    pty_fd,
-                    shell_pid,
-                    terminal.log_buffer().clone(),
-                    None,
-                )
-                .map_err(|_| ErrorCode::RenderError)?;
-
-                let pty_tx = machine.channel();
-                let handle = machine.spawn();
-
-                Ok((handle, pty_tx, pty_fd, shell_pid, None))
-            }
+        if reattach_session_id.is_some() {
+            crate::rust_log_info!(
+                "[TerminalPool] pty-daemon path is disabled on main; ignoring reattach request"
+            );
         }
+
+        let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+
+        // 统一使用 spawn 创建 PTY（支持指定工作目录）
+        // 如果未指定工作目录，默认使用 $HOME
+        let cwd = working_dir.or_else(|| env::var("HOME").ok());
+        let terminal_id = terminal.id().0 as u32;
+        let pty = create_pty_with_spawn(
+            &shell,
+            vec!["-l".to_string()],
+            &cwd,
+            cols,
+            rows,
+            terminal_id,
+        )
+        .map_err(|_| ErrorCode::RenderError)?;
+
+        let pty_fd = *pty.child.id;
+        let shell_pid = *pty.child.pid as u32;
+
+        let event_listener = FFIEventListener::new(event_queue, terminal.id().0);
+
+        // 非 daemon 模式不使用共享内存 ring buffer
+        let machine = Machine::new_with_log_buffer(
+            crosswords,
+            pty,
+            event_listener,
+            terminal.id().0,
+            pty_fd,
+            shell_pid,
+            terminal.log_buffer().clone(),
+            None,
+        )
+        .map_err(|_| ErrorCode::RenderError)?;
+
+        let pty_tx = machine.channel();
+        let handle = machine.spawn();
+
+        Ok((handle, pty_tx, pty_fd, shell_pid, None))
     }
 
     /// 尝试使用 daemon 创建或 reattach PTY（失败时回退到 in-process）
@@ -1183,7 +1209,10 @@ impl TerminalPool {
     /// 使用场景：插件 reopenTerminal 时，先调用此方法设置旧 session_id，
     /// 再调用 createTerminalTab，新终端会 reattach 到原 daemon session。
     pub fn set_reattach_hint(&self, session_id: String) {
-        *self.reattach_hint.write() = Some(session_id);
+        // NOTE(main): reattach is intentionally disabled while the daemon path
+        // is bypassed on main. Keep the implementation available for later.
+        let _ = session_id;
+        *self.reattach_hint.write() = None;
     }
 
     /// 查询终端关联的 daemon session ID
@@ -1200,9 +1229,9 @@ impl TerminalPool {
     /// 设置后，close_terminal 关闭时会 detach daemon session 而非 kill，
     /// daemon session 保留，后续可通过 reattach 恢复。
     pub fn mark_keep_alive(&self, id: usize) {
-        if let Some(entry) = self.terminals.write().get_mut(&id) {
-            entry.keep_daemon_alive = true;
-        }
+        // NOTE(main): keepAlive only makes sense with pty-daemon reattach.
+        // Leave the API in place but keep it as a no-op on main for stability.
+        let _ = id;
     }
 
     /// 关闭终端
