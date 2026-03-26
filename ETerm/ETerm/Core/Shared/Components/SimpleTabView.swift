@@ -15,6 +15,7 @@ struct SimpleTabView: View {
     let height: CGFloat
     let isHovered: Bool  // 由外部控制的 hover 状态
     let slotViews: [AnyView]  // 插件注入的 slot 视图
+    let terminalId: String?  // Terminal ID，用于 tooltip 和右键菜单复制
     let onClose: (() -> Void)?
 
     // 批量关闭回调
@@ -43,6 +44,7 @@ struct SimpleTabView: View {
         height: CGFloat = 28,
         isHovered: Bool = false,
         slotViews: [AnyView] = [],
+        terminalId: String? = nil,
         onClose: (() -> Void)? = nil,
         onCloseOthers: (() -> Void)? = nil,
         onCloseLeft: (() -> Void)? = nil,
@@ -58,6 +60,7 @@ struct SimpleTabView: View {
         self.height = height
         self.isHovered = isHovered
         self.slotViews = slotViews
+        self.terminalId = terminalId
         self.onClose = onClose
         self.onCloseOthers = onCloseOthers
         self.onCloseLeft = onCloseLeft
@@ -218,6 +221,8 @@ struct SimpleTabView: View {
             RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(backgroundColor)
         )
+        // Tooltip：鼠标悬浮显示 Terminal ID
+        .help(terminalId.map { "Terminal ID: \($0)" } ?? "")
         // 右键菜单
         .contextMenu {
             if let onClose = onClose {
@@ -231,6 +236,14 @@ struct SimpleTabView: View {
             }
             if let onCloseRight = onCloseRight, canCloseRight {
                 Button("关闭右侧") { onCloseRight() }
+            }
+            // 复制 Terminal ID（仅在有值时显示）
+            if let tid = terminalId {
+                Divider()
+                Button("复制 Terminal ID") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(tid, forType: .string)
+                }
             }
         }
         // 动画
