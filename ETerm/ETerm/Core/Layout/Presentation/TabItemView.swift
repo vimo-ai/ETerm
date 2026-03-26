@@ -169,6 +169,7 @@ final class TabItemView: DraggableItemView {
             height: Self.tabHeight,
             isHovered: isHovered,
             slotViews: slotViews,
+            terminalId: rustTerminalId.map { String($0) },
             onClose: { [weak self] in
                 self?.onClose?()
             },
