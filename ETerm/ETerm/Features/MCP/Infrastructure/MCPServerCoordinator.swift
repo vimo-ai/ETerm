@@ -338,7 +338,8 @@ final class MCPServerCoordinator: @unchecked Sendable {
                             "workingDirectory": ["type": "string", "description": "Working directory for the new terminal"],
                             "target": ["type": "string", "enum": ["current_panel", "split_horizontal", "split_vertical", "new_window"], "description": "Where to open the terminal (default: current_panel)"],
                             "windowNumber": ["type": "integer", "description": "Target window number (default: active window)"],
-                            "panelId": ["type": "string", "description": "Target panel UUID (default: active panel)"]
+                            "panelId": ["type": "string", "description": "Target panel UUID (default: active panel)"],
+                            "focus": ["type": "boolean", "description": "Whether to steal keyboard focus from the current terminal (default: false for MCP calls)"]
                         ],
                         "required": []
                     ]
@@ -409,6 +410,8 @@ final class MCPServerCoordinator: @unchecked Sendable {
             let targetStr = arguments["target"] as? String ?? "current_panel"
             let windowNumber = arguments["windowNumber"] as? Int
             let panelId = arguments["panelId"] as? String
+            // MCP 调用默认不抢占焦点，调用方需明确传 true 才会切换焦点
+            let focus = arguments["focus"] as? Bool ?? false
 
             guard let target = OpenTerminalTool.Target(rawValue: targetStr) else {
                 throw MCPServerError.invalidParams("Invalid 'target' value: \(targetStr)")
@@ -420,7 +423,8 @@ final class MCPServerCoordinator: @unchecked Sendable {
                     workingDirectory: workingDirectory,
                     target: target,
                     windowNumber: windowNumber,
-                    panelId: panelId
+                    panelId: panelId,
+                    focus: focus
                 )
                 return OpenTerminalTool.responseToJSON(response)
             }

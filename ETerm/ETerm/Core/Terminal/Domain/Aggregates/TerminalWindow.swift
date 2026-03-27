@@ -1022,8 +1022,8 @@ extension TerminalWindow {
 
     private func executePanel(_ command: PanelCommand) -> CommandResult {
         switch command {
-        case .split(let panelId, let direction, let cwd):
-            return executePanelSplit(panelId: panelId, direction: direction, cwd: cwd)
+        case .split(let panelId, let direction, let cwd, let focus):
+            return executePanelSplit(panelId: panelId, direction: direction, cwd: cwd, focus: focus)
         case .close(let panelId):
             return executePanelClose(panelId: panelId)
         case .setActive(let panelId):
@@ -1031,7 +1031,7 @@ extension TerminalWindow {
         }
     }
 
-    private func executePanelSplit(panelId: UUID, direction: SplitDirection, cwd: String?) -> CommandResult {
+    private func executePanelSplit(panelId: UUID, direction: SplitDirection, cwd: String?, focus: Bool = true) -> CommandResult {
         // 使用默认的布局计算器
         let layoutCalculator = BinaryTreeLayoutCalculator()
 
@@ -1049,17 +1049,20 @@ extension TerminalWindow {
             return CommandResult(success: false)
         }
 
-        // 停用旧终端
-        let oldTerminalId = active.terminalId
-
-        // 激活新 Panel
-        active.setPanel(newPanelId)
-
         var result = CommandResult()
         result.terminalsToCreate = [TerminalSpec(tabId: newTab.tabId, cwd: cwd)]
-        if let oldId = oldTerminalId {
-            result.terminalsToDeactivate = [oldId]
+        result.createdPanelId = newPanelId
+
+        if focus {
+            // 停用旧终端，激活新 Panel
+            let oldTerminalId = active.terminalId
+            active.setPanel(newPanelId)
+            if let oldId = oldTerminalId {
+                result.terminalsToDeactivate = [oldId]
+            }
         }
+        // 当 focus == false 时，不切换 active panel，旧终端保持激活状态
+
         result.effects = .layoutChange
         return result
     }

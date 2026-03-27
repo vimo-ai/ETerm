@@ -55,6 +55,9 @@ struct CommandResult {
     /// 新创建的 Tab ID（用于 addWithConfig 场景，Coordinator 需要返回给调用方）
     var createdTabId: UUID?
 
+    /// 新创建的 Panel ID（用于 split 场景，focus == false 时 active 不变，调用方通过此字段获取新 Panel）
+    var createdPanelId: UUID?
+
     // MARK: - 副作用
 
     /// 副作用声明

@@ -33,12 +33,14 @@ enum OpenTerminalTool {
     ///   - target: 目标位置，默认 current_panel
     ///   - windowNumber: 指定窗口（nil 使用当前活跃窗口）
     ///   - panelId: 指定 panel（nil 使用当前活跃 panel）
+    ///   - focus: 是否将焦点切换到新终端（默认 true，MCP 调用时建议传 false）
     @MainActor
     static func execute(
         workingDirectory: String? = nil,
         target: Target = .currentPanel,
         windowNumber: Int? = nil,
-        panelId: String? = nil
+        panelId: String? = nil,
+        focus: Bool = true
     ) -> Response {
         let windowManager = WindowManager.shared
 
@@ -75,13 +77,13 @@ enum OpenTerminalTool {
             return addTabToPanel(coordinator: coordinator, panelId: targetPanelId, cwd: workingDirectory)
 
         case .splitHorizontal:
-            return splitPanel(coordinator: coordinator, panelId: targetPanelId, direction: .horizontal, cwd: workingDirectory)
+            return splitPanel(coordinator: coordinator, panelId: targetPanelId, direction: .horizontal, cwd: workingDirectory, focus: focus)
 
         case .splitVertical:
-            return splitPanel(coordinator: coordinator, panelId: targetPanelId, direction: .vertical, cwd: workingDirectory)
+            return splitPanel(coordinator: coordinator, panelId: targetPanelId, direction: .vertical, cwd: workingDirectory, focus: focus)
 
         case .newWindow:
-            return createNewWindow(cwd: workingDirectory)
+            return createNewWindow(cwd: workingDirectory, focus: focus)
         }
     }
 
@@ -104,20 +106,27 @@ enum OpenTerminalTool {
     }
 
     @MainActor
-    private static func splitPanel(coordinator: TerminalWindowCoordinator, panelId: UUID, direction: SplitDirection, cwd: String?) -> Response {
+    private static func splitPanel(coordinator: TerminalWindowCoordinator, panelId: UUID, direction: SplitDirection, cwd: String?, focus: Bool = true) -> Response {
         let effectiveCwd = cwd ?? coordinator.getActiveCwd(for: panelId)
-        let result = coordinator.perform(.panel(.split(panelId: panelId, direction: direction, cwd: effectiveCwd)))
+        let result = coordinator.perform(.panel(.split(panelId: panelId, direction: direction, cwd: effectiveCwd, focus: focus)))
 
         if result.success {
-            // 获取新创建的 panel
-            if let newPanelId = coordinator.terminalWindow.active.panelId,
-               let newPanel = coordinator.terminalWindow.getPanel(newPanelId),
+            // focus == true 时新 panel 已成为 active；focus == false 时需从 createdPanelId 获取
+            let newPanelId: UUID?
+            if focus {
+                newPanelId = coordinator.terminalWindow.active.panelId
+            } else {
+                newPanelId = result.createdPanelId
+            }
+
+            if let pid = newPanelId,
+               let newPanel = coordinator.terminalWindow.getPanel(pid),
                let activeTab = newPanel.tabs.first(where: { $0.tabId == newPanel.activeTabId }) {
                 return Response(
                     success: true,
                     message: "Terminal opened in new \(direction == .horizontal ? "horizontal" : "vertical") split",
                     terminalId: activeTab.rustTerminalId,
-                    panelId: newPanelId.uuidString
+                    panelId: pid.uuidString
                 )
             }
             return Response(success: true, message: "Panel split created", terminalId: nil, panelId: nil)
@@ -127,9 +136,9 @@ enum OpenTerminalTool {
     }
 
     @MainActor
-    private static func createNewWindow(cwd: String?) -> Response {
+    private static func createNewWindow(cwd: String?, focus: Bool = true) -> Response {
         let windowManager = WindowManager.shared
-        windowManager.createWindow(inheritCwd: cwd)
+        windowManager.createWindow(inheritCwd: cwd, focus: focus)
 
         // 等待窗口创建完成，获取新窗口信息
         if let newWindow = windowManager.windows.last,

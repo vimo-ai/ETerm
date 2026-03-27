@@ -322,9 +322,10 @@ final class WindowManager: NSObject {
     ///   - inheritCwd: 继承的工作目录（可选）
     ///   - frame: 窗口位置和尺寸（可选，用于恢复 session）
     ///   - screenIdentifier: 窗口所在屏幕标识符（可选，用于恢复 session）
+    ///   - focus: 是否将新窗口设为 key window（默认 true）
     /// - Returns: 创建的窗口
     @discardableResult
-    func createWindow(inheritCwd: String? = nil, frame: NSRect? = nil, screenIdentifier: String? = nil) -> KeyableWindow {
+    func createWindow(inheritCwd: String? = nil, frame: NSRect? = nil, screenIdentifier: String? = nil, focus: Bool = true) -> KeyableWindow {
         // 确定窗口的 frame
         let windowFrame: NSRect
         if let savedFrame = frame, let screenId = screenIdentifier {
@@ -391,8 +392,12 @@ final class WindowManager: NSObject {
         // 添加到列表
         windows.append(window)
 
-        // 显示窗口
-        window.makeKeyAndOrderFront(nil)
+        // 显示窗口（focus == false 时不抢占键盘焦点）
+        if focus {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            window.orderFront(nil)
+        }
 
         return window
     }
