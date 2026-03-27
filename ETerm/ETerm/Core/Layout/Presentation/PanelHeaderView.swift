@@ -461,9 +461,14 @@ final class PanelHeaderHostingView: NSView {
                 tabs[index].title = newTab.title
                 tabs[index].rustTerminalId = newTab.rustTerminalId
                 if index < tabItemViews.count {
-                    tabItemViews[index].title = newTab.title
+                    let terminalIdChanged = tabItemViews[index].rustTerminalId != newTab.rustTerminalId
+                    tabItemViews[index].title = newTab.title  // didSet 触发 updateItemView（仅 title 变化时）
                     tabItemViews[index].rustTerminalId = newTab.rustTerminalId
                     tabItemViews[index].tab = tabRegistry[newTab.id]
+                    // rustTerminalId 变化但 title 未变时，需手动刷新视图（tooltip + 右键菜单依赖此值）
+                    if terminalIdChanged {
+                        tabItemViews[index].updateItemView()
+                    }
                 }
             }
             // 标题变化可能导致宽度变化，需要重新布局
