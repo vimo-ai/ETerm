@@ -104,7 +104,8 @@ enum PanelCommand {
     ///   - panelId: 要分割的 Panel ID
     ///   - direction: 分割方向
     ///   - cwd: 新终端的工作目录（nil 表示继承当前目录）
-    case split(panelId: UUID, direction: SplitDirection, cwd: String?)
+    ///   - focus: 是否将焦点切换到新 Panel（默认 true）
+    case split(panelId: UUID, direction: SplitDirection, cwd: String?, focus: Bool = true)
 
     /// 关闭 Panel
     case close(panelId: UUID)

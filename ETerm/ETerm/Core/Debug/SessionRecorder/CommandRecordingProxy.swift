@@ -139,7 +139,7 @@ final class CommandRecordingProxy {
 
     private func mapPanelCommand(_ command: PanelCommand, window: TerminalWindow) -> SessionEvent? {
         switch command {
-        case .split(let panelId, let direction, _):
+        case .split(let panelId, let direction, _, _):
             // 执行后，新 Panel 已被激活（在 executePanelSplit 中）
             // 所以 window.active.panelId 就是新创建的 Panel ID
             guard let newPanelId = window.active.panelId else {
