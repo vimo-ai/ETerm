@@ -144,6 +144,35 @@ public indirect enum LayoutTree: Codable, Equatable {
         }
     }
 
+    /// 移除指定的 Panel（用于关闭空面板）
+    ///
+    /// - Parameter panelId: 要移除的 Panel ID
+    /// - Returns: 新的布局树（如果移除后为空返回 nil）
+    public func removingPanel(_ panelId: UUID) -> LayoutTree? {
+        switch self {
+        case .panel(let panelNode):
+            return panelNode.id == panelId ? nil : self
+
+        case .split(let direction, let first, let second, let ratio):
+            let newFirst = first.removingPanel(panelId)
+            let newSecond = second.removingPanel(panelId)
+
+            if newFirst == nil {
+                return newSecond
+            }
+            if newSecond == nil {
+                return newFirst
+            }
+
+            return .split(
+                direction: direction,
+                first: newFirst!,
+                second: newSecond!,
+                ratio: ratio
+            )
+        }
+    }
+
     /// 移除指定的 Tab
     ///
     /// - Parameter tabId: 要移除的 Tab ID
