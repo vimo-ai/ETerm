@@ -626,6 +626,12 @@ impl<U: EventListener> Crosswords<U> {
         self.clear_screen(ClearMode::Saved);
     }
 
+    /// 清除可视区域（将当前内容推入历史并重置视口）
+    #[inline]
+    pub fn clear_visible_area(&mut self) {
+        self.clear_screen(ClearMode::All);
+    }
+
     #[inline]
     pub fn scroll_display(&mut self, scroll: Scroll) {
         let old_display_offset = self.grid.display_offset();
@@ -1750,6 +1756,14 @@ impl<U: EventListener> Handler for Crosswords<U> {
             (Line(0), self.grid.bottommost_line())
         };
 
+        // ESC[H (cursor home) resets the pending history counter.
+        // This protects `clear` (which sends ESC[H then ESC[2J) from
+        // having its scrollback popped, while TUI repaints (which send
+        // ESC[2J then ESC[H) still get cleaned up.
+        if line == Line(0) && col == Column(0) {
+            self.grid.reset_pending_history();
+        }
+
         self.damage_cursor();
         self.grid.cursor.pos.row =
             std::cmp::max(std::cmp::min(line + y_offset, max_y), Line(0));
@@ -2485,15 +2499,21 @@ impl<U: EventListener> Handler for Crosswords<U> {
                 if self.mode.contains(Mode::ALT_SCREEN) {
                     self.grid.reset_region(..);
                 } else {
-                    let old_offset = self.grid.display_offset();
-
-                    self.grid.clear_viewport();
-
-                    // Compute number of lines scrolled by clearing the viewport.
-                    let lines = self.grid.display_offset().saturating_sub(old_offset);
-
-                    self.vi_mode_cursor.pos.row = (self.vi_mode_cursor.pos.row - lines)
-                        .grid_clamp(&self.grid, Boundary::Grid);
+                    let popped = self.grid.pop_pending_history();
+                    if popped > 0 {
+                        // TUI repaint: LFs just pushed stale content into scrollback,
+                        // pop it and clear the screen in place (no new scrollback).
+                        self.grid.reset_region(..);
+                    } else {
+                        // Normal clear (e.g., `clear` command): preserve scrollback.
+                        let old_offset = self.grid.display_offset();
+                        self.grid.clear_viewport();
+                        let lines =
+                            self.grid.display_offset().saturating_sub(old_offset);
+                        self.vi_mode_cursor.pos.row =
+                            (self.vi_mode_cursor.pos.row - lines)
+                                .grid_clamp(&self.grid, Boundary::Grid);
+                    }
                 }
 
                 self.selection = None;
