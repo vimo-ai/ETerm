@@ -96,6 +96,8 @@ public final class DevRunnerPlugin: NSObject, ETermKit.Plugin {
         }
         state.terminalId = terminalId
         host.markTerminalKeepAlive(terminalId: terminalId)
+        // 设置 Tab 标题（使用 workspace 相对路径，避免多个同名项目混淆）
+        host.setTabTitle(terminalId: terminalId, title: result.displayName)
         // 记录 daemon session ID，用于后续 reattach
         state.daemonSessionId = host.getDaemonSessionId(terminalId: terminalId)
 
@@ -105,7 +107,7 @@ public final class DevRunnerPlugin: NSObject, ETermKit.Plugin {
             host.sendInput(terminalId: terminalId, text: wrappedCommand, pressEnter: true)
         }
 
-        print("[DevRunner] 启动进程 \(result.processId), terminal=\(terminalId)")
+        print("[DevRunner] 启动进程 \(result.processId), terminal=\(terminalId), title=\(result.displayName)")
 
         // 刷新进程列表
         DevRunnerBridge.shared.refreshProcesses()
