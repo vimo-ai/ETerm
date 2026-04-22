@@ -84,6 +84,14 @@ else
     log_warn "libvlaude_ffi.dylib not found - VlaudeFfi features will be disabled"
 fi
 
+log_info "Copying SocketClient FFI..."
+if [ -f "Libs/SocketClient/libsocket_client_ffi.dylib" ]; then
+    cp "Libs/SocketClient/libsocket_client_ffi.dylib" "${BUNDLE_PATH}/Contents/Libs/"
+    log_info "Copied libsocket_client_ffi.dylib"
+else
+    log_warn "libsocket_client_ffi.dylib not found - SocketClient features will be disabled"
+fi
+
 # Copy Socket.IO dependencies
 # Socket.IO Swift client has several dylibs that need to be bundled
 log_info "Copying Socket.IO dependencies..."
@@ -164,6 +172,21 @@ if [ -f "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib" ]; then
         "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib" 2>/dev/null || true
 fi
 
+# Fix SocketClient FFI link path
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libsocket_client_ffi.dylib" ]; then
+    OLD_PATH=$(otool -L "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" | grep socket_client_ffi | awk '{print $1}')
+    if [ -n "$OLD_PATH" ]; then
+        install_name_tool -change \
+            "$OLD_PATH" \
+            "@loader_path/../Libs/libsocket_client_ffi.dylib" \
+            "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" 2>/dev/null || true
+    fi
+
+    install_name_tool -id \
+        "@loader_path/../Libs/libsocket_client_ffi.dylib" \
+        "${BUNDLE_PATH}/Contents/Libs/libsocket_client_ffi.dylib" 2>/dev/null || true
+fi
+
 # Re-sign after modification
 log_info "Re-signing..."
 codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
@@ -177,6 +200,9 @@ if [ -f "${BUNDLE_PATH}/Contents/Libs/libai_cli_session_db.dylib" ]; then
 fi
 if [ -f "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib" ]; then
     codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libvlaude_ffi.dylib"
+fi
+if [ -f "${BUNDLE_PATH}/Contents/Libs/libsocket_client_ffi.dylib" ]; then
+    codesign -f -s - "${BUNDLE_PATH}/Contents/Libs/libsocket_client_ffi.dylib"
 fi
 
 # Copy manifest.json

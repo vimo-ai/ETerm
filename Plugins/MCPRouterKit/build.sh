@@ -65,16 +65,24 @@ install_name_tool -change \
     "@executable_path/../Frameworks/ETermKit.framework/ETermKit" \
     "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
-# Fix MCP Router Core link path
-install_name_tool -change \
-    "Lib/libmcp_router_core.dylib" \
+# Fix MCP Router Core link path (detect actual linked path from dylib)
+OLD_CORE_PATH=$(otool -L "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib" | grep mcp_router_core | awk '{print $1}')
+if [ -n "$OLD_CORE_PATH" ]; then
+    install_name_tool -change \
+        "$OLD_CORE_PATH" \
+        "@loader_path/../Frameworks/libmcp_router_core.dylib" \
+        "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+fi
+
+# Fix MCP Router Core install name
+install_name_tool -id \
     "@loader_path/../Frameworks/libmcp_router_core.dylib" \
-    "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
+    "${BUNDLE_PATH}/Contents/Frameworks/libmcp_router_core.dylib"
 
 # Re-sign after modification
 log_info "Re-signing..."
-codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 codesign -f -s - "${BUNDLE_PATH}/Contents/Frameworks/libmcp_router_core.dylib"
+codesign -f -s - "${BUNDLE_PATH}/Contents/MacOS/lib${PLUGIN_NAME}.dylib"
 
 # Copy manifest.json
 cp "Resources/manifest.json" "${BUNDLE_PATH}/Contents/Resources/"
