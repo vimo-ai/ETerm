@@ -2577,7 +2577,8 @@ impl TerminalPool {
     ///
     /// 当 Skia DirectContext 报告 OOM 时：
     /// 1. 清除终端的 Surface/Image 缓存（这是 GPU 内存大头）
-    /// 2. 清理 Skia scratch 资源（防止 stale 指针导致 refAndMakeResourceMRU 崩溃）
+    /// 2. 不触碰 Skia DirectContext 的资源缓存，让内置 LRU 自行管理
+    ///    - 避免清掉 shader program / pipeline cache 导致重编译超时
     ///
     /// 使用 30 秒冷却窗口（AtomicU64 无锁），避免 oomed() 持续 true 导致每帧触发。
     fn check_gpu_health_and_recover(&self, sugarloaf: &mut Sugarloaf) {
@@ -2605,27 +2606,18 @@ impl TerminalPool {
             device_lost
         );
 
+        // 只清除终端的 Surface/Image 缓存（GPU 内存大头 ~2-4MB/tab）
+        // 不调用 Skia purge API，保留 shader program / pipeline cache
+        // Skia 内置 LRU 会在预算超限时自动淘汰其他资源
         if let Some(mut terminals) = self.terminals.try_write() {
             for (_id, entry) in terminals.iter_mut() {
                 entry.surface_cache = None;
                 entry.render_cache = None;
                 entry.dirty_flag.mark_dirty();
             }
-
-            // Purge Skia scratch resources (prefer_scratch_resources=true).
-            // This clears stale entries from the scratch key map that could
-            // otherwise cause use-after-free in GrResourceCache::refAndMakeResourceMRU.
-            // Shader programs and pipeline caches are non-scratch, so they survive.
-            let usage = ctx.skia_context.resource_cache_usage();
-            ctx.skia_context.purge_unlocked_resource_bytes(
-                usage.resource_bytes,
-                true, // prefer scratch resources
-            );
-
+            // 清理成功后才更新冷却时间戳
             self.last_gpu_recovery_epoch.store(now_epoch, Ordering::Relaxed);
-            crate::rust_log_warn!(
-                "[GPU] Recovery complete. Terminal caches + scratch resources purged."
-            );
+            crate::rust_log_warn!("[GPU] Recovery complete. Terminal caches cleared (shader programs preserved).");
         } else {
             crate::rust_log_warn!("[GPU] Recovery skipped: terminals write lock busy, will retry next frame.");
         }
