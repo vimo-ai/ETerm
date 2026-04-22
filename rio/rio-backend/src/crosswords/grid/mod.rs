@@ -62,6 +62,11 @@ pub struct Grid<T> {
 
     /// Maximum number of lines in history.
     max_scroll_limit: usize,
+
+    /// Lines pushed into scrollback since last clear/cursor-home.
+    /// Used to detect TUI repaint cycles (LFs + ESC[2J) and pop
+    /// the stale scrollback lines instead of creating duplicates.
+    pending_history_lines: usize,
 }
 
 impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
@@ -74,6 +79,7 @@ impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
             cursor: Cursor::default(),
             lines,
             columns,
+            pending_history_lines: 0,
         }
     }
 
@@ -204,6 +210,9 @@ impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
 
         // Only rotate the entire history if the active region starts at the top.
         if region.start == 0 {
+            // Track lines entering history for TUI repaint detection.
+            self.pending_history_lines += positions;
+
             // Create scrollback for the new lines.
             self.increase_scroll_limit(positions);
 
@@ -277,6 +286,7 @@ impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
         self.saved_cursor = Cursor::default();
         self.cursor = Cursor::default();
         self.display_offset = 0;
+        self.pending_history_lines = 0;
 
         // Reset all visible lines.
         let range = self.topmost_line().0..(self.screen_lines() as i32);
@@ -313,6 +323,23 @@ impl<T> Grid<T> {
         }
     }
 
+    /// Pop recently pushed history lines and reset the counter.
+    /// Returns the number of lines actually popped.
+    pub fn pop_pending_history(&mut self) -> usize {
+        let count = min(self.pending_history_lines, self.history_size());
+        if count != 0 {
+            self.raw.shrink_lines(count);
+            self.display_offset = min(self.display_offset, self.history_size());
+        }
+        self.pending_history_lines = 0;
+        count
+    }
+
+    #[inline]
+    pub fn reset_pending_history(&mut self) {
+        self.pending_history_lines = 0;
+    }
+
     #[inline]
     pub fn clear_history(&mut self) {
         // Explicitly purge all lines from history.
@@ -320,6 +347,7 @@ impl<T> Grid<T> {
 
         // Reset display offset.
         self.display_offset = 0;
+        self.pending_history_lines = 0;
     }
 
     /// This is used only for initializing after loading ref-tests.

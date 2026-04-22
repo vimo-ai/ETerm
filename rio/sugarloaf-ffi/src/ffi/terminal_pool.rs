@@ -455,6 +455,19 @@ pub extern "C" fn terminal_pool_scroll(
     pool.scroll(terminal_id, delta)
 }
 
+/// 清屏：清除可视区域和滚动历史
+#[no_mangle]
+pub extern "C" fn terminal_pool_clear_screen(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.clear_screen(terminal_id)
+}
+
 // ===== 渲染流程（统一提交）=====
 
 /// 开始新的一帧（清空待渲染列表）
