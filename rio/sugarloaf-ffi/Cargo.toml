@@ -13,7 +13,7 @@ wgpu = "27.0.1"
 
 # Skia (macOS only)
 [target.'cfg(target_os = "macos")'.dependencies]
-skia-safe = { version = "0.82.0", features = ["metal", "textlayout"] }
+skia-safe = { version = "0.93.1", features = ["metal", "textlayout"] }
 objc2 = "0.5"
 
 # 终端相关依赖 (RIO)

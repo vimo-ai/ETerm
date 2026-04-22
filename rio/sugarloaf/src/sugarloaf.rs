@@ -758,25 +758,26 @@ impl<'a> Sugarloaf<'a> {
                                                     deco_paint.set_style(skia_safe::PaintStyle::Stroke);
                                                     deco_paint.set_stroke_width(underline_thickness);
 
-                                                    let mut path = skia_safe::Path::new();
                                                     let wave_height = 2.0;
                                                     let wave_period = 4.0;
                                                     let start_x = x;
                                                     let wave_y = underline_y + underline_thickness / 2.0;
 
-                                                    path.move_to(Point::new(start_x, wave_y));
+                                                    let mut pb = skia_safe::PathBuilder::new();
+                                                    pb.move_to(Point::new(start_x, wave_y));
                                                     let mut cx = start_x;
                                                     let mut up = true;
                                                     while cx < x + char_cell_advance {
                                                         let next_x = (cx + wave_period).min(x + char_cell_advance);
                                                         let dy = if up { -wave_height } else { wave_height };
-                                                        path.quad_to(
+                                                        pb.quad_to(
                                                             Point::new(cx + wave_period / 2.0, wave_y + dy),
                                                             Point::new(next_x, wave_y),
                                                         );
                                                         cx = next_x;
                                                         up = !up;
                                                     }
+                                                    let path = pb.snapshot();
                                                     canvas.draw_path(&path, &deco_paint);
                                                 }
                                             }
