@@ -54,7 +54,7 @@ zeno = { version = "0.3.3", optional = true }
 futures = { workspace = true }
 
 # Skia renderer (macOS only)
-skia-safe = { version = "0.82.0", features = ["metal", "textlayout"] }
+skia-safe = { version = "0.93.1", features = ["metal", "textlayout"] }
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSArray", "NSString", "NSGeometry"] }
 objc2-quartz-core = { version = "0.2", features = ["CAMetalLayer"] }

@@ -1235,6 +1235,18 @@ impl Terminal {
         self.cached_search_view = None;
     }
 
+    pub fn clear_visible_area(&mut self) {
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.clear_visible_area();
+        });
+    }
+
+    pub fn clear_saved_history(&mut self) {
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.clear_saved_history();
+        });
+    }
+
     // ==================== Step 7: Scroll ====================
 
     /// 滚动终端
