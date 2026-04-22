@@ -244,15 +244,14 @@ impl BlockDrawer {
         canvas.draw_rect(rect, paint);
     }
 
-    /// 绘制阴影（点阵模式，密度随 scale 自适应）
+    /// 绘制阴影（alpha 半透明填充）
     ///
-    /// - 25% (░): 每 4 像素填 1 个
-    /// - 50% (▒): 棋盘格
-    /// - 75% (▓): 每 4 像素填 3 个
+    /// - 25% (░): alpha × 0.25
+    /// - 50% (▒): alpha × 0.50
+    /// - 75% (▓): alpha × 0.75
     ///
-    /// step = scale，确保在不同 DPI 下视觉密度一致：
-    /// - scale=1.0 (低 DPI): 1x1 像素点阵
-    /// - scale=2.0 (Retina): 2x2 物理像素 = 1 逻辑像素
+    /// 高分屏下点阵无意义（2x2 物理像素一个点，肉眼就是色块），
+    /// 直接用 alpha 混合：对齐无缝、单次 draw_rect、视觉更干净。
     fn draw_shade(
         &self,
         canvas: &Canvas,
@@ -261,47 +260,14 @@ impl BlockDrawer {
         w: f32,
         h: f32,
         density: f32,
-        scale: f32,
+        _scale: f32,
         paint: &Paint,
     ) {
-        // 根据 DPI 缩放调整点阵大小，保持视觉密度一致
-        let step = scale.max(1.0);
-
-        let mut curr_y = y;
-        let mut row = 0;
-        while curr_y < y + h {
-            let mut curr_x = x;
-            let mut col = 0;
-            while curr_x < x + w {
-                // 根据密度决定是否绘制
-                let should_draw = match density {
-                    d if d <= 0.25 => {
-                        // 25%: 只绘制 (0,0) 位置
-                        row % 2 == 0 && col % 2 == 0
-                    }
-                    d if d <= 0.50 => {
-                        // 50%: 棋盘格
-                        (row + col) % 2 == 0
-                    }
-                    _ => {
-                        // 75%: 只跳过 (1,1) 位置
-                        !(row % 2 == 1 && col % 2 == 1)
-                    }
-                };
-
-                if should_draw {
-                    let px_w = step.min(x + w - curr_x);
-                    let px_h = step.min(y + h - curr_y);
-                    let rect = Rect::from_xywh(curr_x, curr_y, px_w, px_h);
-                    canvas.draw_rect(rect, paint);
-                }
-
-                curr_x += step;
-                col += 1;
-            }
-            curr_y += step;
-            row += 1;
-        }
+        let mut shade_paint = paint.clone();
+        let color = paint.color4f();
+        shade_paint.set_color4f(Color4f::new(color.r, color.g, color.b, color.a * density), None);
+        let rect = Rect::from_xywh(x, y, w, h);
+        canvas.draw_rect(rect, &shade_paint);
     }
 
     // ===== 象限绘制 =====
