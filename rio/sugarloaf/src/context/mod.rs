@@ -161,10 +161,17 @@ impl Context<'_> {
             )
         };
 
-        let skia_context = direct_contexts::make_metal(&backend, None)
+        let mut skia_context = direct_contexts::make_metal(&backend, None)
             .expect("Failed to create Skia DirectContext");
 
-        tracing::info!("Skia Context initialized successfully");
+        // Limit GPU resource cache to 128MB (default 256MB).
+        // ETerm active usage is ~50-60MB even with 8+ terminals.
+        // On low-memory devices (M1 Pro 16GB), the OS may reclaim GPU memory
+        // behind Skia's back, leaving stale pointers in the scratch key map.
+        // A tighter budget lets Skia manage eviction itself, keeping the cache consistent.
+        skia_context.set_resource_cache_limit(128 * 1024 * 1024);
+
+        tracing::info!("Skia Context initialized successfully (resource cache limit: 128MB)");
 
         // ===== Initialize WGPU (for filters/compatibility) =====
         // #[cfg(feature = "wgpu-backend")]

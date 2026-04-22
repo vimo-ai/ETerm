@@ -1782,6 +1782,29 @@ impl TerminalPool {
         }
     }
 
+    /// 清屏：清除可视区域和滚动历史
+    ///
+    /// 使用 try_lock 避免阻塞主线程，如果锁被占用则跳过
+    pub fn clear_screen(&self, id: usize) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                // 先清除可视区域（会把内容推入历史），再清除历史
+                terminal.clear_visible_area();
+                terminal.clear_saved_history();
+                // 清除选区
+                entry.selection_overlay.clear();
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     /// 设置选区
     ///
     /// 使用 try_lock 避免阻塞主线程
@@ -2554,8 +2577,7 @@ impl TerminalPool {
     ///
     /// 当 Skia DirectContext 报告 OOM 时：
     /// 1. 清除终端的 Surface/Image 缓存（这是 GPU 内存大头）
-    /// 2. 不触碰 Skia DirectContext 的资源缓存，让内置 LRU 自行管理
-    ///    - 避免清掉 shader program / pipeline cache 导致重编译超时
+    /// 2. 清理 Skia scratch 资源（防止 stale 指针导致 refAndMakeResourceMRU 崩溃）
     ///
     /// 使用 30 秒冷却窗口（AtomicU64 无锁），避免 oomed() 持续 true 导致每帧触发。
     fn check_gpu_health_and_recover(&self, sugarloaf: &mut Sugarloaf) {
@@ -2583,18 +2605,27 @@ impl TerminalPool {
             device_lost
         );
 
-        // 只清除终端的 Surface/Image 缓存（GPU 内存大头 ~2-4MB/tab）
-        // 不调用 Skia purge API，保留 shader program / pipeline cache
-        // Skia 内置 LRU 会在预算超限时自动淘汰其他资源
         if let Some(mut terminals) = self.terminals.try_write() {
             for (_id, entry) in terminals.iter_mut() {
                 entry.surface_cache = None;
                 entry.render_cache = None;
                 entry.dirty_flag.mark_dirty();
             }
-            // 清理成功后才更新冷却时间戳
+
+            // Purge Skia scratch resources (prefer_scratch_resources=true).
+            // This clears stale entries from the scratch key map that could
+            // otherwise cause use-after-free in GrResourceCache::refAndMakeResourceMRU.
+            // Shader programs and pipeline caches are non-scratch, so they survive.
+            let usage = ctx.skia_context.resource_cache_usage();
+            ctx.skia_context.purge_unlocked_resource_bytes(
+                usage.resource_bytes,
+                true, // prefer scratch resources
+            );
+
             self.last_gpu_recovery_epoch.store(now_epoch, Ordering::Relaxed);
-            crate::rust_log_warn!("[GPU] Recovery complete. Terminal caches cleared (shader programs preserved).");
+            crate::rust_log_warn!(
+                "[GPU] Recovery complete. Terminal caches + scratch resources purged."
+            );
         } else {
             crate::rust_log_warn!("[GPU] Recovery skipped: terminals write lock busy, will retry next frame.");
         }
