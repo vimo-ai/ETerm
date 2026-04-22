@@ -52,11 +52,13 @@ public struct MonitoredProcessResult: Codable {
     public let processId: String
     public let wrappedCommand: String
     public let cwd: String
+    public let displayName: String
 
     public enum CodingKeys: String, CodingKey {
         case processId = "process_id"
         case wrappedCommand = "wrapped_command"
         case cwd
+        case displayName = "display_name"
     }
 }
 
