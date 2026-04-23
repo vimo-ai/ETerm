@@ -160,6 +160,12 @@ pub fn route_wakeup_event(terminal_id: usize) -> bool {
     false
 }
 
+/// 待延迟释放的 GPU 资源
+struct DeferredGpuDrop {
+    surface: Option<TerminalSurfaceCache>,
+    image: Option<TerminalRenderCache>,
+}
+
 /// 单个终端的渲染缓存
 struct TerminalRenderCache {
     /// 缓存的渲染结果（Image 比 Surface 更轻量）
@@ -345,6 +351,13 @@ pub struct TerminalPool {
     /// 插件在 reopenTerminal 前通过 set_reattach_hint 设置，
     /// create_terminal_with_cwd 消费后自动清空（一次性语义）。
     reattach_hint: RwLock<Option<String>>,
+
+    /// GPU 资源延迟释放队列
+    ///
+    /// 主线程关闭/resize/切换终端时，GPU Surface/Image 不能直接 drop（会从主线程修改
+    /// Skia GrResourceCache，与 CVDisplayLink 线程竞态）。改为 .take() 放入此队列，
+    /// 由 CVDisplayLink 线程在 render_all() 开头统一 drop。
+    deferred_gpu_drops: Mutex<Vec<DeferredGpuDrop>>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -354,6 +367,14 @@ unsafe impl Send for TerminalPool {}
 impl TerminalPool {
     /// 创建临时 Surface 用于渲染（用完即释放）
     ///
+    fn defer_gpu_drop(&self, entry: &mut TerminalEntry) {
+        let surface = entry.surface_cache.take();
+        let image = entry.render_cache.take();
+        if surface.is_some() || image.is_some() {
+            self.deferred_gpu_drops.lock().push(DeferredGpuDrop { surface, image });
+        }
+    }
+
     /// # 参数
     /// - width, height: Surface 尺寸（物理像素）
     ///
@@ -469,6 +490,7 @@ impl TerminalPool {
             // 缓存初始 font metrics
             cached_font_metrics: std::sync::RwLock::new(initial_font_metrics),
             reattach_hint: RwLock::new(None),
+            deferred_gpu_drops: Mutex::new(Vec::new()),
         })
     }
 
@@ -1239,7 +1261,8 @@ impl TerminalPool {
     /// 若 keep_daemon_alive 为 true，则 detach daemon session（session 保留可恢复）；
     /// 否则 kill daemon session（彻底清理）。
     pub fn close_terminal(&mut self, id: usize) -> bool {
-        if let Some(entry) = self.terminals.write().remove(&id) {
+        if let Some(mut entry) = self.terminals.write().remove(&id) {
+            self.defer_gpu_drop(&mut entry);
             // 从全局事件路由注销
             unregister_terminal_event_target(id);
             // 根据 keepAlive 标记决定关闭策略
@@ -1280,7 +1303,8 @@ impl TerminalPool {
     ///
     /// 供插件主动清理时使用，确保彻底终止 daemon session。
     pub fn close_terminal_force(&mut self, id: usize) -> bool {
-        if let Some(entry) = self.terminals.write().remove(&id) {
+        if let Some(mut entry) = self.terminals.write().remove(&id) {
+            self.defer_gpu_drop(&mut entry);
             // 从全局事件路由注销
             unregister_terminal_event_target(id);
             // 无视 keep_daemon_alive，直接 kill
@@ -1321,8 +1345,8 @@ impl TerminalPool {
         let mut entry = self.terminals.write().remove(&id)?;
 
         // 清空渲染缓存（目标池需要重新渲染）
-        entry.render_cache = None;
-        entry.surface_cache = None;
+        // GPU 资源延迟释放，避免主线程修改 Skia resource cache
+        self.defer_gpu_drop(&mut entry);
 
         // 标记为脏，确保目标池会重新渲染
         entry.dirty_flag.mark_dirty();
@@ -1679,11 +1703,15 @@ impl TerminalPool {
                 entry.cols = cols;
                 entry.rows = rows;
 
-                // P4 优化：尺寸变化时清除 Surface 缓存
-                entry.surface_cache = None;
-
-                // P4-S1 修复：同时清除 render_cache 并标记 dirty
-                entry.render_cache = None;
+                // GPU 资源延迟释放，避免主线程修改 Skia resource cache
+                let old_surface = entry.surface_cache.take();
+                let old_image = entry.render_cache.take();
+                if old_surface.is_some() || old_image.is_some() {
+                    self.deferred_gpu_drops.lock().push(DeferredGpuDrop {
+                        surface: old_surface,
+                        image: old_image,
+                    });
+                }
                 entry.dirty_flag.mark_dirty();
 
                 // 更新 RenderState 尺寸，标记需要全量同步
@@ -2684,8 +2712,14 @@ impl TerminalPool {
                 if !visible_ids.contains(id)
                     && (entry.surface_cache.is_some() || entry.render_cache.is_some())
                 {
-                    entry.surface_cache = None;
-                    entry.render_cache = None;
+                    let old_surface = entry.surface_cache.take();
+                    let old_image = entry.render_cache.take();
+                    if old_surface.is_some() || old_image.is_some() {
+                        self.deferred_gpu_drops.lock().push(DeferredGpuDrop {
+                            surface: old_surface,
+                            image: old_image,
+                        });
+                    }
                     entry.dirty_flag.mark_dirty();
                     evicted += 1;
                 }
@@ -2837,6 +2871,12 @@ impl TerminalPool {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         let frame_start = std::time::Instant::now();
+
+        // 释放主线程排队的 GPU 资源（必须在渲染线程 drop，避免与 Skia GrResourceCache 竞态）
+        {
+            let mut drops = self.deferred_gpu_drops.lock();
+            drops.clear();
+        }
 
         // 先应用主线程排队的待处理更新（避免更新丢失）
         self.apply_pending_updates();
@@ -4560,5 +4600,115 @@ mod tests {
         }
 
         eprintln!("✅ GPU 缓存淘汰：split view 多个可见终端正确保留");
+    }
+
+    #[test]
+    fn test_deferred_gpu_drop_basic() {
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let drop_count = Arc::new(AtomicUsize::new(0));
+        let queue: Mutex<Vec<Arc<AtomicUsize>>> = Mutex::new(Vec::new());
+
+        // 模拟主线程：take + 入队（不立即 drop）
+        {
+            let tracker = drop_count.clone();
+            queue.lock().push(tracker);
+        }
+
+        // 入队后 drop_count 引用数 = 2（原始 + 队列里的）
+        assert_eq!(Arc::strong_count(&drop_count), 2, "入队后应有 2 个引用");
+
+        // 模拟 CVDisplayLink 线程：清空队列（触发 drop）
+        {
+            queue.lock().clear();
+        }
+
+        // 清空后只剩原始引用
+        assert_eq!(Arc::strong_count(&drop_count), 1, "清空队列后应只剩 1 个引用");
+
+        eprintln!("✅ deferred GPU drop: 入队延迟释放，clear 触发 drop");
+    }
+
+    #[test]
+    fn test_deferred_gpu_drop_cross_thread() {
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::thread;
+        use std::time::Duration;
+
+        let queue: Arc<Mutex<Vec<Arc<AtomicUsize>>>> = Arc::new(Mutex::new(Vec::new()));
+        let dropped_on_render_thread = Arc::new(AtomicBool::new(false));
+        let render_thread_id = Arc::new(Mutex::new(None::<thread::ThreadId>));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // "渲染线程"：定期清空队列
+        let q = queue.clone();
+        let flag = dropped_on_render_thread.clone();
+        let tid = render_thread_id.clone();
+        let s = stop.clone();
+        let render_handle = thread::spawn(move || {
+            *tid.lock() = Some(thread::current().id());
+            while !s.load(Ordering::Acquire) {
+                let mut guard = q.lock();
+                if !guard.is_empty() {
+                    // drop 发生在这个线程
+                    guard.clear();
+                    flag.store(true, Ordering::Release);
+                }
+                drop(guard);
+                thread::sleep(Duration::from_micros(100));
+            }
+        });
+
+        // 等渲染线程启动
+        thread::sleep(Duration::from_millis(5));
+
+        // "主线程"：往队列里放资源
+        let tracker = Arc::new(AtomicUsize::new(0));
+        queue.lock().push(tracker.clone());
+        assert_eq!(Arc::strong_count(&tracker), 2);
+
+        // 等渲染线程清空
+        thread::sleep(Duration::from_millis(10));
+
+        assert!(dropped_on_render_thread.load(Ordering::Acquire), "资源应在渲染线程被释放");
+        assert_eq!(Arc::strong_count(&tracker), 1, "队列清空后应只剩 1 个引用");
+
+        stop.store(true, Ordering::Release);
+        render_handle.join().unwrap();
+
+        eprintln!("✅ deferred GPU drop: 主线程入队，渲染线程释放");
+    }
+
+    #[test]
+    fn test_deferred_gpu_drop_multiple_entries() {
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
+
+        let queue: Mutex<Vec<Arc<AtomicUsize>>> = Mutex::new(Vec::new());
+
+        // 模拟多个终端同时关闭
+        let trackers: Vec<_> = (0..5).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+        for t in &trackers {
+            queue.lock().push(t.clone());
+        }
+
+        // 所有资源都在队列里
+        for (i, t) in trackers.iter().enumerate() {
+            assert_eq!(Arc::strong_count(t), 2, "终端 {} 入队后应有 2 个引用", i);
+        }
+
+        // 一次性清空
+        queue.lock().clear();
+
+        for (i, t) in trackers.iter().enumerate() {
+            assert_eq!(Arc::strong_count(t), 1, "终端 {} 清空后应只剩 1 个引用", i);
+        }
+
+        eprintln!("✅ deferred GPU drop: 批量入队，一次清空全部释放");
     }
 }
