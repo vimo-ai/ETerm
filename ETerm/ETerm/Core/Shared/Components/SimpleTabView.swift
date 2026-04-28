@@ -28,8 +28,6 @@ struct SimpleTabView: View {
     let canCloseRight: Bool
     let canCloseOthers: Bool
 
-    @Environment(\.colorScheme) private var colorScheme
-
     // 动画状态
     @State private var animationPhase: CGFloat = 0
 
@@ -77,7 +75,7 @@ struct SimpleTabView: View {
         decoration != nil
     }
 
-    // MARK: - 配色（跟随水墨主题）
+    // MARK: - Sci-Fi HUD 配色
 
     /// 装饰颜色（从 TabDecoration 获取，转换为 SwiftUI Color）
     private var decorationColor: Color {
@@ -90,29 +88,21 @@ struct SimpleTabView: View {
     /// 激活状态背景色
     private var activeBackground: Color {
         if let decoration = decoration {
-            // 有装饰时使用装饰颜色
-            let baseOpacity: CGFloat = colorScheme == .dark ? 0.3 : 0.2
+            let baseOpacity: CGFloat = 0.25
             let opacity = animatedOpacity(baseOpacity: baseOpacity)
             return Color(nsColor: decoration.color).opacity(opacity)
         }
-        // 激活 - 深红/墨色
-        return colorScheme == .dark
-            ? Color(hex: ThemeColors.accentHex).opacity(0.6)
-            : Color(hex: ThemeColors.accentHex).opacity(0.4)
+        return ThemeColors.UI.accent.opacity(0.2)
     }
 
     /// 未激活状态背景色
     private var inactiveBackground: Color {
-        colorScheme == .dark
-            ? Color.white.opacity(0.08)
-            : Color.black.opacity(0.06)
+        ThemeColors.UI.bgTertiary
     }
 
     /// Hover 状态背景色
     private var hoverBackground: Color {
-        colorScheme == .dark
-            ? Color.white.opacity(0.12)
-            : Color.black.opacity(0.1)
+        ThemeColors.UI.bgHover
     }
 
     /// 文字颜色
@@ -121,21 +111,17 @@ struct SimpleTabView: View {
             return Color(nsColor: decoration.color)
         }
         if isActive {
-            return colorScheme == .dark ? Color.white : Color.white
+            return ThemeColors.UI.textPrimary
         }
-        return colorScheme == .dark
-            ? Color.white.opacity(0.7)
-            : Color.black.opacity(0.6)
+        return ThemeColors.UI.textSecondary
     }
 
     /// 关闭按钮颜色
     private var closeButtonColor: Color {
         if isActive || hasDecoration {
-            return Color.white.opacity(0.7)
+            return ThemeColors.UI.textSecondary
         }
-        return colorScheme == .dark
-            ? Color.white.opacity(0.5)
-            : Color.black.opacity(0.4)
+        return ThemeColors.UI.textMuted
     }
 
     /// 圆角大小
@@ -185,7 +171,7 @@ struct SimpleTabView: View {
         HStack(spacing: 6) {
             // 左侧：标题
             Text(text)
-                .font(.system(size: height * 0.4))
+                .font(.system(size: height * 0.4, weight: isActive ? .medium : .regular, design: .monospaced))
                 .foregroundColor(textColor)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -216,10 +202,14 @@ struct SimpleTabView: View {
         }
         .padding(.horizontal, 10)
         .frame(width: tabWidth, height: height)
-        .contentShape(Rectangle())  // 整个 Tab 可点击
+        .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(backgroundColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(tabBorderColor, lineWidth: 1)
         )
         // Tooltip：鼠标悬浮显示 Terminal ID
         .help(terminalId.map { "Terminal ID: \($0)" } ?? "")
@@ -264,6 +254,16 @@ struct SimpleTabView: View {
             return activeBackground
         }
         return isHovered ? hoverBackground : inactiveBackground
+    }
+
+    private var tabBorderColor: Color {
+        if let decoration = decoration {
+            return Color(nsColor: decoration.color).opacity(0.4)
+        }
+        if isActive {
+            return ThemeColors.UI.accent.opacity(0.3)
+        }
+        return ThemeColors.UI.border
     }
 
     private func startAnimationIfNeeded() {

@@ -6,8 +6,8 @@
 //
 
 import SwiftUI
+import ETermKit
 
-/// Claude 监控仪表盘视图（用于 InfoWindow）
 struct ClaudeMonitorDashboardView: View {
     @ObservedObject private var tracker = WeeklyUsageTracker.shared
     @AppStorage("WeeklyUsageSkipWeekends") private var skipWeekends = false
@@ -27,30 +27,26 @@ struct ClaudeMonitorDashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                // 周度使用节奏卡片
+            VStack(spacing: 12) {
                 WeeklyUsageCard(
                     skipWeekends: $skipWeekends,
                     skipSleep: $skipSleep,
                     sleepSchedule: sleepSchedule
                 )
 
-                // 5 小时使用卡片
                 if showHourlyUsageCard, let fiveHour = tracker.snapshot?.fiveHour {
                     HourlyUsageCard(window: fiveHour)
                 }
 
-                // 用量历史曲线图
                 if showUsageHistoryChart {
                     UsageHistoryChart()
                 }
 
-                // 冲刺预测
                 if showSprintPrediction {
                     SprintPredictionView()
                 }
             }
-            .padding(16)
+            .padding(12)
         }
         .frame(minWidth: 400, minHeight: 500)
     }

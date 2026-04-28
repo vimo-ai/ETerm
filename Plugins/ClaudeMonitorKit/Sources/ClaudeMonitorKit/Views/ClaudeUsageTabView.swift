@@ -14,8 +14,7 @@ struct ClaudeUsageTabView: View {
     /// 用于控制 InfoPanel 显示/隐藏
     var onToggleDashboard: (() -> Void)?
 
-    /// ETerm 主题色（青绿色 #2AD98D）
-    private let themeAccentColor = Color(red: 0x2A/255.0, green: 0xD9/255.0, blue: 0x8D/255.0)
+    private let themeAccentColor = ThemeColors.UI.accent
 
     /// 根据用量与时间进度的偏差计算时间进度条颜色（HSB 渐变）
     /// 目标是用完配额：用量领先=好（蓝→绿），用量落后=危险（黄→橙→红）
@@ -55,16 +54,13 @@ struct ClaudeUsageTabView: View {
     var body: some View {
         Button(action: { onToggleDashboard?() }) {
             HStack(spacing: 6) {
-                // 双进度条
                 VStack(spacing: 2) {
-                    // 时间进度条（动态颜色：红→绿→蓝）
                     UsageProgressBarView(
                         progress: tracker.snapshot?.timeProgress ?? 0,
                         color: timeProgressColor
                     )
                     .frame(width: 32, height: 3)
 
-                    // 用量进度条（主题色）
                     UsageProgressBarView(
                         progress: tracker.snapshot?.usageProgress ?? 0,
                         color: themeAccentColor
@@ -72,17 +68,10 @@ struct ClaudeUsageTabView: View {
                     .frame(width: 32, height: 3)
                 }
 
-                // 百分比
                 Text(usageText)
-                    .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    .foregroundColor(tracker.snapshot != nil ? .primary : .secondary)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(tracker.snapshot != nil ? ThemeColors.UI.accent : ThemeColors.UI.textMuted)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.gray.opacity(0.12))
-            )
         }
         .buttonStyle(.plain)
         .help(tracker.snapshot?.recommendationReason ?? "Claude 用量监控")
@@ -105,11 +94,8 @@ private struct UsageProgressBarView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                // 背景
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.gray.opacity(0.3))
-
-                // 进度
+                    .fill(ThemeColors.UI.border)
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(color)
                     .frame(width: geometry.size.width * CGFloat(min(1, max(0, progress))))

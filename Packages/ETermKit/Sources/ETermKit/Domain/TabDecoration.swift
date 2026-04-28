@@ -134,7 +134,7 @@ public struct TabDecoration: Equatable, @unchecked Sendable {
     public static func thinking(pluginId: String) -> TabDecoration {
         TabDecoration(
             priority: .plugin(id: pluginId, priority: 101),
-            color: .systemBlue,
+            color: ThemeColors.tabThinking,
             style: .pulse
         )
     }
@@ -145,7 +145,7 @@ public struct TabDecoration: Equatable, @unchecked Sendable {
     public static func completed(pluginId: String) -> TabDecoration {
         TabDecoration(
             priority: .plugin(id: pluginId, priority: 5),
-            color: .systemOrange,
+            color: ThemeColors.tabCompleted,
             style: .solid
         )
     }
@@ -158,7 +158,7 @@ public struct TabDecoration: Equatable, @unchecked Sendable {
     public static func waitingInput(pluginId: String) -> TabDecoration {
         TabDecoration(
             priority: .plugin(id: pluginId, priority: 102),
-            color: .systemYellow,
+            color: ThemeColors.tabWaitingInput,
             style: .pulse
         )
     }

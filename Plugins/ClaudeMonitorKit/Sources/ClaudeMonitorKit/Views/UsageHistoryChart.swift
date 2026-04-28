@@ -6,6 +6,7 @@
 
 import SwiftUI
 import Charts
+import ETermKit
 
 /// 用量历史曲线图组件
 struct UsageHistoryChart: View {
@@ -58,56 +59,56 @@ struct UsageHistoryChart: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 12))
+                    .foregroundColor(ThemeColors.UI.accent)
                 Text("用量趋势")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textPrimary)
 
                 Spacer()
 
                 if let startDate = cycleStartDate, let endDate = cycleEndDate {
                     Text(formatCycleLabel(startDate, endDate: endDate))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textMuted)
                 }
             }
 
             chartView
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(8)
+        .padding(16)
+        .background(ThemeColors.UI.bgCard)
+        .cornerRadius(12)
     }
 
     // MARK: - Chart View
 
     private var chartView: some View {
         Chart {
-            // 理想进度参考线（绿色虚线）
             ForEach(Array(idealProgressData.enumerated()), id: \.offset) { _, point in
                 LineMark(
                     x: .value("时间", point.0),
                     y: .value("理想", point.1),
                     series: .value("类型", "理想进度")
                 )
-                .foregroundStyle(Color.green.opacity(0.6))
+                .foregroundStyle(ThemeColors.UI.accent.opacity(0.4))
                 .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
             }
 
-            // 当前时间标记线
             if isCurrentTimeInCycle {
                 RuleMark(x: .value("现在", currentTime))
-                    .foregroundStyle(Color.orange.opacity(0.7))
+                    .foregroundStyle(ThemeColors.UI.warning.opacity(0.7))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 2]))
                     .annotation(position: .top, alignment: .center) {
-                        Text("现在")
-                            .font(.caption2)
-                            .foregroundColor(.orange)
+                        Text("NOW")
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundColor(ThemeColors.UI.warning)
                     }
             }
 
-            // 实际用量曲线
             if !currentCycleData.isEmpty {
                 ForEach(currentCycleData) { point in
                     LineMark(
@@ -115,7 +116,7 @@ struct UsageHistoryChart: View {
                         y: .value("用量", point.utilization),
                         series: .value("类型", "实际用量")
                     )
-                    .foregroundStyle(Color.blue)
+                    .foregroundStyle(ThemeColors.UI.info)
                     .interpolationMethod(.monotone)
                     .lineStyle(StrokeStyle(lineWidth: 2))
                 }
@@ -125,44 +126,52 @@ struct UsageHistoryChart: View {
         .chartYScale(domain: 0...100)
         .chartYAxis {
             AxisMarks(values: [0, 25, 50, 75, 100]) { value in
-                AxisGridLine()
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(ThemeColors.UI.border.opacity(0.5))
                 AxisValueLabel {
                     if let intValue = value.as(Int.self) {
                         Text("\(intValue)%")
-                            .font(.caption2)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(ThemeColors.UI.textMuted)
                     }
                 }
             }
         }
         .chartXAxis {
             AxisMarks(values: .stride(by: .day, count: 1)) { value in
-                AxisGridLine()
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(ThemeColors.UI.border.opacity(0.5))
                 AxisValueLabel {
                     if let date = value.as(Date.self) {
                         Text(formatXAxisLabel(date))
-                            .font(.caption2)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(ThemeColors.UI.textMuted)
                     }
                 }
             }
         }
         .chartLegend(.hidden)
+        .chartPlotStyle { plotArea in
+            plotArea
+                .background(ThemeColors.UI.bgTertiary.opacity(0.5))
+        }
         .frame(height: 120)
         .overlay(alignment: .center) {
             if currentCycleData.isEmpty && cycleStartDate != nil {
-                Text("等待数据...")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(6)
-                    .background(Color.gray.opacity(0.1))
+                Text("AWAITING DATA...")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textMuted)
+                    .padding(8)
+                    .background(ThemeColors.UI.bgTertiary)
                     .cornerRadius(4)
             } else if cycleStartDate == nil {
                 VStack(spacing: 8) {
                     Image(systemName: "chart.line.uptrend.xyaxis")
                         .font(.title2)
-                        .foregroundColor(.secondary)
-                    Text("暂无周期数据")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(ThemeColors.UI.textMuted)
+                    Text("NO CYCLE DATA")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textMuted)
                 }
             }
         }
@@ -182,9 +191,7 @@ struct UsageHistoryChart: View {
     /// 生成考虑跳过周末/睡眠的理想进度点
     private func generateIdealProgressPoints(from startDate: Date, to endDate: Date) -> [(Date, Double)] {
         var points: [(Date, Double)] = []
-        let calendar = Calendar.current
 
-        // 计算总有效时间
         let totalEffectiveTime = calculateEffectiveTime(from: startDate, to: endDate)
         guard totalEffectiveTime > 0 else {
             return [(startDate, 0), (endDate, 100)]

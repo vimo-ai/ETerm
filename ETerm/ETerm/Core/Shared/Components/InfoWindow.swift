@@ -7,6 +7,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import ETermKit
 
 /// 全局信息窗口
 final class InfoWindow: NSWindow {
@@ -36,39 +37,35 @@ final class InfoWindow: NSWindow {
     private func setupWindow() {
         title = "信息面板"
 
-        // 跟随当前 Space
         collectionBehavior = [.moveToActiveSpace]
-
-        // 关闭时隐藏而不是释放
         isReleasedWhenClosed = false
-
-        // 最小尺寸
         minSize = NSSize(width: 400, height: 200)
+
+        titlebarAppearsTransparent = true
+        backgroundColor = NSColor(red: 0x0A/255.0, green: 0x0A/255.0, blue: 0x0A/255.0, alpha: 1.0)
+        appearance = NSAppearance(named: .darkAqua)
     }
 
     private func setupContent() {
         guard let registry = registry else { return }
 
-        // 毛玻璃背景作为 contentView
-        let visualEffect = NSVisualEffectView()
-        visualEffect.material = .sidebar
-        visualEffect.blendingMode = .behindWindow
-        visualEffect.state = .active
-
-        // SwiftUI 内容
         let content = InfoWindowContentView(registry: registry)
         let hosting = NSHostingView(rootView: content)
         hosting.translatesAutoresizingMaskIntoConstraints = false
 
-        visualEffect.addSubview(hosting)
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor(red: 0x0A/255.0, green: 0x0A/255.0, blue: 0x0A/255.0, alpha: 1.0).cgColor
+
+        container.addSubview(hosting)
         NSLayoutConstraint.activate([
-            hosting.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor),
-            hosting.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor),
-            hosting.topAnchor.constraint(equalTo: visualEffect.topAnchor),
-            hosting.bottomAnchor.constraint(equalTo: visualEffect.bottomAnchor)
+            hosting.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hosting.topAnchor.constraint(equalTo: container.topAnchor),
+            hosting.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
 
-        self.contentView = visualEffect
+        self.contentView = container
         self.hostingView = hosting
     }
 
@@ -164,12 +161,13 @@ struct InfoWindowContentView: View {
         VStack(spacing: 12) {
             Image(systemName: "tray")
                 .font(.system(size: 36, weight: .light))
-                .foregroundStyle(.tertiary)
+                .foregroundColor(ThemeColors.UI.textMuted)
             Text("暂无内容")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.textMuted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ThemeColors.UI.bgSecondary)
     }
 
     // MARK: - Content List
@@ -191,6 +189,7 @@ struct InfoWindowContentView: View {
             }
             .padding(16)
         }
+        .background(ThemeColors.UI.bgSecondary)
     }
 
     private var visibleContents: [InfoContent] {
@@ -210,22 +209,26 @@ struct InfoContentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 标题栏
             cardHeader
 
-            // 分隔线
             Rectangle()
-                .fill(.quaternary)
+                .fill(ThemeColors.UI.border)
                 .frame(height: 0.5)
                 .padding(.horizontal, 12)
 
-            // 内容区
             content.viewProvider()
                 .padding(12)
         }
-        .background(cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .shadow(color: .black.opacity(isHovering ? 0.15 : 0.08), radius: isHovering ? 8 : 4, y: 2)
+        .background(ThemeColors.UI.bgCard)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(
+                    isHovering ? ThemeColors.UI.accent.opacity(0.3) : ThemeColors.UI.border.opacity(0.5),
+                    lineWidth: 1
+                )
+        )
+        .shadow(color: .black.opacity(isHovering ? 0.4 : 0.2), radius: isHovering ? 12 : 6, y: 2)
         .scaleEffect(isHovering ? 1.005 : 1.0)
         .animation(.easeOut(duration: 0.15), value: isHovering)
         .onHover { hovering in
@@ -233,13 +236,11 @@ struct InfoContentCard: View {
         }
     }
 
-    // MARK: - Card Header
-
     private var cardHeader: some View {
         HStack(spacing: 8) {
             Text(content.title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.textPrimary)
 
             Spacer()
 
@@ -247,12 +248,6 @@ struct InfoContentCard: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-    }
-
-    // MARK: - Card Background
-
-    private var cardBackground: some View {
-        Color(nsColor: .controlBackgroundColor).opacity(0.6)
     }
 }
 
@@ -267,11 +262,11 @@ private struct CloseButton: View {
         Button(action: action) {
             Image(systemName: "xmark")
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(isHovering ? .white : .secondary)
+                .foregroundColor(isHovering ? ThemeColors.UI.textPrimary : ThemeColors.UI.textMuted)
                 .frame(width: 18, height: 18)
                 .background(
                     Circle()
-                        .fill(isHovering ? Color.secondary : Color.secondary.opacity(0.15))
+                        .fill(isHovering ? ThemeColors.UI.error.opacity(0.6) : ThemeColors.UI.bgTertiary)
                 )
         }
         .buttonStyle(.plain)
