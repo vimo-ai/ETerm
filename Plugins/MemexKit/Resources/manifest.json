@@ -7,17 +7,9 @@
     "runMode": "main",
     "loadPriority": "immediate",
     "dependencies": [{"id": "com.eterm.aicli", "minVersion": "1.0.0"}],
-    "capabilities": ["ui.pageBar"],
+    "capabilities": ["ui.pageBar", "ui.infoPanel"],
     "principalClass": "MemexPlugin",
     "sidebarTabs": [
-        {
-            "id": "memex-status",
-            "title": "Memex 状态",
-            "icon": "gauge.with.dots.needle.bottom.50percent",
-            "viewClass": "MemexStatusView",
-            "renderMode": "tab",
-            "order": 20
-        },
         {
             "id": "memex-web",
             "title": "Memex Web",
@@ -27,7 +19,13 @@
             "order": 21
         }
     ],
-    "infoPanelContents": [],
+    "infoPanelContents": [
+        {
+            "id": "memex-dashboard",
+            "title": "Memex",
+            "viewClass": "MemexInfoPanelView"
+        }
+    ],
     "pageBarItems": [
         {
             "id": "memex-stats",

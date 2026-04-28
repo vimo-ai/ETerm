@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import ETermKit
 
 // MARK: - 主视图组件从 ContentView.swift 提取
 
@@ -32,41 +33,41 @@ struct WeeklyUsageCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Image(systemName: "calendar.badge.clock")
-                    .font(.title3)
-                    .foregroundColor(.purple)
+                    .font(.system(size: 14))
+                    .foregroundColor(ThemeColors.UI.accent)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("周度使用节奏")
-                        .font(.headline)
-                        .foregroundColor(.white)
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textPrimary)
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textSecondary)
                 }
                 Spacer()
                 HStack(spacing: 12) {
                     Toggle(isOn: $skipWeekends) {
                         Text("跳过周末")
-                            .font(.caption)
-                            .foregroundColor(.gray)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(ThemeColors.UI.textSecondary)
                     }
                     .toggleStyle(.switch)
-                    .help("跳过周末后，时间进度按工作日计算")
+                    .tint(Color(ThemeColors.accent))
 
                     Toggle(isOn: $skipSleep) {
                         Text("跳过睡眠")
-                            .font(.caption)
-                            .foregroundColor(.gray)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(ThemeColors.UI.textSecondary)
                     }
                     .toggleStyle(.switch)
-                    .help("跳过睡眠时间（每天 3:00-9:00）")
+                    .tint(Color(ThemeColors.accent))
                 }
             }
 
             contentSection(snapshot: snapshot, metrics: metrics)
         }
-        .padding(24)
-        .background(Color.gray.opacity(0.2))
-        .cornerRadius(16)
+        .padding(20)
+        .background(ThemeColors.UI.bgCard)
+        .cornerRadius(12)
     }
 
     @ViewBuilder
@@ -75,19 +76,19 @@ struct WeeklyUsageCard: View {
             HStack(spacing: 8) {
                 ProgressView()
                 Text("加载周度数据…")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textSecondary)
             }
         } else if let error = tracker.lastError, snapshot == nil {
             Text("无法获取周度用量：\(error)")
-                .font(.subheadline)
-                .foregroundColor(.red)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.error)
         } else if let snapshot, let metrics {
             usageContent(for: snapshot, metrics: metrics)
         } else {
             Text("等待首次刷新…")
-                .font(.subheadline)
-                .foregroundColor(.gray)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.textMuted)
         }
     }
 
@@ -137,20 +138,20 @@ struct WeeklyUsageCard: View {
                         HStack(spacing: 4) {
                             Image(systemName: "calendar.badge.minus")
                                 .font(.caption2)
-                                .foregroundColor(.blue)
+                                .foregroundColor(ThemeColors.UI.info)
                             Text("剩余包含周末")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(ThemeColors.UI.textSecondary)
                         }
                     }
                     if skipSleep && metrics.remainingSleepCount > 0 {
                         HStack(spacing: 4) {
                             Image(systemName: "moon.zzz.fill")
                                 .font(.caption2)
-                                .foregroundColor(.purple)
+                                .foregroundColor(ThemeColors.UI.accent)
                             Text("剩余跳过 \(metrics.remainingSleepCount) 次睡眠")
-                                .font(.caption2)
-                                .foregroundColor(.gray)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundColor(ThemeColors.UI.textSecondary)
                         }
                     }
                 }
@@ -162,18 +163,17 @@ struct WeeklyUsageCard: View {
                     Image(systemName: recommendationIcon(snapshot.recommendation))
                         .foregroundColor(recommendationColor(snapshot.recommendation))
                     Text(snapshot.recommendation.displayName)
-                        .font(.headline)
-                        .foregroundColor(.white)
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textPrimary)
                 }
 
-                // 使用当前的时间进度(考虑跳过睡眠/周末)重新计算推荐理由
                 Text(buildDynamicReason(usageProgress: snapshot.usageProgress, timeProgress: metrics.progress))
-                    .font(.caption)
-                    .foregroundColor(.gray)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textSecondary)
 
                 Text("更新于 \(formatUpdateTime(snapshot.lastUpdated))")
-                    .font(.caption2)
-                    .foregroundColor(.gray)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textMuted)
             }
         }
     }
@@ -202,7 +202,7 @@ struct WeeklyUsageCard: View {
                 ProgressArrowMarker(
                     fraction: effective,
                     label: String(format: "有效 %.1f%%", effective * 100),
-                    color: Color.purple
+                    color: ThemeColors.UI.info
                 )
             )
         }
@@ -243,7 +243,7 @@ struct WeeklyUsageCard: View {
                             ProgressOverlaySegment(
                                 startFraction: startFraction,
                                 endFraction: endFraction,
-                                color: Color.purple.opacity(0.35)
+                                color: ThemeColors.UI.info.opacity(0.35)
                             )
                         )
                     }
@@ -287,7 +287,7 @@ struct WeeklyUsageCard: View {
                         ProgressOverlaySegment(
                             startFraction: startFraction,
                             endFraction: endFraction,
-                            color: Color.green.opacity(0.3)
+                            color: ThemeColors.UI.success.opacity(0.3)
                         )
                     )
                 }
@@ -340,32 +340,32 @@ struct HourlyUsageCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Image(systemName: "timer")
-                    .font(.title3)
-                    .foregroundColor(.orange)
+                    .font(.system(size: 14))
+                    .foregroundColor(ThemeColors.UI.warning)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("5 小时使用节奏")
-                        .font(.headline)
-                        .foregroundColor(.white)
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textPrimary)
                     Text(remainingText)
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textSecondary)
                 }
                 Spacer()
                 Text(String(format: "%.1f%%", window.utilization))
-                    .font(.headline)
-                    .foregroundColor(.white)
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textPrimary)
             }
 
             CapsuleProgressRow(
                 title: "小时进度",
                 valueText: String(format: "%.1f%%", window.utilization),
                 progress: progress,
-                tint: .orange
+                tint: ThemeColors.UI.warning
             )
         }
         .padding(24)
-        .background(Color.gray.opacity(0.2))
-        .cornerRadius(16)
+        .background(ThemeColors.UI.bgCard)
+        .cornerRadius(12)
     }
 }
 
@@ -388,12 +388,9 @@ private func buildDynamicReason(usageProgress: Double, timeProgress: Double) -> 
     return String(format: "已使用 %.1f%%，时间进度 %.1f%%，%@", usagePercent, timePercent, deltaText)
 }
 
-/// ETerm 主题色（青绿色 #2AD98D）
-private let themeAccentColor = Color(red: 0x2A/255.0, green: 0xD9/255.0, blue: 0x8D/255.0)
-
 /// 用量标记颜色：使用主题色
 private func colorForUsage(_ progress: Double) -> Color {
-    return themeAccentColor
+    return ThemeColors.UI.accent
 }
 
 /// 时间进度条颜色：根据用量与时间差值动态变化（红→绿→蓝）
@@ -655,10 +652,10 @@ private func workingSeconds(from start: Date,
 
 private func recommendationColor(_ recommendation: WeeklyUsageRecommendation) -> Color {
     switch recommendation {
-    case .accelerate: return .orange
-    case .maintain: return .green
-    case .slowDown: return .yellow
-    case .pause: return .red
+    case .accelerate: return ThemeColors.UI.warning
+    case .maintain: return ThemeColors.UI.success
+    case .slowDown: return ThemeColors.UI.warning.opacity(0.7)
+    case .pause: return ThemeColors.UI.error
     }
 }
 
@@ -734,12 +731,12 @@ private struct CapsuleProgressRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title)
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textSecondary)
                 Spacer()
                 Text(valueText)
-                    .font(.subheadline)
-                    .foregroundColor(.white)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textPrimary)
             }
             GeometryReader { geometry in
                 let width = geometry.size.width
@@ -749,11 +746,11 @@ private struct CapsuleProgressRow: View {
                             ForEach(arrowMarkers) { marker in
                                 let tipX = markerTipX(for: marker, totalWidth: width)
                                 Image(systemName: "arrowtriangle.down.fill")
-                                    .font(.caption2)
+                                    .font(.system(size: 8))
                                     .foregroundColor(marker.color)
                                     .position(x: tipX, y: 16)
                                 Text(marker.label)
-                                    .font(.caption2)
+                                    .font(.system(size: 9, design: .monospaced))
                                     .foregroundColor(marker.color)
                                     .position(
                                         x: markerLabelX(for: marker, tipX: tipX, totalWidth: width),
@@ -766,7 +763,7 @@ private struct CapsuleProgressRow: View {
 
                     ZStack(alignment: .leading) {
                         Capsule()
-                            .fill(Color.gray.opacity(0.3))
+                            .fill(ThemeColors.UI.border)
                             .frame(height: 6)
                         Capsule()
                             .fill(tint)

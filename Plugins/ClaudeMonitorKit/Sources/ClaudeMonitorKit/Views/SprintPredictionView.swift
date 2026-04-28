@@ -5,6 +5,7 @@
 //
 
 import SwiftUI
+import ETermKit
 
 /// 冲刺预测视图
 /// 显示最近 5 次用量变化的时间间隔，并预测按每个速率用完剩余额度需要多久
@@ -14,14 +15,11 @@ struct SprintPredictionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // 标题区域
             headerSection
-
-            // 预测内容
             contentSection
         }
         .padding(16)
-        .background(Color.gray.opacity(0.2))
+        .background(ThemeColors.UI.bgCard)
         .cornerRadius(12)
     }
 
@@ -30,25 +28,25 @@ struct SprintPredictionView: View {
     @ViewBuilder
     private var headerSection: some View {
         HStack(spacing: 8) {
-            Image(systemName: "chart.line.uptrend.xyaxis")
-                .font(.title3)
-                .foregroundColor(.cyan)
+            Image(systemName: "bolt.horizontal.fill")
+                .font(.system(size: 12))
+                .foregroundColor(ThemeColors.UI.accent)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("冲刺预测")
-                    .font(.headline)
-                    .foregroundColor(.white)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textPrimary)
 
                 if let snapshot = tracker.snapshot {
                     let remainingPercent = 100 - snapshot.overall.utilization
                     let remainingTime = max(snapshot.overall.endDate.timeIntervalSince(Date()), 0)
                     Text("剩余 \(formatPercent(remainingPercent))，\(formatDurationCompact(remainingTime))")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textSecondary)
                 } else {
-                    Text("等待数据...")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                    Text("AWAITING DATA...")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textMuted)
                 }
             }
 
@@ -78,16 +76,14 @@ struct SprintPredictionView: View {
                 emptyStateView(message: "暂无足够数据")
             } else {
                 VStack(spacing: 12) {
-                    // 加权平均预测（主预测）
                     if let weighted = weightedPrediction {
                         weightedPredictionView(weighted)
                     }
 
-                    // 分隔线
-                    Divider()
-                        .background(Color.gray.opacity(0.3))
+                    Rectangle()
+                        .fill(ThemeColors.UI.border)
+                        .frame(height: 1)
 
-                    // 详细列表
                     predictionsListView(predictions: predictions)
                 }
             }
@@ -99,32 +95,27 @@ struct SprintPredictionView: View {
     @ViewBuilder
     private func weightedPredictionView(_ prediction: WeightedPrediction) -> some View {
         HStack(spacing: 12) {
-            // 状态指示
             Text(prediction.status.emoji)
                 .font(.title2)
 
             VStack(alignment: .leading, spacing: 4) {
-                // 主预测结果
                 HStack(spacing: 6) {
                     Text("综合预测")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textSecondary)
 
-                    Text("(\(prediction.sampleCount)个样本)")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
+                    Text("\(prediction.sampleCount)个样本")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textMuted)
                 }
 
-                // 预测时间和差值
                 HStack(spacing: 8) {
                     Text(formatPredictedTime(prediction.predictedFinishTime))
-                        .font(.system(.body, design: .monospaced))
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textPrimary)
 
                     Text(formatDelta(prediction.delta))
-                        .font(.subheadline)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundColor(deltaColor(prediction.status))
                 }
             }
@@ -141,8 +132,8 @@ struct SprintPredictionView: View {
         HStack {
             Spacer()
             Text(message)
-                .font(.subheadline)
-                .foregroundColor(.gray)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.textMuted)
             Spacer()
         }
         .padding(.vertical, 16)
@@ -162,63 +153,57 @@ struct SprintPredictionView: View {
     @ViewBuilder
     private func predictionRow(_ prediction: SprintPrediction) -> some View {
         HStack(spacing: 8) {
-            // 采集时间
-            Text(formatTimestamp(prediction.interval.timestamp))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.cyan)
-                .frame(width: 45, alignment: .leading)
-
-            // 变化区间
             Text(formatIntervalRange(prediction.interval))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.white)
-                .frame(width: 70, alignment: .leading)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.textMuted)
+                .frame(width: 65, alignment: .leading)
 
-            // 耗时
+            Text(formatTimeRange(prediction.interval))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.textPrimary)
+                .frame(width: 95, alignment: .leading)
+
             Text(formatDurationCompact(prediction.interval.duration))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.gray)
-                .frame(width: 50, alignment: .trailing)
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.accent)
+                .frame(width: 55, alignment: .trailing)
 
-            // 箭头
-            Text("->")
-                .font(.caption)
-                .foregroundColor(.gray)
+            Spacer()
 
-            // 预测用完时间
             Text(formatPredictedTime(prediction.predictedFinishTime))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.white)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.textSecondary)
                 .frame(width: 60, alignment: .trailing)
 
-            // 状态标识和差值
-            HStack(spacing: 4) {
-                Text(prediction.status.emoji)
-                    .font(.caption2)
-                Text(formatDelta(prediction.delta))
-                    .font(.caption)
-                    .foregroundColor(deltaColor(prediction.status))
-            }
-            .frame(minWidth: 70, alignment: .trailing)
+            Text(formatDelta(prediction.delta))
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(deltaColor(prediction.status))
+                .frame(minWidth: 60, alignment: .trailing)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 5)
         .padding(.horizontal, 8)
         .background(rowBackground(prediction.status))
-        .cornerRadius(6)
+        .cornerRadius(4)
     }
 
     // MARK: - 格式化方法
 
-    /// 格式化时间戳，显示为 "HH:mm"
     private func formatTimestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         return formatter.string(from: date)
     }
 
-    /// 格式化变化区间，如 "73%->74%"
+    private func formatTimeRange(_ interval: ConsumptionInterval) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        let end = interval.timestamp
+        let start = end.addingTimeInterval(-interval.duration)
+        return "\(fmt.string(from: start))→\(fmt.string(from: end))"
+    }
+
     private func formatIntervalRange(_ interval: ConsumptionInterval) -> String {
-        String(format: "%.0f%%->%.0f%%", interval.fromUtilization, interval.toUtilization)
+        String(format: "%.0f%%→%.0f%%", interval.fromUtilization, interval.toUtilization)
     }
 
     /// 格式化百分比
@@ -270,21 +255,19 @@ struct SprintPredictionView: View {
         }
     }
 
-    /// 差值颜色
     private func deltaColor(_ status: SprintStatus) -> Color {
         switch status {
-        case .surplus: return .green
-        case .balanced: return .yellow
-        case .deficit: return .red
+        case .surplus: return ThemeColors.UI.success
+        case .balanced: return ThemeColors.UI.warning
+        case .deficit: return ThemeColors.UI.error
         }
     }
 
-    /// 行背景色
     private func rowBackground(_ status: SprintStatus) -> Color {
         switch status {
-        case .surplus: return Color.green.opacity(0.1)
-        case .balanced: return Color.yellow.opacity(0.1)
-        case .deficit: return Color.red.opacity(0.1)
+        case .surplus: return ThemeColors.UI.success.opacity(0.08)
+        case .balanced: return ThemeColors.UI.warning.opacity(0.08)
+        case .deficit: return ThemeColors.UI.error.opacity(0.08)
         }
     }
 }
@@ -293,5 +276,5 @@ struct SprintPredictionView: View {
     SprintPredictionView()
         .frame(width: 400)
         .padding()
-        .background(Color.black)
+        .background(ThemeColors.UI.bgPrimary)
 }

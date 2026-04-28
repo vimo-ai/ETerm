@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Foundation
+import ETermKit
 
 // MARK: - Stats Store
 
@@ -68,40 +69,45 @@ public struct MemexPageBarView: View {
     @ObservedObject private var store = MemexStatsStore.shared
     @State private var isStarting = false
 
-    public init() {}
+    var onToggleDashboard: (() -> Void)?
+
+    public init(onToggleDashboard: (() -> Void)? = nil) {
+        self.onToggleDashboard = onToggleDashboard
+    }
 
     public var body: some View {
-        HStack(spacing: 10) {
-            if let stats = store.stats {
-                statGroup(icon: "folder.fill", value: formatNumber(stats.projectCount), label: "项目")
-                divider
-                statGroup(icon: "bubble.left.and.bubble.right.fill", value: formatNumber(stats.sessionCount), label: "会话")
-                divider
-                statGroup(icon: "text.bubble.fill", value: formatNumber(stats.messageCount), label: "消息")
-
-                // Embedding 统计
-                if let emb = store.embeddingStats {
+        Button {
+            if store.stats != nil {
+                onToggleDashboard?()
+            } else if !isStarting {
+                startMemex()
+            }
+        } label: {
+            HStack(spacing: 10) {
+                if let stats = store.stats {
+                    statGroup(icon: "folder.fill", value: formatNumber(stats.projectCount), label: "项目")
                     divider
-                    statGroup(icon: "cube.transparent", value: formatNumber(emb.indexed), label: "已索引")
-                    if emb.pending > 0 {
-                        statGroup(icon: "clock.fill", value: formatNumber(emb.pending), label: "待索引")
+                    statGroup(icon: "bubble.left.and.bubble.right.fill", value: formatNumber(stats.sessionCount), label: "会话")
+                    divider
+                    statGroup(icon: "text.bubble.fill", value: formatNumber(stats.messageCount), label: "消息")
+
+                    if let emb = store.embeddingStats {
+                        divider
+                        statGroup(icon: "cube.transparent", value: formatNumber(emb.indexed), label: "已索引")
+                        if emb.pending > 0 {
+                            statGroup(icon: "clock.fill", value: formatNumber(emb.pending), label: "待索引")
+                        }
                     }
-                }
-            } else if isStarting {
-                // 启动中
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .rotationEffect(.degrees(isStarting ? 360 : 0))
-                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isStarting)
-                Text("memex 启动中...")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                // memex 未启动，点击启动
-                Button {
-                    startMemex()
-                } label: {
+                } else if isStarting {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(isStarting ? 360 : 0))
+                        .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isStarting)
+                    Text("memex 启动中...")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
                     HStack(spacing: 4) {
                         Image(systemName: "play.circle")
                             .font(.caption2)
@@ -110,10 +116,11 @@ public struct MemexPageBarView: View {
                     }
                     .foregroundColor(.orange)
                 }
-                .buttonStyle(.plain)
             }
         }
+        .buttonStyle(.plain)
         .fixedSize()
+        .help(store.stats != nil ? "Memex 仪表盘" : "启动 memex")
     }
 
     private func startMemex() {
