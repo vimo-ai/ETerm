@@ -626,6 +626,13 @@ impl<U: EventListener> Crosswords<U> {
         self.clear_screen(ClearMode::Saved);
     }
 
+    /// Clear the visible viewport (rotates current contents into scrollback
+    /// and resets the screen). Used by the `terminal_pool_clear_screen` FFI.
+    #[inline]
+    pub fn clear_visible_area(&mut self) {
+        self.clear_screen(ClearMode::All);
+    }
+
     #[inline]
     pub fn scroll_display(&mut self, scroll: Scroll) {
         let old_display_offset = self.grid.display_offset();
