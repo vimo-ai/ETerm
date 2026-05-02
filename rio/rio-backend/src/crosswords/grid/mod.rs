@@ -62,6 +62,10 @@ pub struct Grid<T> {
 
     /// Maximum number of lines in history.
     max_scroll_limit: usize,
+
+    /// When true, viewport stays stationary even at display_offset==0.
+    /// Used to prevent content from shifting under an active selection.
+    freeze_display: bool,
 }
 
 impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
@@ -70,6 +74,7 @@ impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
             raw: Storage::with_capacity(lines, columns),
             max_scroll_limit,
             display_offset: 0,
+            freeze_display: false,
             saved_cursor: Cursor::default(),
             cursor: Cursor::default(),
             lines,
@@ -196,8 +201,9 @@ impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
             return;
         }
 
-        // Update display offset when not pinned to active area.
-        if self.display_offset != 0 {
+        // Update display offset when not pinned to active area,
+        // or when display is frozen (active selection prevents viewport from following).
+        if self.display_offset != 0 || self.freeze_display {
             self.display_offset =
                 min(self.display_offset + positions, self.max_scroll_limit);
         }
@@ -377,6 +383,16 @@ impl<T> Grid<T> {
     #[inline]
     pub fn display_offset(&self) -> usize {
         self.display_offset
+    }
+
+    #[inline]
+    pub fn set_freeze_display(&mut self, freeze: bool) {
+        self.freeze_display = freeze;
+    }
+
+    #[inline]
+    pub fn freeze_display(&self) -> bool {
+        self.freeze_display
     }
 
     #[inline]
