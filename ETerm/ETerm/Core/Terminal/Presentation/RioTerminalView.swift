@@ -985,6 +985,17 @@ class RioMetalView: NSView, RenderViewProtocol {
     /// 当前选择所在的终端 ID（mouseDown 时快照，避免 activeTab 变化导致坐标错位）
     private var selectionTerminalId: Int?
 
+    // MARK: - 选区自动滚动
+
+    /// 拖选到边缘时的自动滚动 Timer
+    private var selectionAutoScrollTimer: Timer?
+    /// 自动滚动方向（正=向上滚历史，负=向下滚到底）
+    private var selectionAutoScrollDelta: Int32 = 0
+    /// 自动滚动触发的边缘区域高度（像素）
+    private let autoScrollEdgeInset: CGFloat = 30.0
+    /// 拖选时最新的鼠标位置（供 Timer 回调使用）
+    private var lastDragLocation: CGPoint = .zero
+
     // MARK: - 超链接悬停状态
 
     /// 是否按下 Cmd 键
@@ -2000,6 +2011,10 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 获取鼠标位置
         let location = convert(event.locationInWindow, from: nil)
+        lastDragLocation = location
+
+        // 检测边缘自动滚动
+        updateAutoScroll(location: location, panelId: panelId)
 
         // 转换为网格坐标（使用快照的 terminalId，确保坐标与 mouseDown 时一致）
         let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: terminalId)
@@ -2092,9 +2107,93 @@ class RioMetalView: NSView, RenderViewProtocol {
             requestRender()
         }
 
+        // 停止自动滚动
+        stopAutoScroll()
+
         // 重置选中状态
         isDraggingSelection = false
         // 注意：不清除 selectionPanelId 和 selectionTab，保持选中状态用于 Cmd+C 复制
+    }
+
+    // MARK: - 选区自动滚动
+
+    /// 检测鼠标是否在 Panel 边缘，启动/停止自动滚动
+    private func updateAutoScroll(location: CGPoint, panelId: UUID) {
+        guard let coordinator = coordinator,
+              let panel = coordinator.terminalWindow.getPanel(panelId) else {
+            stopAutoScroll()
+            return
+        }
+
+        let panelFrame = panel.bounds
+        let localY = location.y - panelFrame.minY
+        let panelHeight = panelFrame.height
+
+        if localY < autoScrollEdgeInset {
+            // 鼠标靠近底部（macOS 坐标系 y=0 在底）→ 向下滚（往新内容方向）
+            let intensity: Int32 = max(1, Int32((autoScrollEdgeInset - localY) / 10.0))
+            startAutoScroll(delta: -intensity)
+        } else if localY > panelHeight - autoScrollEdgeInset {
+            // 鼠标靠近顶部 → 向上滚（往历史方向）
+            let intensity: Int32 = max(1, Int32((localY - (panelHeight - autoScrollEdgeInset)) / 10.0))
+            startAutoScroll(delta: intensity)
+        } else {
+            stopAutoScroll()
+        }
+    }
+
+    /// 启动自动滚动 Timer
+    private func startAutoScroll(delta: Int32) {
+        selectionAutoScrollDelta = delta
+        guard selectionAutoScrollTimer == nil else { return }
+
+        selectionAutoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            self?.performAutoScroll()
+        }
+    }
+
+    /// 停止自动滚动 Timer
+    private func stopAutoScroll() {
+        selectionAutoScrollTimer?.invalidate()
+        selectionAutoScrollTimer = nil
+        selectionAutoScrollDelta = 0
+    }
+
+    /// Timer 回调：执行一次滚动 + 更新选区终点
+    private func performAutoScroll() {
+        guard isDraggingSelection,
+              let panelId = selectionPanelId,
+              let activeTab = selectionTab,
+              let terminalId = selectionTerminalId,
+              let pool = terminalPool else {
+            stopAutoScroll()
+            return
+        }
+
+        // 执行滚动
+        _ = pool.scroll(terminalId: terminalId, deltaLines: selectionAutoScrollDelta)
+
+        // 用最后一次鼠标位置重新计算选区终点
+        let gridPos = screenToGrid(location: lastDragLocation, panelId: panelId, terminalId: terminalId)
+        guard let (absoluteRow, col) = pool.screenToAbsolute(
+            terminalId: terminalId,
+            screenRow: Int(gridPos.row),
+            screenCol: Int(gridPos.col)
+        ) else { return }
+
+        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col))
+
+        if let selection = activeTab.textSelection {
+            _ = pool.setSelection(
+                terminalId: terminalId,
+                startAbsoluteRow: selection.startAbsoluteRow,
+                startCol: Int(selection.startCol),
+                endAbsoluteRow: selection.endAbsoluteRow,
+                endCol: Int(selection.endCol)
+            )
+        }
+
+        requestRender()
     }
 
     // MARK: - 右键菜单
