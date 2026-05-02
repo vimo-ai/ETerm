@@ -1820,8 +1820,9 @@ impl TerminalPool {
                 // 先清除可视区域（会把内容推入历史），再清除历史
                 terminal.clear_visible_area();
                 terminal.clear_saved_history();
-                // 清除选区
+                // 清除选区 + 解冻视口
                 entry.selection_overlay.clear();
+                terminal.set_freeze_display(false);
                 entry.dirty_flag.mark_dirty();
                 self.needs_render.store(true, Ordering::Release);
                 true
@@ -1851,7 +1852,12 @@ impl TerminalPool {
         if let Some(entry) = terminals.get(&id) {
             // 尝试修正宽字符边界（如果能获取锁）
             let (adjusted_start_col, adjusted_end_col) =
-                if let Some(terminal) = entry.terminal.try_lock() {
+                if let Some(mut terminal) = entry.terminal.try_lock() {
+                    // Freeze viewport so new content doesn't shift selection
+                    if !terminal.freeze_display() {
+                        terminal.set_freeze_display(true);
+                    }
+
                     let state = terminal.state();
                     let grid = &state.grid;
 
@@ -1936,6 +1942,12 @@ impl TerminalPool {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
             entry.selection_overlay.clear();
+
+            // Unfreeze viewport so it resumes following new content
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.set_freeze_display(false);
+            }
+
             self.needs_render.store(true, Ordering::Release);
             true
         } else {
@@ -1952,7 +1964,7 @@ impl TerminalPool {
         if let Some(entry) = terminals.get(&id) {
             let snapshot = entry.selection_overlay.snapshot()?;
 
-            if let Some(terminal) = entry.terminal.try_lock() {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
                 let text = terminal.text_in_range(
                     snapshot.start_row,
                     snapshot.start_col,
@@ -1963,6 +1975,7 @@ impl TerminalPool {
                 match text {
                     Some(ref t) if t.chars().all(|c| c.is_whitespace()) => {
                         entry.selection_overlay.clear();
+                        terminal.set_freeze_display(false);
                         self.needs_render.store(true, Ordering::Release);
                         None
                     }

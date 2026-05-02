@@ -615,6 +615,16 @@ impl<U: EventListener> Crosswords<U> {
         self.grid.display_offset()
     }
 
+    #[inline]
+    pub fn set_freeze_display(&mut self, freeze: bool) {
+        self.grid.set_freeze_display(freeze);
+    }
+
+    #[inline]
+    pub fn freeze_display(&self) -> bool {
+        self.grid.freeze_display()
+    }
+
     /// 获取当前滚动区域
     #[inline]
     pub fn scroll_region(&self) -> &std::ops::Range<Line> {

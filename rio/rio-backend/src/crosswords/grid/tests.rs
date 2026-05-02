@@ -353,6 +353,35 @@ fn shrink_reflow_disabled() {
     assert_eq!(grid[Line(0)][Column(1)], cell('2'));
 }
 
+// When freeze_display is true, scroll_up increments display_offset even from 0.
+#[test]
+fn scroll_up_with_freeze_display() {
+    let mut grid = Grid::<usize>::new(10, 1, 1000);
+    for i in 0..10 {
+        grid[Line(i as i32)][Column(0)] = i;
+    }
+
+    // Without freeze: display_offset stays 0 when at bottom
+    assert_eq!(grid.display_offset(), 0);
+    grid.scroll_up::<usize>(&(Line(0)..Line(10)), 1);
+    assert_eq!(grid.display_offset(), 0);
+
+    // With freeze: display_offset increments to keep viewport stationary
+    grid.set_freeze_display(true);
+    grid.scroll_up::<usize>(&(Line(0)..Line(10)), 1);
+    assert_eq!(grid.display_offset(), 1);
+
+    // Multiple lines
+    grid.scroll_up::<usize>(&(Line(0)..Line(10)), 3);
+    assert_eq!(grid.display_offset(), 4);
+
+    // Unfreeze: display_offset stops incrementing (already non-zero keeps incrementing though)
+    grid.set_freeze_display(false);
+    grid.scroll_up::<usize>(&(Line(0)..Line(10)), 1);
+    // display_offset != 0 so it still increments (existing behavior)
+    assert_eq!(grid.display_offset(), 5);
+}
+
 // https://github.com/rust-lang/rust-clippy/pull/6375
 #[allow(clippy::all)]
 fn cell(c: char) -> Square {

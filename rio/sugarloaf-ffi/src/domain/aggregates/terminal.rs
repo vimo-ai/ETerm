@@ -1282,6 +1282,20 @@ impl Terminal {
         });
     }
 
+    // ==================== Selection Display Freeze ====================
+
+    pub fn set_freeze_display(&mut self, freeze: bool) {
+        with_crosswords_mut!(self, crosswords, {
+            crosswords.set_freeze_display(freeze);
+        });
+    }
+
+    pub fn freeze_display(&self) -> bool {
+        with_crosswords!(self, crosswords, {
+            crosswords.freeze_display()
+        })
+    }
+
     // ==================== Damage 管理（代理到 Crosswords）====================
 
     /// 检查是否有 damage（需要重绘）
