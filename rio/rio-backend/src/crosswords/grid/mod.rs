@@ -66,6 +66,11 @@ pub struct Grid<T> {
     /// When true, viewport stays stationary even at display_offset==0.
     /// Used to prevent content from shifting under an active selection.
     freeze_display: bool,
+
+    /// display_offset saved when freeze started.
+    /// On unfreeze: if this was 0, reset display_offset to 0 (back to bottom);
+    /// otherwise leave display_offset as-is (user was already scrolled up).
+    pre_freeze_offset: usize,
 }
 
 impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
@@ -75,6 +80,7 @@ impl<T: GridSquare + Default + PartialEq + Clone> Grid<T> {
             max_scroll_limit,
             display_offset: 0,
             freeze_display: false,
+            pre_freeze_offset: 0,
             saved_cursor: Cursor::default(),
             cursor: Cursor::default(),
             lines,
@@ -387,6 +393,13 @@ impl<T> Grid<T> {
 
     #[inline]
     pub fn set_freeze_display(&mut self, freeze: bool) {
+        if freeze && !self.freeze_display {
+            self.pre_freeze_offset = self.display_offset;
+        } else if !freeze && self.freeze_display {
+            if self.pre_freeze_offset == 0 {
+                self.display_offset = 0;
+            }
+        }
         self.freeze_display = freeze;
     }
 

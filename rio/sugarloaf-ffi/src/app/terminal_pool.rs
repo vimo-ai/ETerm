@@ -1979,7 +1979,10 @@ impl TerminalPool {
                         self.needs_render.store(true, Ordering::Release);
                         None
                     }
-                    Some(t) => Some(t),
+                    Some(t) => {
+                        terminal.set_freeze_display(false);
+                        Some(t)
+                    }
                     None => None,
                 }
             } else {

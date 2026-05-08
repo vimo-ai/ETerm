@@ -375,11 +375,40 @@ fn scroll_up_with_freeze_display() {
     grid.scroll_up::<usize>(&(Line(0)..Line(10)), 3);
     assert_eq!(grid.display_offset(), 4);
 
-    // Unfreeze: display_offset stops incrementing (already non-zero keeps incrementing though)
+    // Unfreeze from bottom: pre_freeze_offset was 0, so display_offset resets to 0
     grid.set_freeze_display(false);
+    assert_eq!(grid.display_offset(), 0);
+
+    // After reset, scroll_up at offset=0 without freeze stays at 0
     grid.scroll_up::<usize>(&(Line(0)..Line(10)), 1);
-    // display_offset != 0 so it still increments (existing behavior)
+    assert_eq!(grid.display_offset(), 0);
+}
+
+// When user was scrolled up before freeze, unfreeze preserves display_offset.
+#[test]
+fn freeze_display_preserves_scrolled_position() {
+    let mut grid = Grid::<usize>::new(10, 1, 1000);
+    for i in 0..10 {
+        grid[Line(i as i32)][Column(0)] = i;
+    }
+
+    // Generate some history
+    for _ in 0..20 {
+        grid.scroll_up::<usize>(&(Line(0)..Line(10)), 1);
+    }
+    // Manually scroll up (user scrolled to history)
+    grid.scroll_display(Scroll::Delta(5));
     assert_eq!(grid.display_offset(), 5);
+
+    // Freeze while scrolled up
+    grid.set_freeze_display(true);
+    // New content arrives, offset grows
+    grid.scroll_up::<usize>(&(Line(0)..Line(10)), 3);
+    assert_eq!(grid.display_offset(), 8);
+
+    // Unfreeze: pre_freeze_offset was 5 (non-zero), so display_offset is preserved
+    grid.set_freeze_display(false);
+    assert_eq!(grid.display_offset(), 8);
 }
 
 // https://github.com/rust-lang/rust-clippy/pull/6375
