@@ -180,8 +180,14 @@ fn find_word_boundary(cells: &[crate::domain::views::grid::CellData], position: 
     let mut start = actual_position;
     while start > 0 {
         let prev_cell = &cells[start - 1];
-        // 跳过宽字符占位符
+        // 宽字符占位符：先 peek 实际字符，是分隔符/异类则不吞入 spacer
         if prev_cell.flags & WIDE_CHAR_SPACER != 0 {
+            if start >= 2 {
+                let actual_char = cells[start - 2].c;
+                if is_word_separator(actual_char) || classify_char(actual_char) != char_type {
+                    break;
+                }
+            }
             start -= 1;
             continue;
         }
@@ -415,7 +421,7 @@ mod tests {
         let word: String = cells[start..=end].iter().map(|c| c.c).collect();
         assert_eq!(word, "你好世界");
     }
-
+}
     #[test]
     fn test_find_word_boundary_mixed() {
         use crate::domain::views::grid::CellData;
@@ -552,4 +558,64 @@ mod tests {
         let boundary = FFIWordBoundary::default();
         terminal_pool_free_word_boundary(boundary);
     }
-}
+
+    #[test]
+    fn test_find_word_boundary_wide_separator() {
+        use crate::domain::views::grid::CellData;
+
+        const WIDE_CHAR_SPACER: u16 = 0b0000_0000_0100_0000;
+
+        // 模拟真实 grid: "读。flywheel"
+        // 读(wide) 。(wide) flywheel(ascii)
+        let cells = vec![
+            CellData { c: '读', flags: 0, ..CellData::default() },
+            CellData { c: ' ', flags: WIDE_CHAR_SPACER, ..CellData::default() },
+            CellData { c: '。', flags: 0, ..CellData::default() },
+            CellData { c: ' ', flags: WIDE_CHAR_SPACER, ..CellData::default() },
+            CellData { c: 'f', flags: 0, ..CellData::default() },
+            CellData { c: 'l', flags: 0, ..CellData::default() },
+            CellData { c: 'y', flags: 0, ..CellData::default() },
+            CellData { c: 'w', flags: 0, ..CellData::default() },
+            CellData { c: 'h', flags: 0, ..CellData::default() },
+            CellData { c: 'e', flags: 0, ..CellData::default() },
+            CellData { c: 'e', flags: 0, ..CellData::default() },
+            CellData { c: 'l', flags: 0, ..CellData::default() },
+        ];
+
+        // 双击 'f' (position=4)，不应选中前面的 "。"
+        let (start, end) = find_word_boundary(&cells, 4);
+        assert_eq!(start, 4, "start should be at 'f', not at the spacer of '。'");
+        assert_eq!(end, 11);
+        let word: String = cells[start..=end].iter()
+            .filter(|c| c.flags & WIDE_CHAR_SPACER == 0)
+            .map(|c| c.c).collect();
+        assert_eq!(word, "flywheel");
+    }
+
+    #[test]
+    fn test_find_word_boundary_wide_cjk_continuous() {
+        use crate::domain::views::grid::CellData;
+
+        const WIDE_CHAR_SPACER: u16 = 0b0000_0000_0100_0000;
+
+        // 模拟真实 grid: "你好世界" — 连续 CJK 仍应选为一个词
+        let cells = vec![
+            CellData { c: '你', flags: 0, ..CellData::default() },
+            CellData { c: ' ', flags: WIDE_CHAR_SPACER, ..CellData::default() },
+            CellData { c: '好', flags: 0, ..CellData::default() },
+            CellData { c: ' ', flags: WIDE_CHAR_SPACER, ..CellData::default() },
+            CellData { c: '世', flags: 0, ..CellData::default() },
+            CellData { c: ' ', flags: WIDE_CHAR_SPACER, ..CellData::default() },
+            CellData { c: '界', flags: 0, ..CellData::default() },
+            CellData { c: ' ', flags: WIDE_CHAR_SPACER, ..CellData::default() },
+        ];
+
+        // 双击 '世' (position=4)，应选中整个 "你好世界"
+        let (start, end) = find_word_boundary(&cells, 4);
+        assert_eq!(start, 0);
+        assert_eq!(end, 7);
+        let word: String = cells[start..=end].iter()
+            .filter(|c| c.flags & WIDE_CHAR_SPACER == 0)
+            .map(|c| c.c).collect();
+        assert_eq!(word, "你好世界");
+    }
