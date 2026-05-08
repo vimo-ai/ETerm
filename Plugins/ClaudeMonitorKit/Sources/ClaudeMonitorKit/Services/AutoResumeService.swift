@@ -184,6 +184,11 @@ final class AutoResumeService: ObservableObject {
         // 等终端初始化完成后发送命令
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             host.sendInput(terminalId: terminalId, text: "claude", pressEnter: true)
+
+            // 等 Claude 启动后发一条消息触发对话
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                host.sendInput(terminalId: terminalId, text: "hi", pressEnter: true)
+            }
         }
     }
 
