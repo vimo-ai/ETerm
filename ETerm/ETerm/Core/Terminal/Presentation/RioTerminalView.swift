@@ -1916,6 +1916,8 @@ class RioMetalView: NSView, RenderViewProtocol {
             return
         }
 
+        _ = pool.clearSelection(terminalId: Int(terminalId))
+
         activeTab.startSelection(absoluteRow: absoluteRow, col: UInt16(col))
 
         if let selection = activeTab.textSelection {
@@ -1996,6 +1998,8 @@ class RioMetalView: NSView, RenderViewProtocol {
                 sourceView: self
             ))
         }
+
+        _ = pool.finalizeSelection(terminalId: terminalId)
     }
 
     override func mouseDragged(with event: NSEvent) {
