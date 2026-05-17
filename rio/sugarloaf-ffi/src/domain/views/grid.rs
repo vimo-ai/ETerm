@@ -269,6 +269,10 @@ pub struct UrlRange {
     pub end_col: usize,
     /// URL 字符串
     pub uri: String,
+    /// 该 URL 是否从上一行延续（用于跨行 URL 的后续行）
+    pub continued_from_prev: bool,
+    /// 该 URL 是否延续到下一行（用于跨行 URL 的前面行）
+    pub continues_to_next: bool,
 }
 
 /// 检测文本中的 URL
@@ -326,10 +330,130 @@ fn detect_urls(text: &str) -> Vec<UrlRange> {
             start_col: char_start,
             end_col: char_end,
             uri: trimmed_url.to_string(),
+            continued_from_prev: false,
+            continues_to_next: false,
         });
     }
 
     urls
+}
+
+const WRAPLINE_FLAG: u16 = 0b0000_0000_0001_0000;
+
+/// 检查一行最后一个 cell 是否有 WRAPLINE 标志（软换行）
+#[inline]
+fn row_is_wrapped(row: &RowData) -> bool {
+    row.cells.last().map_or(false, |cell| cell.flags & WRAPLINE_FLAG != 0)
+}
+
+/// 对连续的 wrapped 行重新检测 URL（处理跨行 URL）
+///
+/// 原理：将连续 wrapped 行的文本拼接后跑 regex，再把结果分配回各行
+fn fixup_wrapped_urls(rows: &mut [Arc<RowData>]) {
+    if rows.is_empty() {
+        return;
+    }
+
+    let mut i = 0;
+    while i < rows.len() {
+        if !row_is_wrapped(&rows[i]) {
+            i += 1;
+            continue;
+        }
+
+        // 找到连续 wrap 行的范围 [i, end)
+        let start = i;
+        let mut end = i + 1;
+        while end < rows.len() && row_is_wrapped(&rows[end - 1]) {
+            end += 1;
+        }
+        // end 包含最后一行（wrap 链的终止行）
+        // 但 end 本身不需要 wrap flag，它是链的最后一行
+        // 范围: rows[start..=end-1] 如果 end < rows.len()
+        // 实际上 end 就是 wrap 链终止后的第一行（不 wrap 的那行也要包含）
+        // 修正: end 是第一个不 wrap 的行 + 1（因为最后一个 wrap 行指向 end-1，end-1 的内容需要包含）
+        // rows[start] wrapped → rows[start+1] ... rows[end-2] wrapped → rows[end-1] (最后一行)
+
+        let columns = rows[start].cells.len();
+
+        // 拼接文本
+        let mut merged_text = String::with_capacity(columns * (end - start));
+        for row_idx in start..end {
+            for cell in &rows[row_idx].cells {
+                merged_text.push(cell.c);
+            }
+        }
+
+        // 重新检测
+        let merged_urls = detect_urls(&merged_text);
+
+        if merged_urls.is_empty() {
+            i = end;
+            continue;
+        }
+
+        // 将结果分配回各行
+        let mut per_row_urls: Vec<Vec<UrlRange>> = vec![Vec::new(); end - start];
+
+        for url in merged_urls {
+            let url_start_row = url.start_col / columns;
+            let url_end_row = url.end_col / columns;
+
+            for row_offset in url_start_row..=url_end_row.min(end - start - 1) {
+                let local_start = if row_offset == url_start_row {
+                    url.start_col - row_offset * columns
+                } else {
+                    0
+                };
+                let local_end = if row_offset == url_end_row {
+                    url.end_col - row_offset * columns
+                } else {
+                    columns - 1
+                };
+
+                per_row_urls[row_offset].push(UrlRange {
+                    start_col: local_start,
+                    end_col: local_end,
+                    uri: url.uri.clone(),
+                    continued_from_prev: row_offset > url_start_row,
+                    continues_to_next: row_offset < url_end_row,
+                });
+            }
+        }
+
+        // 更新各行的 urls（只更新有变化的行）
+        for (offset, new_urls) in per_row_urls.into_iter().enumerate() {
+            let row_idx = start + offset;
+            if new_urls.is_empty() && rows[row_idx].urls.is_empty() {
+                continue;
+            }
+            // 合并: 保留不跨行的原始 URL，加上新检测的跨行 URL
+            let original_urls = &rows[row_idx].urls;
+            let has_new_cross_line = new_urls.iter().any(|u| u.continued_from_prev || u.continues_to_next);
+            if !has_new_cross_line && original_urls.is_empty() {
+                // 新检测到的都是单行 URL，原始已经有了，跳过
+                continue;
+            }
+            let mut final_urls: Vec<UrlRange> = Vec::new();
+            // 保留原始的单行 URL（不被新跨行 URL 覆盖的）
+            for orig in original_urls.iter() {
+                let overlaps = new_urls.iter().any(|nu| {
+                    orig.start_col <= nu.end_col && nu.start_col <= orig.end_col
+                });
+                if !overlaps {
+                    final_urls.push(orig.clone());
+                }
+            }
+            // 加入新的（跨行 + 重新检测的）
+            final_urls.extend(new_urls);
+            final_urls.sort_by_key(|u| u.start_col);
+
+            let row = Arc::make_mut(&mut rows[row_idx]);
+            row.urls = final_urls;
+        }
+
+        i = end;
+    }
 }
 
 /// Row Data - 单行的数据
@@ -628,6 +752,9 @@ impl GridData {
             rows.push(Arc::new(row_data));
         }
 
+        // 处理跨行 URL（软换行导致的 URL 截断）
+        fixup_wrapped_urls(&mut rows);
+
         Self {
             columns,
             screen_lines,
@@ -688,6 +815,9 @@ impl GridData {
                 row_hashes.push(previous.row_hashes[screen_line]);
             }
         }
+
+        // 处理跨行 URL
+        fixup_wrapped_urls(&mut rows);
 
         Self {
             columns,
@@ -986,5 +1116,108 @@ mod tests {
     fn test_detect_urls_empty_string() {
         let urls = detect_urls("");
         assert_eq!(urls.len(), 0);
+    }
+
+    /// 测试：跨行 URL 修复
+    #[test]
+    fn test_fixup_wrapped_urls_cross_line() {
+        use rio_backend::config::colors::{AnsiColor, NamedColor};
+
+        let columns = 20;
+        // 模拟: "https://example.com/very/long/path/to/resource"
+        // 第一行: "https://example.com/" (20 chars, 最后一个 cell 有 WRAPLINE flag)
+        // 第二行: "very/long/path/to/re" (20 chars, wrapped)
+        // 第三行: "source              " (6 chars + padding)
+        let line1 = "https://example.com/";
+        let line2 = "very/long/path/to/re";
+        let line3 = "source              ";
+
+        let make_row = |text: &str, wrapped: bool| -> Arc<RowData> {
+            let mut cells: Vec<CellData> = text.chars().map(|c| CellData {
+                c,
+                fg: AnsiColor::Named(NamedColor::Foreground),
+                bg: AnsiColor::Named(NamedColor::Background),
+                flags: 0,
+                zerowidth: Vec::new(),
+                underline_color: None,
+            }).collect();
+            while cells.len() < columns {
+                cells.push(CellData::default());
+            }
+            if wrapped {
+                if let Some(last) = cells.last_mut() {
+                    last.flags |= WRAPLINE_FLAG;
+                }
+            }
+            let urls = detect_urls(text);
+            Arc::new(RowData { cells, content_hash: 0, urls })
+        };
+
+        let mut rows = vec![
+            make_row(line1, true),
+            make_row(line2, true),
+            make_row(line3, false),
+        ];
+
+        // 修复前: 第一行单独检测到 "https://example.com/" (截断)
+        assert_eq!(rows[0].urls.len(), 1);
+        assert_eq!(rows[0].urls[0].uri, "https://example.com/");
+        assert_eq!(rows[1].urls.len(), 0); // 第二行没有独立 URL
+        assert_eq!(rows[2].urls.len(), 0);
+
+        fixup_wrapped_urls(&mut rows);
+
+        // 修复后: 三行都有完整 URL
+        let full_url = "https://example.com/very/long/path/to/resource";
+        assert_eq!(rows[0].urls.len(), 1);
+        assert_eq!(rows[0].urls[0].uri, full_url);
+        assert_eq!(rows[0].urls[0].start_col, 0);
+        assert_eq!(rows[0].urls[0].end_col, 19); // 到行末
+        assert!(!rows[0].urls[0].continued_from_prev);
+        assert!(rows[0].urls[0].continues_to_next);
+
+        assert_eq!(rows[1].urls.len(), 1);
+        assert_eq!(rows[1].urls[0].uri, full_url);
+        assert_eq!(rows[1].urls[0].start_col, 0);
+        assert_eq!(rows[1].urls[0].end_col, 19);
+        assert!(rows[1].urls[0].continued_from_prev);
+        assert!(rows[1].urls[0].continues_to_next);
+
+        assert_eq!(rows[2].urls.len(), 1);
+        assert_eq!(rows[2].urls[0].uri, full_url);
+        assert_eq!(rows[2].urls[0].start_col, 0);
+        assert_eq!(rows[2].urls[0].end_col, 5); // "source" ends at col 5
+        assert!(rows[2].urls[0].continued_from_prev);
+        assert!(!rows[2].urls[0].continues_to_next);
+    }
+
+    /// 测试：非 wrapped 行不受影响
+    #[test]
+    fn test_fixup_wrapped_urls_no_wrap() {
+        use rio_backend::config::colors::{AnsiColor, NamedColor};
+
+        let columns = 40;
+        let text = "Visit https://example.com for info";
+
+        let cells: Vec<CellData> = text.chars().map(|c| CellData {
+            c,
+            fg: AnsiColor::Named(NamedColor::Foreground),
+            bg: AnsiColor::Named(NamedColor::Background),
+            flags: 0,
+            zerowidth: Vec::new(),
+            underline_color: None,
+        }).chain(std::iter::repeat(CellData::default()).take(columns - text.len()))
+        .collect();
+
+        let urls = detect_urls(text);
+        let mut rows = vec![Arc::new(RowData { cells, content_hash: 0, urls })];
+
+        fixup_wrapped_urls(&mut rows);
+
+        // 非 wrapped 行不变
+        assert_eq!(rows[0].urls.len(), 1);
+        assert_eq!(rows[0].urls[0].uri, "https://example.com");
+        assert!(!rows[0].urls[0].continued_from_prev);
+        assert!(!rows[0].urls[0].continues_to_next);
     }
 }
