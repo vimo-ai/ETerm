@@ -250,89 +250,47 @@ impl Default for AtomicSelectionCache {
 // P1.2: AtomicTitleCache - 标题缓存
 // ============================================================================
 
-use std::sync::atomic::AtomicPtr;
-use std::ptr;
+use arc_swap::ArcSwap;
 
 /// 标题缓存
 ///
-/// 使用 AtomicPtr<String> 实现无锁标题更新
-/// 采用 RCU (Read-Copy-Update) 模式：
-/// - 更新时分配新 String，原子交换指针
-/// - 读取时克隆当前值
-/// - 旧值通过 Box 自动释放
+/// 使用 ArcSwap 实现无锁标题更新，无 use-after-free 风险：
+/// - 更新时原子交换 Arc 指针
+/// - 读取时获取 Arc clone（保证数据存活）
+/// - 旧值在最后一个 Arc 引用释放时自动回收
 #[derive(Debug)]
 pub struct AtomicTitleCache {
-    /// 指向堆分配的 String
-    ptr: AtomicPtr<String>,
+    inner: ArcSwap<Option<String>>,
 }
 
 impl AtomicTitleCache {
     /// 创建新的标题缓存（初始为空）
     pub fn new() -> Self {
         Self {
-            ptr: AtomicPtr::new(ptr::null_mut()),
+            inner: ArcSwap::from_pointee(None),
         }
     }
 
     /// 更新标题（生产者调用：PTY 线程）
-    ///
-    /// # 参数
-    /// - title: 新标题
     pub fn update(&self, title: &str) {
-        // 分配新 String
-        let new_ptr = Box::into_raw(Box::new(title.to_string()));
-
-        // 原子交换指针
-        let old_ptr = self.ptr.swap(new_ptr, Ordering::AcqRel);
-
-        // 释放旧值
-        if !old_ptr.is_null() {
-            unsafe {
-                drop(Box::from_raw(old_ptr));
-            }
-        }
+        self.inner.store(std::sync::Arc::new(Some(title.to_string())));
     }
 
     /// 读取标题（消费者调用：主线程）
-    ///
-    /// # 返回
-    /// - `Some(String)` - 当前标题
-    /// - `None` - 无标题
     pub fn read(&self) -> Option<String> {
-        let ptr = self.ptr.load(Ordering::Acquire);
-        if ptr.is_null() {
-            None
-        } else {
-            // 安全：ptr 指向有效的 String，且我们只读取
-            unsafe { Some((*ptr).clone()) }
-        }
+        let guard = self.inner.load();
+        guard.as_ref().clone()
     }
 
     /// 清除标题
     pub fn clear(&self) {
-        let old_ptr = self.ptr.swap(ptr::null_mut(), Ordering::AcqRel);
-        if !old_ptr.is_null() {
-            unsafe {
-                drop(Box::from_raw(old_ptr));
-            }
-        }
+        self.inner.store(std::sync::Arc::new(None));
     }
 }
 
 impl Default for AtomicTitleCache {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Drop for AtomicTitleCache {
-    fn drop(&mut self) {
-        let ptr = self.ptr.load(Ordering::Acquire);
-        if !ptr.is_null() {
-            unsafe {
-                drop(Box::from_raw(ptr));
-            }
-        }
     }
 }
 
@@ -673,19 +631,31 @@ mod tests {
 
     #[test]
     fn test_atomic_title_cache_concurrent() {
+        use std::sync::atomic::AtomicBool;
+
         let cache = Arc::new(AtomicTitleCache::new());
+        let started = Arc::new(AtomicBool::new(false));
+
         let cache_writer = Arc::clone(&cache);
+        let started_w = Arc::clone(&started);
+
         let cache_reader = Arc::clone(&cache);
+        let started_r = Arc::clone(&started);
 
         let iterations = 1000;
 
         let writer = thread::spawn(move || {
-            for i in 0..iterations {
+            cache_writer.update("Title 0");
+            started_w.store(true, Ordering::Release);
+            for i in 1..iterations {
                 cache_writer.update(&format!("Title {}", i));
             }
         });
 
         let reader = thread::spawn(move || {
+            while !started_r.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
             let mut valid_reads = 0;
             for _ in 0..iterations {
                 if cache_reader.read().is_some() {
