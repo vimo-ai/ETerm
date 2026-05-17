@@ -230,18 +230,67 @@ pub extern "C" fn terminal_pool_get_url_at(
     // 查找包含该列的 URL
     for url in row.urls() {
         if col >= url.start_col && col <= url.end_col {
-            // 找到 URL，转换为绝对行号
             let absolute_row = state.grid.screen_to_absolute(screen_row as usize, 0).line as i64;
 
-            // 分配 C 字符串
+            // 计算跨行 URL 的实际起止行
+            let mut actual_start_row = absolute_row;
+            let mut actual_start_col = url.start_col as u16;
+            let mut actual_end_row = absolute_row;
+            let mut actual_end_col = url.end_col as u16;
+
+            if url.continued_from_prev {
+                // 向上查找同一 URL 的起始行
+                let mut scan = screen_row - 1;
+                while scan >= 0 {
+                    if let Some(prev_row) = state.grid.row(scan as usize) {
+                        let found = prev_row.urls().iter().find(|u| u.uri == url.uri && u.continues_to_next);
+                        if let Some(prev_url) = found {
+                            actual_start_row = state.grid.screen_to_absolute(scan as usize, 0).line as i64;
+                            actual_start_col = prev_url.start_col as u16;
+                            if !prev_url.continued_from_prev {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                    scan -= 1;
+                }
+            }
+
+            if url.continues_to_next {
+                // 向下查找同一 URL 的结束行
+                let mut scan = screen_row + 1;
+                let max_lines = state.grid.lines() as i32;
+                while scan < max_lines {
+                    if let Some(next_row) = state.grid.row(scan as usize) {
+                        let found = next_row.urls().iter().find(|u| u.uri == url.uri && u.continued_from_prev);
+                        if let Some(next_url) = found {
+                            actual_end_row = state.grid.screen_to_absolute(scan as usize, 0).line as i64;
+                            actual_end_col = next_url.end_col as u16;
+                            if !next_url.continues_to_next {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                    scan += 1;
+                }
+            }
+
             match std::ffi::CString::new(url.uri.as_bytes()) {
                 Ok(c_string) => {
                     let ptr = c_string.into_raw();
                     return FFIHyperlink {
-                        start_row: absolute_row,
-                        start_col: url.start_col as u16,
-                        end_row: absolute_row,
-                        end_col: url.end_col as u16,
+                        start_row: actual_start_row,
+                        start_col: actual_start_col,
+                        end_row: actual_end_row,
+                        end_col: actual_end_col,
                         uri_ptr: ptr,
                         uri_len: url.uri.len(),
                         valid: true,
