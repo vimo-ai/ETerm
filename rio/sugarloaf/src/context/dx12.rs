@@ -25,7 +25,7 @@ use windows::{
             Direct3D::D3D_FEATURE_LEVEL_11_0,
             Direct3D12::{
                 D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device,
-                D3D12_RESOURCE_STATE_COMMON,
+                D3D12_FENCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON,
             },
             Dxgi::{
                 Common::{
@@ -59,6 +59,8 @@ pub struct Dx12FrameHandle {
 pub struct Dx12Context {
     skia_context: DirectContext,
     swap_chain: IDXGISwapChain3,
+    device: ID3D12Device,
+    queue: ID3D12CommandQueue,
     /// Pre-created Skia surfaces + their backing render targets, one per back buffer.
     surfaces: Vec<(Surface, BackendRenderTarget)>,
     /// Timestamp of last Skia GPU cache cleanup (throttled)
@@ -154,6 +156,8 @@ impl Dx12Context {
         Dx12Context {
             skia_context,
             swap_chain,
+            device,
+            queue,
             surfaces,
             last_gpu_cleanup: std::time::Instant::now(),
             size,
@@ -176,14 +180,22 @@ impl GpuContext for Dx12Context {
             return;
         }
 
-        // Drop existing surfaces before resizing buffers (they hold references
-        // to the back buffer resources which must be released first).
+        // Release ALL Skia GPU resources so the D3D12 back buffer refs drop to zero.
         self.surfaces.clear();
         self.skia_context.flush_and_submit();
+        self.skia_context.free_gpu_resources();
 
-        // SAFETY: ResizeBuffers requires that no outstanding references to
-        // the back buffers exist. We cleared self.surfaces above.
+        // GPU fence: spin-wait for the queue to drain.
         unsafe {
+            if let Ok(fence) = self.device.CreateFence::<windows::Win32::Graphics::Direct3D12::ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) {
+                let _ = self.queue.Signal(&fence, 1);
+                while fence.GetCompletedValue() < 1 {
+                    std::hint::spin_loop();
+                }
+            }
+        }
+
+        let resize_result = unsafe {
             self.swap_chain
                 .ResizeBuffers(
                     BUFFER_COUNT,
@@ -192,7 +204,17 @@ impl GpuContext for Dx12Context {
                     DXGI_FORMAT_R8G8B8A8_UNORM,
                     DXGI_SWAP_CHAIN_FLAG::default(),
                 )
-                .expect("Failed to resize swap chain buffers");
+        };
+
+        if let Err(e) = resize_result {
+            eprintln!("[dx12] ResizeBuffers failed: {:?}", e);
+            self.surfaces = create_surfaces_for_swap_chain(
+                &self.swap_chain,
+                &mut self.skia_context,
+                (self.size.width * self.scale) as u32,
+                (self.size.height * self.scale) as u32,
+            );
+            return;
         }
 
         self.surfaces = create_surfaces_for_swap_chain(
