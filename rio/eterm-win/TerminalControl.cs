@@ -33,9 +33,7 @@ public sealed class TerminalControl : SwapChainPanel
 
     public TerminalControl()
     {
-        // Enable keyboard focus so we receive key events
         this.IsTabStop = true;
-        this.IsFocusEngaged = false;
 
         this.KeyDown += OnKeyDown;
         this.CharacterReceived += OnCharacterReceived;
@@ -105,7 +103,7 @@ public sealed class TerminalControl : SwapChainPanel
                     _engineHandle,
                     _terminalId,
                     ptr,
-                    (nuint)data.Length);
+                    (uint)data.Length);
             }
         }
     }

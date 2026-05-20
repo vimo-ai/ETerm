@@ -17,4 +17,12 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250108002" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.3233" />
   </ItemGroup>
+
+  <!-- Copy native DLL to output directory -->
+  <ItemGroup>
+    <None Include="..\target\release\sugarloaf_ffi_win.dll"
+          Condition="Exists('..\target\release\sugarloaf_ffi_win.dll')"
+          CopyToOutputDirectory="PreserveNewest"
+          Link="sugarloaf_ffi_win.dll" />
+  </ItemGroup>
 </Project>
