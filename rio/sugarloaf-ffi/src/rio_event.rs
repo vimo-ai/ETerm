@@ -539,22 +539,417 @@ fn convert_rio_event(event: rio_backend::event::RioEvent, route_id: usize) -> Ri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rio_backend::crosswords::grid::Scroll;
+
+    // ===== FFIEvent conversion: every RioEvent variant =====
 
     #[test]
-    fn test_ffi_event_conversion() {
-        let event = RioEvent::Wakeup(42);
-        let ffi = FFIEvent::from(&event);
+    fn test_ffi_event_wakeup() {
+        let ffi = FFIEvent::from(&RioEvent::Wakeup(42));
         assert_eq!(ffi.event_type, 0);
         assert_eq!(ffi.route_id, 42);
+        assert_eq!(ffi.scroll_delta, 0);
     }
 
     #[test]
-    fn test_event_queue() {
+    fn test_ffi_event_render() {
+        let ffi = FFIEvent::from(&RioEvent::Render);
+        assert_eq!(ffi.event_type, 1);
+        assert_eq!(ffi.route_id, 0);
+    }
+
+    #[test]
+    fn test_ffi_event_cursor_blinking_change() {
+        let ffi = FFIEvent::from(&RioEvent::CursorBlinkingChange);
+        assert_eq!(ffi.event_type, 2);
+        assert_eq!(ffi.route_id, 0);
+    }
+
+    #[test]
+    fn test_ffi_event_cursor_blinking_change_on_route() {
+        let ffi = FFIEvent::from(&RioEvent::CursorBlinkingChangeOnRoute(7));
+        assert_eq!(ffi.event_type, 2);
+        assert_eq!(ffi.route_id, 7);
+    }
+
+    #[test]
+    fn test_ffi_event_bell() {
+        let ffi = FFIEvent::from(&RioEvent::Bell);
+        assert_eq!(ffi.event_type, 3);
+    }
+
+    #[test]
+    fn test_ffi_event_title() {
+        let ffi = FFIEvent::from(&RioEvent::Title("hello".to_string()));
+        assert_eq!(ffi.event_type, 4);
+    }
+
+    #[test]
+    fn test_ffi_event_pty_write() {
+        let ffi = FFIEvent::from(&RioEvent::PtyWrite("data".to_string()));
+        assert_eq!(ffi.event_type, 5);
+    }
+
+    #[test]
+    fn test_ffi_event_clipboard_store() {
+        let ffi = FFIEvent::from(&RioEvent::ClipboardStore("copied".to_string()));
+        assert_eq!(ffi.event_type, 6);
+    }
+
+    #[test]
+    fn test_ffi_event_clipboard_load() {
+        let ffi = FFIEvent::from(&RioEvent::ClipboardLoad);
+        assert_eq!(ffi.event_type, 7);
+    }
+
+    #[test]
+    fn test_ffi_event_exit() {
+        let ffi = FFIEvent::from(&RioEvent::Exit);
+        assert_eq!(ffi.event_type, 8);
+    }
+
+    #[test]
+    fn test_ffi_event_close_terminal() {
+        let ffi = FFIEvent::from(&RioEvent::CloseTerminal(99));
+        assert_eq!(ffi.event_type, 9);
+        assert_eq!(ffi.route_id, 99);
+    }
+
+    #[test]
+    fn test_ffi_event_scroll_delta() {
+        let ffi = FFIEvent::from(&RioEvent::Scroll(Scroll::Delta(5)));
+        assert_eq!(ffi.event_type, 10);
+        assert_eq!(ffi.scroll_delta, 5);
+    }
+
+    #[test]
+    fn test_ffi_event_scroll_page_up() {
+        let ffi = FFIEvent::from(&RioEvent::Scroll(Scroll::PageUp));
+        assert_eq!(ffi.event_type, 10);
+        assert_eq!(ffi.scroll_delta, -20);
+    }
+
+    #[test]
+    fn test_ffi_event_scroll_page_down() {
+        let ffi = FFIEvent::from(&RioEvent::Scroll(Scroll::PageDown));
+        assert_eq!(ffi.event_type, 10);
+        assert_eq!(ffi.scroll_delta, 20);
+    }
+
+    #[test]
+    fn test_ffi_event_scroll_top() {
+        let ffi = FFIEvent::from(&RioEvent::Scroll(Scroll::Top));
+        assert_eq!(ffi.event_type, 10);
+        assert_eq!(ffi.scroll_delta, i32::MIN);
+    }
+
+    #[test]
+    fn test_ffi_event_scroll_bottom() {
+        let ffi = FFIEvent::from(&RioEvent::Scroll(Scroll::Bottom));
+        assert_eq!(ffi.event_type, 10);
+        assert_eq!(ffi.scroll_delta, i32::MAX);
+    }
+
+    #[test]
+    fn test_ffi_event_mouse_cursor_dirty() {
+        let ffi = FFIEvent::from(&RioEvent::MouseCursorDirty);
+        assert_eq!(ffi.event_type, 11);
+    }
+
+    #[test]
+    fn test_ffi_event_noop() {
+        let ffi = FFIEvent::from(&RioEvent::Noop);
+        assert_eq!(ffi.event_type, 12);
+    }
+
+    #[test]
+    fn test_ffi_event_current_directory_changed() {
+        let ffi = FFIEvent::from(&RioEvent::CurrentDirectoryChanged(3, "/home".to_string()));
+        assert_eq!(ffi.event_type, 13);
+        assert_eq!(ffi.route_id, 3);
+    }
+
+    #[test]
+    fn test_ffi_event_command_executed() {
+        let ffi = FFIEvent::from(&RioEvent::CommandExecuted(5, "ls -la".to_string()));
+        assert_eq!(ffi.event_type, 14);
+        assert_eq!(ffi.route_id, 5);
+    }
+
+    #[test]
+    fn test_ffi_event_shell_command_started() {
+        let ffi = FFIEvent::from(&RioEvent::ShellCommandStarted {
+            route_id: 10,
+            command: "cargo build".to_string(),
+            cwd: Some("/project".to_string()),
+            git_branch: Some("main".to_string()),
+        });
+        assert_eq!(ffi.event_type, 15);
+        assert_eq!(ffi.route_id, 10);
+    }
+
+    #[test]
+    fn test_ffi_event_shell_command_finished() {
+        let ffi = FFIEvent::from(&RioEvent::ShellCommandFinished {
+            route_id: 10,
+            exit_code: Some(0),
+        });
+        assert_eq!(ffi.event_type, 16);
+        assert_eq!(ffi.route_id, 10);
+    }
+
+    // ===== FFIEvent constructors =====
+
+    #[test]
+    fn test_ffi_event_constructors_roundtrip() {
+        assert_eq!(FFIEvent::wakeup(1).event_type, 0);
+        assert_eq!(FFIEvent::wakeup(1).route_id, 1);
+        assert_eq!(FFIEvent::render().event_type, 1);
+        assert_eq!(FFIEvent::cursor_blinking_change().event_type, 2);
+        assert_eq!(FFIEvent::cursor_blinking_change_on_route(5).route_id, 5);
+        assert_eq!(FFIEvent::bell().event_type, 3);
+        assert_eq!(FFIEvent::exit().event_type, 8);
+        assert_eq!(FFIEvent::close_terminal(42).route_id, 42);
+        assert_eq!(FFIEvent::mouse_cursor_dirty().event_type, 11);
+        assert_eq!(FFIEvent::noop().event_type, 12);
+    }
+
+    // ===== EventQueue =====
+
+    #[test]
+    fn test_event_queue_enqueue_drain() {
         let queue = EventQueue::new();
         queue.enqueue(RioEvent::Wakeup(1));
         queue.enqueue(RioEvent::Bell);
+        queue.enqueue(RioEvent::Render);
 
         let events = queue.drain();
+        assert_eq!(events.len(), 3);
+
+        let events = queue.drain();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn test_event_queue_drain_empty() {
+        let queue = EventQueue::new();
+        assert!(queue.drain().is_empty());
+    }
+
+    #[test]
+    fn test_event_queue_shutdown_blocks_enqueue() {
+        let queue = EventQueue::new();
+        queue.enqueue(RioEvent::Wakeup(1));
+        queue.shutdown();
+        queue.enqueue(RioEvent::Wakeup(2));
+
+        let events = queue.drain();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_event_queue_shutdown_clears_existing() {
+        let queue = EventQueue::new();
+        queue.enqueue(RioEvent::Wakeup(1));
+        queue.enqueue(RioEvent::Bell);
+        queue.shutdown();
+
+        assert!(queue.drain().is_empty());
+    }
+
+    #[test]
+    fn test_event_queue_is_shutdown() {
+        let queue = EventQueue::new();
+        assert!(!queue.is_shutdown());
+        queue.shutdown();
+        assert!(queue.is_shutdown());
+    }
+
+    #[test]
+    fn test_event_queue_shutdown_blocks_send_event() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_clone = call_count.clone();
+
+        extern "C" fn test_cb(_ctx: *mut c_void, _event: FFIEvent) {
+            unsafe {
+                let counter = &*((_ctx) as *const AtomicUsize);
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let queue = EventQueue::new();
+        let counter_ptr = Arc::into_raw(call_count_clone) as *mut c_void;
+        queue.set_callback(test_cb, None, counter_ptr);
+
+        queue.send_event(RioEvent::Render);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+
+        queue.shutdown();
+        queue.send_event(RioEvent::Render);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+
+        unsafe { Arc::from_raw(counter_ptr as *const AtomicUsize) };
+    }
+
+    #[test]
+    fn test_event_queue_clone_shares_state() {
+        let q1 = EventQueue::new();
+        let q2 = q1.clone();
+
+        q1.enqueue(RioEvent::Wakeup(1));
+        q2.enqueue(RioEvent::Wakeup(2));
+
+        let events = q1.drain();
         assert_eq!(events.len(), 2);
+    }
+
+    // ===== convert_rio_event =====
+
+    #[test]
+    fn test_convert_wakeup() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::Wakeup(5), 99);
+        match converted {
+            RioEvent::Wakeup(id) => assert_eq!(id, 5),
+            _ => panic!("Expected Wakeup"),
+        }
+    }
+
+    #[test]
+    fn test_convert_render() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::Render, 0);
+        assert!(matches!(converted, RioEvent::Render));
+    }
+
+    #[test]
+    fn test_convert_bell() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::Bell, 0);
+        assert!(matches!(converted, RioEvent::Bell));
+    }
+
+    #[test]
+    fn test_convert_exit() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::Exit, 0);
+        assert!(matches!(converted, RioEvent::Exit));
+    }
+
+    #[test]
+    fn test_convert_title() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::Title("test".to_string()), 0);
+        match converted {
+            RioEvent::Title(s) => assert_eq!(s, "test"),
+            _ => panic!("Expected Title"),
+        }
+    }
+
+    #[test]
+    fn test_convert_pty_write() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::PtyWrite("hello".to_string()), 0);
+        match converted {
+            RioEvent::PtyWrite(s) => assert_eq!(s, "hello"),
+            _ => panic!("Expected PtyWrite"),
+        }
+    }
+
+    #[test]
+    fn test_convert_current_directory_injects_route_id() {
+        use rio_backend::event::RioEvent as BE;
+        use std::path::PathBuf;
+        let converted = convert_rio_event(BE::CurrentDirectoryChanged(PathBuf::from("/home/user")), 42);
+        match converted {
+            RioEvent::CurrentDirectoryChanged(route_id, path) => {
+                assert_eq!(route_id, 42);
+                assert_eq!(path, "/home/user");
+            }
+            _ => panic!("Expected CurrentDirectoryChanged"),
+        }
+    }
+
+    #[test]
+    fn test_convert_command_executed_injects_route_id() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::CommandExecuted("ls".to_string()), 7);
+        match converted {
+            RioEvent::CommandExecuted(route_id, cmd) => {
+                assert_eq!(route_id, 7);
+                assert_eq!(cmd, "ls");
+            }
+            _ => panic!("Expected CommandExecuted"),
+        }
+    }
+
+    #[test]
+    fn test_convert_shell_command_started_injects_route_id() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(
+            BE::ShellCommandStarted {
+                command: "cargo test".to_string(),
+                cwd: Some("/project".to_string()),
+                git_branch: Some("main".to_string()),
+            },
+            33,
+        );
+        match converted {
+            RioEvent::ShellCommandStarted { route_id, command, cwd, git_branch } => {
+                assert_eq!(route_id, 33);
+                assert_eq!(command, "cargo test");
+                assert_eq!(cwd.as_deref(), Some("/project"));
+                assert_eq!(git_branch.as_deref(), Some("main"));
+            }
+            _ => panic!("Expected ShellCommandStarted"),
+        }
+    }
+
+    #[test]
+    fn test_convert_shell_command_finished_injects_route_id() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(
+            BE::ShellCommandFinished { exit_code: Some(1) },
+            33,
+        );
+        match converted {
+            RioEvent::ShellCommandFinished { route_id, exit_code } => {
+                assert_eq!(route_id, 33);
+                assert_eq!(exit_code, Some(1));
+            }
+            _ => panic!("Expected ShellCommandFinished"),
+        }
+    }
+
+    #[test]
+    fn test_convert_scroll() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::Scroll(Scroll::Delta(-3)), 0);
+        match converted {
+            RioEvent::Scroll(Scroll::Delta(d)) => assert_eq!(d, -3),
+            _ => panic!("Expected Scroll Delta"),
+        }
+    }
+
+    #[test]
+    fn test_convert_close_terminal() {
+        use rio_backend::event::RioEvent as BE;
+        let converted = convert_rio_event(BE::CloseTerminal(8), 0);
+        match converted {
+            RioEvent::CloseTerminal(id) => assert_eq!(id, 8),
+            _ => panic!("Expected CloseTerminal"),
+        }
+    }
+
+    // ===== FFIEventListener =====
+
+    #[test]
+    fn test_ffi_event_listener_new() {
+        let queue = EventQueue::new();
+        let listener = FFIEventListener::new(queue, 42);
+        assert!(!listener.queue().is_shutdown());
     }
 }
