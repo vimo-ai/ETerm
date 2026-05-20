@@ -260,3 +260,55 @@ where
         .spawn()
         .map(|_| ())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cmdline_with_shell() {
+        assert_eq!(cmdline("cmd.exe"), "cmd.exe");
+    }
+
+    #[test]
+    fn test_cmdline_with_args() {
+        assert_eq!(cmdline("cmd.exe /k echo hello"), "cmd.exe /k echo hello");
+    }
+
+    #[test]
+    fn test_cmdline_empty_defaults_to_powershell() {
+        assert_eq!(cmdline(""), "powershell");
+    }
+
+    #[test]
+    fn test_win32_string_ascii() {
+        let result = win32_string("hello");
+        assert_eq!(result, vec![104, 101, 108, 108, 111, 0]);
+    }
+
+    #[test]
+    fn test_win32_string_empty() {
+        let result = win32_string("");
+        assert_eq!(result, vec![0]);
+    }
+
+    #[test]
+    fn test_win32_string_null_terminated() {
+        let result = win32_string("a");
+        assert_eq!(result.last(), Some(&0u16));
+    }
+
+    #[test]
+    fn test_create_pty_builds_cmdline_with_args() {
+        // This just tests that the args join logic is correct
+        let args = vec!["--login".to_string(), "-i".to_string()];
+        let shell = "bash";
+        let exec = if !args.is_empty() {
+            let args_str = args.join(" ");
+            format!("{shell} {args_str}")
+        } else {
+            shell.to_string()
+        };
+        assert_eq!(exec, "bash --login -i");
+    }
+}

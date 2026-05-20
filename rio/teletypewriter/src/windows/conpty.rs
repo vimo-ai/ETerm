@@ -265,3 +265,60 @@ impl From<Winsize> for COORD {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_winsize_to_coord_normal() {
+        let ws = Winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_width: 0,
+            ws_height: 0,
+        };
+        let coord: COORD = ws.into();
+        assert_eq!(coord.X, 80);
+        assert_eq!(coord.Y, 24);
+    }
+
+    #[test]
+    fn test_winsize_to_coord_large() {
+        let ws = Winsize {
+            ws_row: 200,
+            ws_col: 300,
+            ws_width: 0,
+            ws_height: 0,
+        };
+        let coord: COORD = ws.into();
+        assert_eq!(coord.X, 300);
+        assert_eq!(coord.Y, 200);
+    }
+
+    #[test]
+    fn test_winsize_to_coord_minimum() {
+        let ws = Winsize {
+            ws_row: 1,
+            ws_col: 1,
+            ws_width: 0,
+            ws_height: 0,
+        };
+        let coord: COORD = ws.into();
+        assert_eq!(coord.X, 1);
+        assert_eq!(coord.Y, 1);
+    }
+
+    #[test]
+    fn test_winsize_to_coord_ignores_pixel_dimensions() {
+        let ws = Winsize {
+            ws_row: 30,
+            ws_col: 120,
+            ws_width: 1920,
+            ws_height: 1080,
+        };
+        let coord: COORD = ws.into();
+        assert_eq!(coord.X, 120);
+        assert_eq!(coord.Y, 30);
+    }
+}
