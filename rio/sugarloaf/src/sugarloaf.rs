@@ -22,8 +22,10 @@ use raw_window_handle::{
 };
 use state::SugarState;
 
+use skia_safe::Color4f;
+
 #[cfg(target_os = "macos")]
-use skia_safe::{Color4f, Font, FontMgr, FontStyle, Paint, Point, Typeface};
+use skia_safe::{Font, FontMgr, FontStyle, Paint, Point, Typeface};
 
 // ========== 脏区渲染优化：布局缓存数据结构 ==========
 
@@ -152,13 +154,13 @@ impl Default for Colorspace {
     }
 }
 
-// #[cfg(not(target_os = "macos"))]
-// #[allow(clippy::derivable_impls)]
-// impl Default for Colorspace {
-//     fn default() -> Colorspace {
-//         Colorspace::Srgb
-//     }
-// }
+#[cfg(not(target_os = "macos"))]
+#[allow(clippy::derivable_impls)]
+impl Default for Colorspace {
+    fn default() -> Colorspace {
+        Colorspace::Srgb
+    }
+}
 
 
 impl SugarloafWindow {
@@ -464,6 +466,20 @@ impl Sugarloaf {
         // 原因：typeface 来自 layout cache 的 Vec<Typeface>，每次 clone 地址都变
         // 使用指针地址作为 cache key 会导致几乎 100% miss
         Font::from_typeface(typeface, font_size)
+    }
+
+    #[inline]
+    #[cfg(not(target_os = "macos"))]
+    pub fn render(&mut self) {
+        let frame = self.ctx.begin_frame();
+        if frame.is_none() {
+            return;
+        }
+        let (mut surface, drawable) = frame.unwrap();
+        let canvas = surface.canvas();
+        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 1.0));
+        canvas.clear(clear_color);
+        self.ctx.end_frame(drawable);
     }
 
     #[inline]

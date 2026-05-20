@@ -1,6 +1,7 @@
 pub mod image;
 pub mod uniforms;
 // pub mod svg;
+#[cfg(feature = "wgpu-backend")]
 pub mod buffer;
 pub mod shapes;
 
