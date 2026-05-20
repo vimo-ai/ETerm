@@ -1,8 +1,8 @@
-//! # Sugarloaf - Skia 渲染引擎 (macOS only)
+//! # Sugarloaf - Skia 渲染引擎 (cross-platform)
 //!
 //! 架构说明: 参见 `sugarloaf/RENDERING_ARCHITECTURE.md`
 //!
-//! 当前实现: 纯 Skia 渲染，通过 CAMetalLayer 使用 Metal backend
+//! 当前实现: 纯 Skia 渲染，macOS 使用 Metal backend，Windows 使用 D3D12 backend
 
 pub mod graphics;
 pub mod primitives;
@@ -24,13 +24,27 @@ use state::SugarState;
 
 use skia_safe::Color4f;
 
-#[cfg(target_os = "macos")]
 use skia_safe::{Font, FontMgr, FontStyle, Paint, Point, Typeface};
+
+// ========== Platform-specific font name constants ==========
+
+#[cfg(target_os = "macos")]
+const EMOJI_FONT_FAMILY: &str = "Apple Color Emoji";
+#[cfg(target_os = "windows")]
+const EMOJI_FONT_FAMILY: &str = "Segoe UI Emoji";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const EMOJI_FONT_FAMILY: &str = "Noto Color Emoji";
+
+#[cfg(target_os = "macos")]
+const MONOSPACE_FALLBACK_FONT: &str = "Menlo";
+#[cfg(target_os = "windows")]
+const MONOSPACE_FALLBACK_FONT: &str = "Consolas";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const MONOSPACE_FALLBACK_FONT: &str = "DejaVu Sans Mono";
 
 // ========== 脏区渲染优化：布局缓存数据结构 ==========
 
 /// 缓存单行的布局计算结果
-#[cfg(target_os = "macos")]
 #[derive(Clone)]
 struct CachedLineLayout {
     /// 字符列表
@@ -48,13 +62,11 @@ struct CachedLineLayout {
 }
 
 /// 行级布局缓存（优化版：直接使用 content hash 作为 key）
-#[cfg(target_os = "macos")]
 struct LineLayoutCache {
     /// Key: content_hash (u64), Value: 缓存的布局结果
     entries: std::collections::HashMap<u64, CachedLineLayout>,
 }
 
-#[cfg(target_os = "macos")]
 impl LineLayoutCache {
     fn new() -> Self {
         Self {
@@ -87,20 +99,14 @@ pub struct Sugarloaf {
     pub graphics: Graphics,
 
     // Skia rendering resources - 使用 FontLibrary 管理的字体
-    #[cfg(target_os = "macos")]
     font_library: std::sync::Arc<parking_lot::RwLock<crate::font::FontLibraryData>>,
-    #[cfg(target_os = "macos")]
     typeface_cache: std::cell::RefCell<std::collections::HashMap<usize, Typeface>>,
     /// 字符到 Typeface 的缓存，避免每帧都查询系统字体
-    #[cfg(target_os = "macos")]
     char_font_cache: std::cell::RefCell<std::collections::HashMap<char, (Typeface, bool)>>,
-    #[cfg(target_os = "macos")]
     font_size: f32,
     /// 复用的 FontMgr 实例，避免每次字体查找时重复创建
-    #[cfg(target_os = "macos")]
     font_mgr: FontMgr,
     /// 布局计算结果缓存（脏区优化）
-    #[cfg(target_os = "macos")]
     layout_cache: std::cell::RefCell<LineLayoutCache>,
 }
 
@@ -203,11 +209,9 @@ impl Sugarloaf {
         let state = SugarState::new(layout, font_library, &font_features);
 
         // Initialize Skia font resources - 使用 FontLibrary
-        #[cfg(target_os = "macos")]
         let font_size = state.style.font_size;
 
         // 启动时创建一次 FontMgr，避免每次字体查找时重复创建
-        #[cfg(target_os = "macos")]
         let font_mgr = FontMgr::new();
 
         let instance = Sugarloaf {
@@ -215,17 +219,11 @@ impl Sugarloaf {
             ctx,
             background_color: None,  // 透明背景，不硬编码黑色
             graphics: Graphics::default(),
-            #[cfg(target_os = "macos")]
             font_library: font_library.inner.clone(),
-            #[cfg(target_os = "macos")]
             typeface_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-            #[cfg(target_os = "macos")]
             char_font_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
-            #[cfg(target_os = "macos")]
             font_size,
-            #[cfg(target_os = "macos")]
             font_mgr,
-            #[cfg(target_os = "macos")]
             layout_cache: std::cell::RefCell::new(LineLayoutCache::new()),
         };
 
@@ -243,13 +241,10 @@ impl Sugarloaf {
         self.state.set_fonts_skia(font_library);
 
         // Update font library reference and clear cache
-        #[cfg(target_os = "macos")]
-        {
-            self.font_library = font_library.inner.clone();
-            self.typeface_cache.borrow_mut().clear();
-            self.char_font_cache.borrow_mut().clear();
-            self.layout_cache.borrow_mut().clear();
-        }
+        self.font_library = font_library.inner.clone();
+        self.typeface_cache.borrow_mut().clear();
+        self.char_font_cache.borrow_mut().clear();
+        self.layout_cache.borrow_mut().clear();
     }
 
     #[inline]
@@ -284,22 +279,16 @@ impl Sugarloaf {
         operation: u8,
     ) {
         self.state.set_rich_text_font_size_based_on_action_skia(rt_id, operation);
-        #[cfg(target_os = "macos")]
-        {
-            // 更新 self.font_size 以便 macOS Skia 渲染使用
-            if let Some(state) = self.state.content.get_state(rt_id) {
-                self.font_size = state.layout.font_size;
-            }
+        // 更新 self.font_size 以便 Skia 渲染使用
+        if let Some(state) = self.state.content.get_state(rt_id) {
+            self.font_size = state.layout.font_size;
         }
     }
 
     #[inline]
     pub fn set_rich_text_font_size(&mut self, rt_id: &usize, font_size: f32) {
         self.state.set_rich_text_font_size_skia(rt_id, font_size);
-        #[cfg(target_os = "macos")]
-        {
-            self.font_size = font_size;
-        }
+        self.font_size = font_size;
     }
 
     #[inline]
@@ -344,20 +333,13 @@ impl Sugarloaf {
         self.state.content()
     }
 
-    /// Check if layout cache contains a specific content hash (macOS only)
+    /// Check if layout cache contains a specific content hash.
     ///
     /// Returns true if the cache has a layout for this hash, false otherwise.
     /// This is used to optimize rendering by skipping extraction of cached lines.
     #[inline]
-    #[cfg(target_os = "macos")]
     pub fn has_cached_layout(&self, content_hash: u64) -> bool {
         self.layout_cache.borrow().get(content_hash).is_some()
-    }
-
-    #[inline]
-    #[cfg(not(target_os = "macos"))]
-    pub fn has_cached_layout(&self, _content_hash: u64) -> bool {
-        false
     }
 
     #[inline]
@@ -377,10 +359,7 @@ impl Sugarloaf {
 
     /// 获取 Skia 字体度量（cell_width, cell_height, line_height）
     /// 返回物理像素值
-    #[cfg(target_os = "macos")]
     pub fn get_font_metrics_skia(&self) -> (f32, f32, f32) {
-        use skia_safe::Font;
-
         let scale = self.ctx.scale();
         let font_size = self.font_size * scale;
         let line_height_factor = self.state.style.line_height;
@@ -394,27 +373,18 @@ impl Sugarloaf {
             let cell_height = (-metrics.ascent + metrics.descent + metrics.leading) * line_height_factor;
             let (cell_width_raw, _) = primary_font.measure_str("M", None);
 
-            // 🎯 关键修复：Round 到整数像素，避免渲染时的亚像素缝隙
-            // 同时确保渲染和坐标转换使用完全相同的值
+            // Round to integer pixels to avoid sub-pixel gaps during rendering
             let cell_width = cell_width_raw.round();
             let cell_height = cell_height.round();
 
             (cell_width, cell_height, cell_height)
         } else {
-            // Fallback 值
+            // Fallback values
             let cell_width = (font_size * 0.6).round();
             let cell_height = (font_size * 1.2).round();
             (cell_width, cell_height, cell_height)
         }
     }
-
-    // #[cfg(not(target_os = "macos"))]
-    // pub fn get_font_metrics_skia(&self) -> (f32, f32, f32) {
-    //     let font_size = self.font_size * self.ctx.scale();
-    //     let cell_width = font_size * 0.6;
-    //     let cell_height = font_size * 1.2;
-    //     (cell_width, cell_height, cell_height)
-    // }
 
     #[inline]
     pub fn clear(&mut self) {
@@ -443,10 +413,7 @@ impl Sugarloaf {
         self.state.compute_layout_rescale_skia(scale);
 
         // Clear layout cache when rescaling
-        #[cfg(target_os = "macos")]
-        {
-            self.layout_cache.borrow_mut().clear();
-        }
+        self.layout_cache.borrow_mut().clear();
 
         // TODO: Handle background image rescale when implemented
     }
@@ -460,7 +427,6 @@ impl Sugarloaf {
     }
 
     /// 创建 Font 对象（移除了 cache，因为 typeface 地址不稳定导致 cache 无效）
-    #[cfg(target_os = "macos")]
     fn get_or_create_font(&self, typeface: &Typeface, font_size: f32) -> Font {
         // 直接创建 Font，不使用 cache
         // 原因：typeface 来自 layout cache 的 Vec<Typeface>，每次 clone 地址都变
@@ -469,21 +435,6 @@ impl Sugarloaf {
     }
 
     #[inline]
-    #[cfg(not(target_os = "macos"))]
-    pub fn render(&mut self) {
-        let frame = self.ctx.begin_frame();
-        if frame.is_none() {
-            return;
-        }
-        let (mut surface, drawable) = frame.unwrap();
-        let canvas = surface.canvas();
-        let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 1.0));
-        canvas.clear(clear_color);
-        self.ctx.end_frame(drawable);
-    }
-
-    #[inline]
-    #[cfg(target_os = "macos")]
     pub fn render(&mut self) {
         // Compute dimensions for rich text
         self.state.compute_dimensions_skia();
@@ -869,7 +820,6 @@ impl Sugarloaf {
 
     /// 生成单行的布局计算结果（字符、字体、位置）
     /// 这是脏区渲染优化的核心：缓存耗时的字体查找和布局计算
-    #[cfg(target_os = "macos")]
     fn generate_line_layout(
         &self,
         line: &crate::layout::BuilderLine,
@@ -909,7 +859,7 @@ impl Sugarloaf {
 
                 let (best_font, _is_emoji) = if is_keycap_sequence || next_is_vs16 {
                     if let Some(emoji_typeface) = self.font_mgr.match_family_style_character(
-                        "Apple Color Emoji",
+                        EMOJI_FONT_FAMILY,
                         FontStyle::normal(),
                         &[],
                         ch as i32,
@@ -952,7 +902,6 @@ impl Sugarloaf {
     /// 为单个字符找到最佳渲染字体
     /// 使用 Skia 的系统字体匹配机制自动查找支持该字符的字体
     #[allow(dead_code)] // Reserved for future use
-    #[cfg(target_os = "macos")]
     fn find_font_for_char(
         &self,
         _font_library: &crate::font::FontLibraryData,
@@ -965,7 +914,6 @@ impl Sugarloaf {
 
     /// 为单个字符找到最佳渲染字体（带样式支持）
     /// 优先使用主字体，只有主字体不支持时才使用系统 fallback
-    #[cfg(target_os = "macos")]
     fn find_font_for_char_styled(
         &self,
         _font_library: &crate::font::FontLibraryData,
@@ -1016,7 +964,6 @@ impl Sugarloaf {
 
     /// 从 FontLibrary 获取或创建 Skia Typeface（带缓存）
     /// 复刻原版逻辑：从 FontLibrary 的字体数据创建 Skia Typeface
-    #[cfg(target_os = "macos")]
     fn get_or_create_typeface(
         &self,
         font_library: &crate::font::FontLibraryData,
@@ -1042,7 +989,7 @@ impl Sugarloaf {
             let family_name = font_data_info
                 .and_then(|f| f.path.as_ref())
                 .and_then(|p| p.to_str())
-                .unwrap_or("Apple Color Emoji");
+                .unwrap_or(EMOJI_FONT_FAMILY);
             self.font_mgr.match_family_style(family_name, FontStyle::normal())
         } else if let Some((font_data, offset, _key)) = font_library.get_data(&font_id) {
             // 普通字体从数据加载
@@ -1055,7 +1002,7 @@ impl Sugarloaf {
             let family_name = font_data_info
                 .and_then(|f| f.path.as_ref())
                 .and_then(|p| p.to_str())
-                .unwrap_or("Menlo");
+                .unwrap_or(MONOSPACE_FALLBACK_FONT);
             self.font_mgr.match_family_style(family_name, FontStyle::normal())
         };
 
@@ -1067,7 +1014,6 @@ impl Sugarloaf {
         typeface
     }
 
-    #[cfg(target_os = "macos")]
     fn render_quad(&self, canvas: &skia_safe::Canvas, quad: &Quad, scale: f32) {
         let mut paint = Paint::default();
         paint.set_anti_alias(true);
