@@ -123,8 +123,7 @@ final class SprintPredictor {
             if utilizationChange > 0 {
                 let duration = currPoint.timestamp.timeIntervalSince(prevPoint.timestamp)
 
-                // 确保时间间隔有效
-                guard duration > 0 else { continue }
+                guard duration >= 60 else { continue }
 
                 let interval = ConsumptionInterval(
                     fromUtilization: prevPoint.utilization,
