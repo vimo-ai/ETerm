@@ -107,7 +107,6 @@ pub struct BuilderLine {
     pub fragments: Vec<FragmentData>,
     pub render_data: RenderData,
     /// Grid 内容的 hash 值（用于缓存查找）
-    #[cfg(target_os = "macos")]
     pub content_hash: u64,
 }
 
@@ -627,7 +626,6 @@ impl Content {
     }
 
     /// 设置行的内容 hash（用于缓存查找）
-    #[cfg(target_os = "macos")]
     pub fn set_line_content_hash(
         &mut self,
         line_idx: usize,
