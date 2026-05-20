@@ -193,7 +193,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_spsc_buffer() {
+    fn test_spsc_buffer_basic() {
         let buf = [1u8; 100];
 
         let (mut producer, mut consumer) = spsc_buffer(60);
@@ -226,5 +226,127 @@ mod test {
         assert_eq!(consumer.len(), 0);
 
         assert_eq!(&buf[..], &out_buf[..]);
+    }
+
+    #[test]
+    fn test_spsc_empty_read() {
+        let (_, mut consumer) = spsc_buffer(64);
+        let mut buf = [0u8; 32];
+        assert_eq!(consumer.read_to_slice(&mut buf), 0);
+    }
+
+    #[test]
+    fn test_spsc_full_write_returns_zero() {
+        let (mut producer, _consumer) = spsc_buffer(8);
+        let data = [0xAA; 8];
+        assert_eq!(producer.write_from_slice(&data), 8);
+        assert!(producer.is_full());
+        assert_eq!(producer.write_from_slice(&[0xFF]), 0);
+    }
+
+    #[test]
+    fn test_spsc_wraparound() {
+        let (mut producer, mut consumer) = spsc_buffer(8);
+        let mut out = [0u8; 8];
+
+        // Fill half
+        assert_eq!(producer.write_from_slice(&[1, 2, 3, 4]), 4);
+        // Drain half — now start pointer is at offset 4
+        assert_eq!(consumer.read_to_slice(&mut out), 4);
+        assert_eq!(&out[..4], &[1, 2, 3, 4]);
+
+        // Write 6 bytes — wraps around the end of the buffer
+        // But write_from_slice only writes contiguous chunk up to end
+        let written = producer.write_from_slice(&[5, 6, 7, 8, 9, 10]);
+        assert_eq!(written, 4); // 8 - 4 = 4 slots until end
+        assert_eq!(producer.len(), 4);
+
+        // Write the rest into the wrapped region
+        let written2 = producer.write_from_slice(&[9, 10]);
+        assert_eq!(written2, 2);
+        assert_eq!(producer.len(), 6);
+
+        // Read all 6 — should get [5,6,7,8] then [9,10]
+        let n = consumer.read_to_slice(&mut out);
+        assert_eq!(n, 4); // first contiguous read
+        assert_eq!(&out[..4], &[5, 6, 7, 8]);
+
+        let n2 = consumer.read_to_slice(&mut out);
+        assert_eq!(n2, 2);
+        assert_eq!(&out[..2], &[9, 10]);
+    }
+
+    #[test]
+    fn test_spsc_single_byte_ops() {
+        let (mut producer, mut consumer) = spsc_buffer(4);
+        let mut out = [0u8; 1];
+
+        for i in 0..10u8 {
+            assert_eq!(producer.write_from_slice(&[i]), 1);
+            assert_eq!(consumer.read_to_slice(&mut out), 1);
+            assert_eq!(out[0], i);
+        }
+    }
+
+    #[test]
+    fn test_spsc_read_trait() {
+        let (mut producer, mut consumer) = spsc_buffer(16);
+        producer.write_from_slice(b"hello");
+
+        let mut buf = [0u8; 16];
+        let n = consumer.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf[..5], b"hello");
+    }
+
+    #[test]
+    fn test_spsc_write_trait() {
+        let (mut producer, mut consumer) = spsc_buffer(16);
+        let n = producer.write(b"world").unwrap();
+        assert_eq!(n, 5);
+
+        let mut buf = [0u8; 16];
+        assert_eq!(consumer.read_to_slice(&mut buf), 5);
+        assert_eq!(&buf[..5], b"world");
+    }
+
+    #[test]
+    fn test_spsc_size_one() {
+        let (mut producer, mut consumer) = spsc_buffer(1);
+        assert_eq!(producer.write_from_slice(&[42]), 1);
+        assert!(producer.is_full());
+        assert_eq!(producer.write_from_slice(&[99]), 0);
+
+        let mut out = [0u8; 1];
+        assert_eq!(consumer.read_to_slice(&mut out), 1);
+        assert_eq!(out[0], 42);
+        assert!(consumer.is_empty());
+    }
+
+    #[test]
+    fn test_spsc_partial_read_into_small_buffer() {
+        let (mut producer, mut consumer) = spsc_buffer(16);
+        producer.write_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let mut small = [0u8; 3];
+        assert_eq!(consumer.read_to_slice(&mut small), 3);
+        assert_eq!(&small, &[1, 2, 3]);
+        assert_eq!(consumer.len(), 5);
+    }
+
+    #[test]
+    fn test_spsc_fill_drain_repeat() {
+        let (mut producer, mut consumer) = spsc_buffer(4);
+        let mut out = [0u8; 4];
+
+        for round in 0..5u8 {
+            let data = [round; 4];
+            assert_eq!(producer.write_from_slice(&data), 4);
+            assert!(producer.is_full());
+
+            assert_eq!(consumer.read_to_slice(&mut out), 4);
+            assert_eq!(out, data);
+            assert!(consumer.is_empty());
+        }
     }
 }
