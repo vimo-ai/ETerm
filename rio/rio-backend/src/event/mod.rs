@@ -134,6 +134,18 @@ pub enum RioEvent {
     /// Contains the command string that was executed.
     CommandExecuted(String),
 
+    /// Shell command started with full context (OSC 133;C).
+    ShellCommandStarted {
+        command: String,
+        cwd: Option<String>,
+        git_branch: Option<String>,
+    },
+
+    /// Shell command finished (OSC 133;D) with exit code.
+    ShellCommandFinished {
+        exit_code: Option<u8>,
+    },
+
     /// Request to store a text string in the clipboard.
     ClipboardStore(ClipboardType, String),
 
@@ -254,6 +266,12 @@ impl Debug for RioEvent {
             RioEvent::UpdateFontSize(action) => write!(f, "UpdateFontSize({action:?})"),
             RioEvent::UpdateGraphics { route_id, .. } => {
                 write!(f, "UpdateGraphics({route_id})")
+            }
+            RioEvent::ShellCommandStarted { command, .. } => {
+                write!(f, "ShellCommandStarted({command})")
+            }
+            RioEvent::ShellCommandFinished { exit_code, .. } => {
+                write!(f, "ShellCommandFinished({exit_code:?})")
             }
         }
     }

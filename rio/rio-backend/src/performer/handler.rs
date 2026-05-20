@@ -178,7 +178,8 @@ pub trait Handler {
 
     /// OSC 133 - Shell Integration: Command execute (user pressed enter).
     /// The command parameter contains the command that is about to be executed.
-    fn shell_command_execute(&mut self, _command: Option<&str>) {}
+    /// The git_branch parameter contains the current git branch if available.
+    fn shell_command_execute(&mut self, _command: Option<&str>, _git_branch: Option<&str>) {}
 
     /// OSC 133 - Shell Integration: Command finished with exit code.
     fn shell_command_finished(&mut self, _exit_code: Option<u8>) {}
@@ -884,8 +885,8 @@ impl<U: Handler, T: Timeout> copa::Perform for Performer<'_, U, T> {
                         b"C" => {
                             // Command execute
                             // params[2] contains the command if present
+                            // params[3] contains git branch if present
                             let command = if params.len() >= 3 {
-                                // 反转义分号（Shell 端转义了 ; 为 \;）
                                 if let Ok(cmd) = simd_utf8::from_utf8_fast(params[2]) {
                                     Some(cmd.replace("\\;", ";"))
                                 } else {
@@ -894,7 +895,17 @@ impl<U: Handler, T: Timeout> copa::Perform for Performer<'_, U, T> {
                             } else {
                                 None
                             };
-                            self.handler.shell_command_execute(command.as_deref());
+                            let git_branch = if params.len() >= 4 {
+                                if let Ok(branch) = simd_utf8::from_utf8_fast(params[3]) {
+                                    let b = branch.replace("\\;", ";");
+                                    if b.is_empty() { None } else { Some(b) }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            self.handler.shell_command_execute(command.as_deref(), git_branch.as_deref());
                         }
                         b"D" => {
                             // Command finished with exit code

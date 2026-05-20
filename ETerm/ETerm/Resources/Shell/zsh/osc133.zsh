@@ -30,10 +30,15 @@ _eterm_precmd() {
 # Mark command execution
 _eterm_preexec() {
     _eterm_command_started=1
-    # OSC 133;C;command - 发送命令内容（$1 是即将执行的命令）
-    # 需要转义分号，避免破坏 OSC 参数分隔
     local cmd="${1//;/\\;}"
-    print -Pn "\e]133;C;${cmd}\a"
+    local branch
+    branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+    if [[ -n "$branch" ]]; then
+        branch="${branch//;/\\;}"
+        print -Pn "\e]133;C;${cmd};${branch}\a"
+    else
+        print -Pn "\e]133;C;${cmd}\a"
+    fi
 }
 
 # Install hooks

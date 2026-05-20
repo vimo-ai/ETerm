@@ -1435,6 +1435,11 @@ impl TerminalPool {
     ///
     /// 返回当前前台进程的名称（如 "vim", "cargo", "python" 等）
     /// 如果前台进程就是 shell 本身，返回 shell 名称（如 "zsh", "bash"）
+    pub fn get_shell_pid(&self, id: usize) -> Option<u32> {
+        let terminals = self.terminals.read();
+        terminals.get(&id).map(|entry| entry.shell_pid)
+    }
+
     pub fn get_foreground_process_name(&self, id: usize) -> Option<String> {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {

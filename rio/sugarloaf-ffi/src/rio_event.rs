@@ -64,6 +64,22 @@ pub enum RioEvent {
     /// 参数：(route_id, command)
     CommandExecuted(usize, String),
 
+    /// Shell 命令开始（带完整上下文）
+    /// 参数：(route_id, command, cwd, git_branch)
+    ShellCommandStarted {
+        route_id: usize,
+        command: String,
+        cwd: Option<String>,
+        git_branch: Option<String>,
+    },
+
+    /// Shell 命令结束（OSC 133;D）
+    /// 参数：(route_id, exit_code)
+    ShellCommandFinished {
+        route_id: usize,
+        exit_code: Option<u8>,
+    },
+
     /// 空操作
     Noop,
 }
@@ -231,6 +247,16 @@ impl From<&RioEvent> for FFIEvent {
                 route_id: *route_id,
                 scroll_delta: 0,
             },
+            RioEvent::ShellCommandStarted { route_id, .. } => FFIEvent {
+                event_type: 15,
+                route_id: *route_id,
+                scroll_delta: 0,
+            },
+            RioEvent::ShellCommandFinished { route_id, .. } => FFIEvent {
+                event_type: 16,
+                route_id: *route_id,
+                scroll_delta: 0,
+            },
             RioEvent::Noop => FFIEvent::noop(),
         }
     }
@@ -360,6 +386,8 @@ impl EventQueue {
                         }
                     }
                 }
+                // Shell history 事件 — 内部消费，不转发 Swift
+                RioEvent::ShellCommandStarted { .. } | RioEvent::ShellCommandFinished { .. } => {}
                 _ => {
                     if let Some((callback, context, ffi_event)) = callback_info {
                         callback(context, ffi_event);
@@ -438,17 +466,33 @@ impl rio_backend::event::EventListener for FFIEventListener {
     }
 
     fn send_event(&self, event: rio_backend::event::RioEvent, _id: rio_backend::event::WindowId) {
-        // 将 rio_backend 的事件转换为我们的事件，注入 route_id
         let our_event = convert_rio_event(event.clone(), self.route_id);
 
-        // 对于 PtyWrite 事件，入队而不是直接发送给 Swift
-        // 因为 PtyWrite 需要在 Rust 侧（RioMachine 事件循环）处理，写回 PTY
         match &our_event {
             RioEvent::PtyWrite(_) => {
                 self.queue.enqueue(our_event);
             }
+            RioEvent::ShellCommandStarted { route_id, command, cwd, git_branch } => {
+                if let Some(db_arc) = crate::domain::shell_history::ShellHistoryDb::try_global() {
+                    if let Ok(db) = db_arc.lock() {
+                        let _ = db.record_start(crate::domain::shell_history::CommandStart {
+                            command: command.clone(),
+                            cwd: cwd.clone(),
+                            git_branch: git_branch.clone(),
+                            shell: "zsh".to_string(),
+                            terminal_id: format!("{}", route_id),
+                        });
+                    }
+                }
+            }
+            RioEvent::ShellCommandFinished { route_id, exit_code } => {
+                if let Some(db_arc) = crate::domain::shell_history::ShellHistoryDb::try_global() {
+                    if let Ok(db) = db_arc.lock() {
+                        let _ = db.record_finish(&format!("{}", route_id), *exit_code);
+                    }
+                }
+            }
             _ => {
-                // 其他事件直接发送给 Swift
                 self.queue.send_event(our_event);
             }
         }
@@ -482,6 +526,12 @@ fn convert_rio_event(event: rio_backend::event::RioEvent, route_id: usize) -> Ri
             RioEvent::CurrentDirectoryChanged(route_id, path.to_string_lossy().to_string())
         }
         BackendEvent::CommandExecuted(cmd) => RioEvent::CommandExecuted(route_id, cmd),
+        BackendEvent::ShellCommandStarted { command, cwd, git_branch } => {
+            RioEvent::ShellCommandStarted { route_id, command, cwd, git_branch }
+        }
+        BackendEvent::ShellCommandFinished { exit_code } => {
+            RioEvent::ShellCommandFinished { route_id, exit_code }
+        }
         _ => RioEvent::Noop,
     }
 }
