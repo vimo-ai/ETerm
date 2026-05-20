@@ -65,7 +65,7 @@ use std::thread::JoinHandle;
 use sugarloaf::font::FontLibrary;
 use sugarloaf::{
     ImageObject, Object, Sugarloaf, SugarloafRenderer, SugarloafWindow,
-    SugarloafWindowSize, layout::RootStyle,
+    SugarloafWindowSize, context::GpuContext, layout::RootStyle,
 };
 
 use super::ffi::{
@@ -286,7 +286,7 @@ pub struct TerminalPool {
     next_id: usize,
 
     /// Sugarloaf 渲染引擎（共享）
-    sugarloaf: Mutex<Sugarloaf<'static>>,
+    sugarloaf: Mutex<Sugarloaf>,
 
     /// 渲染器
     renderer: Mutex<Renderer>,
@@ -405,7 +405,7 @@ impl TerminalPool {
             );
 
             // 使用 Skia DirectContext 创建 GPU Surface
-            let mut skia_context = context.skia_context.clone();
+            let mut skia_context = context.skia_context().clone();
             let surface = surfaces::render_target(
                 &mut skia_context,
                 Budgeted::Yes,
@@ -499,7 +499,7 @@ impl TerminalPool {
         config: &AppConfig,
         font_library: &FontLibrary,
         render_config: &RenderConfig,
-    ) -> Result<Sugarloaf<'static>, ErrorCode> {
+    ) -> Result<Sugarloaf, ErrorCode> {
         #[cfg(target_os = "macos")]
         let raw_window_handle = {
             use raw_window_handle::{AppKitWindowHandle, RawWindowHandle};
@@ -2457,7 +2457,7 @@ impl TerminalPool {
                         // 获取 GPU context 用于创建 GPU-backed Images（避免 CPU→GPU 双份内存）
                         let mut gpu_context = {
                             let sugarloaf = self.sugarloaf.lock();
-                            sugarloaf.get_context().skia_context.clone()
+                            sugarloaf.get_context().skia_context().clone()
                         };
 
                         let mut renderer = self.renderer.lock();
@@ -2632,8 +2632,8 @@ impl TerminalPool {
     /// 使用 30 秒冷却窗口（AtomicU64 无锁），避免 oomed() 持续 true 导致每帧触发。
     fn check_gpu_health_and_recover(&self, sugarloaf: &mut Sugarloaf) {
         let ctx = sugarloaf.get_context_mut();
-        let oomed = ctx.skia_context.oomed();
-        let device_lost = ctx.skia_context.is_device_lost();
+        let oomed = ctx.skia_context_mut().oomed();
+        let device_lost = ctx.skia_context_mut().is_device_lost();
 
         if !oomed && !device_lost {
             return;
