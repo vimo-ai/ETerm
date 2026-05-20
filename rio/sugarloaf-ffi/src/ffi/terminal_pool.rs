@@ -317,6 +317,23 @@ pub extern "C" fn terminal_pool_get_cached_cwd(
 }
 
 /// 获取终端的前台进程名称
+/// 获取终端的 shell 进程 PID
+///
+/// 返回 PTY fork 出的 shell 进程 ID，用于进程树匹配。
+/// 失败返回 0。
+#[no_mangle]
+pub extern "C" fn terminal_pool_get_shell_pid(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+) -> u32 {
+    if handle.is_null() {
+        return 0;
+    }
+
+    let pool = unsafe { &*(handle as *mut TerminalPool) };
+    pool.get_shell_pid(terminal_id).unwrap_or(0)
+}
+
 ///
 /// 返回当前前台进程的名称（如 "vim", "cargo", "python" 等）
 /// 如果前台进程就是 shell 本身，返回 shell 名称（如 "zsh", "bash"）

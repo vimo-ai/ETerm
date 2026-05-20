@@ -37,6 +37,10 @@ pub mod views;
 
 pub mod primitives;
 
+// Shell 命令历史
+
+pub mod shell_history;
+
 // Re-exports for convenience
 
 pub use aggregates::{Terminal, TerminalId};
