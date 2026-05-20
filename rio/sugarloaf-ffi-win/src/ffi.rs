@@ -1,22 +1,33 @@
-//! Windows FFI layer for ETerm terminal
-//!
-//! Provides C ABI functions for terminal lifecycle + rendering using ConPTY
-//! and the Sugarloaf D3D12 backend.
-
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::ffi::{c_char, c_void, CString};
-use std::io::Write;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroIsize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
 
+use corcovado::channel;
+use parking_lot::RwLock;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle};
+use rio_backend::ansi::CursorShape;
+use rio_backend::crosswords::grid::Dimensions;
+use rio_backend::crosswords::pos::{Column, Line};
+use rio_backend::crosswords::square::Flags;
+use rio_backend::crosswords::{Crosswords, CrosswordsSize};
+use rio_backend::event::Msg;
 use sugarloaf::context::GpuContext;
-use sugarloaf::{Sugarloaf, SugarloafRenderer, SugarloafWindow, SugarloafWindowSize};
+use sugarloaf::SugarCursor;
 use sugarloaf::font::FontLibrary;
 use sugarloaf::layout::RootStyle;
+use sugarloaf::{Sugarloaf, SugarloafRenderer, SugarloafWindow, SugarloafWindowSize};
 use teletypewriter::windows::{create_pty, Pty};
-use teletypewriter::{ProcessReadWrite, WinsizeBuilder};
+use teletypewriter::WinsizeBuilder;
+
+use crate::event::WinEventListener;
+use crate::machine::{Machine, State as MachineState};
 
 const FFI_OK: i32 = 0;
 const FFI_ERR_NULL_HANDLE: i32 = -1;
@@ -32,8 +43,14 @@ pub struct SugarloafWinHandle {
 }
 
 struct Terminal {
-    pty: Pty,
+    crosswords: Arc<RwLock<Crosswords<WinEventListener>>>,
+    pty_tx: channel::Sender<Msg>,
+    #[allow(dead_code)]
+    machine_handle: JoinHandle<(Machine<Pty>, MachineState)>,
+    dirty: Arc<AtomicBool>,
     title: String,
+    cols: u16,
+    rows: u16,
 }
 
 struct WinEngine {
@@ -41,6 +58,9 @@ struct WinEngine {
     next_id: i32,
     sugarloaf: Option<Sugarloaf>,
     font_library: FontLibrary,
+    rich_text_id: Option<usize>,
+    hwnd: Option<NonZeroIsize>,
+    scale: f32,
 }
 
 impl WinEngine {
@@ -50,6 +70,9 @@ impl WinEngine {
             next_id: 1,
             sugarloaf: None,
             font_library: FontLibrary::default(),
+            rich_text_id: None,
+            hwnd: None,
+            scale: 1.0,
         }
     }
 }
@@ -80,6 +103,309 @@ where
 }
 
 // ============================================================================
+// Grid extraction: Crosswords → Sugarloaf Content
+// ============================================================================
+
+fn cursor_to_sugar(shape: CursorShape, color: [f32; 4]) -> Option<SugarCursor> {
+    match shape {
+        CursorShape::Block => Some(SugarCursor::Block(color)),
+        CursorShape::Underline => Some(SugarCursor::Underline(color)),
+        CursorShape::Beam => Some(SugarCursor::Caret(color)),
+        CursorShape::Hidden => None,
+    }
+}
+
+fn extract_grid_to_sugarloaf(
+    sugarloaf: &mut Sugarloaf,
+    crosswords: &Crosswords<WinEventListener>,
+    rich_text_id: &usize,
+) {
+    use rio_backend::config::colors::{AnsiColor, NamedColor};
+    use sugarloaf::layout::{BuilderLine, FragmentData};
+
+    let grid = &crosswords.grid;
+    let total_lines = grid.screen_lines();
+    let total_cols = grid.columns();
+    let display_offset = grid.display_offset() as i32;
+
+    let cursor_state = crosswords.cursor();
+    let cursor_pos = cursor_state.pos;
+    let cursor_shape = cursor_state.content;
+    let cursor_color = [1.0f32, 1.0, 1.0, 1.0];
+
+    let content = sugarloaf.content();
+
+    let builder_state = match content.get_state_mut(rich_text_id) {
+        Some(bs) => bs,
+        None => return,
+    };
+
+    builder_state.lines.clear();
+
+    for line_idx in 0..total_lines {
+        let mut fragments = Vec::new();
+        let mut current_text = String::new();
+        let mut current_fg: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+        let mut current_bg: Option<[f32; 4]> = None;
+        let mut current_bold = false;
+        let mut current_italic = false;
+        let mut current_cursor: Option<SugarCursor> = None;
+
+        let visual_line = Line(line_idx as i32 - display_offset);
+
+        for col_idx in 0..total_cols {
+            let cell = &grid[visual_line][Column(col_idx)];
+
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
+            }
+
+            let fg = ansi_to_rgba(&cell.fg);
+            let bg = match &cell.bg {
+                AnsiColor::Named(NamedColor::Background) => None,
+                other => Some(ansi_to_rgba(other)),
+            };
+
+            let bold = cell.flags.contains(Flags::BOLD);
+            let italic = cell.flags.contains(Flags::ITALIC);
+            let inverse = cell.flags.contains(Flags::INVERSE);
+
+            let is_cursor = cursor_pos.row == visual_line
+                && cursor_pos.col.0 == col_idx;
+            let cell_cursor = if is_cursor {
+                cursor_to_sugar(cursor_shape, cursor_color)
+            } else {
+                None
+            };
+
+            let (actual_fg, actual_bg) = if inverse {
+                let bg_color = bg.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                (bg_color, Some(fg))
+            } else {
+                (fg, bg)
+            };
+
+            let style_changed = actual_fg != current_fg
+                || actual_bg != current_bg
+                || bold != current_bold
+                || italic != current_italic
+                || cell_cursor != current_cursor;
+
+            if style_changed && !current_text.is_empty() {
+                fragments.push(FragmentData {
+                    content: std::mem::take(&mut current_text),
+                    style: make_fragment_style(
+                        current_fg,
+                        current_bg,
+                        current_bold,
+                        current_italic,
+                        current_cursor,
+                        1.0,
+                    ),
+                });
+            }
+
+            current_fg = actual_fg;
+            current_bg = actual_bg;
+            current_bold = bold;
+            current_italic = italic;
+            current_cursor = cell_cursor;
+
+            let is_wide = cell.flags.contains(Flags::WIDE_CHAR);
+
+            if is_wide && !current_text.is_empty() {
+                fragments.push(FragmentData {
+                    content: std::mem::take(&mut current_text),
+                    style: make_fragment_style(
+                        current_fg,
+                        current_bg,
+                        current_bold,
+                        current_italic,
+                        current_cursor,
+                        1.0,
+                    ),
+                });
+            }
+
+            current_text.push(cell.c);
+
+            if let Some(zw) = cell.zerowidth() {
+                for &ch in zw {
+                    current_text.push(ch);
+                }
+            }
+
+            if is_wide {
+                fragments.push(FragmentData {
+                    content: std::mem::take(&mut current_text),
+                    style: make_fragment_style(
+                        current_fg,
+                        current_bg,
+                        current_bold,
+                        current_italic,
+                        current_cursor,
+                        2.0,
+                    ),
+                });
+            }
+        }
+
+        if !current_text.is_empty() {
+            fragments.push(FragmentData {
+                content: current_text,
+                style: make_fragment_style(
+                    current_fg,
+                    current_bg,
+                    current_bold,
+                    current_italic,
+                    current_cursor,
+                    1.0,
+                ),
+            });
+        }
+
+        let mut hasher = DefaultHasher::new();
+        line_idx.hash(&mut hasher);
+        for frag in &fragments {
+            frag.content.hash(&mut hasher);
+        }
+
+        builder_state.lines.push(BuilderLine {
+            content_hash: hasher.finish(),
+            fragments,
+            ..Default::default()
+        });
+    }
+
+    static EXTRACT_COUNT: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0);
+    let ec = EXTRACT_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if ec < 5 {
+        let total_frags: usize = builder_state
+            .lines
+            .iter()
+            .map(|l| l.fragments.len())
+            .sum();
+        let sample = builder_state
+            .lines
+            .first()
+            .and_then(|l| l.fragments.first())
+            .map(|f| f.content.chars().take(30).collect::<String>())
+            .unwrap_or_default();
+        eprintln!(
+            "[extract #{}] pushed {} lines, {} total frags, first_line_sample={:?}",
+            ec,
+            builder_state.lines.len(),
+            total_frags,
+            sample
+        );
+    }
+
+    builder_state.mark_dirty();
+}
+
+fn ansi_to_rgba(color: &rio_backend::config::colors::AnsiColor) -> [f32; 4] {
+    use rio_backend::config::colors::{AnsiColor, NamedColor};
+
+    match color {
+        AnsiColor::Named(named) => match named {
+            NamedColor::Foreground | NamedColor::LightWhite => [1.0, 1.0, 1.0, 1.0],
+            NamedColor::Background | NamedColor::Black => [0.0, 0.0, 0.0, 1.0],
+            NamedColor::Red => [0.8, 0.0, 0.0, 1.0],
+            NamedColor::Green => [0.0, 0.8, 0.0, 1.0],
+            NamedColor::Yellow => [0.8, 0.8, 0.0, 1.0],
+            NamedColor::Blue => [0.0, 0.0, 0.8, 1.0],
+            NamedColor::Magenta => [0.8, 0.0, 0.8, 1.0],
+            NamedColor::Cyan => [0.0, 0.8, 0.8, 1.0],
+            NamedColor::White => [0.75, 0.75, 0.75, 1.0],
+            NamedColor::LightBlack => [0.5, 0.5, 0.5, 1.0],
+            NamedColor::LightRed => [1.0, 0.33, 0.33, 1.0],
+            NamedColor::LightGreen => [0.33, 1.0, 0.33, 1.0],
+            NamedColor::LightYellow => [1.0, 1.0, 0.33, 1.0],
+            NamedColor::LightBlue => [0.33, 0.33, 1.0, 1.0],
+            NamedColor::LightMagenta => [1.0, 0.33, 1.0, 1.0],
+            NamedColor::LightCyan => [0.33, 1.0, 1.0, 1.0],
+            _ => [1.0, 1.0, 1.0, 1.0],
+        },
+        AnsiColor::Spec(rgb) => [
+            rgb.r as f32 / 255.0,
+            rgb.g as f32 / 255.0,
+            rgb.b as f32 / 255.0,
+            1.0,
+        ],
+        AnsiColor::Indexed(idx) => {
+            match idx {
+                0 => [0.0, 0.0, 0.0, 1.0],
+                1 => [0.8, 0.0, 0.0, 1.0],
+                2 => [0.0, 0.8, 0.0, 1.0],
+                3 => [0.8, 0.8, 0.0, 1.0],
+                4 => [0.0, 0.0, 0.8, 1.0],
+                5 => [0.8, 0.0, 0.8, 1.0],
+                6 => [0.0, 0.8, 0.8, 1.0],
+                7 => [0.75, 0.75, 0.75, 1.0],
+                8 => [0.5, 0.5, 0.5, 1.0],
+                9 => [1.0, 0.33, 0.33, 1.0],
+                10 => [0.33, 1.0, 0.33, 1.0],
+                11 => [1.0, 1.0, 0.33, 1.0],
+                12 => [0.33, 0.33, 1.0, 1.0],
+                13 => [1.0, 0.33, 1.0, 1.0],
+                14 => [0.33, 1.0, 1.0, 1.0],
+                15 => [1.0, 1.0, 1.0, 1.0],
+                16..=231 => {
+                    let i = idx - 16;
+                    let r = i / 36;
+                    let g = (i % 36) / 6;
+                    let b = i % 6;
+                    let to_f = |v: u8| {
+                        if v == 0 {
+                            0.0
+                        } else {
+                            (55.0 + v as f32 * 40.0) / 255.0
+                        }
+                    };
+                    [to_f(r), to_f(g), to_f(b), 1.0]
+                }
+                _ => {
+                    let gray = (8.0 + (idx - 232) as f32 * 10.0) / 255.0;
+                    [gray, gray, gray, 1.0]
+                }
+            }
+        }
+    }
+}
+
+fn make_fragment_style(
+    fg: [f32; 4],
+    bg: Option<[f32; 4]>,
+    bold: bool,
+    italic: bool,
+    cursor: Option<SugarCursor>,
+    width: f32,
+) -> sugarloaf::FragmentStyle {
+    use sugarloaf::font_introspector::{Attributes, Stretch, Style, Weight};
+
+    let font_attrs = Attributes::new(
+        Stretch::NORMAL,
+        if bold { Weight::BOLD } else { Weight::NORMAL },
+        if italic { Style::Italic } else { Style::Normal },
+    );
+
+    sugarloaf::FragmentStyle {
+        font_id: 0,
+        width,
+        font_attrs,
+        color: fg,
+        background_color: bg,
+        font_vars: 0,
+        decoration: None,
+        decoration_color: None,
+        cursor,
+        media: None,
+        drawable_char: None,
+    }
+}
+
+// ============================================================================
 // FFI exports
 // ============================================================================
 
@@ -97,17 +423,15 @@ pub extern "C" fn sugarloaf_win_destroy(handle: *mut SugarloafWinHandle) {
         return;
     }
     ffi_boundary((), || unsafe {
-        let _ = Box::from_raw(handle as *mut WinEngine);
+        let engine = Box::from_raw(handle as *mut WinEngine);
+        // Shutdown all terminal Machine threads
+        for (_, terminal) in engine.terminals.iter() {
+            let _ = terminal.pty_tx.send(Msg::Shutdown);
+        }
+        drop(engine);
     });
 }
 
-/// Initialize the D3D12 rendering surface for a given Win32 HWND.
-///
-/// Must be called before `sugarloaf_win_render`. The `hwnd` is the native
-/// window handle (HWND cast to void*), and `width`/`height` are the initial
-/// viewport size in logical pixels.
-///
-/// Returns `FFI_OK` on success.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_init_renderer(
     handle: *mut SugarloafWinHandle,
@@ -140,9 +464,23 @@ pub extern "C" fn sugarloaf_win_init_renderer(
         let layout = RootStyle::default();
 
         match Sugarloaf::new(win, renderer, &engine.font_library, layout) {
-            Ok(sugarloaf) => {
+            Ok(mut sugarloaf) => {
+                let rt_id = sugarloaf.create_rich_text();
+
+                sugarloaf.set_objects(vec![sugarloaf::Object::RichText(sugarloaf::RichText {
+                    id: rt_id,
+                    position: [0.0, 0.0],
+                    lines: None,
+                })]);
+
+                engine.rich_text_id = Some(rt_id);
+                engine.hwnd = NonZeroIsize::new(hwnd as isize);
+                engine.scale = scale;
                 engine.sugarloaf = Some(sugarloaf);
-                tracing::info!("Renderer initialized: {}x{} @ {:.1}x", width, height, scale);
+                eprintln!(
+                    "[ffi] Renderer initialized: {}x{} @ {:.1}x, rt_id={}",
+                    width, height, scale, rt_id
+                );
                 FFI_OK
             }
             Err(e) => {
@@ -165,25 +503,63 @@ pub extern "C" fn sugarloaf_win_create_terminal(
 
     ffi_boundary(FFI_ERR_PANIC, || {
         let engine = unsafe { engine_ref(handle) };
+        let id = engine.next_id;
+        engine.next_id += 1;
 
-        match create_pty("powershell.exe", vec![], &None, cols, rows) {
-            Ok(pty) => {
-                let id = engine.next_id;
-                engine.next_id += 1;
-                engine.terminals.insert(
-                    id,
-                    Terminal {
-                        pty,
-                        title: format!("Terminal {}", id),
-                    },
-                );
-                id
-            }
+        let pty = match create_pty("powershell.exe", vec![], &None, cols, rows) {
+            Ok(pty) => pty,
             Err(e) => {
                 eprintln!("[sugarloaf-ffi-win] create_terminal failed: {:?}", e);
-                FFI_ERR_IO
+                return FFI_ERR_IO;
             }
-        }
+        };
+
+        let dirty = Arc::new(AtomicBool::new(true));
+        let event_listener = WinEventListener::new(dirty.clone(), id as usize);
+
+        let size = CrosswordsSize::new(cols as usize, rows as usize);
+        let crosswords = Crosswords::new(
+            size,
+            CursorShape::Block,
+            event_listener.clone(),
+            rio_backend::event::WindowId::from(0),
+            id as usize,
+        );
+        let crosswords = Arc::new(RwLock::new(crosswords));
+
+        let machine = match Machine::new(
+            crosswords.clone(),
+            pty,
+            event_listener,
+            id as usize,
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!(
+                    "[sugarloaf-ffi-win] create machine failed: {:?}",
+                    e
+                );
+                return FFI_ERR_IO;
+            }
+        };
+
+        let pty_tx = machine.channel();
+        let machine_handle = machine.spawn();
+
+        engine.terminals.insert(
+            id,
+            Terminal {
+                crosswords,
+                pty_tx,
+                machine_handle,
+                dirty,
+                title: format!("Terminal {}", id),
+                cols,
+                rows,
+            },
+        );
+
+        id
     })
 }
 
@@ -199,7 +575,10 @@ pub extern "C" fn sugarloaf_win_close_terminal(
     ffi_boundary(FFI_ERR_PANIC, || {
         let engine = unsafe { engine_ref(handle) };
         match engine.terminals.remove(&terminal_id) {
-            Some(_) => FFI_OK,
+            Some(terminal) => {
+                let _ = terminal.pty_tx.send(Msg::Shutdown);
+                FFI_OK
+            }
             None => FFI_ERR_NOT_FOUND,
         }
     })
@@ -223,19 +602,13 @@ pub extern "C" fn sugarloaf_win_write(
         let engine = unsafe { engine_ref(handle) };
         let bytes = unsafe { slice::from_raw_parts(data, len as usize) };
 
-        match engine.terminals.get_mut(&terminal_id) {
+        match engine.terminals.get(&terminal_id) {
             Some(terminal) => {
-                let writer = terminal.pty.writer();
-                match writer.write_all(bytes) {
-                    Ok(()) => FFI_OK,
-                    Err(e) => {
-                        eprintln!(
-                            "[sugarloaf-ffi-win] write failed (id={}): {:?}",
-                            terminal_id, e
-                        );
-                        FFI_ERR_IO
-                    }
-                }
+                use std::borrow::Cow;
+                let _ = terminal
+                    .pty_tx
+                    .send(Msg::Input(Cow::Owned(bytes.to_vec())));
+                FFI_OK
             }
             None => FFI_ERR_NOT_FOUND,
         }
@@ -260,33 +633,33 @@ pub extern "C" fn sugarloaf_win_resize(
 
         match engine.terminals.get_mut(&terminal_id) {
             Some(terminal) => {
+                terminal.cols = cols;
+                terminal.rows = rows;
+
+                // Resize crosswords grid
+                {
+                    let mut cw = terminal.crosswords.write();
+                    let size = CrosswordsSize::new(cols as usize, rows as usize);
+                    cw.resize::<CrosswordsSize>(size);
+                }
+
+                // Notify PTY of size change
                 let winsize = WinsizeBuilder {
                     rows,
                     cols,
                     width,
                     height,
                 };
-                match terminal.pty.set_winsize(winsize) {
-                    Ok(()) => FFI_OK,
-                    Err(e) => {
-                        eprintln!(
-                            "[sugarloaf-ffi-win] resize failed (id={}): {:?}",
-                            terminal_id, e
-                        );
-                        FFI_ERR_IO
-                    }
-                }
+                let _ = terminal.pty_tx.send(Msg::Resize(winsize));
+                terminal.dirty.store(true, Ordering::Release);
+
+                FFI_OK
             }
             None => FFI_ERR_NOT_FOUND,
         }
     })
 }
 
-/// Render a single frame using the D3D12 Sugarloaf backend.
-///
-/// The renderer must have been initialized via `sugarloaf_win_init_renderer`.
-/// Returns `FFI_OK` on success, or `FFI_ERR_RENDER` if the renderer is not
-/// initialized or the frame fails.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_render(handle: *mut SugarloafWinHandle) -> i32 {
     if handle.is_null() {
@@ -301,14 +674,50 @@ pub extern "C" fn sugarloaf_win_render(handle: *mut SugarloafWinHandle) -> i32 {
             None => return FFI_ERR_RENDER,
         };
 
+        let rt_id = match engine.rich_text_id {
+            Some(id) => id,
+            None => return FFI_ERR_RENDER,
+        };
+
+        static DIAG_COUNTER: std::sync::atomic::AtomicU32 =
+            std::sync::atomic::AtomicU32::new(0);
+
+        let mut needs_render = false;
+
+        if let Some((_, terminal)) = engine.terminals.iter().next() {
+            if terminal.dirty.swap(false, Ordering::AcqRel) {
+                let cw = terminal.crosswords.read();
+
+                let n = DIAG_COUNTER.fetch_add(1, Ordering::Relaxed);
+                if n < 10 || n % 120 == 0 {
+                    let grid = &cw.grid;
+                    let lines = grid.screen_lines();
+                    let cols = grid.columns();
+                    let mut non_empty = 0usize;
+                    for li in 0..lines {
+                        for ci in 0..cols {
+                            let c = grid[Line(li as i32)][Column(ci)].c;
+                            if c != ' ' && c != '\0' {
+                                non_empty += 1;
+                            }
+                        }
+                    }
+                    eprintln!(
+                        "[diag #{}] grid={}x{}, non_empty={}, rt_id={}, cursor={:?}",
+                        n, cols, lines, non_empty, rt_id, cw.cursor()
+                    );
+                }
+
+                extract_grid_to_sugarloaf(sugarloaf, &cw, &rt_id);
+                needs_render = true;
+            }
+        }
+
         sugarloaf.render();
         FFI_OK
     })
 }
 
-/// Resize the rendering surface (call when the window is resized).
-///
-/// Returns `FFI_OK` on success.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_resize_renderer(
     handle: *mut SugarloafWinHandle,
@@ -321,10 +730,51 @@ pub extern "C" fn sugarloaf_win_resize_renderer(
 
     ffi_boundary(FFI_ERR_PANIC, || {
         let engine = unsafe { engine_ref(handle) };
-        if let Some(sugarloaf) = engine.sugarloaf.as_mut() {
-            sugarloaf.resize(width as u32, height as u32);
+
+        let hwnd_nz = match engine.hwnd {
+            Some(h) => h,
+            None => return FFI_ERR_RENDER,
+        };
+
+        // Drop old Sugarloaf to fully release all D3D12 resources
+        engine.sugarloaf.take();
+        engine.rich_text_id = None;
+
+        let wh = Win32WindowHandle::new(hwnd_nz);
+        let win = SugarloafWindow {
+            handle: RawWindowHandle::Win32(wh),
+            display: RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
+            size: SugarloafWindowSize { width, height },
+            scale: engine.scale,
+        };
+
+        let renderer = SugarloafRenderer::default();
+        let layout = RootStyle::default();
+
+        match Sugarloaf::new(win, renderer, &engine.font_library, layout) {
+            Ok(mut sugarloaf) => {
+                let rt_id = sugarloaf.create_rich_text();
+                sugarloaf.set_objects(vec![sugarloaf::Object::RichText(
+                    sugarloaf::RichText {
+                        id: rt_id,
+                        position: [0.0, 0.0],
+                        lines: None,
+                    },
+                )]);
+                engine.rich_text_id = Some(rt_id);
+                engine.sugarloaf = Some(sugarloaf);
+
+                // Force a dirty re-extract on next render
+                for (_, terminal) in engine.terminals.iter() {
+                    terminal.dirty.store(true, Ordering::Release);
+                }
+                FFI_OK
+            }
+            Err(e) => {
+                eprintln!("[ffi] resize: recreate failed: {:?}", e);
+                FFI_ERR_RENDER
+            }
         }
-        FFI_OK
     })
 }
 
@@ -341,11 +791,46 @@ pub extern "C" fn sugarloaf_win_get_title(
         let engine = unsafe { engine_ref(handle) };
         match engine.terminals.get(&terminal_id) {
             Some(terminal) => {
-                CString::new(terminal.title.as_str())
+                let cw = terminal.crosswords.read();
+                let title = if cw.title.is_empty() {
+                    &terminal.title
+                } else {
+                    &cw.title
+                };
+                CString::new(title.as_str())
                     .map(|cs| cs.into_raw())
                     .unwrap_or(std::ptr::null_mut())
             }
             None => std::ptr::null_mut(),
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_scroll(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+    delta: i32,
+) -> i32 {
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                use rio_backend::crosswords::grid::Scroll;
+                let scroll = match delta {
+                    i32::MAX => Scroll::Bottom,
+                    i32::MIN => Scroll::Top,
+                    d => Scroll::Delta(d),
+                };
+                terminal.crosswords.write().scroll_display(scroll);
+                terminal.dirty.store(true, Ordering::Release);
+                FFI_OK
+            }
+            None => FFI_ERR_NOT_FOUND,
         }
     })
 }
