@@ -24,7 +24,7 @@ fn main() {
 }
 
 struct Application {
-    sugarloaf: Option<Sugarloaf<'static>>,
+    sugarloaf: Option<Sugarloaf>,
     window: Option<Window>,
     height: f32,
     width: f32,
