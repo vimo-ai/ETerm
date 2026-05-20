@@ -1,59 +1,46 @@
 //! Windows FFI layer for ETerm terminal
 //!
-//! Provides C ABI functions for terminal lifecycle management using ConPTY.
-//! This crate is Windows-only and will not compile on other platforms.
+//! Provides C ABI functions for terminal lifecycle + rendering using ConPTY
+//! and the Sugarloaf D3D12 backend.
 
 use std::collections::HashMap;
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, c_void, CString};
 use std::io::Write;
+use std::num::NonZeroIsize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
 
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle};
+use sugarloaf::context::GpuContext;
+use sugarloaf::{Sugarloaf, SugarloafRenderer, SugarloafWindow, SugarloafWindowSize};
+use sugarloaf::font::FontLibrary;
+use sugarloaf::layout::RootStyle;
 use teletypewriter::windows::{create_pty, Pty};
 use teletypewriter::{ProcessReadWrite, WinsizeBuilder};
 
-// ============================================================================
-// Error codes
-// ============================================================================
-
-/// Success
 const FFI_OK: i32 = 0;
-/// Null handle pointer
 const FFI_ERR_NULL_HANDLE: i32 = -1;
-/// Terminal not found
 const FFI_ERR_NOT_FOUND: i32 = -2;
-/// I/O error (PTY creation, write, resize)
 const FFI_ERR_IO: i32 = -3;
-/// Null data pointer
 const FFI_ERR_NULL_DATA: i32 = -4;
-/// Panic caught at FFI boundary
+const FFI_ERR_RENDER: i32 = -5;
 const FFI_ERR_PANIC: i32 = -99;
 
-// ============================================================================
-// Opaque handle
-// ============================================================================
-
-/// Opaque handle exposed to C callers.
-///
-/// The actual data behind the pointer is a `WinEngine`.
 #[repr(C)]
 pub struct SugarloafWinHandle {
     _private: [u8; 0],
 }
 
-// ============================================================================
-// Internal engine state
-// ============================================================================
-
-/// Per-terminal state wrapping a ConPTY instance.
 struct Terminal {
     pty: Pty,
+    title: String,
 }
 
-/// Top-level engine that owns all terminals.
 struct WinEngine {
     terminals: HashMap<i32, Terminal>,
     next_id: i32,
+    sugarloaf: Option<Sugarloaf>,
+    font_library: FontLibrary,
 }
 
 impl WinEngine {
@@ -61,25 +48,16 @@ impl WinEngine {
         Self {
             terminals: HashMap::new(),
             next_id: 1,
+            sugarloaf: None,
+            font_library: FontLibrary::default(),
         }
     }
 }
 
-// ============================================================================
-// Helper utilities
-// ============================================================================
-
-/// Convert an opaque handle pointer back to a mutable `WinEngine` reference.
-///
-/// # Safety
-///
-/// The caller must guarantee that `handle` was produced by `sugarloaf_win_init`
-/// and has not yet been passed to `sugarloaf_win_destroy`.
 unsafe fn engine_ref<'a>(handle: *mut SugarloafWinHandle) -> &'a mut WinEngine {
     &mut *(handle as *mut WinEngine)
 }
 
-/// FFI boundary guard -- catches panics so they never unwind across the C ABI.
 #[inline]
 fn ffi_boundary<T, F>(default: T, f: F) -> T
 where
@@ -105,10 +83,6 @@ where
 // FFI exports
 // ============================================================================
 
-/// Create a new `WinEngine` and return an opaque handle.
-///
-/// Returns a non-null pointer on success, or null on failure.
-/// The caller must eventually pass the handle to `sugarloaf_win_destroy`.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_init() -> *mut SugarloafWinHandle {
     ffi_boundary(std::ptr::null_mut(), || {
@@ -117,9 +91,6 @@ pub extern "C" fn sugarloaf_win_init() -> *mut SugarloafWinHandle {
     })
 }
 
-/// Destroy a `WinEngine` and all terminals it owns.
-///
-/// After this call the handle is invalid and must not be reused.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_destroy(handle: *mut SugarloafWinHandle) {
     if handle.is_null() {
@@ -130,9 +101,58 @@ pub extern "C" fn sugarloaf_win_destroy(handle: *mut SugarloafWinHandle) {
     });
 }
 
-/// Create a new terminal backed by ConPTY running `powershell.exe`.
+/// Initialize the D3D12 rendering surface for a given Win32 HWND.
 ///
-/// Returns a positive terminal ID on success, or a negative error code.
+/// Must be called before `sugarloaf_win_render`. The `hwnd` is the native
+/// window handle (HWND cast to void*), and `width`/`height` are the initial
+/// viewport size in logical pixels.
+///
+/// Returns `FFI_OK` on success.
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_init_renderer(
+    handle: *mut SugarloafWinHandle,
+    hwnd: *mut c_void,
+    width: f32,
+    height: f32,
+    scale: f32,
+) -> i32 {
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+    if hwnd.is_null() {
+        return FFI_ERR_NULL_DATA;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+
+        let wh = Win32WindowHandle::new(
+            NonZeroIsize::new(hwnd as isize).expect("HWND must be non-zero"),
+        );
+        let win = SugarloafWindow {
+            handle: RawWindowHandle::Win32(wh),
+            display: RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
+            size: SugarloafWindowSize { width, height },
+            scale,
+        };
+
+        let renderer = SugarloafRenderer::default();
+        let layout = RootStyle::default();
+
+        match Sugarloaf::new(win, renderer, &engine.font_library, layout) {
+            Ok(sugarloaf) => {
+                engine.sugarloaf = Some(sugarloaf);
+                tracing::info!("Renderer initialized: {}x{} @ {:.1}x", width, height, scale);
+                FFI_OK
+            }
+            Err(e) => {
+                eprintln!("[sugarloaf-ffi-win] init_renderer failed: {:?}", e);
+                FFI_ERR_RENDER
+            }
+        }
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_create_terminal(
     handle: *mut SugarloafWinHandle,
@@ -150,23 +170,23 @@ pub extern "C" fn sugarloaf_win_create_terminal(
             Ok(pty) => {
                 let id = engine.next_id;
                 engine.next_id += 1;
-                engine.terminals.insert(id, Terminal { pty });
+                engine.terminals.insert(
+                    id,
+                    Terminal {
+                        pty,
+                        title: format!("Terminal {}", id),
+                    },
+                );
                 id
             }
             Err(e) => {
-                eprintln!(
-                    "[sugarloaf-ffi-win] create_terminal failed: {:?}",
-                    e
-                );
+                eprintln!("[sugarloaf-ffi-win] create_terminal failed: {:?}", e);
                 FFI_ERR_IO
             }
         }
     })
 }
 
-/// Close and remove a terminal by ID.
-///
-/// Returns `FFI_OK` (0) on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_close_terminal(
     handle: *mut SugarloafWinHandle,
@@ -178,21 +198,13 @@ pub extern "C" fn sugarloaf_win_close_terminal(
 
     ffi_boundary(FFI_ERR_PANIC, || {
         let engine = unsafe { engine_ref(handle) };
-
         match engine.terminals.remove(&terminal_id) {
-            Some(_terminal) => {
-                // Dropping the Terminal (and its Pty) cleans up ConPTY resources.
-                FFI_OK
-            }
+            Some(_) => FFI_OK,
             None => FFI_ERR_NOT_FOUND,
         }
     })
 }
 
-/// Write bytes to a terminal's PTY.
-///
-/// `data` must point to at least `len` bytes.
-/// Returns `FFI_OK` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_write(
     handle: *mut SugarloafWinHandle,
@@ -230,11 +242,6 @@ pub extern "C" fn sugarloaf_win_write(
     })
 }
 
-/// Resize a terminal's PTY.
-///
-/// `cols` and `rows` are the new grid dimensions.
-/// `width` and `height` are the pixel dimensions of the viewport.
-/// Returns `FFI_OK` on success, or a negative error code.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_resize(
     handle: *mut SugarloafWinHandle,
@@ -275,31 +282,74 @@ pub extern "C" fn sugarloaf_win_resize(
     })
 }
 
-/// Render stub -- not yet implemented.
+/// Render a single frame using the D3D12 Sugarloaf backend.
 ///
-/// Rendering integration will come in a later phase.
-/// Returns `FFI_OK`.
+/// The renderer must have been initialized via `sugarloaf_win_init_renderer`.
+/// Returns `FFI_OK` on success, or `FFI_ERR_RENDER` if the renderer is not
+/// initialized or the frame fails.
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_render(handle: *mut SugarloafWinHandle) -> i32 {
-    // Rendering not yet wired -- intentional no-op.
-    FFI_OK
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+
+        let sugarloaf = match engine.sugarloaf.as_mut() {
+            Some(s) => s,
+            None => return FFI_ERR_RENDER,
+        };
+
+        sugarloaf.render();
+        FFI_OK
+    })
 }
 
-/// Get the title of a terminal -- not yet implemented.
+/// Resize the rendering surface (call when the window is resized).
 ///
-/// Returns a null pointer (title tracking will come with rendering integration).
-/// When implemented, the caller must free the returned string with
-/// `sugarloaf_win_free_string`.
+/// Returns `FFI_OK` on success.
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_resize_renderer(
+    handle: *mut SugarloafWinHandle,
+    width: f32,
+    height: f32,
+) -> i32 {
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+        if let Some(sugarloaf) = engine.sugarloaf.as_mut() {
+            sugarloaf.resize(width as u32, height as u32);
+        }
+        FFI_OK
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_get_title(
     handle: *mut SugarloafWinHandle,
     terminal_id: i32,
 ) -> *mut c_char {
-    // Title tracking not yet wired -- intentional stub.
-    std::ptr::null_mut()
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    ffi_boundary(std::ptr::null_mut(), || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                CString::new(terminal.title.as_str())
+                    .map(|cs| cs.into_raw())
+                    .unwrap_or(std::ptr::null_mut())
+            }
+            None => std::ptr::null_mut(),
+        }
+    })
 }
 
-/// Free a string previously returned by this library (e.g. from `sugarloaf_win_get_title`).
 #[no_mangle]
 pub extern "C" fn sugarloaf_win_free_string(s: *mut c_char) {
     if !s.is_null() {

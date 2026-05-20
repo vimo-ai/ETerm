@@ -38,6 +38,33 @@ internal static partial class NativeMethods
     internal static partial void sugarloaf_win_destroy(IntPtr handle);
 
     // =========================================================================
+    // Renderer initialization
+    // =========================================================================
+
+    /// <summary>
+    /// Initialize the D3D12 rendering surface for a Win32 HWND.
+    /// Must be called before sugarloaf_win_render.
+    /// Returns 0 on success, negative error code on failure.
+    /// </summary>
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_init_renderer")]
+    internal static partial int sugarloaf_win_init_renderer(
+        IntPtr handle,
+        IntPtr hwnd,
+        float width,
+        float height,
+        float scale);
+
+    /// <summary>
+    /// Resize the rendering surface (call when the window is resized).
+    /// Returns 0 on success, negative error code on failure.
+    /// </summary>
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_resize_renderer")]
+    internal static partial int sugarloaf_win_resize_renderer(
+        IntPtr handle,
+        float width,
+        float height);
+
+    // =========================================================================
     // Terminal management
     // =========================================================================
 
