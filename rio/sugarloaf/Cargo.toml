@@ -53,13 +53,6 @@ yazi = { version = "0.2.1", optional = true }
 zeno = { version = "0.3.3", optional = true }
 futures = { workspace = true }
 
-# Skia renderer (macOS only)
-skia-safe = { version = "0.93.1", features = ["metal", "textlayout"] }
-objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSArray", "NSString", "NSGeometry"] }
-objc2-quartz-core = { version = "0.2", features = ["CAMetalLayer"] }
-objc2-metal = "0.2"
-
 # Keep wgpu for filters (will be removed later)
 wgpu = { workspace = true, optional = true }
 
@@ -90,10 +83,37 @@ ttf-parser = { version = "0.25.1", default-features = false, features = ["openty
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))'.dependencies]
 fontconfig-parser = { version = "0.5.8", default-features = false }
 
+# Skia + Metal backend (macOS)
+[target.'cfg(target_os = "macos")'.dependencies]
+skia-safe = { version = "0.93.1", features = ["metal", "textlayout"] }
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSArray", "NSString", "NSGeometry"] }
+objc2-quartz-core = { version = "0.2", features = ["CAMetalLayer"] }
+objc2-metal = "0.2"
+
+# Skia + Direct3D 12 backend (Windows)
+[target.'cfg(target_os = "windows")'.dependencies]
+skia-safe = { version = "0.93.1", features = ["d3d", "textlayout"] }
+windows = { version = "0.62.0", features = [
+    "Win32",
+    "Win32_Foundation",
+    "Win32_Graphics",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+] }
+
 [dev-dependencies]
 png = "0.17.16"
 deflate = "1.0.0"
 criterion = { workspace = true }
+
+[[example]]
+name = "dx12_test"
 
 [features]
 default = ["scale", "render", "wgpu-backend"]

@@ -23,7 +23,7 @@ fn main() {
 }
 
 struct Application {
-    sugarloaf: Option<Sugarloaf<'static>>,
+    sugarloaf: Option<Sugarloaf>,
     window: Option<Window>,
     rich_texts: Vec<usize>,
     height: f32,

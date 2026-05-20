@@ -13,7 +13,8 @@ use crate::layout::{RichTextLayout, RootStyle};
 use crate::sugarloaf::graphics::Graphics;
 use crate::Content;
 use crate::SugarDimensions;
-use crate::{context::Context, Object, Quad};
+use crate::context::{Context, GpuContext};
+use crate::{Object, Quad};
 use core::fmt::{Debug, Formatter};
 use primitives::ImageProperties;
 use raw_window_handle::{
@@ -77,8 +78,8 @@ impl LineLayoutCache {
 
 // ========== 主要渲染结构体 ==========
 
-pub struct Sugarloaf<'a> {
-    pub ctx: Context<'a>,
+pub struct Sugarloaf {
+    pub ctx: Context,
     state: state::SugarState,
     pub background_color: Option<Color4f>,
     pub graphics: Graphics,
@@ -106,12 +107,12 @@ pub struct SugarloafErrors {
     pub fonts_not_found: Vec<SugarloafFont>,
 }
 
-pub struct SugarloafWithErrors<'a> {
-    pub instance: Sugarloaf<'a>,
+pub struct SugarloafWithErrors {
+    pub instance: Sugarloaf,
     pub errors: SugarloafErrors,
 }
 
-impl Debug for SugarloafWithErrors<'_> {
+impl Debug for SugarloafWithErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.errors)
     }
@@ -187,13 +188,13 @@ impl HasDisplayHandle for SugarloafWindow {
 unsafe impl Send for SugarloafWindow {}
 unsafe impl Sync for SugarloafWindow {}
 
-impl<'a> Sugarloaf<'a> {
+impl Sugarloaf {
     pub fn new(
         window: SugarloafWindow,
         renderer: SugarloafRenderer,
         font_library: &FontLibrary,
         layout: RootStyle,
-    ) -> Result<Sugarloaf<'a>, Box<SugarloafWithErrors<'a>>> {
+    ) -> Result<Sugarloaf, Box<SugarloafWithErrors>> {
         let font_features = renderer.font_features.to_owned();
         let ctx = Context::new(window, renderer);
 
@@ -250,18 +251,18 @@ impl<'a> Sugarloaf<'a> {
     }
 
     #[inline]
-    pub fn get_context(&self) -> &Context<'_> {
+    pub fn get_context(&self) -> &Context {
         &self.ctx
     }
 
     #[inline]
-    pub fn get_context_mut(&mut self) -> &mut Context<'a> {
+    pub fn get_context_mut(&mut self) -> &mut Context {
         &mut self.ctx
     }
 
     #[inline]
     pub fn get_scale(&self) -> f32 {
-        self.ctx.scale
+        self.ctx.scale()
     }
 
     #[inline]
@@ -378,7 +379,7 @@ impl<'a> Sugarloaf<'a> {
     pub fn get_font_metrics_skia(&self) -> (f32, f32, f32) {
         use skia_safe::Font;
 
-        let scale = self.ctx.scale;
+        let scale = self.ctx.scale();
         let font_size = self.font_size * scale;
         let line_height_factor = self.state.style.line_height;
 
@@ -407,7 +408,7 @@ impl<'a> Sugarloaf<'a> {
 
     // #[cfg(not(target_os = "macos"))]
     // pub fn get_font_metrics_skia(&self) -> (f32, f32, f32) {
-    //     let font_size = self.font_size * self.ctx.scale;
+    //     let font_size = self.font_size * self.ctx.scale();
     //     let cell_width = font_size * 0.6;
     //     let cell_height = font_size * 1.2;
     //     (cell_width, cell_height, cell_height)
@@ -420,7 +421,7 @@ impl<'a> Sugarloaf<'a> {
 
     #[inline]
     pub fn window_size(&self) -> SugarloafWindowSize {
-        self.ctx.size
+        self.ctx.size()
     }
 
     #[inline]
@@ -436,7 +437,7 @@ impl<'a> Sugarloaf<'a> {
 
     #[inline]
     pub fn rescale(&mut self, scale: f32) {
-        self.ctx.scale = scale;
+        self.ctx.set_scale(scale);
         self.state.compute_layout_rescale_skia(scale);
 
         // Clear layout cache when rescaling
@@ -485,7 +486,7 @@ impl<'a> Sugarloaf<'a> {
         let clear_color = self.background_color.unwrap_or(Color4f::new(0.0, 0.0, 0.0, 1.0));
         canvas.clear(clear_color);
 
-        let scale = self.ctx.scale;
+        let scale = self.ctx.scale();
 
         // Render quads (backgrounds, borders, etc.)
         for quad in &self.state.quads {
