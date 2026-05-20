@@ -2,9 +2,10 @@
     x:Class="ETerm.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ETerm"
     Title="ETerm">
 
     <Grid>
-        <SwapChainPanel x:Name="TerminalPanel" />
+        <local:TerminalControl x:Name="TerminalControl" />
     </Grid>
 </Window>

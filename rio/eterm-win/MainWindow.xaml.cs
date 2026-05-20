@@ -1,32 +1,17 @@
 using System;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
+using WinRT.Interop;
 
 namespace ETerm;
 
-/// <summary>
-/// Main window hosting the terminal rendering surface.
-///
-/// Lifecycle:
-///   Loaded  -> sugarloaf_win_init + create_terminal
-///   Closed  -> close_terminal + sugarloaf_win_destroy
-///   Resized -> sugarloaf_win_resize
-/// </summary>
 public sealed partial class MainWindow : Window
 {
-    /// <summary>
-    /// Opaque handle to the native sugarloaf-ffi-win engine.
-    /// </summary>
     private IntPtr _engineHandle = IntPtr.Zero;
-
-    /// <summary>
-    /// ID of the primary terminal (returned by create_terminal).
-    /// </summary>
     private int _terminalId = -1;
+    private DispatcherTimer? _renderTimer;
+    private bool _rendererReady;
 
-    /// <summary>
-    /// Default terminal dimensions (columns x rows).
-    /// </summary>
     private const ushort DefaultCols = 80;
     private const ushort DefaultRows = 24;
 
@@ -34,49 +19,93 @@ public sealed partial class MainWindow : Window
     {
         this.InitializeComponent();
 
-        // Wire up lifecycle events
-        TerminalPanel.Loaded += OnTerminalPanelLoaded;
-        TerminalPanel.SizeChanged += OnTerminalPanelSizeChanged;
+        TerminalControl.Loaded += OnTerminalControlLoaded;
+        TerminalControl.SizeChanged += OnSizeChanged;
         this.Closed += OnWindowClosed;
     }
 
-    private void OnTerminalPanelLoaded(object sender, RoutedEventArgs e)
+    private void OnTerminalControlLoaded(object sender, RoutedEventArgs e)
     {
         _engineHandle = NativeMethods.sugarloaf_win_init();
         if (_engineHandle == IntPtr.Zero)
         {
-            // Engine initialization failed -- this is expected until the
-            // native DLL stub is replaced with a real implementation.
+            System.Diagnostics.Debug.WriteLine("[ETerm] sugarloaf_win_init failed");
             return;
         }
+
+        IntPtr hwnd = WindowNative.GetWindowHandle(this);
+
+        float width = (float)TerminalControl.ActualWidth;
+        float height = (float)TerminalControl.ActualHeight;
+        if (width < 1) width = 800;
+        if (height < 1) height = 600;
+
+        float scale = (float)(TerminalControl.XamlRoot?.RasterizationScale ?? 1.0);
+
+        int result = NativeMethods.sugarloaf_win_init_renderer(
+            _engineHandle, hwnd, width, height, scale);
+
+        if (result != 0)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[ETerm] init_renderer failed: {result}");
+            return;
+        }
+
+        _rendererReady = true;
 
         _terminalId = NativeMethods.sugarloaf_win_create_terminal(
             _engineHandle, DefaultCols, DefaultRows);
+
+        TerminalControl.Attach(_engineHandle, _terminalId);
+
+        _renderTimer = new DispatcherTimer();
+        _renderTimer.Interval = TimeSpan.FromMilliseconds(16);
+        _renderTimer.Tick += OnRenderTick;
+        _renderTimer.Start();
+
+        System.Diagnostics.Debug.WriteLine(
+            $"[ETerm] Ready: terminal={_terminalId}, {width}x{height} @{scale}x");
     }
 
-    private void OnTerminalPanelSizeChanged(object sender, SizeChangedEventArgs e)
+    private void OnRenderTick(object? sender, object e)
     {
-        if (_engineHandle == IntPtr.Zero || _terminalId < 0)
-        {
+        if (!_rendererReady || _engineHandle == IntPtr.Zero)
             return;
-        }
 
-        // TODO: Compute cols/rows from pixel size and font metrics
-        NativeMethods.sugarloaf_win_resize(
-            _engineHandle,
-            _terminalId,
-            DefaultCols,
-            DefaultRows,
-            (float)e.NewSize.Width,
-            (float)e.NewSize.Height);
+        NativeMethods.sugarloaf_win_render(_engineHandle);
+    }
+
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_engineHandle == IntPtr.Zero || !_rendererReady)
+            return;
+
+        float width = (float)e.NewSize.Width;
+        float height = (float)e.NewSize.Height;
+        if (width < 1 || height < 1)
+            return;
+
+        NativeMethods.sugarloaf_win_resize_renderer(_engineHandle, width, height);
+
+        if (_terminalId >= 0)
+        {
+            NativeMethods.sugarloaf_win_resize(
+                _engineHandle, _terminalId,
+                DefaultCols, DefaultRows,
+                (ushort)width, (ushort)height);
+        }
     }
 
     private void OnWindowClosed(object sender, WindowEventArgs args)
     {
+        _renderTimer?.Stop();
+        _renderTimer = null;
+
         if (_engineHandle == IntPtr.Zero)
-        {
             return;
-        }
+
+        TerminalControl.Detach();
 
         if (_terminalId >= 0)
         {
@@ -88,22 +117,14 @@ public sealed partial class MainWindow : Window
         _engineHandle = IntPtr.Zero;
     }
 
-    /// <summary>
-    /// Helper: get the current terminal title from the native engine.
-    /// Returns null if unavailable.
-    /// </summary>
     public string? GetTerminalTitle()
     {
         if (_engineHandle == IntPtr.Zero || _terminalId < 0)
-        {
             return null;
-        }
 
         IntPtr titlePtr = NativeMethods.sugarloaf_win_get_title(_engineHandle, _terminalId);
         if (titlePtr == IntPtr.Zero)
-        {
             return null;
-        }
 
         try
         {
