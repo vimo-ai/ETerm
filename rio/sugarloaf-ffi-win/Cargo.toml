@@ -1,0 +1,12 @@
+[package]
+name = "sugarloaf-ffi-win"
+version = "0.1.0"
+edition = "2021"
+description = "Windows FFI layer for ETerm terminal (ConPTY-based)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+teletypewriter = { path = "../teletypewriter" }
+libc = "0.2.174"

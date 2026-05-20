@@ -7,6 +7,7 @@ members = [
     "rio-proc-macros",
     "rio-backend",
     "sugarloaf-ffi",
+    "sugarloaf-ffi-win",
 ]
 resolver = "2"
 
