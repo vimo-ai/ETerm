@@ -14,9 +14,14 @@ enum ClaudeMonitorPaths {
         return ETermPaths.plugins + "/claude-monitor"
     }
 
-    /// 用量历史存储路径
+    /// 用量历史存储路径（最近 30 天活跃数据）
     static var usageHistory: String {
         return "\(dataDirectory)/usage_history.json"
+    }
+
+    /// 用量历史归档路径
+    static var usageHistoryArchive: String {
+        return "\(dataDirectory)/usage_history_archive.json"
     }
 
     /// 确保父目录存在

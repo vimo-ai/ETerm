@@ -82,18 +82,17 @@ final class UsageHistoryStore: ObservableObject {
     ) -> Bool {
         let now = Date()
 
-        // 检测周期重置
         if let lastPoint = dataPoints.last {
-            let utilizationDrop = lastPoint.utilization - utilization
+            let delta = utilization - lastPoint.utilization
 
-            // 当利用率下降超过阈值时，生成新的周期ID
-            if utilizationDrop > resetThreshold {
-                currentCycleId = generateCycleId()
-            }
-
-            // 只在 utilization 变化时才记录新数据点
-            if abs(lastPoint.utilization - utilization) < 0.1 {
+            if delta > 0.5 {
+                // 正常增长，记录
+            } else if delta > -resetThreshold {
+                // 不变或小降（噪声/session 缓存差异），跳过
                 return false
+            } else {
+                // 大降超过阈值，cycle 重置
+                currentCycleId = generateCycleId()
             }
         }
 
@@ -211,11 +210,36 @@ final class UsageHistoryStore: ObservableObject {
             to: Date()
         ) ?? Date()
 
-        let originalCount = dataPoints.count
-        dataPoints = dataPoints.filter { $0.timestamp >= cutoffDate }
+        let oldPoints = dataPoints.filter { $0.timestamp < cutoffDate }
+        guard !oldPoints.isEmpty else { return }
 
-        if originalCount - dataPoints.count > 0 {
-            saveData()
+        archivePoints(oldPoints)
+        dataPoints = dataPoints.filter { $0.timestamp >= cutoffDate }
+        saveData()
+    }
+
+    private func archivePoints(_ points: [UsageDataPoint]) {
+        let archivePath = ClaudeMonitorPaths.usageHistoryArchive
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = .prettyPrinted
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        do {
+            try ClaudeMonitorPaths.ensureParentDirectory(for: archivePath)
+
+            var existing: [UsageDataPoint] = []
+            if FileManager.default.fileExists(atPath: archivePath) {
+                let data = try Data(contentsOf: URL(fileURLWithPath: archivePath))
+                existing = try decoder.decode([UsageDataPoint].self, from: data)
+            }
+
+            existing.append(contentsOf: points)
+            let data = try encoder.encode(existing)
+            try data.write(to: URL(fileURLWithPath: archivePath), options: .atomic)
+        } catch {
+            logError("[ClaudeMonitor] 归档用量历史失败: \(error)")
         }
     }
 }
