@@ -14,9 +14,10 @@ use parking_lot::RwLock;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle};
 use rio_backend::ansi::CursorShape;
 use rio_backend::crosswords::grid::Dimensions;
-use rio_backend::crosswords::pos::{Column, Line};
+use rio_backend::crosswords::pos::{Column, Line, Pos, Side};
 use rio_backend::crosswords::square::Flags;
 use rio_backend::crosswords::{Crosswords, CrosswordsSize};
+use rio_backend::selection::{Selection, SelectionType};
 use rio_backend::event::Msg;
 use sugarloaf::context::GpuContext;
 use sugarloaf::SugarCursor;
@@ -133,6 +134,11 @@ fn extract_grid_to_sugarloaf(
     let cursor_shape = cursor_state.content;
     let cursor_color = [1.0f32, 1.0, 1.0, 1.0];
 
+    let selection_range = crosswords
+        .selection
+        .as_ref()
+        .and_then(|s| s.to_range(crosswords));
+
     let content = sugarloaf.content();
 
     let builder_state = match content.get_state_mut(rich_text_id) {
@@ -178,12 +184,21 @@ fn extract_grid_to_sugarloaf(
                 None
             };
 
-            let (actual_fg, actual_bg) = if inverse {
+            let (mut actual_fg, mut actual_bg) = if inverse {
                 let bg_color = bg.unwrap_or([0.0, 0.0, 0.0, 1.0]);
                 (bg_color, Some(fg))
             } else {
                 (fg, bg)
             };
+
+            if let Some(ref range) = selection_range {
+                let cell_pos = Pos::new(visual_line, Column(col_idx));
+                if range.contains(cell_pos) {
+                    let tmp = actual_fg;
+                    actual_fg = actual_bg.unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                    actual_bg = Some(tmp);
+                }
+            }
 
             let style_changed = actual_fg != current_fg
                 || actual_bg != current_bg
@@ -842,4 +857,284 @@ pub extern "C" fn sugarloaf_win_free_string(s: *mut c_char) {
             drop(CString::from_raw(s));
         }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FontMetrics {
+    pub cell_width: f32,
+    pub cell_height: f32,
+    pub line_height: f32,
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_get_font_metrics(
+    handle: *mut SugarloafWinHandle,
+    out: *mut FontMetrics,
+) -> i32 {
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+    if out.is_null() {
+        return FFI_ERR_NULL_DATA;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+
+        let sugarloaf = match engine.sugarloaf.as_ref() {
+            Some(s) => s,
+            None => return FFI_ERR_RENDER,
+        };
+
+        let (cell_width, cell_height, line_height) = sugarloaf.get_font_metrics_skia();
+
+        unsafe {
+            *out = FontMetrics {
+                cell_width,
+                cell_height,
+                line_height,
+            };
+        }
+
+        FFI_OK
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_is_bracketed_paste_enabled(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    ffi_boundary(false, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                use rio_backend::crosswords::Mode;
+                let cw = terminal.crosswords.read();
+                cw.mode().contains(Mode::BRACKETED_PASTE)
+            }
+            None => false,
+        }
+    })
+}
+
+#[repr(C)]
+pub struct ScreenToAbsoluteResult {
+    pub absolute_row: i64,
+    pub col: usize,
+    pub success: bool,
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_screen_to_absolute(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+    screen_row: usize,
+    screen_col: usize,
+) -> ScreenToAbsoluteResult {
+    let fail = ScreenToAbsoluteResult {
+        absolute_row: 0,
+        col: 0,
+        success: false,
+    };
+
+    if handle.is_null() {
+        return fail;
+    }
+
+    ffi_boundary(fail, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                let cw = terminal.crosswords.read();
+                let grid = &cw.grid;
+                let history_size = grid.history_size();
+                let display_offset = grid.display_offset();
+                let absolute_row =
+                    (history_size + screen_row).saturating_sub(display_offset) as i64;
+                ScreenToAbsoluteResult {
+                    absolute_row,
+                    col: screen_col,
+                    success: true,
+                }
+            }
+            None => ScreenToAbsoluteResult {
+                absolute_row: 0,
+                col: 0,
+                success: false,
+            },
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_set_selection(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+    start_absolute_row: i64,
+    start_col: usize,
+    end_absolute_row: i64,
+    end_col: usize,
+) -> i32 {
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                let mut cw = terminal.crosswords.write();
+                let history_size = cw.grid.history_size() as i64;
+                let display_offset = cw.grid.display_offset() as i64;
+
+                let start_row =
+                    Line((start_absolute_row - history_size + display_offset) as i32);
+                let end_row =
+                    Line((end_absolute_row - history_size + display_offset) as i32);
+
+                let start_pos = Pos::new(start_row, Column(start_col));
+                let end_pos = Pos::new(end_row, Column(end_col));
+
+                let mut selection =
+                    Selection::new(SelectionType::Simple, start_pos, Side::Left);
+                selection.update(end_pos, Side::Right);
+                cw.selection = Some(selection);
+
+                terminal.dirty.store(true, Ordering::Release);
+                FFI_OK
+            }
+            None => FFI_ERR_NOT_FOUND,
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_clear_selection(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+) -> i32 {
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                terminal.crosswords.write().selection = None;
+                terminal.dirty.store(true, Ordering::Release);
+                FFI_OK
+            }
+            None => FFI_ERR_NOT_FOUND,
+        }
+    })
+}
+
+#[repr(C)]
+pub struct SelectionTextResult {
+    pub text: *mut c_char,
+    pub text_len: usize,
+    pub success: bool,
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_get_selection_text(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+) -> SelectionTextResult {
+    let fail = SelectionTextResult {
+        text: std::ptr::null_mut(),
+        text_len: 0,
+        success: false,
+    };
+
+    if handle.is_null() {
+        return fail;
+    }
+
+    ffi_boundary(fail, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                let cw = terminal.crosswords.read();
+                match cw.selection_to_string() {
+                    Some(text) => {
+                        let text_len = text.len();
+                        let c_string = CString::new(text).unwrap_or_default();
+                        SelectionTextResult {
+                            text: c_string.into_raw(),
+                            text_len,
+                            success: true,
+                        }
+                    }
+                    None => SelectionTextResult {
+                        text: std::ptr::null_mut(),
+                        text_len: 0,
+                        success: false,
+                    },
+                }
+            }
+            None => SelectionTextResult {
+                text: std::ptr::null_mut(),
+                text_len: 0,
+                success: false,
+            },
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_finalize_selection(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+) -> SelectionTextResult {
+    let fail = SelectionTextResult {
+        text: std::ptr::null_mut(),
+        text_len: 0,
+        success: false,
+    };
+
+    if handle.is_null() {
+        return fail;
+    }
+
+    ffi_boundary(fail, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                let mut cw = terminal.crosswords.write();
+                match cw.selection_to_string() {
+                    Some(text) if !text.trim().is_empty() => {
+                        let text_len = text.len();
+                        let c_string = CString::new(text).unwrap_or_default();
+                        SelectionTextResult {
+                            text: c_string.into_raw(),
+                            text_len,
+                            success: true,
+                        }
+                    }
+                    _ => {
+                        cw.selection = None;
+                        terminal.dirty.store(true, Ordering::Release);
+                        SelectionTextResult {
+                            text: std::ptr::null_mut(),
+                            text_len: 0,
+                            success: false,
+                        }
+                    }
+                }
+            }
+            None => SelectionTextResult {
+                text: std::ptr::null_mut(),
+                text_len: 0,
+                success: false,
+            },
+        }
+    })
 }
