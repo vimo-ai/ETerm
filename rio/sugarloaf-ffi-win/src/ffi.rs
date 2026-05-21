@@ -533,13 +533,14 @@ pub extern "C" fn sugarloaf_win_create_terminal(
         let event_listener = WinEventListener::new(dirty.clone(), id as usize);
 
         let size = CrosswordsSize::new(cols as usize, rows as usize);
-        let crosswords = Crosswords::new(
+        let mut crosswords = Crosswords::new(
             size,
             CursorShape::Block,
             event_listener.clone(),
             rio_backend::event::WindowId::from(0),
             id as usize,
         );
+        crosswords.grid.update_history(10_000);
         let crosswords = Arc::new(RwLock::new(crosswords));
 
         let machine = match Machine::new(
@@ -1135,6 +1136,39 @@ pub extern "C" fn sugarloaf_win_finalize_selection(
                 text_len: 0,
                 success: false,
             },
+        }
+    })
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CursorPosition {
+    pub row: i32,
+    pub col: i32,
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_get_cursor_pos(
+    handle: *mut SugarloafWinHandle,
+    terminal_id: i32,
+) -> CursorPosition {
+    let fail = CursorPosition { row: 0, col: 0 };
+    if handle.is_null() {
+        return fail;
+    }
+
+    ffi_boundary(fail, || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.terminals.get(&terminal_id) {
+            Some(terminal) => {
+                let cw = terminal.crosswords.read();
+                let cursor = cw.cursor();
+                CursorPosition {
+                    row: cursor.pos.row.0,
+                    col: cursor.pos.col.0 as i32,
+                }
+            }
+            None => fail,
         }
     })
 }
