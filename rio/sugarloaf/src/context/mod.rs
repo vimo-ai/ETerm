@@ -49,6 +49,12 @@ pub trait GpuContext {
 
     /// Update the display scale factor.
     fn set_scale(&mut self, scale: f32);
+
+    /// Get raw pointer to the platform swap chain (for composition).
+    /// Returns null on platforms that don't support it.
+    fn swap_chain_ptr(&self) -> *mut std::ffi::c_void {
+        std::ptr::null_mut()
+    }
 }
 
 // ===== Platform dispatch =====

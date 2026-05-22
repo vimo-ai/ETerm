@@ -1,0 +1,72 @@
+<Project>
+  <!--
+    Override targets from MrtCore.PriGen.targets that require VS AppxPackage DLLs
+    (Microsoft.Build.AppxPackage.dll, Microsoft.Build.Packaging.Pri.Tasks.dll).
+    Not available when building with dotnet CLI without VS UWP workload.
+
+    Directory.Build.targets is imported AFTER NuGet package targets, so these
+    overrides take precedence over the WindowsAppSDK definitions.
+  -->
+
+  <!-- PRI generation targets -->
+  <Target Name="AddPriPayloadFilesToCopyToOutputDirectoryItems" />
+  <Target Name="_ExpandPriFiles" />
+  <Target Name="_ExpandProjectPriFile" />
+  <Target Name="_GeneratePrisForPortableLibraries" />
+
+  <!-- SDK tool paths (calls GetSdkFileFullPath / GetSdkPropertyValue) -->
+  <Target Name="_GetSdkToolsPathsFromSdk" />
+  <Target Name="_GetSdkToolsPathsFromPackage" />
+  <Target Name="_GetSdkToolPaths" />
+
+  <!-- Validation (calls ValidateConfiguration from AppxPackage.dll) -->
+  <Target Name="_ValidateConfiguration" />
+
+  <!-- Architecture queries (call GetPackageArchitecture) -->
+  <Target Name="_GetPackageArchitecture" />
+  <Target Name="_GetRecursiveProjectArchitecture" />
+  <Target Name="_GetDefaultResourceLanguage" />
+
+  <!-- Packaging/output groups (call ExpandPayloadDirectories / RemovePayloadDuplicates) -->
+  <Target Name="GetMrtPackagingOutputs" Returns="" />
+  <Target Name="GetOptionalProjectOutputs" Returns="" />
+  <Target Name="ComFilesOutputGroup" Returns="" />
+  <Target Name="OptionalProjectsOutputGroup" Returns="" />
+  <Target Name="Publish" />
+
+  <!-- CopyLocal — simplified version without RemovePayloadDuplicates -->
+  <Target Name="CopyLocalFilesOutputGroup"
+          DependsOnTargets="$(AllOutputGroupsDependsOn)"
+          Returns="@(CopyLocalFilesOutputGroupOutput)">
+    <ItemGroup>
+      <CopyLocalFilesOutputGroupOutput Include="@(ReferenceCopyLocalPaths)"
+          Condition="'%(ReferenceCopyLocalPaths.Extension)' != '.xml'">
+        <TargetPath>%(ReferenceCopyLocalPaths.DestinationSubDirectory)%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</TargetPath>
+      </CopyLocalFilesOutputGroupOutput>
+    </ItemGroup>
+  </Target>
+
+  <!-- GetCopyToOutputDirectoryItems — simplified version -->
+  <Target Name="GetCopyToOutputDirectoryItemsOutputGroup"
+          Returns="@(GetCopyToOutputDirectoryItemsOutputGroupOutput)">
+    <ItemGroup>
+      <GetCopyToOutputDirectoryItemsOutputGroupOutput Include="@(AllItemsFullPathWithTargetPath)"
+          Condition="'%(AllItemsFullPathWithTargetPath.CopyToOutputDirectory)' == 'Always' or '%(AllItemsFullPathWithTargetPath.CopyToOutputDirectory)' == 'PreserveNewest'" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Generate resources.pri via makepri.exe after build -->
+  <Target Name="_GeneratePriDirect" AfterTargets="Build">
+    <PropertyGroup>
+      <_MakePri>C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\makepri.exe</_MakePri>
+      <_OutDirAbs>$([System.IO.Path]::GetFullPath('$(OutputPath)'))</_OutDirAbs>
+    </PropertyGroup>
+    <Exec Command="&quot;$(_MakePri)&quot; createconfig /cf &quot;$(_OutDirAbs)_priconfig.xml&quot; /dq en-US /o /pv 10.0.0"
+          WorkingDirectory="$(_OutDirAbs)"
+          Condition="Exists('$(_MakePri)')" />
+    <Exec Command="&quot;$(_MakePri)&quot; new /pr &quot;$(_OutDirAbs).&quot; /cf &quot;$(_OutDirAbs)_priconfig.xml&quot; /of &quot;$(_OutDirAbs)resources.pri&quot; /in eterm-win /o"
+          WorkingDirectory="$(_OutDirAbs)"
+          Condition="Exists('$(_MakePri)')"
+          IgnoreExitCode="true" />
+  </Target>
+</Project>

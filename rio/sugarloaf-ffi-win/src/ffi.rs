@@ -52,6 +52,17 @@ struct Terminal {
     title: String,
     cols: u16,
     rows: u16,
+    rich_text_id: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TerminalRenderLayout {
+    pub terminal_id: i32,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 struct WinEngine {
@@ -59,9 +70,9 @@ struct WinEngine {
     next_id: i32,
     sugarloaf: Option<Sugarloaf>,
     font_library: FontLibrary,
-    rich_text_id: Option<usize>,
     hwnd: Option<NonZeroIsize>,
     scale: f32,
+    render_layout: Vec<(i32, f32, f32, f32, f32)>,
 }
 
 impl WinEngine {
@@ -71,9 +82,9 @@ impl WinEngine {
             next_id: 1,
             sugarloaf: None,
             font_library: FontLibrary::default(),
-            rich_text_id: None,
             hwnd: None,
             scale: 1.0,
+            render_layout: Vec::new(),
         }
     }
 }
@@ -479,22 +490,13 @@ pub extern "C" fn sugarloaf_win_init_renderer(
         let layout = RootStyle::default();
 
         match Sugarloaf::new(win, renderer, &engine.font_library, layout) {
-            Ok(mut sugarloaf) => {
-                let rt_id = sugarloaf.create_rich_text();
-
-                sugarloaf.set_objects(vec![sugarloaf::Object::RichText(sugarloaf::RichText {
-                    id: rt_id,
-                    position: [0.0, 0.0],
-                    lines: None,
-                })]);
-
-                engine.rich_text_id = Some(rt_id);
+            Ok(sugarloaf) => {
                 engine.hwnd = NonZeroIsize::new(hwnd as isize);
                 engine.scale = scale;
                 engine.sugarloaf = Some(sugarloaf);
                 eprintln!(
-                    "[ffi] Renderer initialized: {}x{} @ {:.1}x, rt_id={}",
-                    width, height, scale, rt_id
+                    "[ffi] Renderer initialized: {}x{} @ {:.1}x",
+                    width, height, scale
                 );
                 FFI_OK
             }
@@ -502,6 +504,64 @@ pub extern "C" fn sugarloaf_win_init_renderer(
                 eprintln!("[sugarloaf-ffi-win] init_renderer failed: {:?}", e);
                 FFI_ERR_RENDER
             }
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_init_renderer_composition(
+    handle: *mut SugarloafWinHandle,
+    width: f32,
+    height: f32,
+    scale: f32,
+) -> *mut c_void {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    ffi_boundary(std::ptr::null_mut(), || {
+        let engine = unsafe { engine_ref(handle) };
+
+        match Sugarloaf::new_for_composition(
+            width,
+            height,
+            scale,
+            &engine.font_library,
+            sugarloaf::layout::RootStyle::default(),
+        ) {
+            Ok(sugarloaf) => {
+                let swap_chain_ptr = sugarloaf.swap_chain_ptr();
+
+                engine.scale = scale;
+                engine.sugarloaf = Some(sugarloaf);
+
+                eprintln!(
+                    "[ffi] Composition renderer initialized: {}x{} @ {:.1}x, swap_chain={:?}",
+                    width, height, scale, swap_chain_ptr
+                );
+                swap_chain_ptr
+            }
+            Err(e) => {
+                eprintln!("[ffi] init_renderer_composition failed: {:?}", e);
+                std::ptr::null_mut()
+            }
+        }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_get_swap_chain(
+    handle: *mut SugarloafWinHandle,
+) -> *mut c_void {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    ffi_boundary(std::ptr::null_mut(), || {
+        let engine = unsafe { engine_ref(handle) };
+        match engine.sugarloaf.as_ref() {
+            Some(s) => s.swap_chain_ptr(),
+            None => std::ptr::null_mut(),
         }
     })
 }
@@ -518,6 +578,15 @@ pub extern "C" fn sugarloaf_win_create_terminal(
 
     ffi_boundary(FFI_ERR_PANIC, || {
         let engine = unsafe { engine_ref(handle) };
+
+        let rich_text_id = match engine.sugarloaf.as_mut() {
+            Some(s) => s.create_rich_text(),
+            None => {
+                eprintln!("[ffi] create_terminal: renderer not initialized");
+                return FFI_ERR_RENDER;
+            }
+        };
+
         let id = engine.next_id;
         engine.next_id += 1;
 
@@ -572,6 +641,7 @@ pub extern "C" fn sugarloaf_win_create_terminal(
                 title: format!("Terminal {}", id),
                 cols,
                 rows,
+                rich_text_id,
             },
         );
 
@@ -593,10 +663,44 @@ pub extern "C" fn sugarloaf_win_close_terminal(
         match engine.terminals.remove(&terminal_id) {
             Some(terminal) => {
                 let _ = terminal.pty_tx.send(Msg::Shutdown);
+                engine.render_layout.retain(|(id, _, _, _, _)| *id != terminal_id);
                 FFI_OK
             }
             None => FFI_ERR_NOT_FOUND,
         }
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn sugarloaf_win_set_render_layout(
+    handle: *mut SugarloafWinHandle,
+    layout: *const TerminalRenderLayout,
+    count: usize,
+) -> i32 {
+    if handle.is_null() {
+        return FFI_ERR_NULL_HANDLE;
+    }
+
+    ffi_boundary(FFI_ERR_PANIC, || {
+        let engine = unsafe { engine_ref(handle) };
+
+        if layout.is_null() || count == 0 {
+            engine.render_layout.clear();
+        } else {
+            let slice = unsafe { std::slice::from_raw_parts(layout, count) };
+            engine.render_layout = slice
+                .iter()
+                .map(|l| (l.terminal_id, l.x, l.y, l.width, l.height))
+                .collect();
+        }
+
+        for (tid, _, _, _, _) in &engine.render_layout {
+            if let Some(t) = engine.terminals.get(tid) {
+                t.dirty.store(true, Ordering::Release);
+            }
+        }
+
+        FFI_OK
     })
 }
 
@@ -690,45 +794,31 @@ pub extern "C" fn sugarloaf_win_render(handle: *mut SugarloafWinHandle) -> i32 {
             None => return FFI_ERR_RENDER,
         };
 
-        let rt_id = match engine.rich_text_id {
-            Some(id) => id,
-            None => return FFI_ERR_RENDER,
-        };
+        let layout = engine.render_layout.clone();
 
-        static DIAG_COUNTER: std::sync::atomic::AtomicU32 =
-            std::sync::atomic::AtomicU32::new(0);
-
-        let mut needs_render = false;
-
-        if let Some((_, terminal)) = engine.terminals.iter().next() {
-            if terminal.dirty.swap(false, Ordering::AcqRel) {
-                let cw = terminal.crosswords.read();
-
-                let n = DIAG_COUNTER.fetch_add(1, Ordering::Relaxed);
-                if n < 10 || n % 120 == 0 {
-                    let grid = &cw.grid;
-                    let lines = grid.screen_lines();
-                    let cols = grid.columns();
-                    let mut non_empty = 0usize;
-                    for li in 0..lines {
-                        for ci in 0..cols {
-                            let c = grid[Line(li as i32)][Column(ci)].c;
-                            if c != ' ' && c != '\0' {
-                                non_empty += 1;
-                            }
-                        }
-                    }
-                    eprintln!(
-                        "[diag #{}] grid={}x{}, non_empty={}, rt_id={}, cursor={:?}",
-                        n, cols, lines, non_empty, rt_id, cw.cursor()
-                    );
+        for (tid, _, _, _, _) in &layout {
+            if let Some(terminal) = engine.terminals.get(tid) {
+                if terminal.dirty.swap(false, Ordering::AcqRel) {
+                    let cw = terminal.crosswords.read();
+                    extract_grid_to_sugarloaf(sugarloaf, &cw, &terminal.rich_text_id);
                 }
-
-                extract_grid_to_sugarloaf(sugarloaf, &cw, &rt_id);
-                needs_render = true;
             }
         }
 
+        let objects: Vec<sugarloaf::Object> = layout
+            .iter()
+            .filter_map(|(tid, x, y, _, _)| {
+                engine.terminals.get(tid).map(|t| {
+                    sugarloaf::Object::RichText(sugarloaf::RichText {
+                        id: t.rich_text_id,
+                        position: [*x, *y],
+                        lines: None,
+                    })
+                })
+            })
+            .collect();
+
+        sugarloaf.set_objects(objects);
         sugarloaf.render();
         FFI_OK
     })
@@ -747,50 +837,17 @@ pub extern "C" fn sugarloaf_win_resize_renderer(
     ffi_boundary(FFI_ERR_PANIC, || {
         let engine = unsafe { engine_ref(handle) };
 
-        let hwnd_nz = match engine.hwnd {
-            Some(h) => h,
+        let sugarloaf = match engine.sugarloaf.as_mut() {
+            Some(s) => s,
             None => return FFI_ERR_RENDER,
         };
 
-        // Drop old Sugarloaf to fully release all D3D12 resources
-        engine.sugarloaf.take();
-        engine.rich_text_id = None;
+        sugarloaf.resize(width as u32, height as u32);
 
-        let wh = Win32WindowHandle::new(hwnd_nz);
-        let win = SugarloafWindow {
-            handle: RawWindowHandle::Win32(wh),
-            display: RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
-            size: SugarloafWindowSize { width, height },
-            scale: engine.scale,
-        };
-
-        let renderer = SugarloafRenderer::default();
-        let layout = RootStyle::default();
-
-        match Sugarloaf::new(win, renderer, &engine.font_library, layout) {
-            Ok(mut sugarloaf) => {
-                let rt_id = sugarloaf.create_rich_text();
-                sugarloaf.set_objects(vec![sugarloaf::Object::RichText(
-                    sugarloaf::RichText {
-                        id: rt_id,
-                        position: [0.0, 0.0],
-                        lines: None,
-                    },
-                )]);
-                engine.rich_text_id = Some(rt_id);
-                engine.sugarloaf = Some(sugarloaf);
-
-                // Force a dirty re-extract on next render
-                for (_, terminal) in engine.terminals.iter() {
-                    terminal.dirty.store(true, Ordering::Release);
-                }
-                FFI_OK
-            }
-            Err(e) => {
-                eprintln!("[ffi] resize: recreate failed: {:?}", e);
-                FFI_ERR_RENDER
-            }
+        for (_, terminal) in engine.terminals.iter() {
+            terminal.dirty.store(true, Ordering::Release);
         }
+        FFI_OK
     })
 }
 
@@ -883,22 +940,24 @@ pub extern "C" fn sugarloaf_win_get_font_metrics(
     ffi_boundary(FFI_ERR_PANIC, || {
         let engine = unsafe { engine_ref(handle) };
 
-        let sugarloaf = match engine.sugarloaf.as_ref() {
-            Some(s) => s,
-            None => return FFI_ERR_RENDER,
-        };
+        let metrics_opt = engine
+            .sugarloaf
+            .as_ref()
+            .map(|s| s.get_font_metrics_skia());
 
-        let (cell_width, cell_height, line_height) = sugarloaf.get_font_metrics_skia();
-
-        unsafe {
-            *out = FontMetrics {
-                cell_width,
-                cell_height,
-                line_height,
-            };
+        match metrics_opt {
+            Some((cell_width, cell_height, line_height)) => {
+                unsafe {
+                    *out = FontMetrics {
+                        cell_width,
+                        cell_height,
+                        line_height,
+                    };
+                }
+                FFI_OK
+            }
+            None => FFI_ERR_RENDER,
         }
-
-        FFI_OK
     })
 }
 

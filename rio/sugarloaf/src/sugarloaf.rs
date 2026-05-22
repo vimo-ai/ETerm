@@ -230,6 +230,42 @@ impl Sugarloaf {
         Ok(instance)
     }
 
+    #[cfg(target_os = "windows")]
+    pub fn new_for_composition(
+        width: f32,
+        height: f32,
+        scale: f32,
+        font_library: &FontLibrary,
+        layout: RootStyle,
+    ) -> Result<Sugarloaf, Box<SugarloafWithErrors>> {
+        let renderer = SugarloafRenderer::default();
+        let font_features = renderer.font_features.to_owned();
+        let ctx = crate::context::Dx12Context::new_for_composition(width, height, scale);
+
+        let state = SugarState::new(layout, font_library, &font_features);
+        let font_size = state.style.font_size;
+        let font_mgr = FontMgr::new();
+
+        let instance = Sugarloaf {
+            state,
+            ctx,
+            background_color: None,
+            graphics: Graphics::default(),
+            font_library: font_library.inner.clone(),
+            typeface_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+            char_font_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+            font_size,
+            font_mgr,
+            layout_cache: std::cell::RefCell::new(LineLayoutCache::new()),
+        };
+
+        Ok(instance)
+    }
+
+    pub fn swap_chain_ptr(&self) -> *mut std::ffi::c_void {
+        self.ctx.swap_chain_ptr()
+    }
+
     #[inline]
     pub fn update_font(&mut self, font_library: &FontLibrary) {
         tracing::info!("requested a font change");

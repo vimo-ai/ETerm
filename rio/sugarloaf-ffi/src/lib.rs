@@ -141,10 +141,6 @@ pub mod infra;
 #[cfg(target_os = "macos")]
 pub mod display_link;
 
-// Windows frame pacer — CVDisplayLink replacement using waitable timer / DwmFlush
-#[cfg(target_os = "windows")]
-pub mod display_link_win;
-
 // FFI 模块（统一导出所有 FFI 接口）
 
 pub mod ffi;
