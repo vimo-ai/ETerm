@@ -5,7 +5,35 @@
     xmlns:local="using:ETerm"
     Title="ETerm">
 
-    <Grid>
-        <local:TerminalControl x:Name="TerminalControl" />
+    <Grid Background="#0c0c0c">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="34"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Background="#1e1e1e" Padding="4,0,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel x:Name="TabStrip" Grid.Column="0"
+                        Orientation="Horizontal" Spacing="2"
+                        VerticalAlignment="Center"/>
+
+            <Button x:Name="NewTabButton" Grid.Column="1"
+                    Content="+" FontSize="14" FontWeight="Bold"
+                    Height="26" Width="28" Padding="0"
+                    Background="Transparent" BorderThickness="0"
+                    VerticalAlignment="Center" Margin="4,0,0,0"
+                    CornerRadius="4"
+                    Click="OnNewTabClick"/>
+
+            <Grid x:Name="TitleBarDragRegion" Grid.Column="2"
+                  Background="Transparent"/>
+        </Grid>
+
+        <local:TerminalControl x:Name="TerminalSurface" Grid.Row="1"/>
     </Grid>
 </Window>

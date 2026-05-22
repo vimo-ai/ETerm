@@ -56,11 +56,18 @@ pub struct Dx12FrameHandle {
 ///
 /// Follows the same lifecycle as MetalContext:
 /// `new()` -> `begin_frame()` -> draw on Surface -> `end_frame(handle)`.
+enum SwapChainMode {
+    Hwnd(HWND),
+    Composition,
+}
+
 pub struct Dx12Context {
     skia_context: DirectContext,
     swap_chain: IDXGISwapChain3,
+    factory: IDXGIFactory4,
     device: ID3D12Device,
     queue: ID3D12CommandQueue,
+    mode: SwapChainMode,
     /// Pre-created Skia surfaces + their backing render targets, one per back buffer.
     surfaces: Vec<(Surface, BackendRenderTarget)>,
     /// Timestamp of last Skia GPU cache cleanup (throttled)
@@ -156,13 +163,90 @@ impl Dx12Context {
         Dx12Context {
             skia_context,
             swap_chain,
+            factory,
             device,
             queue,
+            mode: SwapChainMode::Hwnd(hwnd),
             surfaces,
             last_gpu_cleanup: std::time::Instant::now(),
             size,
             scale,
         }
+    }
+
+    pub fn new_for_composition(
+        width: f32,
+        height: f32,
+        scale: f32,
+    ) -> Self {
+        let pixel_width = (width * scale) as u32;
+        let pixel_height = (height * scale) as u32;
+
+        let factory: IDXGIFactory4 =
+            unsafe { CreateDXGIFactory1() }.expect("Failed to create DXGI factory");
+
+        let (_adapter, device) = find_hardware_adapter(&factory)
+            .expect("No suitable D3D12 hardware adapter found");
+
+        let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&Default::default()) }
+            .expect("Failed to create D3D12 command queue");
+
+        let backend_context = BackendContext {
+            adapter: _adapter,
+            device: device.clone(),
+            queue: queue.clone(),
+            memory_allocator: None,
+            protected_context: Protected::No,
+        };
+
+        let mut skia_context = unsafe { DirectContext::new_d3d(&backend_context, None) }
+            .expect("Failed to create Skia D3D12 DirectContext");
+
+        let swap_chain_desc = DXGI_SWAP_CHAIN_DESC1 {
+            Width: pixel_width,
+            Height: pixel_height,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            BufferCount: BUFFER_COUNT,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            ..Default::default()
+        };
+
+        let swap_chain: IDXGISwapChain3 = unsafe {
+            factory.CreateSwapChainForComposition(&queue, &swap_chain_desc, None)
+        }
+        .expect("Failed to create DXGI composition swap chain")
+        .cast()
+        .expect("Failed to cast to IDXGISwapChain3");
+
+        let surfaces = create_surfaces_for_swap_chain(
+            &swap_chain,
+            &mut skia_context,
+            pixel_width,
+            pixel_height,
+        );
+
+        Dx12Context {
+            skia_context,
+            swap_chain,
+            factory,
+            device,
+            queue,
+            mode: SwapChainMode::Composition,
+            surfaces,
+            last_gpu_cleanup: std::time::Instant::now(),
+            size: SugarloafWindowSize { width, height },
+            scale,
+        }
+    }
+
+    pub fn swap_chain_ptr(&self) -> *mut std::ffi::c_void {
+        use windows::core::Interface;
+        self.swap_chain.as_raw()
     }
 }
 
@@ -180,12 +264,10 @@ impl GpuContext for Dx12Context {
             return;
         }
 
-        // Release ALL Skia GPU resources so the D3D12 back buffer refs drop to zero.
         self.surfaces.clear();
         self.skia_context.flush_and_submit();
         self.skia_context.free_gpu_resources();
 
-        // GPU fence: spin-wait for the queue to drain.
         unsafe {
             if let Ok(fence) = self.device.CreateFence::<windows::Win32::Graphics::Direct3D12::ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) {
                 let _ = self.queue.Signal(&fence, 1);
@@ -195,26 +277,41 @@ impl GpuContext for Dx12Context {
             }
         }
 
-        let resize_result = unsafe {
-            self.swap_chain
-                .ResizeBuffers(
-                    BUFFER_COUNT,
-                    pixel_width,
-                    pixel_height,
-                    DXGI_FORMAT_R8G8B8A8_UNORM,
-                    DXGI_SWAP_CHAIN_FLAG::default(),
-                )
+        let swap_chain_desc = DXGI_SWAP_CHAIN_DESC1 {
+            Width: pixel_width,
+            Height: pixel_height,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            BufferCount: BUFFER_COUNT,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            ..Default::default()
         };
 
-        if let Err(e) = resize_result {
-            eprintln!("[dx12] ResizeBuffers failed: {:?}", e);
-            self.surfaces = create_surfaces_for_swap_chain(
-                &self.swap_chain,
-                &mut self.skia_context,
-                (self.size.width * self.scale) as u32,
-                (self.size.height * self.scale) as u32,
-            );
-            return;
+        let new_swap_chain: Option<IDXGISwapChain3> = match &self.mode {
+            SwapChainMode::Composition => {
+                unsafe {
+                    self.factory
+                        .CreateSwapChainForComposition(&self.queue, &swap_chain_desc, None)
+                }
+                .ok()
+                .and_then(|sc| sc.cast().ok())
+            }
+            SwapChainMode::Hwnd(hwnd) => {
+                unsafe {
+                    self.factory
+                        .CreateSwapChainForHwnd(&self.queue, *hwnd, &swap_chain_desc, None, None)
+                }
+                .ok()
+                .and_then(|sc| sc.cast().ok())
+            }
+        };
+
+        if let Some(sc) = new_swap_chain {
+            self.swap_chain = sc;
         }
 
         self.surfaces = create_surfaces_for_swap_chain(
@@ -285,6 +382,10 @@ impl GpuContext for Dx12Context {
 
     fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
+    }
+
+    fn swap_chain_ptr(&self) -> *mut std::ffi::c_void {
+        self.swap_chain_ptr()
     }
 }
 

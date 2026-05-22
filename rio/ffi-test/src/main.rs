@@ -1,5 +1,5 @@
 use std::ffi::{c_char, c_void};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use libloading::{Library, Symbol};
@@ -73,8 +73,6 @@ struct SelectionTextResult {
 struct EngineState {
     handle: *mut c_void,
     terminal_id: i32,
-    cell_w: f32,
-    cell_h: f32,
     lib: Library,
 }
 
@@ -88,6 +86,8 @@ struct MouseState {
 }
 
 static ENGINE: OnceLock<EngineState> = OnceLock::new();
+static CELL_W: AtomicU32 = AtomicU32::new(0);
+static CELL_H: AtomicU32 = AtomicU32::new(0);
 static WHEEL_ACCUM: AtomicI32 = AtomicI32::new(0);
 static MOUSE: Mutex<MouseState> = Mutex::new(MouseState {
     selecting: false,
@@ -112,9 +112,34 @@ fn write_to_pty(data: &[u8]) {
 
 // ── Coordinate helpers ──
 
-fn pixel_to_cell(state: &EngineState, x: i32, y: i32) -> (usize, usize) {
-    let col = (x.max(0) as f32 / state.cell_w) as usize;
-    let row = (y.max(0) as f32 / state.cell_h) as usize;
+fn cell_w() -> f32 {
+    f32::from_bits(CELL_W.load(Ordering::Relaxed))
+}
+
+fn cell_h() -> f32 {
+    f32::from_bits(CELL_H.load(Ordering::Relaxed))
+}
+
+fn update_font_metrics(state: &EngineState) {
+    unsafe {
+        let mut metrics = FontMetrics {
+            cell_width: 0.0,
+            cell_height: 0.0,
+            line_height: 0.0,
+        };
+        let get_metrics: Symbol<GetFontMetricsFn> =
+            state.lib.get(b"sugarloaf_win_get_font_metrics").unwrap();
+        let rc = get_metrics(state.handle, &mut metrics);
+        if rc == 0 {
+            CELL_W.store(metrics.cell_width.to_bits(), Ordering::Relaxed);
+            CELL_H.store(metrics.line_height.to_bits(), Ordering::Relaxed);
+        }
+    }
+}
+
+fn pixel_to_cell(x: i32, y: i32) -> (usize, usize) {
+    let col = (x.max(0) as f32 / cell_w()) as usize;
+    let row = (y.max(0) as f32 / cell_h()) as usize;
     (col, row)
 }
 
@@ -140,7 +165,7 @@ fn start_selection(hwnd: HWND, x: i32, y: i32) {
             .unwrap();
         clear(state.handle, state.terminal_id);
     }
-    let (col, row) = pixel_to_cell(state, x, y);
+    let (col, row) = pixel_to_cell(x, y);
     if let Some((abs_row, abs_col)) = screen_to_abs(state, row, col) {
         let mut m = MOUSE.lock().unwrap();
         m.selecting = true;
@@ -158,7 +183,7 @@ fn update_selection(x: i32, y: i32) {
     if !m.selecting {
         return;
     }
-    let (col, row) = pixel_to_cell(state, x, y);
+    let (col, row) = pixel_to_cell(x, y);
     if let Some((abs_row, abs_col)) = screen_to_abs(state, row, col) {
         unsafe {
             let set: Symbol<SetSelectionFn> = state
@@ -452,8 +477,8 @@ unsafe extern "system" fn wndproc(
                         .get(b"sugarloaf_win_get_cursor_pos")
                         .unwrap();
                     let pos = get_cursor(state.handle, state.terminal_id);
-                    let x = (pos.col as f32 * state.cell_w) as i32;
-                    let y = ((pos.row + 1) as f32 * state.cell_h) as i32;
+                    let x = (pos.col as f32 * cell_w()) as i32;
+                    let y = ((pos.row + 1) as f32 * cell_h()) as i32;
 
                     let himc = ImmGetContext(hwnd);
                     if !himc.0.is_null() {
@@ -474,16 +499,20 @@ unsafe extern "system" fn wndproc(
             let height = ((lparam.0 >> 16) & 0xFFFF) as u16;
             if width > 0 && height > 0 {
                 if let Some(state) = ENGINE.get() {
-                    let cols = (width as f32 / state.cell_w) as u16;
-                    let rows = (height as f32 / state.cell_h) as u16;
+                    unsafe {
+                        let resize_renderer: Symbol<ResizeRendererFn> = state
+                            .lib
+                            .get(b"sugarloaf_win_resize_renderer")
+                            .unwrap();
+                        resize_renderer(state.handle, width as f32, height as f32);
+                    }
+
+                    update_font_metrics(state);
+
+                    let cols = (width as f32 / cell_w()) as u16;
+                    let rows = (height as f32 / cell_h()) as u16;
                     if cols > 0 && rows > 0 {
                         unsafe {
-                            let resize_renderer: Symbol<ResizeRendererFn> = state
-                                .lib
-                                .get(b"sugarloaf_win_resize_renderer")
-                                .unwrap();
-                            resize_renderer(state.handle, width as f32, height as f32);
-
                             let resize: Symbol<ResizeFn> =
                                 state.lib.get(b"sugarloaf_win_resize").unwrap();
                             resize(
@@ -609,7 +638,7 @@ fn main() {
     }
     println!("Renderer initialized");
 
-    let (cell_w, cell_h) = unsafe {
+    unsafe {
         let mut metrics = FontMetrics {
             cell_width: 8.0,
             cell_height: 16.0,
@@ -623,15 +652,17 @@ fn main() {
                 "Font metrics: cell_width={:.1}, cell_height={:.1}, line_height={:.1}",
                 metrics.cell_width, metrics.cell_height, metrics.line_height
             );
-            (metrics.cell_width, metrics.line_height)
+            CELL_W.store(metrics.cell_width.to_bits(), Ordering::Relaxed);
+            CELL_H.store(metrics.line_height.to_bits(), Ordering::Relaxed);
         } else {
             eprintln!("get_font_metrics failed ({}), using defaults 8x16", rc);
-            (8.0f32, 16.0f32)
+            CELL_W.store(8.0f32.to_bits(), Ordering::Relaxed);
+            CELL_H.store(16.0f32.to_bits(), Ordering::Relaxed);
         }
-    };
+    }
 
-    let cols = (init_w as f32 / cell_w) as u16;
-    let rows = (init_h as f32 / cell_h) as u16;
+    let cols = (init_w as f32 / cell_w()) as u16;
+    let rows = (init_h as f32 / cell_h()) as u16;
     unsafe {
         let create_terminal: Symbol<CreateTerminalFn> =
             lib.get(b"sugarloaf_win_create_terminal").unwrap();
@@ -640,15 +671,13 @@ fn main() {
     }
     println!(
         "Terminal created: id={}, {}x{} (cell {:.0}x{:.0})",
-        terminal_id, cols, rows, cell_w, cell_h
+        terminal_id, cols, rows, cell_w(), cell_h()
     );
 
     ENGINE
         .set(EngineState {
             handle,
             terminal_id,
-            cell_w,
-            cell_h,
             lib,
         })
         .expect("ENGINE already set");

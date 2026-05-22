@@ -193,12 +193,12 @@ struct TerminalEntry {
     /// Terminal 聚合根
     terminal: Arc<Mutex<Terminal>>,
 
-    /// PTY 输入通道
-    pty_tx: channel::Sender<rio_backend::event::Msg>,
+    /// PTY 输入通道（虚拟终端为 None）
+    pty_tx: Option<channel::Sender<rio_backend::event::Msg>>,
 
-    /// Machine 线程句柄
+    /// Machine 线程句柄（虚拟终端为 None）
     #[allow(dead_code)]
-    machine_handle: JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>,
+    machine_handle: Option<JoinHandle<(Machine<teletypewriter::Pty>, crate::rio_machine::State)>>,
 
     /// 终端尺寸
     cols: u16,
@@ -579,8 +579,8 @@ impl TerminalPool {
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
-            pty_tx,
-            machine_handle,
+            pty_tx: Some(pty_tx),
+            machine_handle: Some(machine_handle),
             cols,
             rows,
             pty_fd,
@@ -659,8 +659,8 @@ impl TerminalPool {
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
-            pty_tx,
-            machine_handle,
+            pty_tx: Some(pty_tx),
+            machine_handle: Some(machine_handle),
             cols,
             rows,
             pty_fd,
@@ -728,8 +728,8 @@ impl TerminalPool {
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
-            pty_tx,
-            machine_handle,
+            pty_tx: Some(pty_tx),
+            machine_handle: Some(machine_handle),
             cols,
             rows,
             pty_fd,
@@ -813,8 +813,8 @@ impl TerminalPool {
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
-            pty_tx,
-            machine_handle,
+            pty_tx: Some(pty_tx),
+            machine_handle: Some(machine_handle),
             cols,
             rows,
             pty_fd,
@@ -926,8 +926,8 @@ impl TerminalPool {
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
-            pty_tx,
-            machine_handle,
+            pty_tx: Some(pty_tx),
+            machine_handle: Some(machine_handle),
             cols,
             rows,
             pty_fd: fd,
@@ -960,6 +960,57 @@ impl TerminalPool {
         eprintln!("[TerminalPool] created terminal {} from external fd {} (pid={})", id, fd, child_pid);
 
         id as i64
+    }
+
+    /// 创建虚拟终端（无 PTY/shell 进程）
+    ///
+    /// 用于 daemon 日志流等外部数据源。通过 write_output() 写入数据。
+    pub fn create_terminal_virtual(&mut self, cols: u16, rows: u16) -> i32 {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let terminal_id = TerminalId(id);
+        let terminal = Terminal::new_with_pty(
+            terminal_id,
+            cols as usize,
+            rows as usize,
+            self.event_queue.clone(),
+            self.config.log_buffer_size,
+        );
+
+        let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
+        let entry = TerminalEntry {
+            terminal: Arc::new(Mutex::new(terminal)),
+            pty_tx: None,
+            machine_handle: None,
+            cols,
+            rows,
+            pty_fd: -1,
+            shell_pid: 0,
+            render_cache: None,
+            surface_cache: None,
+            cursor_cache: Arc::new(crate::infra::AtomicCursorCache::new()),
+            is_background: Arc::new(AtomicBool::new(false)),
+            selection_cache: Arc::new(crate::infra::AtomicSelectionCache::new()),
+            title_cache: Arc::new(crate::infra::AtomicTitleCache::new()),
+            scroll_cache: Arc::new(crate::infra::AtomicScrollCache::new()),
+            dirty_flag: dirty_flag.clone(),
+            render_state: Arc::new(Mutex::new(
+                crate::domain::aggregates::render_state::RenderState::new(
+                    cols as usize,
+                    rows as usize,
+                ),
+            )),
+            selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
+            ime_state: Arc::new(RwLock::new(None)),
+            daemon_session: None,
+            keep_daemon_alive: false,
+        };
+
+        self.terminals.write().insert(id, entry);
+        register_terminal_event_target(id, dirty_flag, &self.needs_render);
+
+        id as i32
     }
 
     /// 创建 PTY 和 Machine
@@ -1291,8 +1342,9 @@ impl TerminalPool {
             }
             // 通知 Machine 线程退出事件循环
             // Machine 退出后 PTY drop → master fd 关闭 → 内核 SIGHUP → 子进程清理
-            let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
-            drop(entry.pty_tx);
+            if let Some(tx) = entry.pty_tx {
+                let _ = tx.send(rio_backend::event::Msg::Shutdown);
+            }
             true
         } else {
             false
@@ -1317,8 +1369,9 @@ impl TerminalPool {
                 }
             }
             // 通知 Machine 线程退出
-            let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
-            drop(entry.pty_tx);
+            if let Some(tx) = entry.pty_tx {
+                let _ = tx.send(rio_backend::event::Msg::Shutdown);
+            }
             true
         } else {
             false
@@ -1757,15 +1810,15 @@ impl TerminalPool {
             width: width as u16,
             height: height as u16,
         };
-        crate::rio_machine::send_resize(&pty_tx, winsize);
+        if let Some(ref tx) = pty_tx {
+            crate::rio_machine::send_resize(tx, winsize);
 
-        // Reattach bounce：用当前正确尺寸触发 SIGWINCH，迫使 shell 重绘 prompt。
-        // 缩小 1 列再恢复，保证即使窗口尺寸未变也能产生 SIGWINCH。
-        if needs_bounce {
-            let bounce = WinsizeBuilder { cols: cols.saturating_sub(1), rows, width: 0, height: 0 };
-            crate::rio_machine::send_resize(&pty_tx, bounce);
-            let restore = WinsizeBuilder { cols, rows, width: width as u16, height: height as u16 };
-            crate::rio_machine::send_resize(&pty_tx, restore);
+            if needs_bounce {
+                let bounce = WinsizeBuilder { cols: cols.saturating_sub(1), rows, width: 0, height: 0 };
+                crate::rio_machine::send_resize(tx, bounce);
+                let restore = WinsizeBuilder { cols, rows, width: width as u16, height: height as u16 };
+                crate::rio_machine::send_resize(tx, restore);
+            }
         }
 
         // 通知 daemon 更新 PTY 窗口大小
@@ -1780,14 +1833,32 @@ impl TerminalPool {
     pub fn input(&self, id: usize, data: &[u8]) -> bool {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            crate::rio_machine::send_input(&entry.pty_tx, data);
-            // 输入后标记需要渲染
-            // 某些应用（如 Claude CLI）在 raw 模式下不产生即时回显，
-            // 但仍需要更新光标位置等状态，所以输入后应触发渲染
+            if let Some(ref tx) = entry.pty_tx {
+                crate::rio_machine::send_input(tx, data);
+            }
             self.needs_render.store(true, Ordering::Release);
             true
         } else {
             eprintln!("[TerminalPool] input: id={} NOT FOUND (have: {:?})", id, terminals.keys().collect::<Vec<_>>());
+            false
+        }
+    }
+
+    /// 将数据直接写入终端的 VT 解析器（绕过 PTY stdin）
+    ///
+    /// 用于虚拟终端场景：daemon 日志流、AI 输出等不经过 PTY 的内容。
+    pub fn write_output(&self, id: usize, data: &[u8]) -> bool {
+        let terminals = self.terminals.read();
+        if let Some(entry) = terminals.get(&id) {
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                terminal.write(data);
+                entry.dirty_flag.mark_dirty();
+                self.needs_render.store(true, Ordering::Release);
+                true
+            } else {
+                false
+            }
+        } else {
             false
         }
     }
@@ -2867,16 +2938,17 @@ impl TerminalPool {
                 if let Some(mut terminal) = terminal_arc.try_lock() {
                     terminal.resize(cols as usize, rows as usize);
                 }
-                use teletypewriter::WinsizeBuilder;
-                let winsize = WinsizeBuilder {
-                    rows,
-                    cols,
-                    width: width as u16,
-                    height: height as u16,
-                };
-                crate::rio_machine::send_resize(&pty_tx, winsize);
+                if let Some(ref tx) = pty_tx {
+                    use teletypewriter::WinsizeBuilder;
+                    let winsize = WinsizeBuilder {
+                        rows,
+                        cols,
+                        width: width as u16,
+                        height: height as u16,
+                    };
+                    crate::rio_machine::send_resize(tx, winsize);
+                }
 
-                // 通知 daemon 更新 PTY 窗口大小
                 if let Some(session_id) = daemon_session_id {
                     let _ = super::daemon_client::DaemonClient::winsize_update(&session_id, cols, rows);
                 }
@@ -3843,8 +3915,9 @@ impl Drop for TerminalPool {
                     let _ = super::daemon_client::DaemonClient::kill(&ds.session_id);
                 }
             }
-            // 通知 Machine 线程退出，避免写入已关闭的 PTY fd
-            let _ = entry.pty_tx.send(rio_backend::event::Msg::Shutdown);
+            if let Some(ref tx) = entry.pty_tx {
+                let _ = tx.send(rio_backend::event::Msg::Shutdown);
+            }
         }
     }
 }

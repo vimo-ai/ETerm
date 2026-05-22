@@ -55,6 +55,23 @@ internal static partial class NativeMethods
         float scale);
 
     /// <summary>
+    /// Initialize composition-mode renderer (no HWND, for SwapChainPanel).
+    /// Returns swap chain pointer on success, IntPtr.Zero on failure.
+    /// </summary>
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_init_renderer_composition")]
+    internal static partial IntPtr sugarloaf_win_init_renderer_composition(
+        IntPtr handle,
+        float width,
+        float height,
+        float scale);
+
+    /// <summary>
+    /// Get the swap chain pointer (for ISwapChainPanelNative.SetSwapChain).
+    /// </summary>
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_get_swap_chain")]
+    internal static partial IntPtr sugarloaf_win_get_swap_chain(IntPtr handle);
+
+    /// <summary>
     /// Resize the rendering surface (call when the window is resized).
     /// Returns 0 on success, negative error code on failure.
     /// </summary>
@@ -86,6 +103,16 @@ internal static partial class NativeMethods
     internal static partial int sugarloaf_win_close_terminal(
         IntPtr handle,
         int terminalId);
+
+    // =========================================================================
+    // Render layout (like macOS TerminalPool.set_render_layout)
+    // =========================================================================
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_set_render_layout")]
+    internal static partial int sugarloaf_win_set_render_layout(
+        IntPtr handle,
+        [In] TerminalRenderLayout[] layout,
+        nuint count);
 
     // =========================================================================
     // Resize
@@ -157,4 +184,120 @@ internal static partial class NativeMethods
     /// </summary>
     [LibraryImport(DllName, EntryPoint = "sugarloaf_win_free_string")]
     internal static partial void sugarloaf_win_free_string(IntPtr s);
+
+    // =========================================================================
+    // Font metrics
+    // =========================================================================
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_get_font_metrics")]
+    internal static partial int sugarloaf_win_get_font_metrics(
+        IntPtr handle,
+        out FontMetrics metrics);
+
+    // =========================================================================
+    // Scroll
+    // =========================================================================
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_scroll")]
+    internal static partial int sugarloaf_win_scroll(
+        IntPtr handle,
+        int terminalId,
+        int delta);
+
+    // =========================================================================
+    // Selection
+    // =========================================================================
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_screen_to_absolute")]
+    internal static partial ScreenToAbsoluteResult sugarloaf_win_screen_to_absolute(
+        IntPtr handle,
+        int terminalId,
+        nuint screenRow,
+        nuint screenCol);
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_set_selection")]
+    internal static partial int sugarloaf_win_set_selection(
+        IntPtr handle,
+        int terminalId,
+        long startAbsoluteRow,
+        nuint startCol,
+        long endAbsoluteRow,
+        nuint endCol);
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_clear_selection")]
+    internal static partial int sugarloaf_win_clear_selection(
+        IntPtr handle,
+        int terminalId);
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_get_selection_text")]
+    internal static partial SelectionTextResult sugarloaf_win_get_selection_text(
+        IntPtr handle,
+        int terminalId);
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_finalize_selection")]
+    internal static partial SelectionTextResult sugarloaf_win_finalize_selection(
+        IntPtr handle,
+        int terminalId);
+
+    // =========================================================================
+    // Cursor
+    // =========================================================================
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_get_cursor_pos")]
+    internal static partial CursorPosition sugarloaf_win_get_cursor_pos(
+        IntPtr handle,
+        int terminalId);
+
+    // =========================================================================
+    // Bracketed paste
+    // =========================================================================
+
+    [LibraryImport(DllName, EntryPoint = "sugarloaf_win_is_bracketed_paste_enabled")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    internal static partial bool sugarloaf_win_is_bracketed_paste_enabled(
+        IntPtr handle,
+        int terminalId);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct TerminalRenderLayout
+{
+    public int TerminalId;
+    public float X;
+    public float Y;
+    public float Width;
+    public float Height;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct FontMetrics
+{
+    public float CellWidth;
+    public float CellHeight;
+    public float LineHeight;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct ScreenToAbsoluteResult
+{
+    public long AbsoluteRow;
+    public nuint Col;
+    public byte SuccessRaw;
+    public bool Success => SuccessRaw != 0;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SelectionTextResult
+{
+    public IntPtr Text;
+    public nuint TextLen;
+    public byte SuccessRaw;
+    public bool Success => SuccessRaw != 0;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct CursorPosition
+{
+    public int Row;
+    public int Col;
 }

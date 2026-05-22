@@ -2,9 +2,6 @@ using Microsoft.UI.Xaml;
 
 namespace ETerm;
 
-/// <summary>
-/// WinUI 3 application entry point.
-/// </summary>
 public partial class App : Application
 {
     private Window? _window;

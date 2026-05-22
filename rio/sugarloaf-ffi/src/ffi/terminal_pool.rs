@@ -158,6 +158,38 @@ pub extern "C" fn terminal_pool_create_terminal_with_fd(
     pool.create_terminal_with_fd(fd, child_pid, cols, rows)
 }
 
+/// 创建虚拟终端（无 PTY/shell 进程）
+///
+/// 通过 terminal_pool_write_output 写入数据到 VT 解析器。
+#[no_mangle]
+pub extern "C" fn terminal_pool_create_terminal_virtual(
+    handle: *mut TerminalPoolHandle,
+    cols: u16,
+    rows: u16,
+) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    let pool = unsafe { &mut *(handle as *mut TerminalPool) };
+    pool.create_terminal_virtual(cols, rows)
+}
+
+/// 将数据直接写入终端的 VT 解析器（绕过 PTY）
+#[no_mangle]
+pub extern "C" fn terminal_pool_write_output(
+    handle: *mut TerminalPoolHandle,
+    terminal_id: usize,
+    data: *const u8,
+    len: usize,
+) -> bool {
+    if handle.is_null() || data.is_null() {
+        return false;
+    }
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    let data_slice = unsafe { std::slice::from_raw_parts(data, len) };
+    pool.write_output(terminal_id, data_slice)
+}
+
 /// 设置 reattach hint
 ///
 /// 下次 terminal_pool_create_terminal_with_cwd 时，优先 attach 到此 daemon session。
