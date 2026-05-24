@@ -18,7 +18,9 @@ MEMEX_BINARY="${SCRIPT_DIR}/Lib/memex"
 
 # Memex Web UI (从 memex-rs 项目复制)
 MEMEX_WEB_DIR="${SCRIPT_DIR}/Lib/web"
-MEMEX_WEB_SOURCE="/Users/higuaifan/Desktop/vimo/memex/web/dist"
+# 从 MemexKit 位置推断 workspace root: MemexKit → Plugins → ETerm → ETerm-workspace
+ETERM_WORKSPACE="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+MEMEX_WEB_SOURCE="${ETERM_WORKSPACE}/memex/web/dist"
 
 # Colors
 GREEN='\033[0;32m'
