@@ -221,15 +221,9 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
 
     /// 获取恢复命令
     ///
-    /// 目前只有 Claude 支持 --resume 参数，其他 CLI 暂不支持。
+    /// 从 ~/.vimo/eterm/config/cli.json 读取配置，默认使用 claude --resume。
     private func getResumeCommand(providerId: String, sessionId: String) -> String? {
-        switch providerId {
-        case "claude":
-            return "claude --resume \(sessionId)\n"
-        // TODO: Gemini/OpenCode/Codex 的 --resume 支持待确认
-        default:
-            return nil
-        }
+        AICliConfigManager.shared.config.resumeCommand(for: providerId, sessionId: sessionId)
     }
 
     public func deactivate() {
