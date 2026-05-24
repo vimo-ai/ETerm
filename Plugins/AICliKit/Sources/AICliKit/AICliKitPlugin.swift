@@ -225,8 +225,7 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
     private func getResumeCommand(providerId: String, sessionId: String) -> String? {
         switch providerId {
         case "claude":
-            // ⚠️ LOCAL ONLY - 不要提交此行，后续改为可配置
-            return "ca -r \(sessionId)\n"
+            return "claude --resume \(sessionId)\n"
         // TODO: Gemini/OpenCode/Codex 的 --resume 支持待确认
         default:
             return nil
