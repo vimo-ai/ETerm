@@ -36,6 +36,9 @@ final class WindowManager: NSObject {
     /// 已确认关闭的窗口（防止 windowShouldClose 死循环）
     private var windowCloseConfirmed: Set<Int> = []
 
+    /// 正在退出应用（防止 terminate → windowShouldClose 再弹确认）
+    var isTerminating = false
+
     private override init() {
         super.init()
     }
@@ -529,7 +532,7 @@ final class WindowManager: NSObject {
 
         // 如果所有窗口都关闭了，退出应用（可选行为）
         if windows.isEmpty {
-            // NSApplication.shared.terminate(nil)
+            // CloseConfirmation.terminateApp()
         }
     }
 
@@ -1016,6 +1019,8 @@ final class WindowManager: NSObject {
 
 extension WindowManager: NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if isTerminating { return true }
+
         guard let window = sender as? KeyableWindow else { return true }
 
         if windowCloseConfirmed.contains(window.windowNumber) {
@@ -1032,7 +1037,7 @@ extension WindowManager: NSWindowDelegate {
                     let isLast = (self?.windowCount ?? 0) <= 1
                     if isLast {
                         CloseConfirmation.confirmCloseWindow(isLastWindow: true) {
-                            NSApplication.shared.terminate(nil)
+                            CloseConfirmation.terminateApp()
                         }
                     } else {
                         self?.windowCloseConfirmed.insert(window.windowNumber)
@@ -1047,7 +1052,7 @@ extension WindowManager: NSWindowDelegate {
         let isLast = windowCount <= 1
         if isLast {
             CloseConfirmation.confirmCloseWindow(isLastWindow: true) {
-                NSApplication.shared.terminate(nil)
+                CloseConfirmation.terminateApp()
             }
             return false
         }

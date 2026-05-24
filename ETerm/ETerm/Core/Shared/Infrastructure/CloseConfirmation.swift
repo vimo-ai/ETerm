@@ -39,4 +39,10 @@ enum CloseConfirmation {
             onConfirm()
         }
     }
+
+    /// 安全退出应用（设置标记防止 windowShouldClose 再弹确认）
+    static func terminateApp() {
+        WindowManager.shared.isTerminating = true
+        NSApplication.shared.terminate(nil)
+    }
 }

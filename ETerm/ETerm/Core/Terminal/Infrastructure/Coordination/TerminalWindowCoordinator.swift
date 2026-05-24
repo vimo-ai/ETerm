@@ -370,7 +370,7 @@ class TerminalWindowCoordinator: ObservableObject {
                 let isLastWindow = WindowManager.shared.windowCount <= 1
                 CloseConfirmation.confirmCloseWindow(isLastWindow: isLastWindow) {
                     if isLastWindow {
-                        NSApplication.shared.terminate(nil)
+                        CloseConfirmation.terminateApp()
                     } else {
                         NSApplication.shared.keyWindow?.close()
                     }
