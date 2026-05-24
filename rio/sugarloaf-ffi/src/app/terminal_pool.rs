@@ -255,6 +255,9 @@ struct TerminalEntry {
     /// 为 true 时，close_terminal 会调用 DaemonClient::detach()，
     /// daemon session 保留，后续可通过 reattach 恢复。
     keep_daemon_alive: bool,
+
+    /// 此终端是通过 daemon reattach 恢复的（进程已在运行，不需要 resume）
+    daemon_reattached: bool,
 }
 
 /// 分离的终端（用于跨池迁移）
@@ -601,6 +604,7 @@ impl TerminalPool {
             )), // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -681,6 +685,7 @@ impl TerminalPool {
             )), // 增量同步用，首次 sync 时全量同步
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -750,6 +755,7 @@ impl TerminalPool {
             )),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -835,6 +841,7 @@ impl TerminalPool {
             )),
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
+            daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -950,6 +957,7 @@ impl TerminalPool {
             ime_state: Arc::new(RwLock::new(None)),
             daemon_session: None, // 非 daemon 管理
             keep_daemon_alive: false,
+            daemon_reattached: false,
         };
 
         self.terminals.write().insert(id, entry);
@@ -1005,6 +1013,7 @@ impl TerminalPool {
             ime_state: Arc::new(RwLock::new(None)),
             daemon_session: None,
             keep_daemon_alive: false,
+            daemon_reattached: false,
         };
 
         self.terminals.write().insert(id, entry);
@@ -1065,43 +1074,37 @@ impl TerminalPool {
         let cols = terminal.cols() as u16;
         let rows = terminal.rows() as u16;
 
-        // NOTE(main): pty-daemon is intentionally bypassed on main for stability.
-        // Keep the daemon implementation below so it can be re-enabled later,
-        // but force all default terminal creation back to the in-process PTY path.
-        //
-        // let cwd_ref = working_dir.as_deref();
-        // let terminal_id = terminal.id().0 as u32;
-        // match Self::try_create_daemon_pty(
-        //     terminal,
-        //     event_queue.clone(),
-        //     cols,
-        //     rows,
-        //     cwd_ref,
-        //     terminal_id,
-        //     reattach_session_id.as_deref(),
-        // ) {
-        //     Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session)) => {
-        //         eprintln!(
-        //             "[TerminalPool] using daemon PTY: session_id={}",
-        //             daemon_session
-        //                 .as_ref()
-        //                 .map(|s| s.session_id.as_str())
-        //                 .unwrap_or("unknown")
-        //         );
-        //         return Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session));
-        //     }
-        //     Err(e) => {
-        //         crate::rust_log_info!(
-        //             "[TerminalPool] daemon pty failed, fallback to in-process: {}",
-        //             e
-        //         );
-        //     }
-        // }
-
-        if reattach_session_id.is_some() {
-            crate::rust_log_info!(
-                "[TerminalPool] pty-daemon path is disabled on main; ignoring reattach request"
-            );
+        let cwd_ref = working_dir.as_deref();
+        let terminal_id = terminal.id().0 as u32;
+        match Self::try_create_daemon_pty(
+            terminal,
+            event_queue.clone(),
+            cols,
+            rows,
+            cwd_ref,
+            terminal_id,
+            reattach_session_id.as_deref(),
+        ) {
+            Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session)) => {
+                eprintln!(
+                    "[TerminalPool] using daemon PTY: session_id={}, reattach={}",
+                    daemon_session
+                        .as_ref()
+                        .map(|s| s.session_id.as_str())
+                        .unwrap_or("unknown"),
+                    daemon_session
+                        .as_ref()
+                        .map(|s| s.was_reattach)
+                        .unwrap_or(false)
+                );
+                return Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session));
+            }
+            Err(e) => {
+                crate::rust_log_info!(
+                    "[TerminalPool] daemon pty failed, fallback to in-process: {}",
+                    e
+                );
+            }
         }
 
         let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
@@ -1201,11 +1204,13 @@ impl TerminalPool {
             }
         };
 
+        daemon_session.was_reattach = is_reattach;
+
         let pty_fd = daemon_session.pty_fd;
         let shell_pid = daemon_session.child_pid as u32;
         let shm_name = &daemon_session.shm_name;
 
-        // 打开共享内存 ring buffer，从 shm 直接读取历史数据
+        // 打开共享内存 ring buffer
         let shared_ring = match pty_daemon::shared_ring::SharedRingBuffer::open(shm_name) {
             Ok(shm) => {
                 eprintln!("[TerminalPool] opened shared ring buffer: {}", shm_name);
@@ -1217,9 +1222,14 @@ impl TerminalPool {
             }
         };
 
-        // 从 shm dump 历史数据并回放到终端
         let ring_data = shared_ring.as_ref().map(|shm| shm.dump()).unwrap_or_default();
-        if !ring_data.is_empty() {
+
+        if is_reattach {
+            // Reattach: 不做 raw replay（会花屏），发 terminal reset 让应用自己 redraw
+            eprintln!("[TerminalPool] reattach: skipping ring replay ({} bytes), will SIGWINCH to trigger redraw", ring_data.len());
+            daemon_session.needs_sigwinch_bounce = true;
+        } else if !ring_data.is_empty() {
+            // 新建 session: replay ring buffer 恢复初始输出
             eprintln!("[TerminalPool] replaying {} bytes of ring data from shm", ring_data.len());
             let mut parser = rio_backend::performer::handler::Processor::<rio_backend::performer::handler::StdSyncHandler>::new();
             let mut cw = crosswords.write();
@@ -1250,12 +1260,6 @@ impl TerminalPool {
         let pty_tx = machine.channel();
         let handle = machine.spawn();
 
-        // Reattach 且 ring buffer 为空：shell 在 detach 期间空闲，屏幕内容丢失。
-        // 标记 needs_sigwinch_bounce，由首次 resize_terminal 用正确尺寸触发 SIGWINCH。
-        // 新建 session 不需要 bounce —— shell 刚启动会自然绘制 prompt。
-        if is_reattach && ring_data.is_empty() {
-            daemon_session.needs_sigwinch_bounce = true;
-        }
 
         Ok((handle, pty_tx, pty_fd, shell_pid, Some(daemon_session)))
     }
@@ -1282,10 +1286,7 @@ impl TerminalPool {
     /// 使用场景：插件 reopenTerminal 时，先调用此方法设置旧 session_id，
     /// 再调用 createTerminalTab，新终端会 reattach 到原 daemon session。
     pub fn set_reattach_hint(&self, session_id: String) {
-        // NOTE(main): reattach is intentionally disabled while the daemon path
-        // is bypassed on main. Keep the implementation available for later.
-        let _ = session_id;
-        *self.reattach_hint.write() = None;
+        *self.reattach_hint.write() = Some(session_id);
     }
 
     /// 查询终端关联的 daemon session ID
@@ -1297,14 +1298,20 @@ impl TerminalPool {
             .map(|ds| ds.session_id.clone())
     }
 
+    pub fn is_daemon_reattached(&self, id: usize) -> bool {
+        self.terminals.read().get(&id)
+            .map(|entry| entry.daemon_reattached)
+            .unwrap_or(false)
+    }
+
     /// 标记终端为 keepAlive
     ///
     /// 设置后，close_terminal 关闭时会 detach daemon session 而非 kill，
     /// daemon session 保留，后续可通过 reattach 恢复。
     pub fn mark_keep_alive(&self, id: usize) {
-        // NOTE(main): keepAlive only makes sense with pty-daemon reattach.
-        // Leave the API in place but keep it as a no-op on main for stability.
-        let _ = id;
+        if let Some(entry) = self.terminals.write().get_mut(&id) {
+            entry.keep_daemon_alive = true;
+        }
     }
 
     /// 关闭终端
