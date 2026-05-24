@@ -357,13 +357,39 @@ class TerminalWindowCoordinator: ObservableObject {
         scheduleRender()
     }
 
-    /// 用户关闭 Tab
+    /// 用户关闭 Tab（Tab X 按钮）
     ///
-    /// 使用 `.remove` 而非 `.close`，支持级联删除：
-    /// - 关闭最后一个 Tab 时会自动移除 Panel
-    /// - Panel 被移除后会自动检查 Page 是否为空
+    /// 与 Cmd+W 行为一致：有运行进程时确认，最后一个 tab 时确认退出。
     func handleTabClose(panelId: UUID, tabId: UUID) {
-        perform(.tab(.remove(tabId: tabId, panelId: panelId, closeTerminal: true)))
+        let hasProcess = hasTabRunningProcess(panelId: panelId, tabId: tabId)
+        let isLast = isLastTab(panelId: panelId)
+
+        let doClose = { [weak self] in
+            guard let self else { return }
+            if isLast {
+                let isLastWindow = WindowManager.shared.windowCount <= 1
+                CloseConfirmation.confirmCloseWindow(isLastWindow: isLastWindow) {
+                    if isLastWindow {
+                        NSApplication.shared.terminate(nil)
+                    } else {
+                        NSApplication.shared.keyWindow?.close()
+                    }
+                }
+            } else {
+                self.perform(.tab(.remove(tabId: tabId, panelId: panelId, closeTerminal: true)))
+            }
+        }
+
+        if hasProcess {
+            DispatchQueue.main.async { [weak self] in
+                let processName = self?.getTabForegroundProcessName(panelId: panelId, tabId: tabId) ?? "进程"
+                CloseConfirmation.confirmCloseWithProcess(processName: processName) {
+                    doClose()
+                }
+            }
+        } else {
+            doClose()
+        }
     }
 
     /// 用户重命名 Tab
