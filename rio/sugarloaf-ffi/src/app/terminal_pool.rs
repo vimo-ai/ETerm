@@ -1260,6 +1260,8 @@ impl TerminalPool {
         let pty_tx = machine.channel();
         let handle = machine.spawn();
 
+        // daemon 创建的 shell 需要 SIGWINCH 触发首次 prompt 绘制
+        unsafe { libc::kill(shell_pid as i32, libc::SIGWINCH); }
 
         Ok((handle, pty_tx, pty_fd, shell_pid, Some(daemon_session)))
     }
