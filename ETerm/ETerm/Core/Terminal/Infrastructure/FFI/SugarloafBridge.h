@@ -169,6 +169,9 @@ void terminal_pool_set_reattach_hint(TerminalPoolHandle handle, const char* sess
 /// or NULL if the terminal does not exist or is not using pty-daemon.
 char* terminal_pool_get_daemon_session_id(TerminalPoolHandle handle, size_t terminal_id);
 
+/// Check if terminal was restored via daemon reattach (process already running)
+bool terminal_pool_is_daemon_reattached(TerminalPoolHandle handle, size_t terminal_id);
+
 /// Mark terminal as keep-alive
 ///
 /// After calling this, terminal_pool_close_terminal will detach the daemon
