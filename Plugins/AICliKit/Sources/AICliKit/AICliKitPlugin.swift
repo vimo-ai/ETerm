@@ -203,6 +203,12 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
                 providerId: providerId
             )
 
+            // daemon reattach 的终端进程还在运行，跳过 resume
+            if host.getDaemonSessionId(terminalId: terminalId) != nil {
+                logInfo("[AICliKit] terminal \(terminalId) is daemon-reattached, skipping resume")
+                continue
+            }
+
             // 延迟恢复
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self = self else { return }
@@ -210,7 +216,6 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
                 guard let currentSessionId = AICliSessionMapper.shared.getSessionIdForTab(tabId),
                       currentSessionId == sessionId else { return }
 
-                // 根据 provider 选择恢复命令（只有支持 --resume 的 CLI 才会返回命令）
                 guard let resumeCommand = self.getResumeCommand(providerId: providerId, sessionId: sessionId) else {
                     return
                 }
@@ -471,6 +476,11 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
 
         guard let sessionId = AICliSessionMapper.shared.getSessionIdForTab(tabId),
               let providerId = AICliSessionMapper.shared.getProviderIdForTab(tabId) else {
+            return
+        }
+
+        if host?.getDaemonSessionId(terminalId: terminalId) != nil {
+            logInfo("[AICliKit] terminal \(terminalId) is daemon-reattached, skipping resume on create")
             return
         }
 

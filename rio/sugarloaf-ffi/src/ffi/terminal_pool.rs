@@ -236,6 +236,19 @@ pub extern "C" fn terminal_pool_get_daemon_session_id(
     }
 }
 
+/// 查询终端是否通过 daemon reattach 恢复（进程已在运行）
+#[no_mangle]
+pub extern "C" fn terminal_pool_is_daemon_reattached(
+    handle: *const TerminalPoolHandle,
+    terminal_id: usize,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+    let pool = unsafe { &*(handle as *const TerminalPool) };
+    pool.is_daemon_reattached(terminal_id)
+}
+
 /// 关闭终端
 ///
 /// 若终端已标记为 keepAlive，则 detach daemon session（session 保留可 reattach）；

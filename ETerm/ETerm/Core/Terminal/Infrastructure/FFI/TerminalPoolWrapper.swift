@@ -925,6 +925,11 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
         rio_free_string(cStr)
         return result
     }
+
+    func isDaemonReattached(_ terminalId: Int) -> Bool {
+        guard let handle = handle else { return false }
+        return terminal_pool_is_daemon_reattached(handle, terminalId)
+    }
 }
 
 // MARK: - Convenience Extensions

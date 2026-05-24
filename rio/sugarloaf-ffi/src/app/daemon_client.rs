@@ -115,6 +115,8 @@ pub struct DaemonSession {
     /// Reattach 且 ring buffer 为空时置 true，
     /// 由首次 resize_terminal 消费并触发 SIGWINCH bounce
     pub needs_sigwinch_bounce: bool,
+    /// 是否为 reattach（而非新建），用于通知 AICliKit 跳过 resume
+    pub was_reattach: bool,
 }
 
 impl Drop for DaemonSession {
@@ -416,6 +418,7 @@ impl DaemonClient {
             control_stream: stream,
             shm_name,
             needs_sigwinch_bounce: false,
+            was_reattach: false,
         })
     }
 
