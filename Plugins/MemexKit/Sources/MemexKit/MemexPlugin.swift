@@ -21,7 +21,6 @@ public final class MemexPlugin: NSObject, Plugin {
     public static var id = "com.eterm.memex"
 
     private weak var host: HostBridge?
-    private var isDashboardVisible = false
 
     public override required init() {
         super.init()
@@ -123,12 +122,7 @@ public final class MemexPlugin: NSObject, Plugin {
     }
 
     private func toggleDashboard() {
-        isDashboardVisible.toggle()
-        if isDashboardVisible {
-            host?.showInfoPanel("memex-dashboard")
-        } else {
-            host?.hideInfoPanel("memex-dashboard")
-        }
+        host?.showInfoPanel("memex-dashboard")
     }
 
     public func windowBottomOverlayView(for id: String) -> AnyView? {
