@@ -33,6 +33,9 @@ final class WindowManager: NSObject {
     /// Session 保存节流延迟（毫秒）
     private let saveDebounceDelay: TimeInterval = 0.5
 
+    /// 已确认关闭的窗口（防止 windowShouldClose 死循环）
+    private var windowCloseConfirmed: Set<Int> = []
+
     private override init() {
         super.init()
     }
@@ -1012,6 +1015,46 @@ final class WindowManager: NSObject {
 // MARK: - NSWindowDelegate
 
 extension WindowManager: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let window = sender as? KeyableWindow else { return true }
+
+        if windowCloseConfirmed.contains(window.windowNumber) {
+            windowCloseConfirmed.remove(window.windowNumber)
+            return true
+        }
+
+        // 检查窗口中是否有正在运行的进程
+        if let coordinator = coordinators[window.windowNumber] {
+            let processes = coordinator.collectRunningProcesses()
+            if !processes.isEmpty {
+                let processNames = processes.map { $0.processName }.joined(separator: ", ")
+                CloseConfirmation.confirmCloseWithProcess(processName: processNames) { [weak self] in
+                    let isLast = (self?.windowCount ?? 0) <= 1
+                    if isLast {
+                        CloseConfirmation.confirmCloseWindow(isLastWindow: true) {
+                            NSApplication.shared.terminate(nil)
+                        }
+                    } else {
+                        self?.windowCloseConfirmed.insert(window.windowNumber)
+                        window.close()
+                    }
+                }
+                return false
+            }
+        }
+
+        // 没有运行进程，检查是否最后一个窗口
+        let isLast = windowCount <= 1
+        if isLast {
+            CloseConfirmation.confirmCloseWindow(isLastWindow: true) {
+                NSApplication.shared.terminate(nil)
+            }
+            return false
+        }
+
+        return true
+    }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? KeyableWindow else { return }
 

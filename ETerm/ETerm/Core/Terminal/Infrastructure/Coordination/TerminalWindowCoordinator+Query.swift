@@ -84,6 +84,32 @@ extension TerminalWindowCoordinator {
         return terminalPool.hasRunningProcess(terminalId: Int(terminalId))
     }
 
+    /// 检查指定 Tab 是否有正在运行的子进程
+    func hasTabRunningProcess(panelId: UUID, tabId: UUID) -> Bool {
+        guard let panel = terminalWindow.getPanel(panelId),
+              let tab = panel.tabs.first(where: { $0.tabId == tabId }),
+              let terminalId = tab.rustTerminalId else {
+            return false
+        }
+        return terminalPool.hasRunningProcess(terminalId: Int(terminalId))
+    }
+
+    /// 获取指定 Tab 的前台进程名称
+    func getTabForegroundProcessName(panelId: UUID, tabId: UUID) -> String? {
+        guard let panel = terminalWindow.getPanel(panelId),
+              let tab = panel.tabs.first(where: { $0.tabId == tabId }),
+              let terminalId = tab.rustTerminalId else {
+            return nil
+        }
+        return terminalPool.getForegroundProcessName(terminalId: Int(terminalId))
+    }
+
+    /// 检查是否只剩最后一个 Tab（关闭后窗口会变空）
+    func isLastTab(panelId: UUID) -> Bool {
+        guard let panel = terminalWindow.getPanel(panelId) else { return false }
+        return panel.tabCount == 1 && terminalWindow.panelCount == 1 && terminalWindow.pages.count <= 1
+    }
+
     /// 检查当前激活的终端是否启用了 Bracketed Paste Mode
     ///
     /// 当启用时（应用程序发送了 \x1b[?2004h），粘贴时应该用转义序列包裹内容。
