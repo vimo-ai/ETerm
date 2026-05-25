@@ -1251,18 +1251,29 @@ impl TerminalPool {
             // (requires daemon-side parser, not yet implemented — Phase 2b).
             // For now, skip ring replay (causes garbled output) and rely on
             // SIGWINCH bounce to trigger child process redraw.
-            if let Some(ref snapshot_b64) = daemon_session.grid_snapshot {
-                use base64::{engine::general_purpose, Engine as _};
-                if let Ok(snapshot_bytes) = general_purpose::STANDARD.decode(snapshot_b64) {
-                    use rio_backend::crosswords::snapshot::GridSnapshot;
-                    if let Ok(snapshot) = GridSnapshot::from_bytes(&snapshot_bytes) {
-                        eprintln!(
-                            "[TerminalPool] reattach: applying daemon grid snapshot ({}x{}, alt={})",
-                            snapshot.cols, snapshot.rows, snapshot.is_alt_screen
-                        );
-                        let mut cw = crosswords.write();
-                        snapshot.apply(&mut *cw);
+            {
+                // Read snapshot from well-known file path (daemon writes it before attach)
+                let snap_path = format!("/tmp/ptyd-snap-{}.bin", &daemon_session.session_id[..8]);
+                if let Ok(snapshot_b64) = std::fs::read_to_string(&snap_path) {
+                    use base64::{engine::general_purpose, Engine as _};
+                    if let Ok(snapshot_bytes) = general_purpose::STANDARD.decode(&snapshot_b64) {
+                        use rio_backend::crosswords::snapshot::GridSnapshot;
+                        match GridSnapshot::from_bytes(&snapshot_bytes) {
+                            Ok(snapshot) => {
+                                eprintln!(
+                                    "[TerminalPool] reattach: applying snapshot ({}x{}, alt={}, {} cells)",
+                                    snapshot.cols, snapshot.rows, snapshot.is_alt_screen,
+                                    snapshot.active_cells.len()
+                                );
+                                let mut cw = crosswords.write();
+                                snapshot.apply(&mut *cw);
+                            }
+                            Err(e) => {
+                                eprintln!("[TerminalPool] reattach: snapshot decode failed: {:?}", e);
+                            }
+                        }
                     }
+                    let _ = std::fs::remove_file(&snap_path);
                 }
             }
             eprintln!("[TerminalPool] reattach: skipping ring replay ({} bytes), will SIGWINCH to trigger redraw", ring_data.len());
