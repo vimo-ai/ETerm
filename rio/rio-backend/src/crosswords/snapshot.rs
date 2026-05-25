@@ -107,10 +107,8 @@ impl GridSnapshot {
             cw.resize(size);
         }
 
-        // Restore active grid cells.
         restore_grid_cells(&mut cw.grid, self.rows, self.cols, &self.active_cells);
 
-        // Restore inactive grid cells.
         restore_grid_cells(
             &mut cw.inactive_grid,
             self.rows,
@@ -118,20 +116,16 @@ impl GridSnapshot {
             &self.inactive_cells,
         );
 
-        // Restore cursor.
         cw.grid.cursor.pos = Pos::new(
             Line(self.cursor_row),
             Column(self.cursor_col),
         );
         cw.cursor_shape = self.cursor_shape;
 
-        // Restore mode flags directly.
         if let Some(mode) = Mode::from_bits(self.mode_bits) {
             cw.mode = mode;
         }
 
-        // If the snapshot was captured with ALT_SCREEN active, but the
-        // fresh Crosswords doesn't have it set, swap into alt screen.
         let currently_alt = cw.mode.contains(Mode::ALT_SCREEN);
         if self.is_alt_screen && !currently_alt {
             cw.swap_alt();
