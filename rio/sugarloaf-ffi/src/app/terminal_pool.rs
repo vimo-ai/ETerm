@@ -1247,36 +1247,24 @@ impl TerminalPool {
         let ring_data = shared_ring.as_ref().map(|shm| shm.dump()).unwrap_or_default();
 
         if is_reattach {
-            // Apply grid snapshot if available (captured on previous detach)
+            // Reattach after crash: apply grid snapshot if daemon provides one
+            // (requires daemon-side parser, not yet implemented — Phase 2b).
+            // For now, skip ring replay (causes garbled output) and rely on
+            // SIGWINCH bounce to trigger child process redraw.
             if let Some(ref snapshot_b64) = daemon_session.grid_snapshot {
                 use base64::{engine::general_purpose, Engine as _};
-                match general_purpose::STANDARD.decode(snapshot_b64) {
-                    Ok(snapshot_bytes) => {
-                        use rio_backend::crosswords::snapshot::GridSnapshot;
-                        match GridSnapshot::from_bytes(&snapshot_bytes) {
-                            Ok(snapshot) => {
-                                eprintln!(
-                                    "[TerminalPool] reattach: applying grid snapshot ({}x{}, alt_screen={})",
-                                    snapshot.cols, snapshot.rows, snapshot.is_alt_screen
-                                );
-                                let mut cw = crosswords.write();
-                                snapshot.apply(&mut *cw);
-                            }
-                            Err(e) => {
-                                eprintln!("[TerminalPool] reattach: failed to deserialize grid snapshot: {e}");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[TerminalPool] reattach: failed to decode snapshot base64: {e}");
+                if let Ok(snapshot_bytes) = general_purpose::STANDARD.decode(snapshot_b64) {
+                    use rio_backend::crosswords::snapshot::GridSnapshot;
+                    if let Ok(snapshot) = GridSnapshot::from_bytes(&snapshot_bytes) {
+                        eprintln!(
+                            "[TerminalPool] reattach: applying daemon grid snapshot ({}x{}, alt={})",
+                            snapshot.cols, snapshot.rows, snapshot.is_alt_screen
+                        );
+                        let mut cw = crosswords.write();
+                        snapshot.apply(&mut *cw);
                     }
                 }
-            } else {
-                eprintln!("[TerminalPool] reattach: no grid snapshot available, screen will be blank until redraw");
             }
-            // Always bounce SIGWINCH on reattach so the child process redraws.
-            // With snapshot: restores visual state immediately, SIGWINCH updates live content.
-            // Without snapshot: SIGWINCH is the only recovery mechanism.
             eprintln!("[TerminalPool] reattach: skipping ring replay ({} bytes), will SIGWINCH to trigger redraw", ring_data.len());
             daemon_session.needs_sigwinch_bounce = true;
         } else if !ring_data.is_empty() {
@@ -1369,47 +1357,17 @@ impl TerminalPool {
 
     /// 关闭终端
     ///
-    /// 若 keep_daemon_alive 为 true 或 daemon session 存在，
-    /// 则 detach daemon session（session 保留可恢复）；
-    /// 仅当明确无 daemon session 时才直接清理。
-    /// 使用 close_terminal_force() 强制 kill daemon session。
+    /// 主动关闭终端（Cmd+W / tab 关闭）→ kill daemon session。
+    /// 异常退出由 daemon 端 crash-detach 处理（session 自动保留）。
     pub fn close_terminal(&mut self, id: usize) -> bool {
         if let Some(mut entry) = self.terminals.write().remove(&id) {
             self.defer_gpu_drop(&mut entry);
             // 从全局事件路由注销
             unregister_terminal_event_target(id);
-            // Daemon session close strategy:
-            // Default to detach (preserve) when a daemon session exists.
-            // This is safe against mark_keep_alive/close_terminal races —
-            // even if keep_daemon_alive hasn't been set yet, we preserve the session.
-            // Use close_terminal_force() for intentional kill.
             if let Some(ref ds) = entry.daemon_session {
-                // Capture grid snapshot before detaching
-                let snapshot_b64 = entry
-                    .terminal
-                    .lock()
-                    .inner_crosswords()
-                    .map(|cw| {
-                        use rio_backend::crosswords::snapshot::GridSnapshot;
-                        let snap = GridSnapshot::capture(&cw.read());
-                        let bytes = snap.to_bytes();
-                        eprintln!(
-                            "[TerminalPool] captured grid snapshot: {} bytes (session={})",
-                            bytes.len(),
-                            ds.session_id
-                        );
-                        use base64::{engine::general_purpose, Engine as _};
-                        general_purpose::STANDARD.encode(&bytes)
-                    });
-
-                if let Err(e) = super::daemon_client::DaemonClient::detach(
-                    &ds.session_id,
-                    entry.cols,
-                    entry.rows,
-                    snapshot_b64,
-                ) {
+                if let Err(e) = super::daemon_client::DaemonClient::kill(&ds.session_id) {
                     eprintln!(
-                        "[TerminalPool] daemon detach failed (session={}): {}",
+                        "[TerminalPool] daemon kill failed (session={}): {}",
                         ds.session_id, e
                     );
                 }
@@ -3979,27 +3937,7 @@ impl Drop for TerminalPool {
         let mut terminals = self.terminals.write();
         for (_, entry) in terminals.drain() {
             if let Some(ref ds) = entry.daemon_session {
-                if entry.keep_daemon_alive {
-                    let snapshot_b64 = entry
-                        .terminal
-                        .lock()
-                        .inner_crosswords()
-                        .map(|cw| {
-                            use rio_backend::crosswords::snapshot::GridSnapshot;
-                            let snap = GridSnapshot::capture(&cw.read());
-                            let bytes = snap.to_bytes();
-                            use base64::{engine::general_purpose, Engine as _};
-                            general_purpose::STANDARD.encode(&bytes)
-                        });
-                    let _ = super::daemon_client::DaemonClient::detach(
-                        &ds.session_id,
-                        entry.cols,
-                        entry.rows,
-                        snapshot_b64,
-                    );
-                } else {
-                    let _ = super::daemon_client::DaemonClient::kill(&ds.session_id);
-                }
+                let _ = super::daemon_client::DaemonClient::kill(&ds.session_id);
             }
             if let Some(ref tx) = entry.pty_tx {
                 let _ = tx.send(rio_backend::event::Msg::Shutdown);
