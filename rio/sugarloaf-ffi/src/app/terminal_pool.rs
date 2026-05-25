@@ -353,7 +353,9 @@ pub struct TerminalPool {
     ///
     /// 插件在 reopenTerminal 前通过 set_reattach_hint 设置，
     /// create_terminal_with_cwd 消费后自动清空（一次性语义）。
-    reattach_hint: RwLock<Option<String>>,
+    ///
+    /// Stores (session_id, set_time) to detect stale hints from race conditions.
+    reattach_hint: RwLock<Option<(String, std::time::Instant)>>,
 
     /// GPU 资源延迟释放队列
     ///
@@ -632,7 +634,20 @@ impl TerminalPool {
         self.next_id += 1;
 
         // 消费 reattach hint（一次性语义）
-        let reattach_hint = self.reattach_hint.write().take();
+        // Discard hints older than 2 seconds to prevent wrong-tab consumption
+        // when multiple tabs are created in rapid succession.
+        let reattach_hint = self.reattach_hint.write().take().and_then(|(sid, set_time)| {
+            let age = set_time.elapsed();
+            if age > std::time::Duration::from_secs(2) {
+                eprintln!(
+                    "[TerminalPool] reattach hint expired ({:?} old), discarding session_id={}",
+                    age, sid
+                );
+                None
+            } else {
+                Some(sid)
+            }
+        });
 
         // 1. 创建 Terminal
         let terminal_id = TerminalId(id);
@@ -1100,8 +1115,8 @@ impl TerminalPool {
                 return Ok((handle, pty_tx, pty_fd, shell_pid, daemon_session));
             }
             Err(e) => {
-                crate::rust_log_info!(
-                    "[TerminalPool] daemon pty failed, fallback to in-process: {}",
+                crate::rust_log_warn!(
+                    "[TerminalPool] daemon unavailable, falling back to in-process PTY: {}",
                     e
                 );
             }
@@ -1217,7 +1232,14 @@ impl TerminalPool {
                 Some(shm)
             }
             Err(e) => {
-                eprintln!("[TerminalPool] warning: failed to open shared ring buffer {}: {}", shm_name, e);
+                if is_reattach {
+                    crate::rust_log_warn!(
+                        "[TerminalPool] reattach: shared ring buffer unavailable ({}), terminal history will be empty. SIGWINCH will trigger redraw.",
+                        e
+                    );
+                } else {
+                    eprintln!("[TerminalPool] warning: failed to open shared ring buffer {}: {}", shm_name, e);
+                }
                 None
             }
         };
@@ -1225,7 +1247,36 @@ impl TerminalPool {
         let ring_data = shared_ring.as_ref().map(|shm| shm.dump()).unwrap_or_default();
 
         if is_reattach {
-            // Reattach: 不做 raw replay（会花屏），发 terminal reset 让应用自己 redraw
+            // Apply grid snapshot if available (captured on previous detach)
+            if let Some(ref snapshot_b64) = daemon_session.grid_snapshot {
+                use base64::{engine::general_purpose, Engine as _};
+                match general_purpose::STANDARD.decode(snapshot_b64) {
+                    Ok(snapshot_bytes) => {
+                        use rio_backend::crosswords::snapshot::GridSnapshot;
+                        match GridSnapshot::from_bytes(&snapshot_bytes) {
+                            Ok(snapshot) => {
+                                eprintln!(
+                                    "[TerminalPool] reattach: applying grid snapshot ({}x{}, alt_screen={})",
+                                    snapshot.cols, snapshot.rows, snapshot.is_alt_screen
+                                );
+                                let mut cw = crosswords.write();
+                                snapshot.apply(&mut *cw);
+                            }
+                            Err(e) => {
+                                eprintln!("[TerminalPool] reattach: failed to deserialize grid snapshot: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[TerminalPool] reattach: failed to decode snapshot base64: {e}");
+                    }
+                }
+            } else {
+                eprintln!("[TerminalPool] reattach: no grid snapshot available, screen will be blank until redraw");
+            }
+            // Always bounce SIGWINCH on reattach so the child process redraws.
+            // With snapshot: restores visual state immediately, SIGWINCH updates live content.
+            // Without snapshot: SIGWINCH is the only recovery mechanism.
             eprintln!("[TerminalPool] reattach: skipping ring replay ({} bytes), will SIGWINCH to trigger redraw", ring_data.len());
             daemon_session.needs_sigwinch_bounce = true;
         } else if !ring_data.is_empty() {
@@ -1288,7 +1339,7 @@ impl TerminalPool {
     /// 使用场景：插件 reopenTerminal 时，先调用此方法设置旧 session_id，
     /// 再调用 createTerminalTab，新终端会 reattach 到原 daemon session。
     pub fn set_reattach_hint(&self, session_id: String) {
-        *self.reattach_hint.write() = Some(session_id);
+        *self.reattach_hint.write() = Some((session_id, std::time::Instant::now()));
     }
 
     /// 查询终端关联的 daemon session ID
@@ -1318,35 +1369,49 @@ impl TerminalPool {
 
     /// 关闭终端
     ///
-    /// 若 keep_daemon_alive 为 true，则 detach daemon session（session 保留可恢复）；
-    /// 否则 kill daemon session（彻底清理）。
+    /// 若 keep_daemon_alive 为 true 或 daemon session 存在，
+    /// 则 detach daemon session（session 保留可恢复）；
+    /// 仅当明确无 daemon session 时才直接清理。
+    /// 使用 close_terminal_force() 强制 kill daemon session。
     pub fn close_terminal(&mut self, id: usize) -> bool {
         if let Some(mut entry) = self.terminals.write().remove(&id) {
             self.defer_gpu_drop(&mut entry);
             // 从全局事件路由注销
             unregister_terminal_event_target(id);
-            // 根据 keepAlive 标记决定关闭策略
+            // Daemon session close strategy:
+            // Default to detach (preserve) when a daemon session exists.
+            // This is safe against mark_keep_alive/close_terminal races —
+            // even if keep_daemon_alive hasn't been set yet, we preserve the session.
+            // Use close_terminal_force() for intentional kill.
             if let Some(ref ds) = entry.daemon_session {
-                if entry.keep_daemon_alive {
-                    // keepAlive：detach session，保留 daemon 进程供后续 reattach
-                    if let Err(e) = super::daemon_client::DaemonClient::detach(
-                        &ds.session_id,
-                        entry.cols,
-                        entry.rows,
-                    ) {
+                // Capture grid snapshot before detaching
+                let snapshot_b64 = entry
+                    .terminal
+                    .lock()
+                    .inner_crosswords()
+                    .map(|cw| {
+                        use rio_backend::crosswords::snapshot::GridSnapshot;
+                        let snap = GridSnapshot::capture(&cw.read());
+                        let bytes = snap.to_bytes();
                         eprintln!(
-                            "[TerminalPool] daemon detach failed (session={}): {}",
-                            ds.session_id, e
+                            "[TerminalPool] captured grid snapshot: {} bytes (session={})",
+                            bytes.len(),
+                            ds.session_id
                         );
-                    }
-                } else {
-                    // 主动关闭：Kill daemon session（区分于崩溃的 crash detach 保留 session）
-                    if let Err(e) = super::daemon_client::DaemonClient::kill(&ds.session_id) {
-                        eprintln!(
-                            "[TerminalPool] daemon kill failed (session={}): {}",
-                            ds.session_id, e
-                        );
-                    }
+                        use base64::{engine::general_purpose, Engine as _};
+                        general_purpose::STANDARD.encode(&bytes)
+                    });
+
+                if let Err(e) = super::daemon_client::DaemonClient::detach(
+                    &ds.session_id,
+                    entry.cols,
+                    entry.rows,
+                    snapshot_b64,
+                ) {
+                    eprintln!(
+                        "[TerminalPool] daemon detach failed (session={}): {}",
+                        ds.session_id, e
+                    );
                 }
             }
             // 通知 Machine 线程退出事件循环
@@ -3915,10 +3980,22 @@ impl Drop for TerminalPool {
         for (_, entry) in terminals.drain() {
             if let Some(ref ds) = entry.daemon_session {
                 if entry.keep_daemon_alive {
+                    let snapshot_b64 = entry
+                        .terminal
+                        .lock()
+                        .inner_crosswords()
+                        .map(|cw| {
+                            use rio_backend::crosswords::snapshot::GridSnapshot;
+                            let snap = GridSnapshot::capture(&cw.read());
+                            let bytes = snap.to_bytes();
+                            use base64::{engine::general_purpose, Engine as _};
+                            general_purpose::STANDARD.encode(&bytes)
+                        });
                     let _ = super::daemon_client::DaemonClient::detach(
                         &ds.session_id,
                         entry.cols,
                         entry.rows,
+                        snapshot_b64,
                     );
                 } else {
                     let _ = super::daemon_client::DaemonClient::kill(&ds.session_id);

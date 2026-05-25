@@ -206,6 +206,12 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
             // daemon reattach 的终端进程还在运行，跳过 resume
             if host.getDaemonSessionId(terminalId: terminalId) != nil {
                 logInfo("[AICliKit] terminal \(terminalId) is daemon-reattached, skipping resume")
+                // Fallback: if daemon session dies before AI CLI reconnects,
+                // trigger resume after a timeout
+                scheduleDaemonFallbackResume(
+                    terminalId: terminalId, tabId: tabId,
+                    sessionId: sessionId, providerId: providerId
+                )
                 continue
             }
 
@@ -481,6 +487,12 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
 
         if host?.getDaemonSessionId(terminalId: terminalId) != nil {
             logInfo("[AICliKit] terminal \(terminalId) is daemon-reattached, skipping resume on create")
+            // Fallback: if daemon session dies before AI CLI reconnects,
+            // trigger resume after a timeout
+            scheduleDaemonFallbackResume(
+                terminalId: terminalId, tabId: tabId,
+                sessionId: sessionId, providerId: providerId
+            )
             return
         }
 
@@ -508,6 +520,43 @@ public final class AICliKitPlugin: NSObject, Plugin, AICliKitProtocol {
         sessionMapLock.unlock()
 
         AICliSessionMapper.shared.end(terminalId: terminalId, tabId: tabId)
+    }
+
+    // MARK: - Daemon Fallback
+
+    /// Schedule a fallback resume for when daemon reattach was detected but
+    /// the AI CLI session never reconnects (e.g., daemon died between the
+    /// check and actual session restoration).
+    ///
+    /// After 5 seconds, if no AI CLI session event has been received for the
+    /// terminal (checked via sessionMap), trigger resume as fallback.
+    private func scheduleDaemonFallbackResume(
+        terminalId: Int, tabId: String,
+        sessionId: String, providerId: String
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            guard let self = self else { return }
+
+            // If a session event arrived in the meantime, the daemon is alive
+            self.sessionMapLock.lock()
+            let hasActiveSession = self.sessionMap[terminalId] != nil
+            self.sessionMapLock.unlock()
+
+            if hasActiveSession {
+                return
+            }
+
+            // Verify the tab still maps to the same session
+            guard let currentSessionId = AICliSessionMapper.shared.getSessionIdForTab(tabId),
+                  currentSessionId == sessionId else { return }
+
+            logInfo("[AICliKit] daemon fallback: no session event for terminal \(terminalId) after 5s, triggering resume")
+
+            guard let resumeCommand = self.getResumeCommand(providerId: providerId, sessionId: sessionId) else {
+                return
+            }
+            self.host?.writeToTerminal(terminalId: terminalId, data: resumeCommand)
+        }
     }
 
     // MARK: - Helpers
