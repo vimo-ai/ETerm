@@ -33,6 +33,7 @@ libc = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 sugarloaf = { workspace = true }
+terminal-core = { workspace = true }
 teletypewriter = { workspace = true }
 unicode-width = { workspace = true }
 copa = { workspace = true }

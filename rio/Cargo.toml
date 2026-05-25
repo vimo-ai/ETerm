@@ -8,6 +8,7 @@ members = [
     "rio-backend",
     "sugarloaf-ffi",
     "sugarloaf-ffi-win",
+    "terminal-core",
 ]
 resolver = "2"
 
@@ -31,6 +32,7 @@ readme = "README.md"
 teletypewriter = { path = "teletypewriter", version = "0.2.35" }
 rio-backend = { path = "rio-backend", version = "0.2.35" }
 sugarloaf = { path = "sugarloaf", version = "0.2.35" }
+terminal-core = { path = "terminal-core" }
 
 # Own dependencies
 copa = { path = "copa", default-features = true, version = "0.2.35" }
