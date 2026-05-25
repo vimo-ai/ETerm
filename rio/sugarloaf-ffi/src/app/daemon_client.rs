@@ -33,6 +33,8 @@ enum Request {
         session_id: String,
         cols: u16,
         rows: u16,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        grid_snapshot: Option<String>,
     },
     List,
     Kill {
@@ -60,6 +62,9 @@ enum Response {
         child_pid: i32,
         /// 共享内存名称，客户端从 shm 直接读取历史数据
         shm_name: String,
+        /// base64-encoded GridSnapshot (from previous detach)
+        #[serde(default)]
+        grid_snapshot: Option<String>,
     },
     AttachDeny {
         session_id: String,
@@ -117,6 +122,59 @@ pub struct DaemonSession {
     pub needs_sigwinch_bounce: bool,
     /// 是否为 reattach（而非新建），用于通知 AICliKit 跳过 resume
     pub was_reattach: bool,
+    /// Grid snapshot bytes received from daemon on reattach (base64 string to decode)
+    pub grid_snapshot: Option<String>,
+}
+
+impl DaemonSession {
+    /// Check if the daemon is alive by sending a Ping on the control stream.
+    /// Returns false on any write/read/timeout error.
+    pub fn ping(&mut self) -> bool {
+        use std::time::Duration;
+
+        let encoded = match encode_message(&Request::Ping) {
+            Ok(data) => data,
+            Err(_) => return false,
+        };
+
+        // Set a short timeout for the health check round-trip
+        let _ = self.control_stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let _ = self.control_stream.set_read_timeout(Some(Duration::from_secs(2)));
+
+        if self.control_stream.write_all(&encoded).is_err() {
+            return false;
+        }
+
+        match try_decode_message(&mut self.control_stream) {
+            Ok(Response::Pong { .. }) => true,
+            _ => false,
+        }
+    }
+
+    /// Non-blocking health check: peek at the control stream to detect a closed connection.
+    /// Returns false if the daemon side has closed the socket (EOF/error).
+    pub fn is_healthy(&self) -> bool {
+        use std::os::unix::io::AsRawFd;
+
+        let fd = self.control_stream.as_raw_fd();
+        let mut buf = [0u8; 1];
+        let ret = unsafe {
+            libc::recv(fd, buf.as_mut_ptr() as *mut _, 1, libc::MSG_PEEK | libc::MSG_DONTWAIT)
+        };
+        // ret == 0 means EOF (daemon closed), ret < 0 with EAGAIN/EWOULDBLOCK means alive
+        if ret == 0 {
+            return false;
+        }
+        if ret < 0 {
+            let err = std::io::Error::last_os_error();
+            // EAGAIN/EWOULDBLOCK = no data available but socket alive
+            if err.kind() == std::io::ErrorKind::WouldBlock {
+                return true;
+            }
+            return false;
+        }
+        true
+    }
 }
 
 impl Drop for DaemonSession {
@@ -389,18 +447,31 @@ impl DaemonClient {
         let attach_req = Request::Attach {
             session_id: session_id.clone(),
         };
-        let (cols, rows, child_pid, shm_name) = match send_request(&mut stream, attach_req)? {
+        let (returned_sid, cols, rows, child_pid, shm_name, grid_snapshot) = match send_request(&mut stream, attach_req)? {
             Response::AttachReady {
+                session_id: returned_sid,
                 cols,
                 rows,
                 child_pid,
                 shm_name,
-                ..
-            } => (cols, rows, child_pid, shm_name),
+                grid_snapshot,
+            } => (returned_sid, cols, rows, child_pid, shm_name, grid_snapshot),
             Response::AttachDeny { reason, .. } => return Err(format!("attach denied: {}", reason)),
             Response::Error { message } => return Err(message),
             _ => return Err("unexpected response to Attach".to_string()),
         };
+
+        // Validate that daemon returned the session we requested
+        if returned_sid != session_id {
+            eprintln!(
+                "[DaemonClient] session_id mismatch: requested={}, returned={}",
+                session_id, returned_sid
+            );
+            return Err(format!(
+                "session_id mismatch: requested {} but got {}",
+                session_id, returned_sid
+            ));
+        }
 
         // Receive PTY fd via SCM_RIGHTS
         let pty_fd = recv_fd(&stream)?;
@@ -419,16 +490,23 @@ impl DaemonClient {
             shm_name,
             needs_sigwinch_bounce: false,
             was_reattach: false,
+            grid_snapshot,
         })
     }
 
-    pub fn detach(session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
+    pub fn detach(
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        grid_snapshot: Option<String>,
+    ) -> Result<(), String> {
         let mut stream = connect().ok_or("failed to connect to daemon")?;
 
         let detach_req = Request::Detach {
             session_id: session_id.to_string(),
             cols,
             rows,
+            grid_snapshot,
         };
         match send_request(&mut stream, detach_req)? {
             Response::Detached { .. } => Ok(()),

@@ -18,6 +18,7 @@ pub mod attr;
 pub mod grid;
 pub mod pos;
 pub mod search;
+pub mod snapshot;
 pub mod square;
 pub mod vi_mode;
 
