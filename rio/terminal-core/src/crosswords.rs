@@ -3146,6 +3146,9 @@ pub struct CrosswordsSize {
     pub height: u32,
     pub square_width: u32,
     pub square_height: u32,
+    /// Maximum number of lines that can be stored in scrollback history.
+    /// Used as `max_scroll_limit` in Grid. Defaults to 10_000.
+    pub max_scroll_limit: usize,
 }
 
 impl CrosswordsSize {
@@ -3157,6 +3160,7 @@ impl CrosswordsSize {
             height: 0,
             square_width: 0,
             square_height: 0,
+            max_scroll_limit: 10_000,
         }
     }
 
@@ -3175,6 +3179,7 @@ impl CrosswordsSize {
             height,
             square_width,
             square_height,
+            max_scroll_limit: 10_000,
         }
     }
 }
@@ -3198,6 +3203,10 @@ impl Dimensions for CrosswordsSize {
 
     fn square_height(&self) -> f32 {
         0.
+    }
+
+    fn history_size(&self) -> usize {
+        self.max_scroll_limit
     }
 }
 
