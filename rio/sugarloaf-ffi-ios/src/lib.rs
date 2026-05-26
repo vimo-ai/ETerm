@@ -62,6 +62,9 @@ pub extern "C" fn sugarloaf_ios_create(
     Box::into_raw(handle) as *mut c_void
 }
 
+/// Render using sugarloaf's built-in rich text pipeline.
+/// This uses get_or_create_typeface() which on iOS falls back to CoreText-registered
+/// fonts when Skia's new_from_data() fails.
 #[no_mangle]
 pub extern "C" fn sugarloaf_ios_render(handle: *mut c_void) -> bool {
     if handle.is_null() {
@@ -69,7 +72,20 @@ pub extern "C" fn sugarloaf_ios_render(handle: *mut c_void) -> bool {
     }
     let h = unsafe { &mut *(handle as *mut SugarloafIosHandle) };
 
-    // bypass sugarloaf's rich text - draw directly with Skia
+    // Use sugarloaf's built-in render() which handles rich text, quads, etc.
+    h.sugarloaf.render();
+    true
+}
+
+/// Diagnostic render: bypass sugarloaf's rich text and draw directly with Skia.
+/// Useful for isolating whether the issue is in the rendering pipeline vs font loading.
+#[no_mangle]
+pub extern "C" fn sugarloaf_ios_render_diagnostic(handle: *mut c_void) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+    let h = unsafe { &mut *(handle as *mut SugarloafIosHandle) };
+
     let frame = h.sugarloaf.ctx.begin_frame();
     if frame.is_none() {
         return false;
@@ -78,7 +94,6 @@ pub extern "C" fn sugarloaf_ios_render(handle: *mut c_void) -> bool {
     let (mut surface, drawable) = frame.unwrap();
     let canvas = surface.canvas();
 
-    // clear background
     canvas.clear(skia_safe::Color4f::new(0.12, 0.12, 0.15, 1.0));
 
     let scale = h.sugarloaf.ctx.scale();
@@ -92,7 +107,7 @@ pub extern "C" fn sugarloaf_ios_render(handle: *mut c_void) -> bool {
         &rect_paint,
     );
 
-    // try direct Skia text drawing
+    // try direct Skia text drawing with system fonts
     let font_mgr = skia_safe::FontMgr::new();
     let typeface = font_mgr
         .match_family_style("Menlo", skia_safe::FontStyle::normal())
@@ -124,7 +139,6 @@ pub extern "C" fn sugarloaf_ios_render(handle: *mut c_void) -> bool {
             &text_paint,
         );
     } else {
-        // no typeface - draw a red rect as indicator
         rect_paint.set_color(skia_safe::Color::from_rgb(255, 0, 0));
         canvas.draw_rect(
             skia_safe::Rect::from_xywh(20.0 * scale, 80.0 * scale, 200.0 * scale, 30.0 * scale),
