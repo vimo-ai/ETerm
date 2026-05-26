@@ -8,6 +8,7 @@ members = [
     "rio-backend",
     "sugarloaf-ffi",
     "sugarloaf-ffi-win",
+    "sugarloaf-ffi-ios",
     "terminal-core",
 ]
 resolver = "2"
