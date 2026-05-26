@@ -166,6 +166,25 @@ struct DeferredGpuDrop {
     image: Option<TerminalRenderCache>,
 }
 
+/// Pending baton-pass resume action (produced by push listener thread,
+/// consumed by the render/event loop on the next frame).
+///
+/// The push listener runs on a background thread and cannot safely modify
+/// TerminalEntry fields (pty_tx, machine_handle) which live behind the
+/// pool-level RwLock. Instead it queues a BatonResumeAction here.
+struct BatonResumeAction {
+    /// Terminal ID that owns this daemon session
+    terminal_id: usize,
+    /// New PTY file descriptor received from daemon
+    new_pty_fd: i32,
+    /// Shell PID associated with the resumed session
+    child_pid: u32,
+    /// Shared memory name for the ring buffer
+    shm_name: String,
+    /// Optional base64-encoded grid snapshot to apply
+    grid_snapshot: Option<String>,
+}
+
 /// 单个终端的渲染缓存
 struct TerminalRenderCache {
     /// 缓存的渲染结果（Image 比 Surface 更轻量）
@@ -363,6 +382,13 @@ pub struct TerminalPool {
     /// Skia GrResourceCache，与 CVDisplayLink 线程竞态）。改为 .take() 放入此队列，
     /// 由 CVDisplayLink 线程在 render_all() 开头统一 drop。
     deferred_gpu_drops: Mutex<Vec<DeferredGpuDrop>>,
+
+    /// Pending baton-pass resume actions from the push listener thread.
+    ///
+    /// The push listener cannot safely write to TerminalEntry (behind the
+    /// pool-level RwLock), so it enqueues a BatonResumeAction here.
+    /// `apply_pending_updates()` drains this queue each frame.
+    pending_baton_resumes: Arc<Mutex<Vec<BatonResumeAction>>>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -496,6 +522,7 @@ impl TerminalPool {
             cached_font_metrics: std::sync::RwLock::new(initial_font_metrics),
             reattach_hint: RwLock::new(None),
             deferred_gpu_drops: Mutex::new(Vec::new()),
+            pending_baton_resumes: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -581,6 +608,7 @@ impl TerminalPool {
             };
 
         // 3. 存储条目
+        let has_daemon = daemon_session.is_some();
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
@@ -615,6 +643,11 @@ impl TerminalPool {
 
         // 4. 注册到全局事件路由（支持跨 Pool 迁移）
         register_terminal_event_target(id, dirty_flag, &self.needs_render);
+
+        // 5. Wire baton-pass push listener for daemon sessions
+        if has_daemon {
+            self.wire_baton_pass_listener(id);
+        }
 
         // eprintln!("✅ [TerminalPool] Terminal {} created", id);
 
@@ -675,6 +708,7 @@ impl TerminalPool {
             };
 
         // 3. 存储条目
+        let has_daemon = daemon_session.is_some();
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
@@ -709,6 +743,11 @@ impl TerminalPool {
 
         // 4. 注册到全局事件路由（支持跨 Pool 迁移）
         register_terminal_event_target(id, dirty_flag, &self.needs_render);
+
+        // 5. Wire baton-pass push listener for daemon sessions
+        if has_daemon {
+            self.wire_baton_pass_listener(id);
+        }
 
         id as i32
     }
@@ -745,6 +784,7 @@ impl TerminalPool {
             };
 
         // 3. 存储条目
+        let has_daemon = daemon_session.is_some();
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
@@ -779,6 +819,11 @@ impl TerminalPool {
 
         // 4. 注册到全局事件路由（支持跨 Pool 迁移）
         register_terminal_event_target(id, dirty_flag, &self.needs_render);
+
+        // 5. Wire baton-pass push listener for daemon sessions
+        if has_daemon {
+            self.wire_baton_pass_listener(id);
+        }
 
         // 更新 next_id（确保不会冲突）
         if id >= self.next_id {
@@ -831,6 +876,7 @@ impl TerminalPool {
             };
 
         // 3. 存储条目
+        let has_daemon = daemon_session.is_some();
         let dirty_flag = Arc::new(crate::infra::AtomicDirtyFlag::new());
         let entry = TerminalEntry {
             terminal: Arc::new(Mutex::new(terminal)),
@@ -865,6 +911,11 @@ impl TerminalPool {
 
         // 4. 注册到全局事件路由（支持跨 Pool 迁移）
         register_terminal_event_target(id, dirty_flag, &self.needs_render);
+
+        // 5. Wire baton-pass push listener for daemon sessions
+        if has_daemon {
+            self.wire_baton_pass_listener(id);
+        }
 
         // 更新 next_id（确保不会冲突）
         if id >= self.next_id {
@@ -1328,6 +1379,325 @@ impl TerminalPool {
         let session_id = &reattachable.id;
         eprintln!("[TerminalPool] found reattachable session: {} (terminal_id={}, state={})", session_id, terminal_id, reattachable.state);
         super::daemon_client::DaemonClient::attach(session_id).ok()
+    }
+
+    /// Wire the baton-pass push listener for a daemon terminal.
+    ///
+    /// Must be called after the TerminalEntry is stored in the terminals map
+    /// (so the callbacks can find it). Starts the push listener thread on the
+    /// DaemonSession with ForceDetach/ResumeAttach callbacks.
+    ///
+    /// The `on_force_detach` callback captures the grid snapshot from crosswords,
+    /// shuts down the current Machine thread, and returns the base64 snapshot.
+    ///
+    /// The `on_resume_attach` callback enqueues a BatonResumeAction into
+    /// `pending_baton_resumes`. The actual PTY/Machine replacement happens in
+    /// `process_pending_baton_resumes()` during the next render frame.
+    fn wire_baton_pass_listener(&self, terminal_id: usize) {
+        use base64::{engine::general_purpose, Engine as _};
+        use rio_backend::crosswords::snapshot::GridSnapshot;
+
+        // Acquire write lock to get mutable access to the daemon_session
+        let mut terminals = self.terminals.write();
+        let entry = match terminals.get_mut(&terminal_id) {
+            Some(e) => e,
+            None => return,
+        };
+
+        let daemon_session = match entry.daemon_session.as_mut() {
+            Some(ds) => ds,
+            None => return,
+        };
+
+        // Clone the Arc-wrapped resources the callbacks need.
+        // ForceDetach captures: terminal_arc (snapshot), pty_tx (shutdown), dirty_flag, needs_render.
+        // ResumeAttach captures: pending_baton_resumes (queue action), needs_render.
+        let terminal_arc = entry.terminal.clone();
+        let pty_tx_for_detach = entry.pty_tx.clone();
+        let dirty_flag = entry.dirty_flag.clone();
+        let detach_needs_render = self.needs_render.clone();
+        let resume_terminal_id = terminal_id;
+        let resume_pending = self.pending_baton_resumes.clone();
+        let resume_needs_render = self.needs_render.clone();
+
+        // -- ForceDetach callback --
+        // Runs on the push listener thread when daemon requests takeover.
+        // Captures grid snapshot, stops the Machine thread, returns snapshot.
+        let on_force_detach: super::daemon_client::ForceDetachCallback =
+            Box::new(move |_session_id: &str| -> Option<String> {
+                eprintln!(
+                    "[baton-pass] ForceDetach: capturing snapshot for terminal {}",
+                    terminal_id
+                );
+
+                // Capture grid snapshot from crosswords
+                let snapshot_b64 = {
+                    let terminal_guard = terminal_arc.lock();
+                    let crosswords_arc = terminal_guard.inner_crosswords()?;
+                    let cw = crosswords_arc.read();
+                    let snapshot = GridSnapshot::capture(&*cw);
+                    let bytes = snapshot.to_bytes();
+                    Some(general_purpose::STANDARD.encode(&bytes))
+                };
+
+                // Shut down the Machine thread so it stops reading from the old dup_fd.
+                // The daemon will invalidate the fd after receiving DetachAck, but
+                // sending Shutdown explicitly avoids a race where the Machine reads
+                // from a now-invalid fd and logs spurious errors.
+                if let Some(ref tx) = pty_tx_for_detach {
+                    let _ = tx.send(rio_backend::event::Msg::Shutdown);
+                    eprintln!(
+                        "[baton-pass] ForceDetach: sent Shutdown to Machine for terminal {}",
+                        terminal_id
+                    );
+                }
+
+                // Mark dirty so the terminal shows stale content until resume
+                dirty_flag.mark_dirty();
+                detach_needs_render.store(true, Ordering::Release);
+
+                snapshot_b64
+            });
+
+        // -- ResumeAttach callback --
+        // Runs on the push listener thread when daemon offers session back.
+        // Enqueues a BatonResumeAction for processing on the render thread.
+        let on_resume_attach: super::daemon_client::ResumeAttachCallback =
+            Box::new(move |_session_id: &str, pty_fd: i32, grid_snapshot: Option<String>| -> bool {
+                eprintln!(
+                    "[baton-pass] ResumeAttach: queuing resume for terminal {} (new fd={})",
+                    resume_terminal_id, pty_fd
+                );
+
+                // We cannot determine child_pid and shm_name from the Push message
+                // alone (the daemon sends them in the ResumeAttach push payload).
+                // For now, store fd=0 and shm_name="" — the processing function
+                // will re-query the daemon session info if needed.
+                // Note: the Push::ResumeAttach variant carries child_pid and shm_name
+                // but the ResumeAttachCallback signature only passes (session_id, fd, snapshot).
+                // The child_pid and shm_name from the push message are not forwarded.
+                // We store placeholder values; process_pending_baton_resumes will use
+                // the existing entry's daemon_session to get the correct child_pid.
+                resume_pending.lock().push(BatonResumeAction {
+                    terminal_id: resume_terminal_id,
+                    new_pty_fd: pty_fd,
+                    child_pid: 0,  // filled in during processing
+                    shm_name: String::new(),  // filled in during processing
+                    grid_snapshot,
+                });
+
+                resume_needs_render.store(true, Ordering::Release);
+                true
+            });
+
+        daemon_session.start_push_listener(on_force_detach, on_resume_attach);
+        eprintln!(
+            "[baton-pass] push listener wired for terminal {} (session={})",
+            terminal_id,
+            &daemon_session.session_id[..8.min(daemon_session.session_id.len())]
+        );
+    }
+
+    /// Process pending baton-pass resume actions.
+    ///
+    /// Called from `apply_pending_updates()` on the render thread.
+    /// For each queued BatonResumeAction, creates a new PTY + Machine
+    /// from the received fd and updates the TerminalEntry.
+    fn process_pending_baton_resumes(&mut self) {
+        use crate::rio_event::FFIEventListener;
+        use std::os::fd::FromRawFd;
+
+        let actions: Vec<BatonResumeAction> =
+            self.pending_baton_resumes.lock().drain(..).collect();
+
+        if actions.is_empty() {
+            return;
+        }
+
+        for action in actions {
+            let terminal_id = action.terminal_id;
+            eprintln!(
+                "[baton-pass] processing ResumeAttach for terminal {} (fd={})",
+                terminal_id, action.new_pty_fd
+            );
+
+            // Gather info from the existing entry (crosswords, log_buffer, cols/rows, child_pid).
+            // Clone Arc references under the terminals read lock, then release it
+            // before acquiring the terminal mutex (lock ordering: terminals > terminal).
+            let (terminal_arc, _cols, _rows, entry_child_pid, entry_shm_name) = {
+                let terminals = self.terminals.read();
+                let entry = match terminals.get(&terminal_id) {
+                    Some(e) => e,
+                    None => {
+                        eprintln!(
+                            "[baton-pass] terminal {} not found, skipping resume",
+                            terminal_id
+                        );
+                        unsafe { libc::close(action.new_pty_fd); }
+                        continue;
+                    }
+                };
+                let ta = entry.terminal.clone();
+                let c = entry.cols;
+                let r = entry.rows;
+                let pid = entry.daemon_session.as_ref()
+                    .map(|ds| ds.child_pid as u32)
+                    .unwrap_or(0);
+                let shm = entry.daemon_session.as_ref()
+                    .map(|ds| ds.shm_name.clone())
+                    .unwrap_or_default();
+                (ta, c, r, pid, shm)
+            };
+            // terminals read lock released here
+
+            // Now lock the terminal to get crosswords and log_buffer
+            let (crosswords, log_buffer) = {
+                let terminal_guard = terminal_arc.lock();
+                let cw = match terminal_guard.inner_crosswords() {
+                    Some(cw) => cw,
+                    None => {
+                        eprintln!(
+                            "[baton-pass] terminal {} has no crosswords, skipping resume",
+                            terminal_id
+                        );
+                        unsafe { libc::close(action.new_pty_fd); }
+                        continue;
+                    }
+                };
+                let lb = terminal_guard.log_buffer().clone();
+                (cw, lb)
+            };
+            // terminal mutex released here
+
+            let child_pid = if action.child_pid != 0 {
+                action.child_pid
+            } else {
+                entry_child_pid
+            };
+            let shm_name = if !action.shm_name.is_empty() {
+                action.shm_name
+            } else {
+                entry_shm_name
+            };
+
+            // Apply grid snapshot if provided
+            if let Some(ref snapshot_b64) = action.grid_snapshot {
+                use base64::{engine::general_purpose, Engine as _};
+                use rio_backend::crosswords::snapshot::GridSnapshot;
+
+                if let Ok(snapshot_bytes) = general_purpose::STANDARD.decode(snapshot_b64) {
+                    match GridSnapshot::from_bytes(&snapshot_bytes) {
+                        Ok(snapshot) => {
+                            eprintln!(
+                                "[baton-pass] applying snapshot ({}x{}, alt={}, {} cells)",
+                                snapshot.cols, snapshot.rows, snapshot.is_alt_screen,
+                                snapshot.active_cells.len()
+                            );
+                            let mut cw = crosswords.write();
+                            snapshot.apply(&mut *cw);
+                        }
+                        Err(e) => {
+                            eprintln!("[baton-pass] snapshot decode failed: {:?}", e);
+                        }
+                    }
+                }
+            }
+
+            // Open shared ring buffer for the resumed session
+            let shared_ring = if !shm_name.is_empty() {
+                match pty_daemon::shared_ring::SharedRingBuffer::open(&shm_name) {
+                    Ok(shm) => {
+                        eprintln!("[baton-pass] opened shared ring buffer: {}", shm_name);
+                        Some(shm)
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[baton-pass] warning: failed to open shared ring buffer {}: {}",
+                            shm_name, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            // Create PTY wrapper from the new fd
+            let pty = match unsafe {
+                let file = std::fs::File::from_raw_fd(action.new_pty_fd);
+                teletypewriter::create_pty_from_file(file, child_pid)
+            } {
+                Ok(pty) => pty,
+                Err(e) => {
+                    eprintln!(
+                        "[baton-pass] failed to create PTY from fd {}: {:?}",
+                        action.new_pty_fd, e
+                    );
+                    continue;
+                }
+            };
+
+            // Create new Machine
+            let event_listener =
+                FFIEventListener::new(self.event_queue.clone(), terminal_id);
+
+            let machine = match Machine::new_with_log_buffer(
+                crosswords,
+                pty,
+                event_listener,
+                terminal_id,
+                action.new_pty_fd,
+                child_pid,
+                log_buffer,
+                shared_ring,
+            ) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!(
+                        "[baton-pass] failed to create Machine for terminal {}: {:?}",
+                        terminal_id, e
+                    );
+                    continue;
+                }
+            };
+
+            let new_pty_tx = machine.channel();
+            let new_handle = machine.spawn();
+
+            // Update the TerminalEntry with the new PTY/Machine
+            {
+                let mut terminals = self.terminals.write();
+                if let Some(entry) = terminals.get_mut(&terminal_id) {
+                    // Send Shutdown to old Machine if it's still around
+                    // (it may have already exited due to fd invalidation)
+                    if let Some(ref old_tx) = entry.pty_tx {
+                        let _ = old_tx.send(rio_backend::event::Msg::Shutdown);
+                    }
+
+                    entry.pty_tx = Some(new_pty_tx);
+                    entry.machine_handle = Some(new_handle);
+                    entry.pty_fd = action.new_pty_fd;
+                    entry.shell_pid = child_pid;
+
+                    // Mark dirty to trigger re-render with restored content
+                    entry.dirty_flag.mark_dirty();
+
+                    eprintln!(
+                        "[baton-pass] terminal {} resumed: fd={}, pid={}",
+                        terminal_id, action.new_pty_fd, child_pid
+                    );
+                }
+            }
+
+            // Trigger SIGWINCH to force child redraw after resume
+            if child_pid > 0 {
+                unsafe {
+                    libc::kill(child_pid as i32, libc::SIGWINCH);
+                }
+            }
+
+            self.needs_render.store(true, Ordering::Release);
+        }
     }
 
     /// 设置 reattach hint
@@ -2997,6 +3367,9 @@ impl TerminalPool {
                 }
             }
         }
+
+        // 5. Process pending baton-pass resume actions
+        self.process_pending_baton_resumes();
     }
 
     /// 渲染所有布局中的终端（由 RenderScheduler 调用）
