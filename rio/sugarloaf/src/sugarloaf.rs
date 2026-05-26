@@ -28,18 +28,18 @@ use skia_safe::{Font, FontMgr, FontStyle, Paint, Point, Typeface};
 
 // ========== Platform-specific font name constants ==========
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 const EMOJI_FONT_FAMILY: &str = "Apple Color Emoji";
 #[cfg(target_os = "windows")]
 const EMOJI_FONT_FAMILY: &str = "Segoe UI Emoji";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 const EMOJI_FONT_FAMILY: &str = "Noto Color Emoji";
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 const MONOSPACE_FALLBACK_FONT: &str = "Menlo";
 #[cfg(target_os = "windows")]
 const MONOSPACE_FALLBACK_FONT: &str = "Consolas";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "windows")))]
 const MONOSPACE_FALLBACK_FONT: &str = "DejaVu Sans Mono";
 
 // ========== 脏区渲染优化：布局缓存数据结构 ==========
@@ -152,7 +152,7 @@ pub enum Colorspace {
     Rec2020,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(clippy::derivable_impls)]
 impl Default for Colorspace {
     fn default() -> Colorspace {
@@ -160,7 +160,7 @@ impl Default for Colorspace {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 #[allow(clippy::derivable_impls)]
 impl Default for Colorspace {
     fn default() -> Colorspace {

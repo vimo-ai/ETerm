@@ -1,0 +1,13 @@
+[package]
+name = "sugarloaf-ffi-ios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+sugarloaf = { path = "../sugarloaf", default-features = false, features = ["render"] }
+raw-window-handle = { workspace = true }
+skia-safe = { version = "0.93.1", features = ["metal", "textlayout"] }

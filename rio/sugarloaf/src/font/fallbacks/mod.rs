@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn external_fallbacks() -> Vec<String> {
     // 优化 fallback 顺序，避免彩色符号字体覆盖 ANSI 颜色
     // 1. 等宽字体优先（保持终端排版）
@@ -26,7 +26,7 @@ pub fn external_fallbacks() -> Vec<String> {
     ]
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]
 pub fn external_fallbacks() -> Vec<String> {
     vec![
         /* Sans-serif fallbacks */

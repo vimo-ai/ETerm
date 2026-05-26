@@ -319,7 +319,18 @@ impl FontLibraryData {
         self.inner.is_empty()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "ios")]
+    pub fn load(&mut self, _font_spec: SugarloafFonts) -> Vec<SugarloafFont> {
+        self.insert(FontData::from_slice(FONT_CASCADIAMONO_REGULAR, false).unwrap());
+        self.insert(FontData::from_slice(constants::FONT_CASCADIAMONO_ITALIC, false).unwrap());
+        self.insert(FontData::from_slice(constants::FONT_CASCADIAMONO_BOLD, false).unwrap());
+        self.insert(
+            FontData::from_slice(constants::FONT_CASCADIAMONO_BOLD_ITALIC, false).unwrap(),
+        );
+        vec![]
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     pub fn load(&mut self, mut spec: SugarloafFonts) -> Vec<SugarloafFont> {
         // Configure hinting through spec
         self.hinting = spec.hinting;

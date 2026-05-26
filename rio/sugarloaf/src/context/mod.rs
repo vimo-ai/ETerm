@@ -66,6 +66,13 @@ pub use metal::MetalContext;
 #[cfg(target_os = "macos")]
 pub type Context = MetalContext;
 
+#[cfg(target_os = "ios")]
+mod metal_ios;
+#[cfg(target_os = "ios")]
+pub use metal_ios::MetalIosContext;
+#[cfg(target_os = "ios")]
+pub type Context = MetalIosContext;
+
 #[cfg(target_os = "windows")]
 mod dx12;
 #[cfg(target_os = "windows")]
