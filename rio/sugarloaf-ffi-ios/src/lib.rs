@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 use sugarloaf::font::FontLibrary;
 use sugarloaf::layout::{RichTextLayout, RootStyle};
-use sugarloaf::{FragmentStyle, Sugarloaf, SugarloafRenderer, SugarloafWindow, SugarloafWindowSize};
+use sugarloaf::{FragmentStyle, Object, RichText, Sugarloaf, SugarloafRenderer, SugarloafWindow, SugarloafWindowSize};
 use sugarloaf::context::GpuContext;
 
 struct SugarloafIosHandle {
@@ -54,6 +54,14 @@ pub extern "C" fn sugarloaf_ios_create(
     let rt_layout = RichTextLayout::from_default_layout(&RootStyle::new(scale, 16.0, 1.2));
     let state_id = sugarloaf.content().create_state(&rt_layout);
 
+    sugarloaf.set_objects(vec![
+        Object::RichText(RichText {
+            id: state_id,
+            position: [10.0, 10.0],
+            lines: None,
+        }),
+    ]);
+
     let handle = Box::new(SugarloafIosHandle {
         sugarloaf,
         state_id,
@@ -71,8 +79,32 @@ pub extern "C" fn sugarloaf_ios_render(handle: *mut c_void) -> bool {
         return false;
     }
     let h = unsafe { &mut *(handle as *mut SugarloafIosHandle) };
+    let id = h.state_id;
 
-    // Use sugarloaf's built-in render() which handles rich text, quads, etc.
+    let green = FragmentStyle {
+        color: [0.0, 0.8, 0.2, 1.0],
+        ..FragmentStyle::default()
+    };
+    let white = FragmentStyle {
+        color: [0.9, 0.9, 0.9, 1.0],
+        ..FragmentStyle::default()
+    };
+    let cyan = FragmentStyle {
+        color: [0.0, 0.8, 0.8, 1.0],
+        ..FragmentStyle::default()
+    };
+
+    let content = h.sugarloaf.content();
+    content.sel(id).clear();
+    content.sel(id).add_text("$ ", green);
+    content.sel(id).add_text("Hello from sugarloaf rich text!", white);
+    content.sel(id).new_line();
+    content.sel(id).add_text("~ ", cyan);
+    content.sel(id).add_text("CascadiaCode via CoreText registration", white);
+    content.sel(id).new_line();
+    content.sel(id).add_text("~ ", cyan);
+    content.sel(id).add_text("ETerm x Vlaude - Terminal on iPhone", green);
+
     h.sugarloaf.render();
     true
 }
