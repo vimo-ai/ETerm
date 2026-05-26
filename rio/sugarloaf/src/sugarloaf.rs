@@ -488,9 +488,10 @@ impl Sugarloaf {
     ///
     /// Returns true if the cache has a layout for this hash, false otherwise.
     /// This is used to optimize rendering by skipping extraction of cached lines.
+    /// Returns false for hash 0 (unset) to avoid false cache sharing between lines.
     #[inline]
     pub fn has_cached_layout(&self, content_hash: u64) -> bool {
-        self.layout_cache.borrow().get(content_hash).is_some()
+        content_hash != 0 && self.layout_cache.borrow().get(content_hash).is_some()
     }
 
     #[inline]
@@ -669,16 +670,18 @@ impl Sugarloaf {
                     for (line_idx, line) in builder_state.lines.iter().enumerate() {
                         let y = base_y + (line_idx as f32) * cell_height + baseline_offset;
 
-                        // 🔥 使用 content_hash 查找缓存
+                        // Use content_hash for layout caching.
+                        // When content_hash is 0 (default, e.g. iOS FFI path where
+                        // set_line_content_hash is never called), skip the cache entirely
+                        // to avoid all lines sharing the same cached layout.
                         let content_hash = line.content_hash;
 
-                        let layout = {
+                        let layout = if content_hash != 0 {
                             let cache = self.layout_cache.borrow();
                             if let Some(cached_layout) = cache.get(content_hash) {
                                 cached_layout.clone()
                             } else {
-                                // 缓存未命中，需要重新计算
-                                drop(cache);  // 释放借用，避免冲突
+                                drop(cache);
 
                                 let new_layout = self.generate_line_layout(
                                     line,
@@ -688,10 +691,18 @@ impl Sugarloaf {
                                     &primary_font,
                                 );
 
-                                // 存入缓存
                                 self.layout_cache.borrow_mut().set(content_hash, new_layout.clone());
                                 new_layout
                             }
+                        } else {
+                            // No content hash — compute layout without caching
+                            self.generate_line_layout(
+                                line,
+                                &font_library,
+                                font_size,
+                                cell_width,
+                                &primary_font,
+                            )
                         };
 
                         // 使用缓存的布局数据渲染

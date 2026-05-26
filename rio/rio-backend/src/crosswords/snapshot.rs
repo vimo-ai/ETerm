@@ -673,4 +673,227 @@ mod tests {
             assert_eq!(nc, decoded);
         }
     }
+
+    // ── B11: GridSnapshot::capture correctly captures current grid content ──
+
+    #[test]
+    fn b11_capture_reflects_grid_content() {
+        let mut cw = make_crosswords(20, 10);
+
+        // Populate several cells with distinct characters and colors.
+        let message = "Hello!";
+        for (i, ch) in message.chars().enumerate() {
+            cw.grid[Line(0)][Column(i)].c = ch;
+            cw.grid[Line(0)][Column(i)].fg = AnsiColor::Named(NamedColor::Green);
+        }
+        cw.grid[Line(2)][Column(5)].c = '#';
+        cw.grid[Line(2)][Column(5)].bg =
+            AnsiColor::Spec(ColorRgb { r: 10, g: 20, b: 30 });
+        cw.grid[Line(2)][Column(5)].flags = CellFlags::BOLD | CellFlags::ITALIC;
+
+        // Set cursor to a non-origin position.
+        cw.grid.cursor.pos = Pos::new(Line(4), Column(12));
+        cw.cursor_shape = CursorShape::Underline;
+
+        let snap = GridSnapshot::capture(&cw);
+
+        // Verify dimensions.
+        assert_eq!(snap.cols, 20);
+        assert_eq!(snap.rows, 10);
+        assert_eq!(snap.active_cells.len(), 20 * 10);
+        assert_eq!(snap.inactive_cells.len(), 20 * 10);
+
+        // Verify the "Hello!" text in row 0.
+        for (i, ch) in message.chars().enumerate() {
+            assert_eq!(snap.active_cells[i].c, ch, "cell[0][{i}] char mismatch");
+            assert_eq!(
+                snap.active_cells[i].fg,
+                AnsiColor::Named(NamedColor::Green),
+                "cell[0][{i}] fg mismatch"
+            );
+        }
+
+        // Verify the '#' cell at row 2, column 5 (linear index = 2*20 + 5 = 45).
+        let idx = 2 * 20 + 5;
+        assert_eq!(snap.active_cells[idx].c, '#');
+        assert_eq!(
+            snap.active_cells[idx].bg,
+            AnsiColor::Spec(ColorRgb { r: 10, g: 20, b: 30 })
+        );
+        assert_eq!(
+            snap.active_cells[idx].flags,
+            (CellFlags::BOLD | CellFlags::ITALIC).bits()
+        );
+
+        // Verify cursor position and shape.
+        assert_eq!(snap.cursor_col, 12);
+        assert_eq!(snap.cursor_row, 4);
+        assert_eq!(snap.cursor_shape, CursorShape::Underline);
+        assert!(!snap.is_alt_screen);
+    }
+
+    // ── B12: GridSnapshot::apply correctly restores grid onto a new instance ──
+
+    #[test]
+    fn b12_apply_restores_to_new_grid() {
+        let mut cw = make_crosswords(15, 8);
+
+        // Write a mixed pattern: text, colors, flags.
+        let line0 = "user@host:~$";
+        for (i, ch) in line0.chars().enumerate() {
+            cw.grid[Line(0)][Column(i)].c = ch;
+        }
+        // Color the prompt green.
+        for i in 0..4 {
+            cw.grid[Line(0)][Column(i)].fg = AnsiColor::Named(NamedColor::Green);
+        }
+        // Use indexed color for the path.
+        for i in 10..12 {
+            cw.grid[Line(0)][Column(i)].fg = AnsiColor::Indexed(208);
+        }
+        // Second line with bold text.
+        cw.grid[Line(1)][Column(0)].c = '>';
+        cw.grid[Line(1)][Column(0)].flags = CellFlags::BOLD;
+
+        cw.grid.cursor.pos = Pos::new(Line(1), Column(2));
+        cw.cursor_shape = CursorShape::Beam;
+
+        let snap = GridSnapshot::capture(&cw);
+
+        // Apply the snapshot to a brand-new empty grid with the same dimensions.
+        let mut cw2 = make_crosswords(15, 8);
+        snap.apply(&mut cw2);
+
+        // Verify text content row 0.
+        for (i, ch) in line0.chars().enumerate() {
+            assert_eq!(
+                cw2.grid[Line(0)][Column(i)].c, ch,
+                "row0 col{i} char mismatch after apply"
+            );
+        }
+
+        // Verify colors.
+        assert_eq!(cw2.grid[Line(0)][Column(0)].fg, AnsiColor::Named(NamedColor::Green));
+        assert_eq!(cw2.grid[Line(0)][Column(10)].fg, AnsiColor::Indexed(208));
+
+        // Verify flags on second line.
+        assert_eq!(cw2.grid[Line(1)][Column(0)].c, '>');
+        assert!(cw2.grid[Line(1)][Column(0)].flags.contains(CellFlags::BOLD));
+
+        // Verify cursor.
+        assert_eq!(cw2.grid.cursor.pos.col, Column(2));
+        assert_eq!(cw2.grid.cursor.pos.row, Line(1));
+        assert_eq!(cw2.cursor_shape, CursorShape::Beam);
+
+        // Verify an untouched cell is still the default space.
+        assert_eq!(cw2.grid[Line(5)][Column(5)].c, ' ');
+    }
+
+    // ── B13: Full roundtrip capture → to_bytes → base64 → decode → from_bytes → apply ──
+
+    #[test]
+    fn b13_full_baton_roundtrip_via_base64() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+
+        let mut cw = make_crosswords(30, 12);
+
+        // Populate a realistic-looking grid: prompt, colored output, cursor mid-line.
+        let prompt = "$ cargo test";
+        for (i, ch) in prompt.chars().enumerate() {
+            cw.grid[Line(0)][Column(i)].c = ch;
+        }
+        cw.grid[Line(0)][Column(0)].fg = AnsiColor::Named(NamedColor::Cyan);
+
+        // Output line with RGB color (true-color).
+        let output = "Compiling eterm v0.1.0";
+        for (i, ch) in output.chars().enumerate() {
+            cw.grid[Line(1)][Column(i)].c = ch;
+            cw.grid[Line(1)][Column(i)].fg =
+                AnsiColor::Spec(ColorRgb { r: 0, g: 200, b: 0 });
+        }
+
+        // A cell with multiple flags.
+        cw.grid[Line(3)][Column(0)].c = '!';
+        cw.grid[Line(3)][Column(0)].flags =
+            CellFlags::BOLD | CellFlags::UNDERLINE | CellFlags::ITALIC;
+        cw.grid[Line(3)][Column(0)].bg = AnsiColor::Indexed(196);
+
+        // Unicode character.
+        cw.grid[Line(4)][Column(0)].c = '\u{1F600}'; // grinning face
+
+        cw.grid.cursor.pos = Pos::new(Line(5), Column(15));
+        cw.cursor_shape = CursorShape::Beam;
+
+        // Step 1: capture
+        let snap_original = GridSnapshot::capture(&cw);
+
+        // Step 2: to_bytes
+        let bytes = snap_original.to_bytes();
+
+        // Step 3: base64 encode (exactly as the baton-pass protocol does)
+        let b64_encoded = STANDARD.encode(&bytes);
+
+        // Verify the base64 string is valid ASCII and non-empty.
+        assert!(!b64_encoded.is_empty());
+        assert!(b64_encoded.is_ascii());
+
+        // Step 4: base64 decode
+        let decoded_bytes = STANDARD
+            .decode(&b64_encoded)
+            .expect("base64 decode should not fail on valid encoding");
+
+        // The decoded bytes must be identical to the original bytes.
+        assert_eq!(
+            bytes, decoded_bytes,
+            "base64 roundtrip must not alter binary data"
+        );
+
+        // Step 5: from_bytes
+        let snap_restored = GridSnapshot::from_bytes(&decoded_bytes)
+            .expect("from_bytes should succeed on valid data");
+
+        // The deserialized snapshot must be identical to the original.
+        assert_eq!(
+            snap_original, snap_restored,
+            "GridSnapshot must be identical after binary+base64 roundtrip"
+        );
+
+        // Step 6: apply onto a fresh grid
+        let mut cw2 = make_crosswords(30, 12);
+        snap_restored.apply(&mut cw2);
+
+        // Verify the prompt text survived the full journey.
+        for (i, ch) in prompt.chars().enumerate() {
+            assert_eq!(
+                cw2.grid[Line(0)][Column(i)].c, ch,
+                "prompt char at col {i} lost in baton roundtrip"
+            );
+        }
+
+        // Verify the true-color output line.
+        for (i, ch) in output.chars().enumerate() {
+            assert_eq!(cw2.grid[Line(1)][Column(i)].c, ch);
+            assert_eq!(
+                cw2.grid[Line(1)][Column(i)].fg,
+                AnsiColor::Spec(ColorRgb { r: 0, g: 200, b: 0 })
+            );
+        }
+
+        // Verify the multi-flag cell.
+        let cell = &cw2.grid[Line(3)][Column(0)];
+        assert_eq!(cell.c, '!');
+        assert!(cell.flags.contains(CellFlags::BOLD));
+        assert!(cell.flags.contains(CellFlags::UNDERLINE));
+        assert!(cell.flags.contains(CellFlags::ITALIC));
+        assert_eq!(cell.bg, AnsiColor::Indexed(196));
+
+        // Verify the Unicode character.
+        assert_eq!(cw2.grid[Line(4)][Column(0)].c, '\u{1F600}');
+
+        // Verify cursor position and shape.
+        assert_eq!(cw2.grid.cursor.pos.col, Column(15));
+        assert_eq!(cw2.grid.cursor.pos.row, Line(5));
+        assert_eq!(cw2.cursor_shape, CursorShape::Beam);
+    }
 }
