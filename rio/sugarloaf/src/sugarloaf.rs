@@ -26,6 +26,121 @@ use skia_safe::Color4f;
 
 use skia_safe::{Font, FontMgr, FontStyle, Paint, Point, Typeface};
 
+// ========== iOS CoreGraphics/CoreText font registration ==========
+//
+// On iOS, Skia's FontMgr::new_from_data() (which calls SkFontMgr_Mac_CT::onMakeFromStreamArgs)
+// can fail to create a Typeface from in-memory font data. The workaround is to register the
+// font data with CoreText via CTFontManagerRegisterGraphicsFont, then use match_family_style
+// to retrieve the registered typeface through the system font manager.
+#[cfg(target_os = "ios")]
+mod ios_font_registration {
+    use std::ffi::c_void;
+    use std::sync::OnceLock;
+
+    // CoreFoundation opaque types
+    type CFAllocatorRef = *const c_void;
+    type CFDataRef = *const c_void;
+    type CFErrorRef = *mut c_void;
+    type Boolean = u8;
+
+    // CoreGraphics opaque types
+    type CGDataProviderRef = *const c_void;
+    type CGFontRef = *const c_void;
+
+    extern "C" {
+        // CoreFoundation
+        fn CFDataCreate(
+            allocator: CFAllocatorRef,
+            bytes: *const u8,
+            length: isize,
+        ) -> CFDataRef;
+        fn CFRelease(cf: *const c_void);
+
+        // CoreGraphics
+        fn CGDataProviderCreateWithCFData(data: CFDataRef) -> CGDataProviderRef;
+        fn CGFontCreateWithDataProvider(provider: CGDataProviderRef) -> CGFontRef;
+
+        // CoreText
+        fn CTFontManagerRegisterGraphicsFont(
+            font: CGFontRef,
+            error: *mut CFErrorRef,
+        ) -> Boolean;
+    }
+
+    /// Register raw font bytes with CoreText so they become available via system font matching.
+    /// Returns true if registration succeeded (or was already registered).
+    pub fn register_font_data(font_bytes: &[u8]) -> bool {
+        unsafe {
+            // Create CFData from raw bytes (kCFAllocatorDefault = NULL)
+            let cf_data =
+                CFDataCreate(std::ptr::null(), font_bytes.as_ptr(), font_bytes.len() as isize);
+            if cf_data.is_null() {
+                return false;
+            }
+
+            // Create CGDataProvider from CFData
+            let provider = CGDataProviderCreateWithCFData(cf_data);
+            if provider.is_null() {
+                CFRelease(cf_data);
+                return false;
+            }
+
+            // Create CGFont from data provider
+            let cg_font = CGFontCreateWithDataProvider(provider);
+            if cg_font.is_null() {
+                CFRelease(provider);
+                CFRelease(cf_data);
+                return false;
+            }
+
+            // Register the font with CoreText
+            let mut error: CFErrorRef = std::ptr::null_mut();
+            let result = CTFontManagerRegisterGraphicsFont(cg_font, &mut error);
+
+            // Clean up (registration copies the font data internally)
+            CFRelease(cg_font);
+            CFRelease(provider);
+            CFRelease(cf_data);
+
+            // result == 1 means success; if error is non-null on failure, release it
+            if result == 0 && !error.is_null() {
+                CFRelease(error as *const c_void);
+                // Registration can fail if font is already registered — that's OK
+            }
+
+            // Consider both success and "already registered" as OK
+            true
+        }
+    }
+
+    /// Register all embedded CascadiaCode fonts with CoreText.
+    /// Called once at initialization time.
+    static FONTS_REGISTERED: OnceLock<bool> = OnceLock::new();
+
+    pub fn ensure_fonts_registered() {
+        FONTS_REGISTERED.get_or_init(|| {
+            use crate::font::constants::*;
+
+            let fonts: &[&[u8]] = &[
+                FONT_CASCADIAMONO_REGULAR,
+                FONT_CASCADIAMONO_ITALIC,
+                FONT_CASCADIAMONO_BOLD,
+                FONT_CASCADIAMONO_BOLD_ITALIC,
+            ];
+
+            for font_data in fonts {
+                register_font_data(font_data);
+            }
+
+            true
+        });
+    }
+
+    /// The PostScript family name used by CascadiaCode fonts.
+    /// After registration, Skia can find these via match_family_style.
+    pub const CASCADIA_CODE_FAMILY: &str = "Cascadia Code";
+}
+
 // ========== Platform-specific font name constants ==========
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1032,7 +1147,89 @@ impl Sugarloaf {
             let offset_usize = offset as usize;
             let font_bytes = &font_data[offset_usize..];
             let data = skia_safe::Data::new_copy(font_bytes);
-            self.font_mgr.new_from_data(&data, None)
+            let result = self.font_mgr.new_from_data(&data, None);
+
+            // iOS: new_from_data can fail because CoreText's makeFromStream
+            // implementation may not handle in-memory font data correctly.
+            // Fall back to CoreText-registered fonts via system font matching.
+            #[cfg(target_os = "ios")]
+            let result = result.or_else(|| {
+                // Debug: log the failure to a temp file (eprintln unreliable on iOS sim)
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/sugarloaf-ios-font-debug.log")
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(
+                            f,
+                            "[sugarloaf] new_from_data failed for font_id={}, data_len={}, offset={}. \
+                             Falling back to CoreText registration.",
+                            font_id,
+                            font_bytes.len(),
+                            offset_usize,
+                        )
+                    });
+
+                // Ensure embedded fonts are registered with CoreText
+                ios_font_registration::ensure_fonts_registered();
+
+                // Determine the font style to match based on font_id
+                // font_id 0 = Regular, 1 = Italic, 2 = Bold, 3 = BoldItalic
+                let font_style = match font_id {
+                    1 => FontStyle::italic(),
+                    2 => FontStyle::bold(),
+                    3 => FontStyle::bold_italic(),
+                    _ => FontStyle::normal(),
+                };
+
+                // Try the registered CascadiaCode family first
+                let ct_result = self.font_mgr
+                    .match_family_style(
+                        ios_font_registration::CASCADIA_CODE_FAMILY,
+                        font_style,
+                    );
+
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/tmp/sugarloaf-ios-font-debug.log")
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(
+                            f,
+                            "[sugarloaf] CoreText match '{}' style={:?}: {}",
+                            ios_font_registration::CASCADIA_CODE_FAMILY,
+                            font_style,
+                            if ct_result.is_some() { "OK" } else { "FAILED" },
+                        )
+                    });
+
+                ct_result.or_else(|| {
+                    // Final fallback: system monospace font
+                    let fallback = self.font_mgr
+                        .match_family_style(MONOSPACE_FALLBACK_FONT, font_style);
+
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/sugarloaf-ios-font-debug.log")
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(
+                                f,
+                                "[sugarloaf] Fallback '{}' style={:?}: {}",
+                                MONOSPACE_FALLBACK_FONT,
+                                font_style,
+                                if fallback.is_some() { "OK" } else { "FAILED" },
+                            )
+                        });
+
+                    fallback
+                })
+            });
+
+            result
         } else {
             // 如果没有找到数据，尝试从系统字体加载
             let family_name = font_data_info
