@@ -10,6 +10,7 @@ members = [
     "sugarloaf-ffi-win",
     "sugarloaf-ffi-ios",
     "terminal-core",
+    "render-core",
 ]
 resolver = "2"
 

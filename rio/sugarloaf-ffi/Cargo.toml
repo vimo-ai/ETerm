@@ -8,6 +8,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 sugarloaf = { path = "../sugarloaf" }
+render-core = { path = "../render-core" }
 raw-window-handle = "0.6.2"
 wgpu = "27.0.1"
 

@@ -1,11 +1,1 @@
-
-mod glyph;
-
-
-mod text_shaper;
-
-
-pub use glyph::GlyphInfo;
-
-
-pub use text_shaper::TextShaper;
+pub use render_core::{GlyphInfo, GlyphLayout, TextShaper};

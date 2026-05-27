@@ -1,43 +1,19 @@
 use std::num::NonZeroUsize;
 use lru::LruCache;
 
-use crate::render::layout::GlyphInfo;
+use render_core::GlyphLayout;
 use rio_backend::ansi::CursorShape;
 
-/// 外层缓存最大条目数（text_hash → LineCacheEntry）
-///
-/// 混合渲染策略：LineCache 只保留 1-2 屏，其余走 Atlas
-/// - 200 条 ≈ 2 屏（假设每屏约 50-100 行）
-/// - 内存上限 ~25MB（大幅降低）
-/// - Atlas 负责历史滚动区域的高效渲染
 const MAX_TEXT_ENTRIES: usize = 200;
-
-/// 内层缓存最大条目数（state_hash → Image）
-/// 限制每个 text_hash 条目下的 Image 缓存数量，防止内存泄漏
-/// 使用 LRU 淘汰策略，保留最近使用的状态
 const MAX_STATE_ENTRIES_PER_LINE: usize = 8;
 
-/// 两层缓存（带 LRU 淘汰）
 pub struct LineCache {
     cache: LruCache<u64, LineCacheEntry>,
 }
 
-/// 缓存条目（每个文本内容一个）
 pub struct LineCacheEntry {
-    /// 外层：文本布局（字体选择 + 整形结果）
     pub layout: GlyphLayout,
-    /// 内层：不同状态组合的最终渲染（LRU 淘汰）
     pub renders: LruCache<u64, skia_safe::Image>,
-}
-
-/// 字形布局（真实版本）
-///
-/// 注意：只包含字体选择结果，不包含状态信息（光标、选区、搜索）
-/// 状态信息在渲染时从 TerminalState 动态获取
-#[derive(Debug, Clone)]
-pub struct GlyphLayout {
-    /// 所有字形信息（字符 + 字体 + 像素坐标）
-    pub glyphs: Vec<GlyphInfo>,
 }
 
 /// 光标信息（用于渲染）
