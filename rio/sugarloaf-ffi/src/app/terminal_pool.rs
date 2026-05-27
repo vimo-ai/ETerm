@@ -185,6 +185,13 @@ struct BatonResumeAction {
     grid_snapshot: Option<String>,
 }
 
+/// Pending takeover start (ForceDetach captured state → RingReader startup on render thread)
+struct PendingTakeoverStart {
+    terminal_id: usize,
+    ring_cursor: u64,
+    shm_name: String,
+}
+
 /// 单个终端的渲染缓存
 struct TerminalRenderCache {
     /// 缓存的渲染结果（Image 比 Surface 更轻量）
@@ -277,6 +284,9 @@ struct TerminalEntry {
 
     /// 此终端是通过 daemon reattach 恢复的（进程已在运行，不需要 resume）
     daemon_reattached: bool,
+
+    /// RingReader during baton-pass takeover (Some while iPhone has session)
+    ring_reader: Option<crate::rio_machine::RingReader>,
 }
 
 /// 分离的终端（用于跨池迁移）
@@ -389,6 +399,7 @@ pub struct TerminalPool {
     /// pool-level RwLock), so it enqueues a BatonResumeAction here.
     /// `apply_pending_updates()` drains this queue each frame.
     pending_baton_resumes: Arc<Mutex<Vec<BatonResumeAction>>>,
+    pending_takeover_starts: Arc<Mutex<Vec<PendingTakeoverStart>>>,
 }
 
 // TerminalPool 需要实现 Send（跨线程传递）
@@ -523,6 +534,7 @@ impl TerminalPool {
             reattach_hint: RwLock::new(None),
             deferred_gpu_drops: Mutex::new(Vec::new()),
             pending_baton_resumes: Arc::new(Mutex::new(Vec::new())),
+            pending_takeover_starts: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -635,6 +647,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
+            ring_reader: None,
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -735,6 +748,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
+            ring_reader: None,
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -811,6 +825,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
+            ring_reader: None,
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -903,6 +918,7 @@ impl TerminalPool {
             selection_overlay: Arc::new(crate::infra::SelectionOverlay::new()),
             ime_state: Arc::new(RwLock::new(None)),
             daemon_reattached: daemon_session.as_ref().map(|s| s.was_reattach).unwrap_or(false),
+            ring_reader: None,
             daemon_session,
             keep_daemon_alive: false,
         };
@@ -1024,6 +1040,7 @@ impl TerminalPool {
             daemon_session: None, // 非 daemon 管理
             keep_daemon_alive: false,
             daemon_reattached: false,
+            ring_reader: None,
         };
 
         self.terminals.write().insert(id, entry);
@@ -1080,6 +1097,7 @@ impl TerminalPool {
             daemon_session: None,
             keep_daemon_alive: false,
             daemon_reattached: false,
+            ring_reader: None,
         };
 
         self.terminals.write().insert(id, entry);
@@ -1397,16 +1415,24 @@ impl TerminalPool {
         use base64::{engine::general_purpose, Engine as _};
         use rio_backend::crosswords::snapshot::GridSnapshot;
 
+        eprintln!("[baton-pass] wire_baton_pass_listener called for terminal {}", terminal_id);
+
         // Acquire write lock to get mutable access to the daemon_session
         let mut terminals = self.terminals.write();
         let entry = match terminals.get_mut(&terminal_id) {
             Some(e) => e,
-            None => return,
+            None => {
+                eprintln!("[baton-pass] wire_baton_pass_listener: terminal {} not found in map", terminal_id);
+                return;
+            }
         };
 
         let daemon_session = match entry.daemon_session.as_mut() {
             Some(ds) => ds,
-            None => return,
+            None => {
+                eprintln!("[baton-pass] wire_baton_pass_listener: terminal {} has no daemon_session", terminal_id);
+                return;
+            }
         };
 
         // Clone the Arc-wrapped resources the callbacks need.
@@ -1416,6 +1442,8 @@ impl TerminalPool {
         let pty_tx_for_detach = entry.pty_tx.clone();
         let dirty_flag = entry.dirty_flag.clone();
         let detach_needs_render = self.needs_render.clone();
+        let takeover_pending = self.pending_takeover_starts.clone();
+        let takeover_shm_name = daemon_session.shm_name.clone();
         let resume_terminal_id = terminal_id;
         let resume_pending = self.pending_baton_resumes.clone();
         let resume_needs_render = self.needs_render.clone();
@@ -1452,7 +1480,25 @@ impl TerminalPool {
                     );
                 }
 
-                // Mark dirty so the terminal shows stale content until resume
+                // Record ring cursor and queue RingReader startup
+                let ring_cursor = match pty_daemon::shared_ring::SharedRingBuffer::open(&takeover_shm_name) {
+                    Ok(r) => {
+                        let tw = r.total_written();
+                        eprintln!("[baton-pass] ForceDetach: ring cursor={} for shm {}", tw, &takeover_shm_name);
+                        tw
+                    }
+                    Err(e) => {
+                        eprintln!("[baton-pass] ForceDetach: failed to open shm {}: {}", &takeover_shm_name, e);
+                        0
+                    }
+                };
+                takeover_pending.lock().push(PendingTakeoverStart {
+                    terminal_id,
+                    ring_cursor,
+                    shm_name: takeover_shm_name.clone(),
+                });
+                eprintln!("[baton-pass] ForceDetach: queued PendingTakeoverStart for terminal {}", terminal_id);
+
                 dirty_flag.mark_dirty();
                 detach_needs_render.store(true, Ordering::Release);
 
@@ -1503,6 +1549,64 @@ impl TerminalPool {
     /// Called from `apply_pending_updates()` on the render thread.
     /// For each queued BatonResumeAction, creates a new PTY + Machine
     /// from the received fd and updates the TerminalEntry.
+    fn process_pending_takeover_starts(&mut self) {
+        use crate::rio_event::FFIEventListener;
+
+        let starts: Vec<PendingTakeoverStart> =
+            self.pending_takeover_starts.lock().drain(..).collect();
+
+        if starts.is_empty() {
+            return;
+        }
+
+        eprintln!("[baton-pass] process_pending_takeover_starts: {} pending", starts.len());
+
+        for start in starts {
+            let tid = start.terminal_id;
+
+            let crosswords = {
+                let terminals = self.terminals.read();
+                let entry = match terminals.get(&tid) {
+                    Some(e) => e,
+                    None => continue,
+                };
+                let terminal_guard = entry.terminal.lock();
+                match terminal_guard.inner_crosswords() {
+                    Some(cw) => cw,
+                    None => continue,
+                }
+            };
+
+            let event_listener = FFIEventListener::new(self.event_queue.clone(), tid);
+
+            match crate::rio_machine::RingReader::start(
+                start.ring_cursor,
+                crosswords,
+                event_listener,
+                tid,
+                start.shm_name,
+            ) {
+                Ok(reader) => {
+                    let mut terminals = self.terminals.write();
+                    if let Some(entry) = terminals.get_mut(&tid) {
+                        entry.ring_reader = Some(reader);
+                        entry.pty_tx = None;
+                        eprintln!(
+                            "[baton-pass] RingReader started for terminal {} (cursor={})",
+                            tid, start.ring_cursor
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[baton-pass] failed to start RingReader for terminal {}: {}",
+                        tid, e
+                    );
+                }
+            }
+        }
+    }
+
     fn process_pending_baton_resumes(&mut self) {
         use crate::rio_event::FFIEventListener;
         use std::os::fd::FromRawFd;
@@ -1516,6 +1620,21 @@ impl TerminalPool {
 
         for action in actions {
             let terminal_id = action.terminal_id;
+
+            // Stop RingReader before creating new Machine
+            {
+                let mut terminals = self.terminals.write();
+                if let Some(entry) = terminals.get_mut(&terminal_id) {
+                    if let Some(reader) = entry.ring_reader.take() {
+                        let final_cursor = reader.stop_and_join();
+                        eprintln!(
+                            "[baton-pass] RingReader stopped for terminal {} (final cursor={})",
+                            terminal_id, final_cursor
+                        );
+                    }
+                }
+            }
+
             eprintln!(
                 "[baton-pass] processing ResumeAttach for terminal {} (fd={})",
                 terminal_id, action.new_pty_fd
@@ -2248,6 +2367,10 @@ impl TerminalPool {
         if let Some(entry) = terminals.get(&id) {
             if let Some(ref tx) = entry.pty_tx {
                 crate::rio_machine::send_input(tx, data);
+            } else if entry.ring_reader.is_some() {
+                if let Some(ref ds) = entry.daemon_session {
+                    let _ = super::daemon_client::DaemonClient::send_input(&ds.session_id, data);
+                }
             }
             self.needs_render.store(true, Ordering::Release);
             true
@@ -3368,7 +3491,10 @@ impl TerminalPool {
             }
         }
 
-        // 5. Process pending baton-pass resume actions
+        // 5. Process pending takeover starts (ForceDetach → RingReader)
+        self.process_pending_takeover_starts();
+
+        // 6. Process pending baton-pass resume actions (stops RingReader, starts Machine)
         self.process_pending_baton_resumes();
     }
 

@@ -51,6 +51,10 @@ enum Request {
     },
     Ping,
     Shutdown,
+    Input {
+        session_id: String,
+        data: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,6 +95,9 @@ enum Response {
         session_count: usize,
     },
     ShuttingDown,
+    InputAck {
+        session_id: String,
+    },
     Error {
         message: String,
     },
@@ -180,6 +187,8 @@ pub struct DaemonSession {
     push_listener_handle: Option<std::thread::JoinHandle<()>>,
     /// Shared reference to control stream for the push listener
     control_stream_shared: Option<Arc<Mutex<UnixStream>>>,
+    /// Stop flag for push listener thread
+    push_listener_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DaemonSession {
@@ -208,11 +217,12 @@ impl DaemonSession {
         self.control_stream_shared = Some(Arc::clone(&shared));
 
         let session_id = self.session_id.clone();
+        let stop = self.push_listener_stop.clone();
 
         let handle = std::thread::Builder::new()
             .name(format!("push-listener-{}", &session_id[..8]))
             .spawn(move || {
-                Self::push_listener_loop(shared, session_id, on_force_detach, on_resume_attach);
+                Self::push_listener_loop(shared, session_id, on_force_detach, on_resume_attach, stop);
             })
             .ok();
 
@@ -225,11 +235,12 @@ impl DaemonSession {
         session_id: String,
         on_force_detach: ForceDetachCallback,
         on_resume_attach: ResumeAttachCallback,
+        stop: Arc<std::sync::atomic::AtomicBool>,
     ) {
         let mut read_buf = Vec::new();
         let mut tmp = [0u8; 4096];
 
-        loop {
+        while !stop.load(std::sync::atomic::Ordering::Acquire) {
             // Non-blocking read with a short sleep between attempts
             let n = {
                 let mut guard = match stream.lock() {
@@ -279,12 +290,10 @@ impl DaemonSession {
                                 &on_resume_attach,
                             );
                         }
-                        Err(e) => {
-                            // Not a Push message — might be something else or garbage.
-                            // Discard the frame and continue.
-                            eprintln!(
-                                "[push-listener] failed to decode push message: {e}"
-                            );
+                        Err(_) => {
+                            // Not a Push message — likely a Response (e.g. Error)
+                            // from daemon's request handler seeing our PushAck.
+                            // Safe to discard.
                             let consumed = 4 + len;
                             read_buf.drain(..consumed);
                         }
@@ -435,12 +444,9 @@ impl DaemonSession {
 impl Drop for DaemonSession {
     fn drop(&mut self) {
         eprintln!("[DaemonSession] drop session_id={}", self.session_id);
-        // Drop the shared stream ref so the push listener sees EOF or lock failure
+        self.push_listener_stop.store(true, std::sync::atomic::Ordering::Release);
         self.control_stream_shared = None;
-        // Wait briefly for the push listener thread to exit (don't block indefinitely)
-        if let Some(handle) = self.push_listener_handle.take() {
-            let _ = handle.join();
-        }
+        // Don't join — push listener will exit within 50ms on next poll cycle
     }
 }
 
@@ -763,6 +769,7 @@ impl DaemonClient {
             grid_snapshot,
             push_listener_handle: None,
             control_stream_shared: None,
+            push_listener_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -846,6 +853,20 @@ impl DaemonClient {
             Response::WinsizeUpdated { .. } => Ok(()),
             Response::Error { message } => Err(message),
             _ => Err("unexpected response to WinsizeUpdate".to_string()),
+        }
+    }
+
+    pub fn send_input(session_id: &str, data: &[u8]) -> Result<(), String> {
+        use base64::{engine::general_purpose, Engine as _};
+        let mut stream = connect().ok_or("failed to connect to daemon")?;
+        let req = Request::Input {
+            session_id: session_id.to_string(),
+            data: general_purpose::STANDARD.encode(data),
+        };
+        match send_request(&mut stream, req)? {
+            Response::InputAck { .. } => Ok(()),
+            Response::Error { message } => Err(message),
+            _ => Err("unexpected response to Input".to_string()),
         }
     }
 }
