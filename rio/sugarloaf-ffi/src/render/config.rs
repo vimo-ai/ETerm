@@ -110,39 +110,18 @@ pub struct FontMetrics {
 impl FontMetrics {
     /// 从字体计算度量信息
     ///
-    /// 完整复用老代码逻辑：
-    /// - rio/sugarloaf/src/sugarloaf.rs:398-429 (get_font_metrics_skia)
-    /// - rio/sugarloaf/src/sugarloaf.rs:686-704 (render 中的计算)
+    /// 委托给 render_core::compute_font_metrics 获取 rounded 的物理像素值。
     pub fn compute(
         config: &RenderConfig,
         font_context: &crate::render::font::FontContext,
     ) -> Self {
         let physical_font_size = config.physical_font_size();
-        let primary_font = font_context.get_primary_font(physical_font_size.value);
-        let (_, skia_metrics) = primary_font.metrics();
-
-        // ===== 计算 cell_height =====
-        // 🎯 关键修复：cell_height 是基础字形高度，不包含 line_height 因子
-        // line_height 因子在 renderer 中单独应用（用于行间距和 box-drawing 拉伸）
-        let raw_cell_height = -skia_metrics.ascent
-                             + skia_metrics.descent
-                             + skia_metrics.leading;
-        // Round 到整数像素，避免渲染时的亚像素缝隙
-        // 参考：rio/sugarloaf/src/sugarloaf.rs:419-420 (get_font_metrics_skia)
-        let cell_height = raw_cell_height.round();
-
-        // ===== 计算 cell_width =====
-        let (raw_cell_width, _) = primary_font.measure_str("M", None);
-        // 🎯 关键修复：Round 到整数像素，避免子像素渲染导致的字符缝隙
-        let cell_width = raw_cell_width.round();
-
-        // ===== 计算 baseline_offset（696 行）=====
-        let baseline_offset = -skia_metrics.ascent;
+        let core_metrics = render_core::compute_font_metrics(physical_font_size.value, font_context);
 
         Self {
-            cell_width: PhysicalPixels::new(cell_width),
-            cell_height: PhysicalPixels::new(cell_height),
-            baseline_offset: PhysicalPixels::new(baseline_offset),
+            cell_width: PhysicalPixels::new(core_metrics.cell_width),
+            cell_height: PhysicalPixels::new(core_metrics.cell_height),
+            baseline_offset: PhysicalPixels::new(core_metrics.baseline_offset),
             config_key: config.cache_key(),
         }
     }

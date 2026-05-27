@@ -847,13 +847,11 @@ impl Renderer {
         let metrics = self.get_font_metrics();
         let physical_font_size = self.config.physical_font_size();
 
-        // 3. 文本整形（传递 line 和 state 用于光标检测）
+        // 3. 文本整形
         self.text_shaper.shape_line(
             &builder_line,
             physical_font_size.value,
             metrics.cell_width.value,
-            line,
-            state,
         )
     }
 
