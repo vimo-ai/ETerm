@@ -10,5 +10,7 @@ crate-type = ["staticlib"]
 [dependencies]
 sugarloaf = { path = "../sugarloaf", default-features = false, features = ["render"] }
 terminal-core = { path = "../terminal-core", default-features = false }
+render-core = { path = "../render-core" }
 raw-window-handle = { workspace = true }
+parking_lot = { workspace = true }
 skia-safe = { version = "0.93.1", features = ["metal", "textlayout"] }
