@@ -243,7 +243,7 @@ impl GlyphRasterizer {
             hasher.finish()
         };
 
-        let font_index = 0u16;
+        let font_index = (typeface.unique_id() % 65536) as u16;
         let width = glyph.width;
 
         GlyphKey::new(glyph_id, font_index, font_size, width, flags)
