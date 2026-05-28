@@ -474,6 +474,20 @@ final class SDKPluginLoader {
         var paths: [String] = []
         var seenIds: Set<String> = []
 
+        #if TEAM_BUILD
+        // 商业版：只扫描 BuiltinPlugins，所有插件内置
+        if let builtinPath = Bundle.main.resourcePath.map({ $0 + "/BuiltinPlugins" }),
+           FileManager.default.fileExists(atPath: builtinPath) {
+            let builtinBundles = scanDirectory(builtinPath)
+            for bundlePath in builtinBundles {
+                let pluginId = extractPluginId(from: bundlePath)
+                if !seenIds.contains(pluginId) {
+                    paths.append(bundlePath)
+                    seenIds.insert(pluginId)
+                }
+            }
+        }
+        #else
         // 1. 开发插件目录（环境变量，最高优先级覆盖）
         if let devPath = ProcessInfo.processInfo.environment["ETERM_PLUGIN_PATH"] {
             let devBundles = scanDirectory(devPath)
@@ -509,6 +523,7 @@ final class SDKPluginLoader {
                 seenIds.insert(pluginId)
             }
         }
+        #endif
 
         return paths
     }
@@ -654,10 +669,12 @@ final class SDKPluginLoader {
         let pluginId = manifest.id
 
         // 检查是否禁用
+        #if !TEAM_BUILD
         if disabledPluginIds.contains(pluginId) {
             logInfo("[SDKPluginLoader] Skipping disabled plugin: \(pluginId)")
             return
         }
+        #endif
 
         // 检查依赖
         for dep in manifest.dependencies {

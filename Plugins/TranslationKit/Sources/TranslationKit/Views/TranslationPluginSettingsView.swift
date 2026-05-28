@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+#if !TEAM_BUILD
 // MARK: - Settings Section View
 
 private struct SettingsSectionView<Content: View>: View {
@@ -196,3 +197,4 @@ struct ModelConfigField: View {
 #Preview {
     TranslationPluginSettingsView()
 }
+#endif // !TEAM_BUILD

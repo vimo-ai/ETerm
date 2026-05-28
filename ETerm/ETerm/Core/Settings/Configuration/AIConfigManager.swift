@@ -53,6 +53,13 @@ final class AIConfigManager: ObservableObject {
     }
 
     private init() {
+        #if TEAM_BUILD
+        // 商业版：使用编译时常量，不读取外部配置文件
+        self.config = AIConfig(
+            apiKey: TeamBuildConstants.aiApiKey,
+            baseURL: TeamBuildConstants.aiBaseURL
+        )
+        #else
         // 配置优先级：JSON 文件 > 迁移数据 > 环境变量 > 默认值
         if let fileConfig = Self.loadFromFile(path: configFilePath) {
             self.config = fileConfig
@@ -68,12 +75,17 @@ final class AIConfigManager: ObservableObject {
                 self.config = .default
             }
         }
+        #endif
     }
 
     // MARK: - 持久化
 
     /// 保存配置到 JSON 文件
     private func saveConfig() {
+        #if TEAM_BUILD
+        // 商业版：配置锁死，不允许保存
+        return
+        #else
         do {
             // 确保父目录存在
             try ETermPaths.ensureParentDirectory(for: configFilePath)
@@ -86,6 +98,7 @@ final class AIConfigManager: ObservableObject {
         } catch {
             logError("保存 AI 配置失败: \(error)")
         }
+        #endif
     }
 
     /// 从 JSON 文件加载配置（静态方法，供 init 调用）

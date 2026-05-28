@@ -57,8 +57,12 @@ public final class ClaudeMonitorPlugin: NSObject, ETermKit.Plugin {
     // MARK: - UI 提供
 
     public func sidebarView(for tabId: String) -> AnyView? {
+        #if !TEAM_BUILD
         guard tabId == "claude-monitor-settings" else { return nil }
         return AnyView(ClaudeMonitorSettingsView())
+        #else
+        return nil
+        #endif
     }
 
     public func infoPanelView(for id: String) -> AnyView? {
@@ -89,6 +93,7 @@ public final class ClaudeMonitorPlugin: NSObject, ETermKit.Plugin {
 
 // MARK: - 设置视图
 
+#if !TEAM_BUILD
 struct ClaudeMonitorSettingsView: View {
     @AppStorage("WeeklyUsageSkipWeekends") private var skipWeekends = false
     @AppStorage("WeeklyUsageSkipSleep") private var skipSleep = false
@@ -148,3 +153,4 @@ struct ClaudeMonitorSettingsView: View {
         return String(format: "%02d:%02d", hours, mins)
     }
 }
+#endif // !TEAM_BUILD

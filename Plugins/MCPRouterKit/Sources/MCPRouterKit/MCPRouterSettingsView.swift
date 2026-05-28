@@ -10,6 +10,7 @@ import ETermKit
 import UniformTypeIdentifiers
 import AppKit
 
+#if !TEAM_BUILD
 // MARK: - ViewModel
 
 /// MCP Router View 状态 - 直接调用 Bridge
@@ -1950,3 +1951,4 @@ private struct OpenCodeIntegrationRowView: View {
         }
     }
 }
+#endif // !TEAM_BUILD

@@ -9,6 +9,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ETermKit
 
+#if !TEAM_BUILD
 struct SettingsView: View {
     @StateObject private var configManager = AIConfigManager.shared
     @StateObject private var ollamaService = OllamaService.shared
@@ -794,3 +795,4 @@ struct SettingsSectionView<Content: View>: View {
 #Preview {
     SettingsView()
 }
+#endif // !TEAM_BUILD

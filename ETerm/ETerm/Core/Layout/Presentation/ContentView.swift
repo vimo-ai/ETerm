@@ -201,6 +201,7 @@ struct ContentView: View {
     private func sidebarDetailView(for item: SidebarItemType) -> some View {
         Group {
             switch item {
+            #if !TEAM_BUILD
             case .builtin(.settings):
                 SettingsView()
                     .frame(maxWidth: 700, maxHeight: 600)
@@ -209,6 +210,7 @@ struct ContentView: View {
                     .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                     .padding(40)
                     .injectModelContainer()  // 注入 ModelContainer
+            #endif
 
             case .builtin(.shortcuts):
                 ShortcutsView()
@@ -218,6 +220,7 @@ struct ContentView: View {
                     .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                     .padding(40)
 
+            #if !TEAM_BUILD
             case .builtin(.plugins):
                 PluginManagerView()
                     .frame(maxWidth: 600, maxHeight: 500)
@@ -225,6 +228,7 @@ struct ContentView: View {
                     .glassEffect(in: RoundedRectangle(cornerRadius: 12))
                     .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 10)
                     .padding(40)
+            #endif
 
             case .plugin(let tabId):
                 // 查找插件注册的视图
@@ -240,6 +244,11 @@ struct ContentView: View {
                     Text("插件视图未找到")
                         .foregroundColor(.secondary)
                 }
+
+            #if TEAM_BUILD
+            default:
+                EmptyView()
+            #endif
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)  // 填充整个区域以居中

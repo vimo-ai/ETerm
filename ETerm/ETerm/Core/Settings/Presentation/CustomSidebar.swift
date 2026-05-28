@@ -70,6 +70,7 @@ struct CustomSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     // 内置项
+                    #if !TEAM_BUILD
                     SidebarItemRow(
                         title: "设置",
                         icon: "gearshape",
@@ -77,6 +78,7 @@ struct CustomSidebar: View {
                         isSelected: selectedItem == .builtin(.settings),
                         action: { selectedItem = .builtin(.settings) }
                     )
+                    #endif
 
                     SidebarItemRow(
                         title: "快捷键",
@@ -86,6 +88,7 @@ struct CustomSidebar: View {
                         action: { selectedItem = .builtin(.shortcuts) }
                     )
 
+                    #if !TEAM_BUILD
                     SidebarItemRow(
                         title: "插件管理",
                         icon: "puzzlepiece.extension",
@@ -93,8 +96,10 @@ struct CustomSidebar: View {
                         isSelected: selectedItem == .builtin(.plugins),
                         action: { selectedItem = .builtin(.plugins) }
                     )
+                    #endif
 
                     // 插件注册的 Tab（分组显示）
+                    #if !TEAM_BUILD
                     if !registry.allTabGroups.isEmpty {
                         Divider()
                             .padding(.vertical, 8)
@@ -134,6 +139,7 @@ struct CustomSidebar: View {
                             }
                         }
                     }
+                    #endif
                 }
                 .padding(.top, 8)
                 .padding(.horizontal, 8)

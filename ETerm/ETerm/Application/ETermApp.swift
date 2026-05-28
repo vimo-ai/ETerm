@@ -330,6 +330,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         mainMenu.addItem(windowMenuItem)
 
+        #if !TEAM_BUILD
         // 调试菜单
         let debugMenu = NSMenu(title: "调试")
         let debugMenuItem = NSMenuItem()
@@ -341,6 +342,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         mainMenu.addItem(debugMenuItem)
+        #endif
 
         NSApplication.shared.mainMenu = mainMenu
         NSApplication.shared.windowsMenu = windowMenu

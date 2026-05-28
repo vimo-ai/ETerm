@@ -6,6 +6,7 @@
 
 import SwiftUI
 
+#if !TEAM_BUILD
 struct PluginManagerView: View {
     @State private var refreshTrigger = UUID()
 
@@ -217,3 +218,4 @@ struct PluginItemView: View {
     PluginManagerView()
         .frame(width: 600, height: 500)
 }
+#endif // !TEAM_BUILD

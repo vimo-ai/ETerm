@@ -826,8 +826,12 @@ public final class VlaudePlugin: NSObject, Plugin {
     // MARK: - View Providers
 
     public func sidebarView(for tabId: String) -> AnyView? {
+        #if !TEAM_BUILD
         guard tabId == "vlaude-settings" else { return nil }
         return AnyView(VlaudeSettingsView())
+        #else
+        return nil
+        #endif
     }
 
     public func bottomDockView(for id: String) -> AnyView? {
