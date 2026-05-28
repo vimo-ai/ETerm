@@ -1,6 +1,9 @@
 //! Thin daemon client embedded in sugarloaf-ffi.
 //! Speaks the pty-daemon protocol (4-byte BE length + JSON) with SCM_RIGHTS fd passing.
 //! Does NOT depend on pty-daemon crate - duplicates minimal protocol types.
+//!
+//! Supports server-initiated push messages (ForceDetach, ResumeAttach) for
+//! baton-pass session takeover.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -8,6 +11,7 @@ use std::env;
 use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
+use std::sync::{Arc, Mutex};
 
 const DEFAULT_SOCKET_PATH: &str = "/tmp/eterm-daemon.sock";
 
@@ -99,6 +103,54 @@ enum Response {
     },
 }
 
+/// Server-initiated push messages (daemon → ETerm) for baton-pass protocol.
+/// Must match pty-daemon's Push enum exactly.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum Push {
+    /// Daemon requests ETerm to release a session (iPhone takeover).
+    ForceDetach { session_id: String },
+
+    /// Daemon offers a session back to ETerm (iPhone released).
+    ResumeAttach {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+        child_pid: i32,
+        shm_name: String,
+        #[serde(default)]
+        grid_snapshot: Option<String>,
+    },
+}
+
+/// Client acknowledgment of a Push message (ETerm → daemon).
+/// Must match pty-daemon's PushAck enum exactly.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum PushAck {
+    DetachAck {
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        grid_snapshot: Option<String>,
+    },
+    ResumeAck {
+        session_id: String,
+    },
+}
+
+/// Callback invoked when the daemon pushes a ForceDetach.
+///
+/// The callback receives the session_id and must return the grid snapshot
+/// (base64-encoded) captured from the terminal before closing the dup_fd.
+/// Returns None if snapshot capture is not possible.
+pub type ForceDetachCallback = Box<dyn Fn(&str) -> Option<String> + Send + 'static>;
+
+/// Callback invoked when the daemon pushes a ResumeAttach.
+///
+/// The callback receives the session_id, new pty_fd, and optional grid snapshot.
+/// It should apply the snapshot and start reading from the new fd.
+pub type ResumeAttachCallback = Box<dyn Fn(&str, RawFd, Option<String>) -> bool + Send + 'static>;
+
 /// 与 daemon 协议匹配的 SessionInfo（字段名必须和 daemon 一致）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -131,9 +183,214 @@ pub struct DaemonSession {
     pub was_reattach: bool,
     /// Grid snapshot bytes received from daemon on reattach (base64 string to decode)
     pub grid_snapshot: Option<String>,
+    /// Handle to the push listener thread (stops when control_stream_shared is dropped/closed)
+    push_listener_handle: Option<std::thread::JoinHandle<()>>,
+    /// Shared reference to control stream for the push listener
+    control_stream_shared: Option<Arc<Mutex<UnixStream>>>,
+    /// Stop flag for push listener thread
+    push_listener_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl DaemonSession {
+    /// Start listening for daemon push messages (ForceDetach, ResumeAttach) on a background thread.
+    ///
+    /// The control_stream is shared between the push listener (reads) and
+    /// request methods like ping/winsize_update (writes). The push listener
+    /// uses a non-blocking read with poll, checking every 100ms.
+    ///
+    /// Call this after the session is fully set up (pty_fd received, machine spawned).
+    pub fn start_push_listener(
+        &mut self,
+        on_force_detach: ForceDetachCallback,
+        on_resume_attach: ResumeAttachCallback,
+    ) {
+        // Clone the control stream for the listener thread
+        let stream_clone = match self.control_stream.try_clone() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[DaemonSession] failed to clone control stream for push listener: {e}");
+                return;
+            }
+        };
+
+        let shared = Arc::new(Mutex::new(stream_clone));
+        self.control_stream_shared = Some(Arc::clone(&shared));
+
+        let session_id = self.session_id.clone();
+        let stop = self.push_listener_stop.clone();
+
+        let handle = std::thread::Builder::new()
+            .name(format!("push-listener-{}", &session_id[..8]))
+            .spawn(move || {
+                Self::push_listener_loop(shared, session_id, on_force_detach, on_resume_attach, stop);
+            })
+            .ok();
+
+        self.push_listener_handle = handle;
+    }
+
+    /// Background loop that reads push messages from the daemon.
+    fn push_listener_loop(
+        stream: Arc<Mutex<UnixStream>>,
+        session_id: String,
+        on_force_detach: ForceDetachCallback,
+        on_resume_attach: ResumeAttachCallback,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let mut read_buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+
+        while !stop.load(std::sync::atomic::Ordering::Acquire) {
+            // Non-blocking read with a short sleep between attempts
+            let n = {
+                let mut guard = match stream.lock() {
+                    Ok(g) => g,
+                    Err(_) => break, // Mutex poisoned — session is being torn down
+                };
+                guard.set_nonblocking(true).ok();
+                match guard.read(&mut tmp) {
+                    Ok(0) => {
+                        eprintln!(
+                            "[push-listener] control stream EOF for session {}",
+                            &session_id[..8]
+                        );
+                        break;
+                    }
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => 0,
+                    Err(e) => {
+                        eprintln!(
+                            "[push-listener] read error for session {}: {e}",
+                            &session_id[..8]
+                        );
+                        break;
+                    }
+                }
+            };
+
+            if n > 0 {
+                read_buf.extend_from_slice(&tmp[..n]);
+            }
+
+            // Try to decode a Push message from the buffer
+            if read_buf.len() >= 4 {
+                let len = u32::from_be_bytes([read_buf[0], read_buf[1], read_buf[2], read_buf[3]])
+                    as usize;
+                if read_buf.len() >= 4 + len {
+                    let payload = &read_buf[4..4 + len];
+                    match serde_json::from_slice::<Push>(payload) {
+                        Ok(push) => {
+                            let consumed = 4 + len;
+                            read_buf.drain(..consumed);
+                            Self::handle_push(
+                                &stream,
+                                &session_id,
+                                push,
+                                &on_force_detach,
+                                &on_resume_attach,
+                            );
+                        }
+                        Err(_) => {
+                            // Not a Push message — likely a Response (e.g. Error)
+                            // from daemon's request handler seeing our PushAck.
+                            // Safe to discard.
+                            let consumed = 4 + len;
+                            read_buf.drain(..consumed);
+                        }
+                    }
+                    continue; // Try to decode more without sleeping
+                }
+            }
+
+            // Sleep briefly before next poll — 50ms is responsive enough for takeover
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        eprintln!(
+            "[push-listener] exiting for session {}",
+            &session_id[..8]
+        );
+    }
+
+    /// Handle a decoded Push message from the daemon.
+    fn handle_push(
+        stream: &Arc<Mutex<UnixStream>>,
+        session_id: &str,
+        push: Push,
+        on_force_detach: &ForceDetachCallback,
+        on_resume_attach: &ResumeAttachCallback,
+    ) {
+        match push {
+            Push::ForceDetach {
+                session_id: push_sid,
+            } => {
+                eprintln!(
+                    "[push-listener] ForceDetach received for session {}",
+                    &push_sid[..8.min(push_sid.len())]
+                );
+
+                // Call the callback to capture grid snapshot and close dup_fd
+                let grid_snapshot = on_force_detach(&push_sid);
+
+                // Send DetachAck back to daemon
+                let ack = PushAck::DetachAck {
+                    session_id: push_sid,
+                    grid_snapshot,
+                };
+                if let Ok(encoded) = encode_message_pushack(&ack) {
+                    if let Ok(mut guard) = stream.lock() {
+                        guard.set_nonblocking(false).ok();
+                        let _ = guard.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+                        let _ = guard.write_all(&encoded);
+                        guard.set_nonblocking(true).ok();
+                    }
+                }
+            }
+            Push::ResumeAttach {
+                session_id: push_sid,
+                grid_snapshot,
+                ..
+            } => {
+                eprintln!(
+                    "[push-listener] ResumeAttach received for session {}",
+                    &push_sid[..8.min(push_sid.len())]
+                );
+
+                // Receive the new dup_fd via SCM_RIGHTS
+                let pty_fd = {
+                    let guard = stream.lock().ok();
+                    guard.and_then(|g| recv_fd(&*g).ok())
+                };
+
+                match pty_fd {
+                    Some(fd) => {
+                        let _ = on_resume_attach(&push_sid, fd, grid_snapshot);
+
+                        // Send ResumeAck
+                        let ack = PushAck::ResumeAck {
+                            session_id: push_sid,
+                        };
+                        if let Ok(encoded) = encode_message_pushack(&ack) {
+                            if let Ok(mut guard) = stream.lock() {
+                                guard.set_nonblocking(false).ok();
+                                let _ = guard
+                                    .set_write_timeout(Some(std::time::Duration::from_secs(2)));
+                                let _ = guard.write_all(&encoded);
+                                guard.set_nonblocking(true).ok();
+                            }
+                        }
+                    }
+                    None => {
+                        eprintln!(
+                            "[push-listener] ResumeAttach: failed to receive pty_fd for session {}",
+                            &push_sid[..8.min(push_sid.len())]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Check if the daemon is alive by sending a Ping on the control stream.
     /// Returns false on any write/read/timeout error.
     pub fn ping(&mut self) -> bool {
@@ -187,12 +444,24 @@ impl DaemonSession {
 impl Drop for DaemonSession {
     fn drop(&mut self) {
         eprintln!("[DaemonSession] drop session_id={}", self.session_id);
+        self.push_listener_stop.store(true, std::sync::atomic::Ordering::Release);
+        self.control_stream_shared = None;
+        // Don't join — push listener will exit within 50ms on next poll cycle
     }
 }
 
 // Protocol encoding/decoding
 
 fn encode_message(msg: &Request) -> Result<Vec<u8>, String> {
+    let json = serde_json::to_vec(msg).map_err(|e| format!("JSON encode: {}", e))?;
+    let len = json.len() as u32;
+    let mut buf = Vec::with_capacity(4 + json.len());
+    buf.extend_from_slice(&len.to_be_bytes());
+    buf.extend_from_slice(&json);
+    Ok(buf)
+}
+
+fn encode_message_pushack(msg: &PushAck) -> Result<Vec<u8>, String> {
     let json = serde_json::to_vec(msg).map_err(|e| format!("JSON encode: {}", e))?;
     let len = json.len() as u32;
     let mut buf = Vec::with_capacity(4 + json.len());
@@ -263,8 +532,6 @@ fn recv_fd(stream: &UnixStream) -> Result<RawFd, String> {
 }
 
 // Helper functions
-
-
 
 fn socket_path() -> String {
     env::var("PTY_DAEMON_SOCK").unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_string())
@@ -500,6 +767,9 @@ impl DaemonClient {
             needs_sigwinch_bounce: false,
             was_reattach: false,
             grid_snapshot,
+            push_listener_handle: None,
+            control_stream_shared: None,
+            push_listener_stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
