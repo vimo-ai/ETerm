@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+#if !TEAM_BUILD
 struct VlaudeSettingsView: View {
     @ObservedObject private var configManager = VlaudeConfigManager.shared
 
@@ -283,3 +284,4 @@ private struct FeatureRow: View {
     VlaudeSettingsView()
         .frame(width: 300, height: 500)
 }
+#endif // !TEAM_BUILD

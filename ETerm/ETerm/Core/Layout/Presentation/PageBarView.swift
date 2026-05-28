@@ -772,6 +772,7 @@ struct PageBarControlsView: View {
             }
             .buttonStyle(.plain)
 
+            #if !TEAM_BUILD
             // 侧边栏按钮（原设置按钮）
             Button(action: {
                 // 发送通知打开侧边栏
@@ -782,6 +783,7 @@ struct PageBarControlsView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(.plain)
+            #endif
 
             // 插件注册的 PageBar 组件（包括翻译模式开关等）
             ForEach(pageBarItems.items) { item in

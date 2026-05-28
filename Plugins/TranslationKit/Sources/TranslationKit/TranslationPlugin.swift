@@ -121,8 +121,10 @@ public final class TranslationPlugin: NSObject, ETermKit.Plugin {
 
     public func sidebarView(for tabId: String) -> AnyView? {
         switch tabId {
+        #if !TEAM_BUILD
         case "translation-settings":
             return AnyView(TranslationPluginSettingsView())
+        #endif
         case "vocabulary":
             return AnyView(
                 VocabularyView()

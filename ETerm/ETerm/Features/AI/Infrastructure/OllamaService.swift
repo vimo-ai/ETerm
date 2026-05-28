@@ -198,8 +198,16 @@ final class OllamaService: OllamaServiceProtocol, ObservableObject {
         config.timeoutIntervalForResource = 10.0
         self.session = URLSession(configuration: config)
 
+        #if TEAM_BUILD
+        // 商业版：使用编译时常量，静默探测
+        var teamSettings = OllamaSettings.default
+        teamSettings.baseURL = TeamBuildConstants.ollamaBaseURL
+        teamSettings.model = TeamBuildConstants.ollamaModel
+        self.settings = teamSettings
+        #else
         // 加载配置
         self.settings = Self.loadSettings(from: configFilePath)
+        #endif
 
         // 启动时检查状态
         Task {
@@ -222,6 +230,10 @@ final class OllamaService: OllamaServiceProtocol, ObservableObject {
     }
 
     func updateSettings(_ newSettings: OllamaSettings) {
+        #if TEAM_BUILD
+        // 商业版：配置锁死，不允许修改
+        return
+        #else
         settings = newSettings
         saveSettings()
 
@@ -229,9 +241,14 @@ final class OllamaService: OllamaServiceProtocol, ObservableObject {
         Task {
             await checkHealth()
         }
+        #endif
     }
 
     private func saveSettings() {
+        #if TEAM_BUILD
+        // 商业版：配置锁死，不允许保存
+        return
+        #else
         do {
             try ETermPaths.ensureParentDirectory(for: configFilePath)
 
@@ -242,6 +259,7 @@ final class OllamaService: OllamaServiceProtocol, ObservableObject {
         } catch {
             logError("保存 Ollama 配置失败: \(error)")
         }
+        #endif
     }
 
     // MARK: - 生成

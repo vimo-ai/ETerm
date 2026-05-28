@@ -103,9 +103,11 @@ public final class MCPRouterPlugin: NSObject, ETermKit.Plugin {
     }
 
     public func sidebarView(for tabId: String) -> AnyView? {
+        #if !TEAM_BUILD
         if tabId == "mcp-router-settings" {
             return AnyView(MCPRouterSettingsView())
         }
+        #endif
         return nil
     }
 
