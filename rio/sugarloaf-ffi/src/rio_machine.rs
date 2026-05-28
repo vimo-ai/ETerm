@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{Builder, JoinHandle};
 use std::time::Instant;
 
@@ -629,91 +628,6 @@ where
                 (self, state)
             })
             .expect("Failed to spawn PTY thread")
-    }
-}
-
-/// RingReader — polls SharedRingBuffer during baton-pass takeover,
-/// feeds new bytes to Crosswords so ETerm continues rendering.
-pub struct RingReader {
-    stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<u64>>,
-}
-
-impl RingReader {
-    pub fn start(
-        initial_cursor: u64,
-        crosswords: Arc<parking_lot::RwLock<Crosswords<FFIEventListener>>>,
-        event_listener: FFIEventListener,
-        route_id: usize,
-        shm_name: String,
-    ) -> Result<Self, String> {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_clone = stop.clone();
-
-        let handle = std::thread::Builder::new()
-            .name(format!("RingReader-{}", route_id))
-            .spawn(move || {
-                Self::reader_loop(stop_clone, initial_cursor, crosswords, event_listener, route_id, &shm_name)
-            })
-            .map_err(|e| format!("spawn RingReader: {e}"))?;
-
-        Ok(Self {
-            stop,
-            handle: Some(handle),
-        })
-    }
-
-    fn reader_loop(
-        stop: Arc<AtomicBool>,
-        mut cursor: u64,
-        crosswords: Arc<parking_lot::RwLock<Crosswords<FFIEventListener>>>,
-        event_listener: FFIEventListener,
-        route_id: usize,
-        shm_name: &str,
-    ) -> u64 {
-        let ring = match pty_daemon::shared_ring::SharedRingBuffer::open(shm_name) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[RingReader-{}] failed to open shm {}: {}", route_id, shm_name, e);
-                return cursor;
-            }
-        };
-
-        let mut parser: Processor = Processor::new();
-
-        while !stop.load(Ordering::Acquire) {
-            let (data, new_total) = ring.read_since(cursor);
-            if data.is_empty() {
-                std::thread::sleep(std::time::Duration::from_millis(8));
-                continue;
-            }
-
-            cursor = new_total;
-
-            {
-                let mut cw = crosswords.write();
-                parser.advance(&mut *cw, &data);
-            }
-
-            event_listener.send_event(RioEvent::Wakeup(route_id));
-        }
-
-        cursor
-    }
-
-    pub fn stop_and_join(mut self) -> u64 {
-        self.stop.store(true, Ordering::Release);
-        if let Some(handle) = self.handle.take() {
-            handle.join().unwrap_or(0)
-        } else {
-            0
-        }
-    }
-}
-
-impl Drop for RingReader {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
     }
 }
 
