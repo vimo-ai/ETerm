@@ -1,31 +1,29 @@
-//
-//  claude-helper
-//
-//  Created by claude-helper on 2025/11/23.
-//
-
 import SwiftUI
+import ETermKit
 
-/// 冲刺预测视图
-/// 显示最近 5 次用量变化的时间间隔，并预测按每个速率用完剩余额度需要多久
 struct SprintPredictionView: View {
     @ObservedObject private var tracker = WeeklyUsageTracker.shared
-    @ObservedObject private var historyStore = UsageHistoryStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // 标题区域
             headerSection
-
-            // 预测内容
-            contentSection
+            if let snapshot = tracker.snapshot {
+                if let wave = snapshot.waveProjection {
+                    waveContent(wave, snapshot: snapshot)
+                } else {
+                    legacyFallback(snapshot: snapshot)
+                }
+            } else {
+                emptyState("等待首次刷新...")
+            }
         }
         .padding(16)
         .background(Color.gray.opacity(0.2))
         .cornerRadius(12)
     }
 
-    // MARK: - 标题区域
+    // MARK: - Header
 
     @ViewBuilder
     private var headerSection: some View {
@@ -40,104 +38,238 @@ struct SprintPredictionView: View {
                     .foregroundColor(.white)
 
                 if let snapshot = tracker.snapshot {
-                    let remainingPercent = 100 - snapshot.overall.utilization
-                    let remainingTime = max(snapshot.overall.endDate.timeIntervalSince(Date()), 0)
-                    Text("剩余 \(formatPercent(remainingPercent))，\(formatDurationCompact(remainingTime))")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                } else {
-                    Text("等待数据...")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                    let remaining = 100 - snapshot.overall.utilization
+                    let hoursLeft = max(snapshot.overall.endDate.timeIntervalSince(Date()), 0) / 3600
+                    let timeStr = hoursLeft >= 24
+                        ? String(format: "%.0fd%.0fh", floor(hoursLeft / 24), hoursLeft.truncatingRemainder(dividingBy: 24))
+                        : String(format: "%.0fh", hoursLeft)
+                    Text("剩余 \(Int(remaining))%, \(timeStr)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textSecondary)
                 }
             }
-
             Spacer()
         }
     }
 
-    // MARK: - 内容区域
+    // MARK: - Wave content
 
     @ViewBuilder
-    private var contentSection: some View {
-        if tracker.snapshot == nil {
-            emptyStateView(message: "等待首次刷新...")
-        } else if let snapshot = tracker.snapshot {
-            let remainingPercent = 100 - snapshot.overall.utilization
-            let remainingTime = max(snapshot.overall.endDate.timeIntervalSince(Date()), 0)
-            let predictions = SprintPredictor.shared.generatePredictions(
-                remainingPercent: remainingPercent,
-                remainingTime: remainingTime
-            )
-            let weightedPrediction = SprintPredictor.shared.generateWeightedPrediction(
-                remainingPercent: remainingPercent,
-                remainingTime: remainingTime
-            )
+    private func waveContent(_ wave: WaveProjectionResult, snapshot: WeeklyUsageSnapshot) -> some View {
+        heroView(wave)
 
-            if predictions.isEmpty {
-                emptyStateView(message: "暂无足够数据")
+        Rectangle()
+            .fill(ThemeColors.UI.border)
+            .frame(height: 1)
+
+        waveList(wave)
+
+        if wave.projectedSdAtReset < 99.5 {
+            ceilingWarning(projected: wave.projectedSdAtReset)
+        }
+    }
+
+    // MARK: - Hero: 终X% 波N/M 速度对比
+
+    @ViewBuilder
+    private func heroView(_ wave: WaveProjectionResult) -> some View {
+        HStack(spacing: 16) {
+            // 终 X%
+            let projected = Int(wave.projectedSdAtReset)
+            let projColor = projected >= 100 ? ThemeColors.UI.success :
+                            projected >= 90  ? ThemeColors.UI.warning : ThemeColors.UI.error
+            Text("终\(projected)%")
+                .font(.system(size: 22, weight: .bold, design: .monospaced))
+                .foregroundColor(projColor)
+
+            // 波 N/M + 预计完成时间
+            VStack(alignment: .leading, spacing: 2) {
+                let waveColor = wave.currentWaveIndex <= wave.wavesNeeded
+                    ? ThemeColors.UI.warning : ThemeColors.UI.success
+                Text("波\(wave.currentWaveIndex)/\(wave.wavesNeeded)")
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .foregroundColor(waveColor)
+
+                if let finish = wave.projectedFinishTime {
+                    Text("完\(formatTime(finish))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.info)
+                }
+            }
+
+            Spacer()
+
+            // 速度对比
+            if let speed = wave.currentSpeed {
+                let actual = Int(speed)
+                let target = Int(wave.targetSpeed)
+                let isFast = speed <= wave.targetSpeed
+                HStack(spacing: 4) {
+                    Text("速\(actual)")
+                        .foregroundColor(isFast ? ThemeColors.UI.success : ThemeColors.UI.error)
+                    Text(isFast ? "快" : "慢")
+                        .foregroundColor(isFast ? ThemeColors.UI.success : ThemeColors.UI.error)
+                    Text("要\(target)")
+                        .foregroundColor(ThemeColors.UI.textMuted)
+                }
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
             } else {
-                VStack(spacing: 12) {
-                    // 加权平均预测（主预测）
-                    if let weighted = weightedPrediction {
-                        weightedPredictionView(weighted)
-                    }
-
-                    // 分隔线
-                    Divider()
-                        .background(Color.gray.opacity(0.3))
-
-                    // 详细列表
-                    predictionsListView(predictions: predictions)
-                }
+                Text("等待速度数据")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textMuted)
             }
-        }
-    }
-
-    // MARK: - 加权平均预测视图
-
-    @ViewBuilder
-    private func weightedPredictionView(_ prediction: WeightedPrediction) -> some View {
-        HStack(spacing: 12) {
-            // 状态指示
-            Text(prediction.status.emoji)
-                .font(.title2)
-
-            VStack(alignment: .leading, spacing: 4) {
-                // 主预测结果
-                HStack(spacing: 6) {
-                    Text("综合预测")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-
-                    Text("(\(prediction.sampleCount)个样本)")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                }
-
-                // 预测时间和差值
-                HStack(spacing: 8) {
-                    Text(formatPredictedTime(prediction.predictedFinishTime))
-                        .font(.system(.body, design: .monospaced))
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-
-                    Text(formatDelta(prediction.delta))
-                        .font(.subheadline)
-                        .foregroundColor(deltaColor(prediction.status))
-                }
-            }
-
-            Spacer()
         }
         .padding(12)
-        .background(rowBackground(prediction.status).opacity(2))
+        .background(heroBackground(wave))
         .cornerRadius(8)
     }
 
+    private func heroBackground(_ wave: WaveProjectionResult) -> Color {
+        if wave.projectedSdAtReset >= 99.5 {
+            return ThemeColors.UI.success.opacity(0.08)
+        } else if wave.projectedSdAtReset >= 90 {
+            return ThemeColors.UI.warning.opacity(0.08)
+        }
+        return ThemeColors.UI.error.opacity(0.08)
+    }
+
+    // MARK: - Wave list
+
     @ViewBuilder
-    private func emptyStateView(message: String) -> some View {
+    private func waveList(_ wave: WaveProjectionResult) -> some View {
+        if wave.waves.isEmpty {
+            emptyState("无波次数据")
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(wave.waves) { w in
+                    waveRow(w, currentSpeed: wave.currentSpeed, targetSpeed: wave.targetSpeed)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func waveRow(
+        _ w: WaveProjection,
+        currentSpeed: Double?,
+        targetSpeed: Double
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                // 波号 + 当前标记
+                HStack(spacing: 4) {
+                    Text("波\(w.id)")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textPrimary)
+                    if w.isCurrentWave {
+                        Text("当前")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(ThemeColors.UI.accent)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(ThemeColors.UI.accent.opacity(0.15))
+                            .cornerRadius(3)
+                    }
+                }
+                .frame(width: 70, alignment: .leading)
+
+                // 时间窗口
+                Text("\(formatTime(w.startTime))→\(formatTime(w.endTime))")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.textSecondary)
+
+                Spacer()
+
+                // 烧了多少 7d%
+                let burnStr = String(format: "+%.1f%%", w.sdBurnPercent)
+                Text(burnStr)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(ThemeColors.UI.accent)
+
+                // 是否撞天花板
+                if w.hitFhCeiling {
+                    Text("满")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(ThemeColors.UI.warning)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(ThemeColors.UI.warning.opacity(0.15))
+                        .cornerRadius(3)
+                }
+            }
+
+            // 当前波额外显示速度信息
+            if w.isCurrentWave, let speed = currentSpeed {
+                let actual = Int(speed)
+                let target = Int(targetSpeed)
+                let isFast = speed <= targetSpeed
+                let label = isFast ? "快于目标" : "慢于目标"
+                let color = isFast ? ThemeColors.UI.success : ThemeColors.UI.error
+                Text("  速度 \(actual)分/1%  \(label) \(target)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(color)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(w.isCurrentWave ? ThemeColors.UI.accent.opacity(0.05) : Color.clear)
+        .cornerRadius(4)
+    }
+
+    // MARK: - Ceiling warning
+
+    @ViewBuilder
+    private func ceilingWarning(projected: Double) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundColor(ThemeColors.UI.error)
+            Text("波次不足：最多打到 \(Int(projected))%")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(ThemeColors.UI.error)
+            Spacer()
+        }
+        .padding(10)
+        .background(ThemeColors.UI.error.opacity(0.08))
+        .cornerRadius(6)
+    }
+
+    // MARK: - Legacy fallback
+
+    @ViewBuilder
+    private func legacyFallback(snapshot: WeeklyUsageSnapshot) -> some View {
+        let remaining = 100 - snapshot.overall.utilization
+        let remainingTime = max(snapshot.overall.endDate.timeIntervalSince(Date()), 0)
+        let weighted = SprintPredictor.shared.generateWeightedPrediction(
+            remainingPercent: remaining,
+            remainingTime: remainingTime
+        )
+        if let w = weighted {
+            HStack(spacing: 12) {
+                Text(w.status.emoji)
+                    .font(.title2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("综合预测（线性）")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textSecondary)
+                    Text(formatDuration(w.predictedFinishTime))
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundColor(ThemeColors.UI.textPrimary)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(ThemeColors.UI.bgTertiary)
+            .cornerRadius(8)
+        } else {
+            emptyState("暂无足够数据")
+        }
+    }
+
+    // MARK: - Helpers
+
+    @ViewBuilder
+    private func emptyState(_ message: String) -> some View {
         HStack {
             Spacer()
             Text(message)
@@ -148,144 +280,17 @@ struct SprintPredictionView: View {
         .padding(.vertical, 16)
     }
 
-    @ViewBuilder
-    private func predictionsListView(predictions: [SprintPrediction]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(predictions) { prediction in
-                predictionRow(prediction)
-            }
-        }
+    private func formatTime(_ date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        return fmt.string(from: date)
     }
 
-    // MARK: - 单行预测
-
-    @ViewBuilder
-    private func predictionRow(_ prediction: SprintPrediction) -> some View {
-        HStack(spacing: 8) {
-            // 采集时间
-            Text(formatTimestamp(prediction.interval.timestamp))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.cyan)
-                .frame(width: 45, alignment: .leading)
-
-            // 变化区间
-            Text(formatIntervalRange(prediction.interval))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.white)
-                .frame(width: 70, alignment: .leading)
-
-            // 耗时
-            Text(formatDurationCompact(prediction.interval.duration))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.gray)
-                .frame(width: 50, alignment: .trailing)
-
-            // 箭头
-            Text("->")
-                .font(.caption)
-                .foregroundColor(.gray)
-
-            // 预测用完时间
-            Text(formatPredictedTime(prediction.predictedFinishTime))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundColor(.white)
-                .frame(width: 60, alignment: .trailing)
-
-            // 状态标识和差值
-            HStack(spacing: 4) {
-                Text(prediction.status.emoji)
-                    .font(.caption2)
-                Text(formatDelta(prediction.delta))
-                    .font(.caption)
-                    .foregroundColor(deltaColor(prediction.status))
-            }
-            .frame(minWidth: 70, alignment: .trailing)
-        }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
-        .background(rowBackground(prediction.status))
-        .cornerRadius(6)
-    }
-
-    // MARK: - 格式化方法
-
-    /// 格式化时间戳，显示为 "HH:mm"
-    private func formatTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        return formatter.string(from: date)
-    }
-
-    /// 格式化变化区间，如 "73%->74%"
-    private func formatIntervalRange(_ interval: ConsumptionInterval) -> String {
-        String(format: "%.0f%%->%.0f%%", interval.fromUtilization, interval.toUtilization)
-    }
-
-    /// 格式化百分比
-    private func formatPercent(_ percent: Double) -> String {
-        String(format: "%.0f%%", percent)
-    }
-
-    /// 格式化紧凑时长（分钟/小时自动切换）
-    private func formatDurationCompact(_ seconds: TimeInterval) -> String {
+    private func formatDuration(_ seconds: TimeInterval) -> String {
         if seconds < 3600 {
-            // 小于 1 小时，显示分钟
-            let minutes = max(1, Int(seconds / 60))
-            return "\(minutes)分钟"
-        } else {
-            // >= 1 小时，显示小时（保留 1 位小数）
-            let hours = seconds / 3600
-            return String(format: "%.1fh", hours)
+            return "\(max(1, Int(seconds / 60)))分钟"
         }
-    }
-
-    /// 格式化预测用完时间
-    private func formatPredictedTime(_ seconds: TimeInterval) -> String {
-        if seconds < 3600 {
-            let minutes = max(1, Int(seconds / 60))
-            return "\(minutes)分钟用完"
-        } else {
-            let hours = seconds / 3600
-            return String(format: "%.1fh用完", hours)
-        }
-    }
-
-    /// 格式化差值（富余/超出）
-    private func formatDelta(_ delta: TimeInterval) -> String {
-        let absDelta = abs(delta)
-        let timeStr: String
-
-        if absDelta < 3600 {
-            let minutes = max(1, Int(absDelta / 60))
-            timeStr = "\(minutes)分钟"
-        } else {
-            let hours = absDelta / 3600
-            timeStr = String(format: "%.1fh", hours)
-        }
-
-        if delta > 0 {
-            return "富余\(timeStr)"
-        } else {
-            return "超出\(timeStr)"
-        }
-    }
-
-    /// 差值颜色
-    private func deltaColor(_ status: SprintStatus) -> Color {
-        switch status {
-        case .surplus: return .green
-        case .balanced: return .yellow
-        case .deficit: return .red
-        }
-    }
-
-    /// 行背景色
-    private func rowBackground(_ status: SprintStatus) -> Color {
-        switch status {
-        case .surplus: return Color.green.opacity(0.1)
-        case .balanced: return Color.yellow.opacity(0.1)
-        case .deficit: return Color.red.opacity(0.1)
-        }
+        return String(format: "%.1fh", seconds / 3600)
     }
 }
 

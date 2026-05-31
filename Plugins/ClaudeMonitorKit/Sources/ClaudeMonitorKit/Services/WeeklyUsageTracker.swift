@@ -13,6 +13,9 @@ enum WeeklyUsageRecommendation: String {
     case maintain
     case slowDown
     case pause
+    case sprinting
+    case waitingForReset
+    case wavesInsufficient
 }
 
 extension WeeklyUsageRecommendation {
@@ -22,6 +25,9 @@ extension WeeklyUsageRecommendation {
         case .maintain: return "节奏合理"
         case .slowDown: return "放慢节奏"
         case .pause: return "已达到周限"
+        case .sprinting: return "冲刺中"
+        case .waitingForReset: return "等待 5h 重置"
+        case .wavesInsufficient: return "波次不足"
         }
     }
 }
@@ -41,6 +47,7 @@ struct WeeklyUsageSnapshot {
     let recommendation: WeeklyUsageRecommendation
     let recommendationReason: String
     let lastUpdated: Date
+    let waveProjection: WaveProjectionResult?
 }
 
 final class WeeklyUsageTracker: ObservableObject {
@@ -222,12 +229,8 @@ final class WeeklyUsageTracker: ObservableObject {
         let duration = endDate.timeIntervalSince(startDate)
         let elapsed = now.timeIntervalSince(startDate)
         let timeProgress = max(0, min(1, elapsed / max(duration, 1)))
-        
         let usageProgress = max(0, min(1, window.utilization / 100.0))
-        let recommendation = recommend(usageProgress: usageProgress, timeProgress: timeProgress)
-        let recommendationReason = buildReason(usageProgress: usageProgress,
-                                               timeProgress: timeProgress)
-        
+
         let overall = WeeklyUsageSnapshot.Window(
             utilization: window.utilization,
             startDate: startDate,
@@ -248,19 +251,43 @@ final class WeeklyUsageTracker: ObservableObject {
         }
         
         let fiveHour: WeeklyUsageSnapshot.Window?
-        if let window = fiveHourWindow,
-           let end = window.resetsAt,
+        if let fhWindow = fiveHourWindow,
+           let end = fhWindow.resetsAt,
            let start = Calendar(identifier: .gregorian)
             .date(byAdding: .hour, value: -5, to: end) {
             fiveHour = WeeklyUsageSnapshot.Window(
-                utilization: window.utilization,
+                utilization: fhWindow.utilization,
                 startDate: start,
                 endDate: end
             )
         } else {
             fiveHour = nil
         }
-        
+
+        // 波次投影
+        var waveProjection: WaveProjectionResult?
+        if let fhWindow = fiveHourWindow,
+           let fhResetDate = fhWindow.resetsAt {
+            waveProjection = SprintPredictor.shared.generateWaveProjection(
+                sdUsed: window.utilization,
+                sdResetDate: endDate,
+                fhUsed: fhWindow.utilization,
+                fhResetDate: fhResetDate
+            )
+        }
+
+        let recommendation = recommend(
+            usageProgress: usageProgress,
+            timeProgress: timeProgress,
+            fhUtilization: fiveHourWindow?.utilization,
+            waveProjection: waveProjection
+        )
+        let recommendationReason = buildReason(
+            usageProgress: usageProgress,
+            timeProgress: timeProgress,
+            waveProjection: waveProjection
+        )
+
         return WeeklyUsageSnapshot(
             overall: overall,
             opus: opus,
@@ -269,42 +296,77 @@ final class WeeklyUsageTracker: ObservableObject {
             usageProgress: usageProgress,
             recommendation: recommendation,
             recommendationReason: recommendationReason,
-            lastUpdated: now
+            lastUpdated: now,
+            waveProjection: waveProjection
         )
     }
-    
-    private func recommend(usageProgress: Double,
-                           timeProgress: Double) -> WeeklyUsageRecommendation {
+
+    private func recommend(
+        usageProgress: Double,
+        timeProgress: Double,
+        fhUtilization: Double?,
+        waveProjection: WaveProjectionResult?
+    ) -> WeeklyUsageRecommendation {
         if usageProgress >= 0.999 {
             return .pause
         }
-
-        let delta = usageProgress - timeProgress
-        if abs(delta) < 0.001 {  // 允许0.1%的误差作为"完全匹配"
-            return .maintain
-        } else if delta > 0 {
-            return .slowDown
-        } else {
-            return .accelerate
+        if let fh = fhUtilization, fh >= 99 {
+            return .waitingForReset
         }
+        if let wave = waveProjection {
+            switch wave.status {
+            case .sprinting: return .sprinting
+            case .wavesInsufficient: return .wavesInsufficient
+            case .waitingForReset: return .waitingForReset
+            case .completed: return .pause
+            case .onTrack: return .maintain
+            case .speedInsufficient: return .accelerate
+            case .noSpeedData: break
+            }
+        }
+        // fallback 到旧线性逻辑
+        let delta = usageProgress - timeProgress
+        if abs(delta) < 0.001 { return .maintain }
+        else if delta > 0 { return .slowDown }
+        else { return .accelerate }
     }
-    
-    private func buildReason(usageProgress: Double,
-                             timeProgress: Double) -> String {
+
+    private func buildReason(
+        usageProgress: Double,
+        timeProgress: Double,
+        waveProjection: WaveProjectionResult?
+    ) -> String {
         let usagePercent = usageProgress * 100
         let timePercent = timeProgress * 100
-        let delta = usagePercent - timePercent
-        
-        let deltaText: String
-        if abs(delta) < 1 {
-            deltaText = "与时间进度基本一致"
-        } else if delta > 0 {
-            deltaText = String(format: "比时间进度快 %.1f%%", delta)
-        } else {
-            deltaText = String(format: "比时间进度慢 %.1f%%", abs(delta))
+
+        if let wave = waveProjection {
+            let projected = Int(wave.projectedSdAtReset)
+            switch wave.status {
+            case .sprinting:
+                return "冲刺中：终\(projected)%，波\(wave.currentWaveIndex)/\(wave.wavesNeeded)"
+            case .waitingForReset:
+                return "5h 窗口已满，等待重置"
+            case .wavesInsufficient:
+                return "剩余波次不足，最多打到 \(projected)%"
+            case .speedInsufficient:
+                return "当前速度不足，需加速。终\(projected)%，波\(wave.currentWaveIndex)/\(wave.wavesNeeded)"
+            case .onTrack:
+                return "进度正常：终\(projected)%，波\(wave.currentWaveIndex)/\(wave.wavesNeeded)"
+            case .completed:
+                return "已达到周限"
+            case .noSpeedData:
+                return "等待速度数据..."
+            }
         }
-        
-        return String(format: "已使用 %.1f%%，时间进度 %.1f%%，%@", usagePercent, timePercent, deltaText)
+
+        let delta = usagePercent - timePercent
+        if abs(delta) < 1 {
+            return String(format: "已使用 %.1f%%，与时间进度基本一致", usagePercent)
+        } else if delta > 0 {
+            return String(format: "已使用 %.1f%%，比时间进度快 %.1f%%", usagePercent, delta)
+        } else {
+            return String(format: "已使用 %.1f%%，比时间进度慢 %.1f%%", usagePercent, abs(delta))
+        }
     }
     
     // MARK: - Supporting models

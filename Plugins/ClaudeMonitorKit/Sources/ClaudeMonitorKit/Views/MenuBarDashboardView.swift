@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import ETermKit
 
 // MARK: - 主视图组件从 ContentView.swift 提取
 
@@ -655,10 +656,13 @@ private func workingSeconds(from start: Date,
 
 private func recommendationColor(_ recommendation: WeeklyUsageRecommendation) -> Color {
     switch recommendation {
-    case .accelerate: return .orange
-    case .maintain: return .green
-    case .slowDown: return .yellow
-    case .pause: return .red
+    case .accelerate: return ThemeColors.UI.warning
+    case .maintain: return ThemeColors.UI.success
+    case .slowDown: return ThemeColors.UI.warning.opacity(0.7)
+    case .pause: return ThemeColors.UI.error
+    case .sprinting: return ThemeColors.UI.success
+    case .waitingForReset: return ThemeColors.UI.warning
+    case .wavesInsufficient: return ThemeColors.UI.error
     }
 }
 
@@ -668,6 +672,9 @@ private func recommendationIcon(_ recommendation: WeeklyUsageRecommendation) -> 
     case .maintain: return "checkmark.circle.fill"
     case .slowDown: return "tortoise.fill"
     case .pause: return "pause.circle.fill"
+    case .sprinting: return "flame.fill"
+    case .waitingForReset: return "clock.arrow.circlepath"
+    case .wavesInsufficient: return "exclamationmark.triangle.fill"
     }
 }
 
