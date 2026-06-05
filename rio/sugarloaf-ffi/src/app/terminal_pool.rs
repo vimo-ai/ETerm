@@ -51,6 +51,16 @@
 
 use crate::domain::aggregates::{Terminal, TerminalId};
 use crate::render::font::FontContext;
+
+/// Decode the FFI half-cell side byte (0 = left, anything else = right).
+#[inline]
+fn side_from_u8(v: u8) -> crate::infra::Side {
+    if v == 0 {
+        crate::infra::Side::Left
+    } else {
+        crate::infra::Side::Right
+    }
+}
 use crate::render::{RenderConfig, Renderer};
 use crate::rio_event::EventQueue;
 use crate::rio_machine::Machine;
@@ -2457,40 +2467,34 @@ impl TerminalPool {
         id: usize,
         start_row: usize,
         start_col: usize,
+        start_side: u8,
         end_row: usize,
         end_col: usize,
+        end_side: u8,
     ) -> bool {
         let terminals = self.terminals.read();
         if let Some(entry) = terminals.get(&id) {
-            // 尝试修正宽字符边界（如果能获取锁）
-            let (adjusted_start_col, adjusted_end_col) =
-                if let Some(mut terminal) = entry.terminal.try_lock() {
-                    // Freeze viewport so new content doesn't shift selection
-                    if !terminal.freeze_display() {
-                        terminal.set_freeze_display(true);
-                    }
+            // Freeze the viewport so newly-arriving output doesn't shift the
+            // selection while the user is dragging.
+            if let Some(mut terminal) = entry.terminal.try_lock() {
+                if !terminal.freeze_display() {
+                    terminal.set_freeze_display(true);
+                }
+            }
 
-                    let state = terminal.state();
-                    let grid = &state.grid;
-
-                    // 修正 start：spacer 向左到宽字符
-                    let adj_start =
-                        Self::adjust_start_for_wide_char(start_row, start_col, grid);
-                    // 修正 end：宽字符向右扩展到 spacer
-                    let adj_end = Self::adjust_end_for_wide_char(end_row, end_col, grid);
-
-                    (adj_start, adj_end)
-                } else {
-                    // 获取不到锁时保持原样（极少情况）
-                    (start_col, end_col)
-                };
-
-            // 操作 SelectionOverlay
-            entry.selection_overlay.update(
+            // Store the raw anchor cells + half-cell sides. Side resolution
+            // (`resolved_range`) and wide-char boundary snapping are applied
+            // later at draw / text time, which always have the grid — so we no
+            // longer need the directional `adjust_*_for_wide_char` fixups here
+            // (they mis-fired on reverse drags because they assumed start
+            // precedes end).
+            entry.selection_overlay.update_with_sides(
                 start_row as i32,
-                adjusted_start_col as u32,
+                start_col as u32,
+                side_from_u8(start_side),
                 end_row as i32,
-                adjusted_end_col as u32,
+                end_col as u32,
+                side_from_u8(end_side),
                 crate::infra::SelectionType::Simple,
             );
 
@@ -2502,49 +2506,62 @@ impl TerminalPool {
         }
     }
 
-    /// 修正选区起点：如果在 spacer 上，向左移到宽字符
-    fn adjust_start_for_wide_char(
-        absolute_row: usize,
-        col: usize,
-        grid: &crate::domain::views::GridView,
-    ) -> usize {
+    /// Snap a selection's start column to a whole glyph: if it lands on a
+    /// wide-char spacer (the trailing half), move left onto the glyph body so
+    /// the highlight/text begins at the whole character.
+    fn snap_start_col(cells: &[crate::domain::views::CellData], col: u32) -> u32 {
         const WIDE_CHAR_SPACER: u16 = 0b0000_0000_0100_0000;
-
-        if let Some(screen_row) = grid.absolute_to_screen(absolute_row) {
-            if let Some(row) = grid.row(screen_row) {
-                let cells = row.cells();
-                if col < cells.len()
-                    && cells[col].flags & WIDE_CHAR_SPACER != 0
-                    && col > 0
-                {
-                    return col - 1;
-                }
-            }
+        let i = col as usize;
+        if col > 0 && i < cells.len() && cells[i].flags & WIDE_CHAR_SPACER != 0 {
+            col - 1
+        } else {
+            col
         }
-        col
     }
 
-    /// 修正选区终点：如果在宽字符上，向右扩展到 spacer
-    fn adjust_end_for_wide_char(
-        absolute_row: usize,
-        col: usize,
-        grid: &crate::domain::views::GridView,
-    ) -> usize {
+    /// Snap a selection's end column to a whole glyph: if it lands on a
+    /// wide-char body, extend right to include its spacer so the highlight
+    /// covers the whole character (no half-cell).
+    fn snap_end_col(cells: &[crate::domain::views::CellData], col: u32) -> u32 {
         const WIDE_CHAR: u16 = 0b0000_0000_0010_0000;
+        let i = col as usize;
+        if i < cells.len() && cells[i].flags & WIDE_CHAR != 0 && i + 1 < cells.len() {
+            col + 1
+        } else {
+            col
+        }
+    }
 
-        if let Some(screen_row) = grid.absolute_to_screen(absolute_row) {
-            if let Some(row) = grid.row(screen_row) {
-                let cells = row.cells();
-                // 如果在宽字符上，向右扩展到包含 spacer
-                if col < cells.len()
-                    && cells[col].flags & WIDE_CHAR != 0
-                    && col + 1 < cells.len()
-                {
-                    return col + 1;
+    /// Resolve an overlay snapshot into the inclusive, glyph-snapped cell range
+    /// used for text extraction. Kept identical to what `draw_selection_overlay`
+    /// renders, so copied text always matches the visible highlight. Returns
+    /// `None` for an empty selection.
+    fn resolve_selection_for_text(
+        snapshot: &crate::infra::SelectionSnapshot,
+        grid: &crate::domain::views::GridView,
+    ) -> Option<(i32, u32, i32, u32)> {
+        let columns = grid.columns() as u32;
+        let range = snapshot.resolved_range(columns)?;
+        let last_col = columns.saturating_sub(1);
+
+        let snap_on_row = |abs_row: i32, col: u32, snap_end: bool| -> u32 {
+            let col = col.min(last_col);
+            if let Some(screen_row) = grid.absolute_to_screen(abs_row.max(0) as usize) {
+                if let Some(row) = grid.row(screen_row) {
+                    let cells = row.cells();
+                    return if snap_end {
+                        Self::snap_end_col(cells, col)
+                    } else {
+                        Self::snap_start_col(cells, col)
+                    };
                 }
             }
-        }
-        col
+            col
+        };
+
+        let start_col = snap_on_row(range.start_row, range.start_col, false);
+        let end_col = snap_on_row(range.end_row, range.end_col, true);
+        Some((range.start_row, start_col, range.end_row, end_col))
     }
 
     /// 清除选区
@@ -2577,12 +2594,15 @@ impl TerminalPool {
             let snapshot = entry.selection_overlay.snapshot()?;
 
             if let Some(mut terminal) = entry.terminal.try_lock() {
-                let text = terminal.text_in_range(
-                    snapshot.start_row,
-                    snapshot.start_col,
-                    snapshot.end_row,
-                    snapshot.end_col,
-                );
+                // Resolve sides + snap wide-char boundaries against the grid so
+                // the extracted text matches the highlight exactly.
+                let text = match Self::resolve_selection_for_text(
+                    &snapshot,
+                    &terminal.state().grid,
+                ) {
+                    Some((sr, sc, er, ec)) => terminal.text_in_range(sr, sc, er, ec),
+                    None => None, // empty selection
+                };
 
                 match text {
                     Some(ref t) if t.chars().all(|c| c.is_whitespace()) => {
@@ -2614,12 +2634,15 @@ impl TerminalPool {
             let snapshot = entry.selection_overlay.snapshot()?;
 
             if let Some(terminal) = entry.terminal.try_lock() {
-                terminal.text_in_range(
-                    snapshot.start_row,
-                    snapshot.start_col,
-                    snapshot.end_row,
-                    snapshot.end_col,
-                )
+                // Same resolve + wide-char snap as the highlight, so Cmd+C copies
+                // exactly what is shown selected.
+                match Self::resolve_selection_for_text(
+                    &snapshot,
+                    &terminal.state().grid,
+                ) {
+                    Some((sr, sc, er, ec)) => terminal.text_in_range(sr, sc, er, ec),
+                    None => None,
+                }
             } else {
                 None
             }
@@ -3101,6 +3124,7 @@ impl TerminalPool {
                             self.draw_selection_overlay(
                                 canvas,
                                 &snapshot,
+                                &state.grid,
                                 physical_cell_width,
                                 physical_line_height,
                                 rows,
@@ -4202,6 +4226,7 @@ impl TerminalPool {
         &self,
         canvas: &skia_safe::Canvas,
         selection: &crate::infra::SelectionSnapshot,
+        grid: &crate::domain::views::GridView,
         cell_width: crate::domain::primitives::PhysicalPixels,
         line_height: crate::domain::primitives::PhysicalPixels,
         screen_rows: usize,
@@ -4210,6 +4235,18 @@ impl TerminalPool {
     ) {
         use crate::infra::SelectionType;
 
+        let columns = grid.columns() as u32;
+
+        // Resolve anchor sides into an inclusive whole-cell range (lock-free,
+        // grid-independent: ordering + half-cell side rules + empty check).
+        // An empty selection draws nothing.
+        let range = match selection.resolved_range(columns) {
+            Some(r) => r,
+            None => return,
+        };
+        let (sel_start_row, sel_start_col, sel_end_row, sel_end_col) =
+            (range.start_row, range.start_col, range.end_row, range.end_col);
+
         // 选区背景色：半透明蓝色
         let selection_color = skia_safe::Color4f::new(0.3, 0.5, 0.8, 0.35);
 
@@ -4217,28 +4254,7 @@ impl TerminalPool {
         paint.set_color4f(selection_color, None);
         paint.set_anti_alias(false); // 矩形不需要抗锯齿
 
-        // 规范化选区：确保 start <= end（支持反向选择）
-        let (sel_start_row, sel_start_col, sel_end_row, sel_end_col) =
-            if selection.start_row < selection.end_row
-                || (selection.start_row == selection.end_row
-                    && selection.start_col <= selection.end_col)
-            {
-                // 正向选择
-                (
-                    selection.start_row,
-                    selection.start_col,
-                    selection.end_row,
-                    selection.end_col,
-                )
-            } else {
-                // 反向选择：交换 start 和 end
-                (
-                    selection.end_row,
-                    selection.end_col,
-                    selection.start_row,
-                    selection.start_col,
-                )
-            };
+        let last_col = columns.saturating_sub(1);
 
         // 遍历可见行
         for screen_row in 0..screen_rows {
@@ -4252,7 +4268,7 @@ impl TerminalPool {
             }
 
             // 计算该行的选区列范围
-            let (start_col, end_col) = match selection.ty {
+            let (mut start_col, mut end_col) = match selection.ty {
                 SelectionType::Block => {
                     // 块选区：固定列范围（也需要规范化）
                     (
@@ -4262,10 +4278,10 @@ impl TerminalPool {
                 }
                 SelectionType::Lines => {
                     // 行选区：整行
-                    (0, u32::MAX)
+                    (0, last_col)
                 }
                 SelectionType::Simple => {
-                    // 普通选区
+                    // 普通选区：首行从 start_col，末行到 end_col，中间整行
                     let start = if abs_row == sel_start_row {
                         sel_start_col
                     } else {
@@ -4274,17 +4290,26 @@ impl TerminalPool {
                     let end = if abs_row == sel_end_row {
                         sel_end_col
                     } else {
-                        u32::MAX
+                        last_col
                     };
                     (start, end)
                 }
             };
 
+            // Clamp to the grid, then snap both boundaries onto whole glyphs so a
+            // double-width (CJK) char is never highlighted as a half cell.
+            start_col = start_col.min(last_col);
+            end_col = end_col.min(last_col);
+            if let Some(row) = grid.row(screen_row) {
+                let cells = row.cells();
+                start_col = Self::snap_start_col(cells, start_col);
+                end_col = Self::snap_end_col(cells, end_col);
+            }
+
             // 绘制矩形
             let x = start_col as f32 * cell_width.value;
             let y = screen_row as f32 * line_height.value;
-            let w = ((end_col.saturating_sub(start_col)).min(1000) + 1) as f32
-                * cell_width.value;
+            let w = (end_col.saturating_sub(start_col) + 1) as f32 * cell_width.value;
             let h = line_height.value;
 
             canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, w, h), &paint);
@@ -4480,6 +4505,65 @@ mod tests {
             history_size: 10000,
             log_buffer_size: 0, // 测试默认禁用
         }
+    }
+
+    // ===== Wide-char boundary snapping (step ⑤) =====
+
+    const WIDE_CHAR: u16 = 0b0000_0000_0010_0000;
+    const WIDE_CHAR_SPACER: u16 = 0b0000_0000_0100_0000;
+
+    fn cell(flags: u16) -> crate::domain::views::CellData {
+        crate::domain::views::CellData {
+            flags,
+            ..Default::default()
+        }
+    }
+
+    /// Row: [A][中body][中spacer][B] — index 1 = WIDE_CHAR, 2 = SPACER.
+    fn wide_row() -> Vec<crate::domain::views::CellData> {
+        vec![cell(0), cell(WIDE_CHAR), cell(WIDE_CHAR_SPACER), cell(0)]
+    }
+
+    #[test]
+    fn snap_start_on_spacer_moves_left_to_glyph() {
+        assert_eq!(TerminalPool::snap_start_col(&wide_row(), 2), 1);
+    }
+
+    #[test]
+    fn snap_start_on_normal_cell_unchanged() {
+        assert_eq!(TerminalPool::snap_start_col(&wide_row(), 3), 3);
+    }
+
+    #[test]
+    fn snap_start_on_glyph_body_unchanged() {
+        assert_eq!(TerminalPool::snap_start_col(&wide_row(), 1), 1);
+    }
+
+    #[test]
+    fn snap_start_spacer_at_col0_stays_clamped() {
+        let row = vec![cell(WIDE_CHAR_SPACER), cell(0)];
+        assert_eq!(TerminalPool::snap_start_col(&row, 0), 0);
+    }
+
+    #[test]
+    fn snap_end_on_glyph_body_extends_to_spacer() {
+        assert_eq!(TerminalPool::snap_end_col(&wide_row(), 1), 2);
+    }
+
+    #[test]
+    fn snap_end_on_normal_cell_unchanged() {
+        assert_eq!(TerminalPool::snap_end_col(&wide_row(), 0), 0);
+    }
+
+    #[test]
+    fn snap_end_on_spacer_unchanged() {
+        assert_eq!(TerminalPool::snap_end_col(&wide_row(), 2), 2);
+    }
+
+    #[test]
+    fn snap_end_on_glyph_body_at_last_col_no_overflow() {
+        let row = vec![cell(0), cell(WIDE_CHAR)];
+        assert_eq!(TerminalPool::snap_end_col(&row, 1), 1);
     }
 
     #[test]

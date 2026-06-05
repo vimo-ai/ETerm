@@ -1925,8 +1925,10 @@ class RioMetalView: NSView, RenderViewProtocol {
                 terminalId: Int(terminalId),
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
+                startSide: selection.startSide.rawValue,
                 endAbsoluteRow: selection.endAbsoluteRow,
-                endCol: Int(selection.endCol)
+                endCol: Int(selection.endCol),
+                endSide: selection.endSide.rawValue
             )
         }
 
@@ -1972,8 +1974,10 @@ class RioMetalView: NSView, RenderViewProtocol {
                 terminalId: terminalId,
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
+                startSide: selection.startSide.rawValue,
                 endAbsoluteRow: selection.endAbsoluteRow,
-                endCol: Int(selection.endCol)
+                endCol: Int(selection.endCol),
+                endSide: selection.endSide.rawValue
             )
         }
 
@@ -2021,7 +2025,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         updateAutoScroll(location: location, panelId: panelId)
 
         // 转换为网格坐标（使用快照的 terminalId，确保坐标与 mouseDown 时一致）
-        let gridPos = screenToGrid(location: location, panelId: panelId, terminalId: terminalId)
+        let (gridPos, mouseSide) = screenToGridWithSide(location: location, panelId: panelId, terminalId: terminalId)
 
         // 将 Screen 坐标转换为真实行号（新架构：使用 terminalPool）
         guard let (absoluteRow, col) = pool.screenToAbsolute(
@@ -2034,7 +2038,7 @@ class RioMetalView: NSView, RenderViewProtocol {
         }
 
         // 更新 Domain 层状态
-        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col))
+        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col), side: mouseSide)
 
         // 通知 Rust 层渲染高亮（新架构：使用 terminalPool）
         if let selection = activeTab.textSelection {
@@ -2042,8 +2046,10 @@ class RioMetalView: NSView, RenderViewProtocol {
                 terminalId: terminalId,
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
+                startSide: selection.startSide.rawValue,
                 endAbsoluteRow: selection.endAbsoluteRow,
-                endCol: Int(selection.endCol)
+                endCol: Int(selection.endCol),
+                endSide: selection.endSide.rawValue
             )
         }
 
@@ -2178,22 +2184,24 @@ class RioMetalView: NSView, RenderViewProtocol {
         _ = pool.scroll(terminalId: terminalId, deltaLines: selectionAutoScrollDelta)
 
         // 用最后一次鼠标位置重新计算选区终点
-        let gridPos = screenToGrid(location: lastDragLocation, panelId: panelId, terminalId: terminalId)
+        let (gridPos, mouseSide) = screenToGridWithSide(location: lastDragLocation, panelId: panelId, terminalId: terminalId)
         guard let (absoluteRow, col) = pool.screenToAbsolute(
             terminalId: terminalId,
             screenRow: Int(gridPos.row),
             screenCol: Int(gridPos.col)
         ) else { return }
 
-        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col))
+        activeTab.updateSelection(absoluteRow: absoluteRow, col: UInt16(col), side: mouseSide)
 
         if let selection = activeTab.textSelection {
             _ = pool.setSelection(
                 terminalId: terminalId,
                 startAbsoluteRow: selection.startAbsoluteRow,
                 startCol: Int(selection.startCol),
+                startSide: selection.startSide.rawValue,
                 endAbsoluteRow: selection.endAbsoluteRow,
-                endCol: Int(selection.endCol)
+                endCol: Int(selection.endCol),
+                endSide: selection.endSide.rawValue
             )
         }
 
@@ -2292,9 +2300,17 @@ class RioMetalView: NSView, RenderViewProtocol {
     ///   - panelId: Panel ID
     ///   - terminalId: 终端 ID（用于查找 contentBounds，避免依赖 activeTab 导致多终端场景下坐标错位）
     private func screenToGrid(location: CGPoint, panelId: UUID, terminalId: Int) -> CursorPosition {
+        return screenToGridWithSide(location: location, panelId: panelId, terminalId: terminalId).pos
+    }
+
+    /// 像素 → 网格坐标，并附带光标所在的半格 side（左半/右半）。
+    ///
+    /// side 取列方向小数部分：< 0.5 为左半（`.left`），否则右半（`.right`）。
+    /// 选区手势用它决定边界格是否包含；其余只关心 col/row 的调用方走 `screenToGrid`。
+    private func screenToGridWithSide(location: CGPoint, panelId: UUID, terminalId: Int) -> (pos: CursorPosition, side: CellSide) {
         guard let coordinator = coordinator,
               let mapper = coordinateMapper else {
-            return CursorPosition(col: 0, row: 0)
+            return (CursorPosition(col: 0, row: 0), .left)
         }
 
         // 获取 Panel 的 bounds
@@ -2305,7 +2321,7 @@ class RioMetalView: NSView, RenderViewProtocol {
 
         // 获取 Panel 对应的 contentBounds（使用传入的 terminalId，避免 activeTab 变化导致错位）
         guard let contentBounds = tabsToRender.first(where: { $0.0 == terminalId })?.1 else {
-            return CursorPosition(col: 0, row: 0)
+            return (CursorPosition(col: 0, row: 0), .left)
         }
 
         // 从 fontMetrics 获取实际的 cell 尺寸
@@ -2328,6 +2344,12 @@ class RioMetalView: NSView, RenderViewProtocol {
             cellHeight: cellHeightVal
         )
 
+        // 计算列方向的半格 side（基于未截断的小数部分）
+        let relativeX = location.x - contentBounds.origin.x
+        let colFloat = max(0, relativeX / cellWidthVal)
+        let frac = colFloat - floor(colFloat)
+        var side: CellSide = frac < 0.5 ? .left : .right
+
         // 边界检查：确保网格坐标不越界
         // 计算终端的行列数（使用与上面相同的 metrics 来源）
         let physicalWidth = contentBounds.width * mapper.scale
@@ -2340,12 +2362,14 @@ class RioMetalView: NSView, RenderViewProtocol {
         // 限制在有效范围内（0 到 max-1）
         if maxCols > 0 && gridPos.col >= maxCols {
             gridPos = CursorPosition(col: maxCols - 1, row: gridPos.row)
+            // 越过右边缘时，按右半格处理（选到行尾）
+            side = .right
         }
         if maxRows > 0 && gridPos.row >= maxRows {
             gridPos = CursorPosition(col: gridPos.col, row: maxRows - 1)
         }
 
-        return gridPos
+        return (gridPos, side)
     }
 
     override func scrollWheel(with event: NSEvent) {
