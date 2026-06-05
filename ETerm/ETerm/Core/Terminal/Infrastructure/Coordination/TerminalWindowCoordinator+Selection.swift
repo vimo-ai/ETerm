@@ -23,20 +23,19 @@ extension TerminalWindowCoordinator {
     ///   - selection: 选中范围（使用真实行号）
     /// - Returns: 是否成功
     func setSelection(terminalId: Int, selection: TextSelection) -> Bool {
+        let (startRow, startCol, endRow, endCol) = selection.normalized()
+
         // 使用终端池设置选区
         guard let wrapper = terminalPool as? TerminalPoolWrapper else {
             return false
         }
 
-        // 传原始 start/end + 各自 side；由 Rust 侧 resolved_range 统一排序与边界解析。
         let success = wrapper.setSelection(
             terminalId: terminalId,
-            startAbsoluteRow: selection.startAbsoluteRow,
-            startCol: Int(selection.startCol),
-            startSide: selection.startSide.rawValue,
-            endAbsoluteRow: selection.endAbsoluteRow,
-            endCol: Int(selection.endCol),
-            endSide: selection.endSide.rawValue
+            startAbsoluteRow: startRow,
+            startCol: Int(startCol),
+            endAbsoluteRow: endRow,
+            endCol: Int(endCol)
         )
 
         if success {

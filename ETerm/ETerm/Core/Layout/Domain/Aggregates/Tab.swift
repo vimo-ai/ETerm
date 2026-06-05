@@ -270,9 +270,9 @@ final class Tab: Pane {
         terminalContent?.startSelection(absoluteRow: absoluteRow, col: col)
     }
 
-    /// 更新选中（仅终端 Tab 有效）。`side` 为活动端半格，拖拽时传入以获得精确边界。
-    func updateSelection(absoluteRow: Int64, col: UInt16, side: CellSide = .right) {
-        terminalContent?.updateSelection(absoluteRow: absoluteRow, col: col, side: side)
+    /// 更新选中（仅终端 Tab 有效）
+    func updateSelection(absoluteRow: Int64, col: UInt16) {
+        terminalContent?.updateSelection(absoluteRow: absoluteRow, col: col)
     }
 
     /// 更新显示偏移量（仅终端 Tab 有效）
