@@ -200,11 +200,11 @@ final class TerminalTab {
     /// - Parameters:
     ///   - absoluteRow: 终点真实行号
     ///   - col: 终点列号
-    func updateSelection(absoluteRow: Int64, col: UInt16) {
+    func updateSelection(absoluteRow: Int64, col: UInt16, side: CellSide = .right) {
         if let selection = textSelection {
-            textSelection = selection.updateEnd(absoluteRow: absoluteRow, col: col)
+            textSelection = selection.updateEnd(absoluteRow: absoluteRow, col: col, side: side)
         } else {
-            // 如果没有选中，先创建起点，再更新终点
+            // 如果没有选中，先创建起点（整格），再更新终点
             // 注意：这种情况理论上不应该发生，因为应该先调用 startSelection
             textSelection = .single(absoluteRow: absoluteRow, col: col)
         }
