@@ -27,5 +27,7 @@ pub use atomic_cache::{
     AtomicTitleCache,
     AtomicScrollCache,
 };
-pub use selection_overlay::{SelectionOverlay, SelectionSnapshot, SelectionType};
+pub use selection_overlay::{
+    ResolvedRange, SelectionOverlay, SelectionSnapshot, SelectionType, Side,
+};
 pub use log_buffer::{LogBuffer, LogLine, LogQueryResult, SharedLogBuffer};

@@ -755,10 +755,13 @@ class TerminalPoolWrapper: TerminalPoolProtocol {
     }
 
     /// 设置选区
+    ///
+    /// `startSide` / `endSide` 为锚点半格（0=左半, 1=右半），决定边界格是否包含。
+    /// 不跟踪 side 的调用方传 start=0(左) / end=1(右) 得到整格闭区间。
     @discardableResult
-    func setSelection(terminalId: Int, startAbsoluteRow: Int64, startCol: Int, endAbsoluteRow: Int64, endCol: Int) -> Bool {
+    func setSelection(terminalId: Int, startAbsoluteRow: Int64, startCol: Int, startSide: UInt8, endAbsoluteRow: Int64, endCol: Int, endSide: UInt8) -> Bool {
         guard let handle = handle else { return false }
-        return terminal_pool_set_selection(handle, terminalId, startAbsoluteRow, startCol, endAbsoluteRow, endCol)
+        return terminal_pool_set_selection(handle, terminalId, startAbsoluteRow, startCol, startSide, endAbsoluteRow, endCol, endSide)
     }
 
     func getInputRow(terminalId: Int) -> UInt16? {
