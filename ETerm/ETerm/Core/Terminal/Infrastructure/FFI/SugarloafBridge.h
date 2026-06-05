@@ -413,13 +413,19 @@ ScreenToAbsoluteResult terminal_pool_screen_to_absolute(
 );
 
 /// Set selection
+///
+/// start_side / end_side carry each anchor's half-cell (0 = left, 1 = right),
+/// determining whether the boundary cell is included. Callers without side
+/// info pass start=0 (left) / end=1 (right) for a fully-inclusive range.
 bool terminal_pool_set_selection(
     TerminalPoolHandle handle,
     size_t terminal_id,
     int64_t start_absolute_row,
     size_t start_col,
+    uint8_t start_side,
     int64_t end_absolute_row,
-    size_t end_col
+    size_t end_col,
+    uint8_t end_side
 );
 
 /// Clear selection

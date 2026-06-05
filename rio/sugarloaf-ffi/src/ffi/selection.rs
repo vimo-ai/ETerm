@@ -61,14 +61,22 @@ pub extern "C" fn terminal_pool_screen_to_absolute(
 }
 
 /// 设置选区
+///
+/// `start_side` / `end_side` carry the half-cell precision of each anchor
+/// (0 = left half, 1 = right half). They determine whether the boundary cell is
+/// included, matching the upstream Rio selection semantics. Callers that don't
+/// track sides should pass 0 (left) for start and 1 (right) for end to get a
+/// fully-inclusive whole-cell range.
 #[no_mangle]
 pub extern "C" fn terminal_pool_set_selection(
     handle: *mut TerminalPoolHandle,
     terminal_id: usize,
     start_absolute_row: i64,
     start_col: usize,
+    start_side: u8,
     end_absolute_row: i64,
     end_col: usize,
+    end_side: u8,
 ) -> bool {
     if handle.is_null() {
         return false;
@@ -81,8 +89,10 @@ pub extern "C" fn terminal_pool_set_selection(
         terminal_id,
         start_absolute_row as usize,
         start_col,
+        start_side,
         end_absolute_row as usize,
         end_col,
+        end_side,
     )
 }
 
